@@ -192,39 +192,36 @@ def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_sha
 @pytest.mark.parametrize("selected_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
-    "batch, seq_len",
+    "batch, seq_len, shard_dim",
     [
-        (2, 1),
+        (1, 32, 0),
     ],
-    ids=["b32s1"],
+    ids=["b1s32"],
 )
-@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
+def test_all_to_all_dispatch_selective_tilize_no_trace(
     mesh_device,
     mesh_shape,
     cluster_axis,
     batch,
+    shard_dim,
     experts,
     selected_experts_k,
     hidden_size,
     seq_len,
-    num_links,
     dtype,
     input_memory_config,
     output_memory_config,
     device_params,
 ):
     torch.manual_seed(2005)
-    if num_links == "MAX_LINKS":
-        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
     devices = mesh_shape[0] * mesh_shape[1]
 
-    input_tokens = torch.rand(1, batch, seq_len, hidden_size, dtype=tt_to_torch_dtype(dtype)).repeat(
-        mesh_shape[1 - cluster_axis], 1, 1, 1
-    )
+    input_tokens = torch.rand(
+        mesh_shape[cluster_axis], batch, seq_len, hidden_size, dtype=tt_to_torch_dtype(dtype)
+    ).repeat(mesh_shape[1 - cluster_axis], 1, 1, 1)
     expert_indices_along_dispatch_axis = []
 
     for _ in range(mesh_shape[cluster_axis]):
@@ -251,24 +248,10 @@ def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
     expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
 
     expert_mapping = gen_expert_mapping(experts, mesh_shape=mesh_shape, cluster_axis=cluster_axis)
+    expert_mapping = expert_mapping.to(torch.uint16)
 
-    logger.info(f"Expert Indices: {expert_indices} with shape {expert_indices.shape}")
-    logger.info(f"Expert Mapping: {expert_mapping} with shape {expert_mapping.shape}")
-
-    dte_intermediate, dte_scores, ed_table = get_dte_intermediate(
-        indices_tensor=expert_indices,
-        mapping_tensor=expert_mapping,
-        scores_tensor=expert_scores,
-        mesh_shape=mesh_shape,
-        cluster_axis=cluster_axis,
-    )
-
-    logger.info(f"DTE Intermediate: {dte_intermediate} with shape {dte_intermediate.shape}")
-    logger.info(f"DTE Scores: {dte_scores} with shape {dte_scores.shape}")
-    logger.info(f"ED Table: {ed_table} with shape {ed_table.shape}")
-
-    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, 2)
-
+    # Shard along sequence dimension (dim 2) on cluster axis, replicate on other axis
+    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
     tt_input_tokens = ttnn.from_torch(
         input_tokens,
         device=mesh_device,
@@ -281,67 +264,44 @@ def test_all_to_all_dispatch_selective_tilize_no_trace_batch32(
     tt_expert_indices = ttnn.from_torch(
         expert_indices,
         device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint16,
         memory_config=input_memory_config,
         mesh_mapper=mesh_mapper,
     )
 
+    tt_expert_scores = ttnn.from_torch(
+        expert_scores,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,  # Use ttnn dtype, not torch dtype
+        memory_config=input_memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+    # expert mapping is replicated across all devices
     tt_expert_mapping = ttnn.from_torch(
         expert_mapping,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint16,
         memory_config=input_memory_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        mesh_mapper=mesh_mapper,
     )
 
-    (
-        tt_output_tensor,
-        tt_metadata_tensor,
-        tt_dte_intermediate,
-        tt_dte_scores,
-        tt_ed_table,
-    ) = ttnn.experimental.all_to_all_dispatch_selective_tilize(
+    # print ttnn shapes
+    logger.info(f"tt_input_tokens shape: {tt_input_tokens.shape}")
+    logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
+    logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
+    logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
+
+    output_tokens, metadata, gathered_scores = ttnn.experimental.all_to_all_dispatch_selective_tilize(
         tt_input_tokens,
         tt_expert_indices,
+        tt_expert_scores,
         tt_expert_mapping,
         cluster_axis=cluster_axis,
-        num_links=num_links,
-        memory_config=output_memory_config,
     )
 
-    logger.info(f"tt_output_tensor per-device shape: {tt_output_tensor.shape}")
-    logger.info(f"tt_metadata_tensor per-device shape: {tt_metadata_tensor.shape}")
-    logger.info(f"tt_dte_intermediate per-device shape: {tt_dte_intermediate.shape}")
-    logger.info(f"tt_dte_scores per-device shape: {tt_dte_scores.shape}")
-    logger.info(f"tt_ed_table per-device shape: {tt_ed_table.shape}")
-
-    torch_tt_output_tensor = ttnn.to_torch(
-        tt_output_tensor,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
-    )
-
-    torch_tt_metadata_tensor = ttnn.to_torch(
-        tt_metadata_tensor,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
-    )
-
-    torch_tt_dte_intermediate = ttnn.to_torch(
-        tt_dte_intermediate,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
-    )
-    torch_tt_dte_scores = ttnn.to_torch(
-        tt_dte_scores,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
-    )
-    torch_tt_ed_table = ttnn.to_torch(
-        tt_ed_table,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
-    )
-
-    logger.info(f"torch_tt_output_tensor shape: {torch_tt_output_tensor.shape}")
-    logger.info(f"torch_tt_metadata_tensor shape: {torch_tt_metadata_tensor.shape}")
-    logger.info(f"torch_tt_dte_intermediate shape: {torch_tt_dte_intermediate.shape}")
-    logger.info(f"torch_tt_dte_scores shape: {torch_tt_dte_scores.shape}")
-    logger.info(f"torch_tt_ed_table shape: {torch_tt_ed_table.shape}")
+    logger.info(f"output_tokens shape: {output_tokens.shape}")
+    logger.info(f"metadata shape: {metadata.shape}")
+    logger.info(f"gathered_scores shape: {gathered_scores.shape}")

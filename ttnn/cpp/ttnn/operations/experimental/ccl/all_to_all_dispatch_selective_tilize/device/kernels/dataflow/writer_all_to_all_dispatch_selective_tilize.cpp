@@ -75,23 +75,30 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size = get_named_compile_time_arg_val("fabric_max_packet_size");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("l1_alignment");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
+    constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto input_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+    constexpr auto output_scores_args = TensorAccessorArgs<input_scores_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 0
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);        // 1
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);        // 2
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 3
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);       // 4
+    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);      // 5
+    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);        // 6
+    uint32_t input_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 7
+    uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 8
+    uint32_t subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);               // 9
+    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                 // 10
+    uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
+    uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
 
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
@@ -100,10 +107,9 @@ void kernel_main() {
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
-    detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+    detail::zero_buffer_async(send_preparation_buffer_address, tokens_per_device * num_devices * sizeof(uint8_t));
 
-    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
@@ -123,6 +129,11 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    // Scores tensors use same page size as indices tensor
+    const auto input_scores_addr_gen =
+        TensorAccessor(input_scores_args, input_scores_tensor_address, indices_page_size);
+    const auto output_scores_addr_gen =
+        TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);

@@ -4,6 +4,7 @@
 
 #include "all_to_all_dispatch_selective_tilize_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -354,6 +355,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"l1_alignment", l1_alignment},
         {"dram_alignment", dram_alignment},
         {"linearized_mesh_coord", linearized_mesh_coord},
+        {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -362,6 +364,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_scores_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_scores_tensor.buffer()).append_to(compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {};
 
@@ -370,7 +374,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "reader_all_to_all_dispatch_selective_tilize.cpp",
         sender_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, named_compile_time_args, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, reader_defines, named_compile_time_args));
 
     // Code-gen a mesh-position to fabric chip ID array for the writer kernel
     // Code-gen a mesh-position to mesh-id array for the writer kernel
@@ -386,7 +390,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "writer_all_to_all_dispatch_selective_tilize.cpp",
         sender_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(compile_time_args, writer_defines, named_compile_time_args));
 
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),            // 0
