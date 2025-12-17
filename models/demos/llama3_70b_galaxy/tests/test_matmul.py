@@ -88,7 +88,8 @@ def test_ring_matmul(mesh_device):
 
     RING_SIZE = 24
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=32, dummy_weights=False, max_seq_len=128)
-    pf_mm_out_core_range_set = model_args.pf_receiver_cores_list
+    pf_mm_out_core_range_set = model_args.pf_mm_out_core_range_set
+    ring_core_range_set = model_args.ring_core_range_set
 
     pc_1_3 = model_args.matmul_1d_ring_config(
         1,  # B
@@ -96,6 +97,7 @@ def test_ring_matmul(mesh_device):
         5120 // 4,  # K = 1280
         3840,  # Use padded N
         RING_SIZE,
+        prefetch=False,
     )
 
     compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -105,8 +107,6 @@ def test_ring_matmul(mesh_device):
         packer_l1_acc=True,
         dst_full_sync_en=True,
     )
-
-    breakpoint()
 
     out_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 3840 // RING_SIZE),
@@ -118,7 +118,7 @@ def test_ring_matmul(mesh_device):
 
     in_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
-        core_grid=pf_mm_out_core_range_set,
+        core_grid=ring_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -162,13 +162,15 @@ def test_ring_matmul(mesh_device):
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=[8, 4])
     out = ttnn.to_torch(out_ring_mm, mesh_composer=mesh_composer).sum(0)
     out = torch.permute(out, (1, 0, 2))
-    passing, pcc_message = comp_pcc(ref_after_w1, out)
-    print(f"Non-Prefetch Matmul PCC with reference: {pcc_message}")
+    passing, pcc_message_ref = comp_pcc(ref_after_w1, out)
+    print(f"Non-Prefetch Ring Matmul PCC with reference: {pcc_message_ref}")
     print(comp_allclose(ref_after_w1, out))
 
-    passing, pcc_message = comp_pcc(comp_out, out)
-    print(f"Non-Prefetch Matmul PCC with ring matmul output: {pcc_message}")
+    _, pcc_message_comp = comp_pcc(comp_out, out)
+    print(f"Non-Prefetch Ring Matmul PCC with ring matmul output: {pcc_message_comp}")
     print(comp_allclose(comp_out, out))
+
+    assert passing, f"Prefetch Ring Matmul comparison to reference failed: {pcc_message_ref}"
 
 
 @torch.no_grad()
@@ -195,19 +197,10 @@ def test_prefetcher_ring_matmul(mesh_device):
     ref_after_w1 = torch.load("models/demos/llama3_70b_galaxy/tests/ref_after_w1.pt")
     comp_out = torch.load("models/demos/llama3_70b_galaxy/tests/comp_out.pt")
 
-    # prefetcher setup
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=1,
-        n_layers=1,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
-
     RING_SIZE = 24
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=32, dummy_weights=False, max_seq_len=128)
-    pf_mm_out_core_range_set = model_args.pf_receiver_cores_list
+    pf_mm_out_core_range_set = model_args.pf_mm_out_core_range_set
+    ring_core_range_set = model_args.ring_core_range_set
 
     pc_1_3 = model_args.matmul_1d_ring_config(
         1,  # B
@@ -215,6 +208,7 @@ def test_prefetcher_ring_matmul(mesh_device):
         5120 // 4,  # K = 1280
         3840,  # Use padded N
         RING_SIZE,
+        prefetch=False,
     )
 
     compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -226,7 +220,7 @@ def test_prefetcher_ring_matmul(mesh_device):
     )
 
     out_memory_config = ttnn.create_sharded_memory_config(
-        shape=(32, 3840 // RING_SIZE),  # Use padded N
+        shape=(32, 3840 // RING_SIZE),
         core_grid=pf_mm_out_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -235,7 +229,7 @@ def test_prefetcher_ring_matmul(mesh_device):
 
     in_memory_config = ttnn.create_sharded_memory_config(
         shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
-        core_grid=pf_mm_out_core_range_set,
+        core_grid=ring_core_range_set,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -264,7 +258,19 @@ def test_prefetcher_ring_matmul(mesh_device):
         memory_config=in_memory_config,
     )
 
+    # prefetcher setup
+    prefetcher_setup = TtLlamaPrefetcherSetup(
+        mesh_device,
+        n_tensors=1,
+        n_layers=1,
+    )
+    mesh_device.set_sub_device_stall_group(
+        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+    )
+
     prefetcher_setup.create_global_cb()
+
+    prefetcher_setup.insert_tensor(w_in)
 
     ttnn.dram_prefetcher(
         prefetcher_setup.get_input_tensors(),
@@ -288,10 +294,12 @@ def test_prefetcher_ring_matmul(mesh_device):
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=[8, 4])
     out = ttnn.to_torch(out_ring_mm, mesh_composer=mesh_composer).sum(0)
     out = torch.permute(out, (1, 0, 2))
-    passing, pcc_message = comp_pcc(ref_after_w1, out)
-    print(f"Non-Prefetch Matmul PCC with reference: {pcc_message}")
+    passing, pcc_message_ref = comp_pcc(ref_after_w1, out)
+    print(f"Non-Prefetch Ring Matmul PCC with reference: {pcc_message_ref}")
     print(comp_allclose(ref_after_w1, out))
 
-    passing, pcc_message = comp_pcc(comp_out, out)
-    print(f"Non-Prefetch Matmul PCC with ring matmul output: {pcc_message}")
+    _, pcc_message_comp = comp_pcc(comp_out, out)
+    print(f"Non-Prefetch Ring Matmul PCC with ring matmul output: {pcc_message_comp}")
     print(comp_allclose(comp_out, out))
+
+    assert passing, f"Prefetch Ring Matmul comparison to reference failed: {pcc_message_ref}"
