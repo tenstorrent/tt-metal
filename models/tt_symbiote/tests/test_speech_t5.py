@@ -24,6 +24,7 @@ def test_speech_t5(device):
     vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
     inputs = processor(text="Hello, my dog is cute.", return_tensors="pt")
     inputs["speaker_embeddings"] = torch.randn((1, 512))
+    inputs["maxlenratio"] = 1
     model.eval()  # Disables dropout, batch norm updates
     vocoder.eval()
     register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
