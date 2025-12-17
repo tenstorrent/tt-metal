@@ -142,7 +142,7 @@ BankManager::BankManager(
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
     buffer_type_(buffer_type),
-    interleaved_address_limit_(0),
+
     alignment_bytes_(alignment_bytes),
     allocator_dependencies_(dependencies) {
     unsigned int bank_id = 0;

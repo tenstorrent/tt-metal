@@ -693,8 +693,7 @@ def test_comp_ops_edge_cases(ttnn_op, device):
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_div_int32_full_range(input_shapes, use_legacy, device):
+def test_binary_div_int32_full_range(input_shapes, device):
     value_ranges_a = [
         (-300, 300),
         (-500, 500),
@@ -753,7 +752,7 @@ def test_binary_div_int32_full_range(input_shapes, use_legacy, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
@@ -764,16 +763,17 @@ def test_div_int32_optional_output(device):
     torch_input_tensor_a = torch.arange(-(2**23), 2**23, 1024, dtype=torch.int32)
     torch_input_tensor_b = torch.arange(-(2**23) - 1, 2**23 - 1, 1024, dtype=torch.int32)
     torch_input_tensor_b[torch_input_tensor_b == 0] = 1
-
+    zeros_tensor = torch.zeros_like(torch_input_tensor_a, dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn.div)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b, device=device).to(torch.int32)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, dtype=ttnn.int32, use_legacy=True)
-    output_tensor = ttnn.to_torch(output_tensor)
+    preallocated_tensor = ttnn.from_torch(zeros_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.div(input_tensor_a, input_tensor_b, output_tensor=preallocated_tensor)
+    output_tensor = ttnn.to_torch(preallocated_tensor)
 
-    assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
 
 
 @pytest.mark.parametrize(
@@ -897,18 +897,16 @@ def test_div_edge_cases(round_mode, device):
         torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
     )
 
-    # round modes are not supported in binary ng, so we use legacy implementation for testing
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode, use_legacy=True)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if round_mode is not None:
-        assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
-    else:
+    if round_mode is None:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+    else:
+        assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_div_inf_nan_cases(use_legacy, device):
+def test_div_inf_nan_cases(device):
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -930,7 +928,7 @@ def test_div_inf_nan_cases(use_legacy, device):
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)

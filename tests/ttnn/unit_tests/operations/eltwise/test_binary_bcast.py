@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
 from models.common.utility_functions import torch_random
@@ -2304,7 +2304,7 @@ def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
     a = torch.reshape(a, (1, 1, 1, 256))
-    b = torch.zeros((1, 1, 256, 256))
+    b = torch.zeros((1, 1, 256, 256), dtype=torch.int32)
 
     torch_add = a + b
 
@@ -3722,7 +3722,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=dst_config,
+            memory_config=out_sharded_config,
         )
 
         out_pt = torch.add(a_pt, b_pt)
