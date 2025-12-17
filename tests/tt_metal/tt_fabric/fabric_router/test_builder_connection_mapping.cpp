@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
 
 namespace tt::tt_fabric {
 
@@ -127,15 +128,16 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
     RouterVariant variant = RouterVariant::MESH;
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, nullptr);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(topology, nullptr);
+    FabricRouterChannelMapping channel_mapping(topology, spec, has_tensix, variant);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_mesh_router(topology, routing_dir, has_z);
 
     // Verify consistency: receiver channel 0 should have targets matching sender channel count
-    uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
+    uint32_t num_vcs = spec.num_vcs;
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_senders = channel_mapping.get_num_sender_channels_for_vc(vc);
+        uint32_t num_senders = spec.sender_channels_per_vc[vc];
 
         // For mesh router VC0, receiver channel 0 should have targets
         if (num_senders > 0) {
@@ -157,14 +159,15 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     auto intermesh_config = IntermeshVCConfig::full_mesh();
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(topology, &intermesh_config);
+    FabricRouterChannelMapping channel_mapping(topology, spec, has_tensix, variant);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_z_router();
 
     // Verify VC1 consistency
-    EXPECT_EQ(channel_mapping.get_num_virtual_channels(), 2);
-    uint32_t vc1_senders = channel_mapping.get_num_sender_channels_for_vc(1);
+    EXPECT_EQ(spec.num_vcs, 2);
+    uint32_t vc1_senders = spec.sender_channels_per_vc[1];
     EXPECT_EQ(vc1_senders, 4);
 
     // VC1 receiver channel 0 should have 4 targets
