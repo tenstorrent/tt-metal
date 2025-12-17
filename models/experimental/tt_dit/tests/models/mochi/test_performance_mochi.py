@@ -53,7 +53,6 @@ def test_mochi_pipeline_performance(
     vae_tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
-    use_cache: bool,
     is_ci_env: bool,
     galaxy_type: str,
 ) -> None:
