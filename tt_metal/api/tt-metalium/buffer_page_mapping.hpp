@@ -53,6 +53,7 @@ struct BufferCorePageMapping {
         }
         value_type operator*() const;
         uint32_t device_page_offset() const { return device_page_offset_; }
+
         bool operator==(const Iterator& other) const { return device_page_offset_ == other.device_page_offset_; }
         bool operator!=(const Iterator& other) const { return device_page_offset_ != other.device_page_offset_; }
 
