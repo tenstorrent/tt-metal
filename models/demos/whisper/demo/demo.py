@@ -746,7 +746,8 @@ def test_demo_for_conditional_generation(
     prompt,
     request,
 ):
-    if is_ci_env and batch_size_per_device == 1 and model_repo == "openai/whisper-large-v3":
+    # Skip test in CI when using generate_kwargs
+    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
     generation_params = GenerationParams(
@@ -768,10 +769,6 @@ def test_demo_for_conditional_generation(
         batch_size_per_device,
         stream=stream,
     )
-
-    # Skip test in CI when using generate_kwargs
-    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
-        pytest.skip("Skipping perf check in CI")
 
     if (
         is_ci_env

@@ -358,7 +358,6 @@ def whisper_attention(
             is_cross_attention=is_cross_attention,
             is_decode=is_decode,
         )
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     else:
         if not is_decode:
             fused_qkv_dtype = ttnn.bfloat8_b
@@ -433,7 +432,6 @@ def whisper_attention(
             # Transpose back to [B, H, S, d] format for nlp_concat_heads
             attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
             attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
-            attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
         else:
             attn_output = functional_sdpa(
                 query_states,
@@ -447,8 +445,8 @@ def whisper_attention(
             ttnn.deallocate(query_states)
             ttnn.deallocate(key_states)
             ttnn.deallocate(value_states)
-            attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
 
+    attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 
