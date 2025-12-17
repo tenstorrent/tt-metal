@@ -28,7 +28,7 @@ def get_latest_programs_perf_data():
     return ttnn._ttnn.profiler.GetLatestProgramsPerfData()
 
 
-def GetAllProgramsPerfData():
+def get_all_programs_perf_data():
     return ttnn._ttnn.profiler.GetAllProgramsPerfData()
 
 
