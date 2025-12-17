@@ -14,8 +14,6 @@
 
 using namespace tt::tt_metal;
 
-using ttnn::operations::experimental::ccl::ring_attention_all_gather_async::RingAttentionAllGatherAsyncDeviceOperation;
-
 namespace ttnn::operations::transformer {
 
 void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
