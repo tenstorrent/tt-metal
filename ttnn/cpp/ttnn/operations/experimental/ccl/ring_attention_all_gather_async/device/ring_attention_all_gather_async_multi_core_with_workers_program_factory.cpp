@@ -504,7 +504,7 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     return ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,
         tensor_args.input_tensor,
-        mesh_device,
+        target_device,
         forward_device,
         backward_device,
         tensor_return_value,
