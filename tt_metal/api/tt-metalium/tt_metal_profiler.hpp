@@ -13,41 +13,18 @@ class IDevice;
 
 namespace detail {
 
-/**
- * Clear profiler control buffer
- *
- * Return value: void
- *
- * | Argument      | Description                                                        | Type            | Valid Range
- * | Required |
- * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | Clear profiler control buffer before any core attempts to profler  | IDevice*        | | True     |
- * */
-void ClearProfilerControlBuffer(IDevice* device);
-
+// clang-format off
 /**
  * Initialize device profiling data buffers
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           |
- * True     |
+ * | Argument | Description                                    | Type     | Valid Range | Required |
+ * |----------|------------------------------------------------|----------|-------------|----------|
+ * | device   | The device holding the program being profiled. | IDevice* |             | True     |
  * */
+// clang-format on
 void InitDeviceProfiler(IDevice* device);
-
-/**
- * Sync TT devices with host
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * */
-void ProfilerSync(ProfilerSyncState state);
 
 // clang-format off
 /**
@@ -69,29 +46,18 @@ void ReadDeviceProfilerResults(
     ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+// clang-format off
 /**
- * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
+ * Sync TT devices with host
  *
  * Return value: void
  *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path |
- * No       |
+ * | Argument | Description                     | Type               | Valid Range | Required |
+ * |----------|---------------------------------|--------------------|-------------|----------|
+ * | state    | The state to use for sync       | ProfilerSyncState  |             | Yes      |
  * */
-void SetDeviceProfilerDir(const std::string& output_dir = "");
-
-/**
- * Start a fresh log for the device side profile results
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * */
-void FreshProfilerDeviceLog();
+// clang-format on
+void ProfilerSync(ProfilerSyncState state);
 
 }  // namespace detail
 }  // namespace tt::tt_metal
