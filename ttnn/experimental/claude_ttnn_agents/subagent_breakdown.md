@@ -300,6 +300,47 @@ Note: May also READ auxiliary data (masks, indices) in addition to writing outpu
 
 ---
 
+## Phase 6: Performance Analysis
+
+**Agent**: `ttnn-pipeline-analyzer` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Deep analysis of pipeline execution behavior to understand blocking, overlap, and performance characteristics.
+
+**Input**:
+- Path to program factory (`{operation}_program_factory.cpp`)
+- OR existing analysis file (`{operation}_analysis.md` from ttnn-operation-analyzer)
+
+**Output**: `{operation_name}_pipeline_analysis.md` containing:
+- CB inventory with capacity/block ratios and lifetimes
+- Blocking point analysis for each CB (when/why producer/consumer blocks)
+- Execution simulation with CB state tracking
+- Timeline visualization (Gantt chart)
+- Performance calculations (throughput, efficiency, bottleneck identification)
+- Optimization recommendations
+
+**Key Features**:
+- Determines whether kernels can overlap (Reader/Compute/Writer)
+- Identifies single vs double buffering patterns
+- Calculates theoretical vs actual throughput
+- Provides concrete optimization recommendations
+
+**When to Use**:
+- Operation seems slower than expected
+- Verifying if double-buffering actually achieves overlap
+- Understanding CB synchronization behavior
+- Identifying performance bottlenecks
+- Planning optimizations
+
+**Key Principle**: "Never assume parallelism. Always verify through careful analysis."
+
+**Reference**: `.claude/references/ttnn-pipeline-analysis-methodology.md`
+
+**Location**: `.claude/agents/ttnn-pipeline-analyzer.md`
+
+---
+
 ## Alternative: Checkpoint-Based Single Kernel Agent
 
 If splitting kernels feels too granular, use a single agent with explicit checkpoints:
@@ -403,5 +444,6 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 2. **`ttnn-operation-scaffolder`** ✅ - Stages 1-3, knows HOW (official TTNN patterns)
 3. **`ttnn-factory-builder`** ✅ - Stages 4-6, knows HOW (CB patterns, work split)
 4. **`ttnn-riscv-debugger`** ✅ - Debug kernel hangs and CB synchronization issues
-5. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
-6. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation
+5. **`ttnn-pipeline-analyzer`** ✅ - Analyze pipeline blocking and performance
+6. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
+7. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation

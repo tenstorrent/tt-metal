@@ -22,6 +22,7 @@ This package contains Claude Code agents for creating new TTNN operations.
 | ttnn-operation-scaffolder | Build Stages 1-3 (API, validation, registration) |
 | ttnn-factory-builder | Build Stages 4-6 (device op, factory, kernels) |
 | ttnn-riscv-debugger | Debug kernel issues (hangs, CB deadlocks, incorrect output) |
+| ttnn-pipeline-analyzer | Analyze pipeline execution and blocking behavior for performance optimization |
 
 ## Workflow
 
@@ -163,6 +164,28 @@ The debugger agent:
 - **Kernel writer agents**: Specialized agents for implementing reader, compute, and writer kernels
 - **Operation-specific debug agents**: Tailored debugging strategies for different operation types
 
+### Stage 6: Performance Analysis (Optional)
+
+For performance optimization of existing operations, use the `ttnn-pipeline-analyzer` agent:
+
+```
+"Please use the ttnn-pipeline-analyzer agent to analyze the pipeline behavior of
+ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.cpp"
+```
+
+**Output**: `{operation_name}_pipeline_analysis.md` containing:
+- CB configuration with capacity/block ratios
+- Blocking point analysis for each CB
+- Execution simulation and timeline (Gantt chart)
+- Performance metrics and efficiency calculations
+- Optimization recommendations
+
+**When to use**:
+- Operation seems slower than expected
+- Verifying double-buffering actually overlaps
+- Understanding blocking behavior
+- Identifying pipeline bottlenecks
+
 ### Tips
 
 - **Keep DeepWiki handy**: Ask about kernel APIs, hardware concepts, or patterns
@@ -171,6 +194,7 @@ The debugger agent:
 - **Start simple**: In Stage 5, test the simplest case first
 - **Use Debug builds**: Always build with `./build_metal.sh -b Debug`
 - **Use the debugger agent**: For kernel hangs or CB issues, invoke `ttnn-riscv-debugger` with the symptom and operation analysis
+- **Use the pipeline analyzer**: For performance issues, use `ttnn-pipeline-analyzer` to understand blocking and overlap behavior
 
 See `subagent_breakdown.md` for additional technical details.
 
