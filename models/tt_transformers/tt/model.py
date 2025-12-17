@@ -201,7 +201,7 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix.shape[2]
-        assert mat_len >= S, f"Sequence length {S} exceeds rot mat len {mat_len}"
+        assert mat_len >= S, f"Padded prefill sequence length {S} exceeds max seq len {mat_len}"
         required_end = start_pos + S
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
