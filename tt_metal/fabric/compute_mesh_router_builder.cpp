@@ -465,9 +465,7 @@ void ComputeMeshRouterBuilder::configure_connection(
     // Start from the default NOC VC (already set in noc_config_) and offset by link index
     auto base_noc_vc = erisc_builder_->config.get_noc_config().edm_noc_vc;
     auto edm_noc_vc = base_noc_vc + (link_idx % FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
-    erisc_builder_->config.edm_noc_vc = edm_noc_vc;
     erisc_builder_->config.get_noc_config().set_edm_noc_vc(edm_noc_vc);
-    peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
     peer_compute.erisc_builder_->config.get_noc_config().set_edm_noc_vc(edm_noc_vc);
 
     // Apply core placement optimizations

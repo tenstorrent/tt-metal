@@ -112,10 +112,16 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
         router_config_->edm_local_sync_address, router_config_->edm_local_tensix_sync_address};
 
     if (router_config_->sender_txq_id != router_config_->receiver_txq_id) {
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_completion_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_completion_counters_base_addr);
+        auto sender_counters = router_config_->get_l1_layout().get_sender_remote_counter_addresses();
+        auto receiver_counters = router_config_->get_l1_layout().get_receiver_remote_counter_addresses();
+        if (sender_counters.ack_counters_base_addr != 0) {
+            addresses_to_clear.push_back(sender_counters.ack_counters_base_addr);
+            addresses_to_clear.push_back(sender_counters.completion_counters_base_addr);
+        }
+        if (receiver_counters.ack_counters_base_addr != 0) {
+            addresses_to_clear.push_back(receiver_counters.ack_counters_base_addr);
+            addresses_to_clear.push_back(receiver_counters.completion_counters_base_addr);
+        }
     }
 
     return addresses_to_clear;

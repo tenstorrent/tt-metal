@@ -206,13 +206,6 @@ struct FabricEriscDatamoverConfig {
 
     std::vector<FabricRiscConfig> risc_configs;
 
-    // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
-    // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
-    // use use a different crediting scheme.
-    size_t to_sender_channel_remote_ack_counters_base_addr = 0;
-    size_t to_sender_channel_remote_completion_counters_base_addr = 0;
-    size_t receiver_channel_remote_ack_counters_base_addr = 0;
-    size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
@@ -238,9 +231,6 @@ struct FabricEriscDatamoverConfig {
 
     Topology topology = Topology::Linear;
 
-    // emd vcs
-    std::size_t edm_noc_vc = 0;
-
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
@@ -263,9 +253,6 @@ struct FabricEriscDatamoverConfig {
     const EriscL1Layout& get_l1_layout() const { return l1_layout_; }
 
 private:
-    // ═══════════════════════════════════════════════════════════
-    // Component Members (private - access via public fields/methods above)
-    // ═══════════════════════════════════════════════════════════
     MeshChannelSpec channel_spec_;  // Channel structure definition
     EriscL1Layout l1_layout_;       // L1 memory layout
     RouterNocConfig noc_config_;    // NOC/CmdBuf assignments

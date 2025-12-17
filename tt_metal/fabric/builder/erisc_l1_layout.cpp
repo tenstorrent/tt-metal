@@ -30,15 +30,16 @@ size_t EriscL1Layout::get_block_size(L1Block block, const MeshChannelSpec& spec)
         // Global Control
         case L1Block::HANDSHAKE: return ETH_CHANNEL_SYNC_SIZE;
 
-        case L1Block::REMOTE_COUNTER_BASES: {
-            // 4 counter regions (ack/completion for sender/receiver)
+        case L1Block::SENDER_REMOTE_COUNTERS:
+        case L1Block::RECEIVER_REMOTE_COUNTERS: {
+            // NUM_COUNTER_REGIONS counter regions per block (ack + completion)
             // Each region: align(sizeof(uint32_t) * num_sender_channels, FIELD_SIZE)
             size_t num_senders = spec.get_total_sender_channels();
             size_t per_counter_region = tt::align(sizeof(uint32_t) * num_senders, FIELD_SIZE);
-            return 4 * per_counter_region;
+            return RemoteCounterAddresses::NUM_COUNTER_REGIONS * per_counter_region;
         }
 
-        case L1Block::EDM_CHANNEL_ACK: return 4 * ETH_CHANNEL_SYNC_SIZE;  // Padding for handshake compatibility
+        case L1Block::EDM_CHANNEL_ACK: return get_block_padding(block) + ETH_CHANNEL_SYNC_SIZE;
 
         case L1Block::TERMINATION_SIGNAL:
         case L1Block::EDM_LOCAL_SYNC:
@@ -50,13 +51,14 @@ size_t EriscL1Layout::get_block_size(L1Block block, const MeshChannelSpec& spec)
         // Per-Channel Control
         case L1Block::SENDER_CHANNEL_CONTROL: {
             // Per sender: buffer_index + conn_info + flow_ctrl + term + conn_sem + buf_idx_sem
-            size_t stride = FIELD_SIZE + CONN_INFO_SIZE + 4 * FIELD_SIZE;
+            // All fields use FIELD_SIZE except conn_info (EDMChannelWorkerLocationInfo)
+            size_t stride = (SenderChannelAddresses::NUM_FIELDS - 1) * FIELD_SIZE + CONN_INFO_SIZE;
             return stride * spec.get_total_sender_channels();
         }
 
         case L1Block::RECEIVER_DOWNSTREAM_CONTROL: {
             // Per downstream: padding + flow_ctrl + teardown
-            size_t stride = 3 * FIELD_SIZE;
+            size_t stride = get_block_padding(block) + ReceiverDownstreamAddresses::NUM_FIELDS * FIELD_SIZE;
             return stride * spec.get_total_downstream_edms();
         }
 
@@ -82,8 +84,22 @@ constexpr size_t EriscL1Layout::get_block_stride(L1Block block) {
     constexpr size_t CONN_INFO_SIZE = sizeof(EDMChannelWorkerLocationInfo);
 
     switch (block) {
-        case L1Block::SENDER_CHANNEL_CONTROL: return FIELD_SIZE + CONN_INFO_SIZE + 4 * FIELD_SIZE;
-        case L1Block::RECEIVER_DOWNSTREAM_CONTROL: return 3 * FIELD_SIZE;
+        case L1Block::SENDER_CHANNEL_CONTROL:
+            // All fields use FIELD_SIZE except conn_info (EDMChannelWorkerLocationInfo)
+            return (SenderChannelAddresses::NUM_FIELDS - 1) * FIELD_SIZE + CONN_INFO_SIZE;
+        case L1Block::RECEIVER_DOWNSTREAM_CONTROL:
+            return get_block_padding(block) + ReceiverDownstreamAddresses::NUM_FIELDS * FIELD_SIZE;
+        default: return 0;
+    }
+}
+
+constexpr size_t EriscL1Layout::get_block_padding(L1Block block) {
+    constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
+    constexpr size_t ETH_CHANNEL_SYNC_SIZE = EriscL1Layout::ETH_CHANNEL_SYNC_SIZE;
+
+    switch (block) {
+        case L1Block::EDM_CHANNEL_ACK: return 3 * ETH_CHANNEL_SYNC_SIZE;  // Padding for handshake compatibility
+        case L1Block::RECEIVER_DOWNSTREAM_CONTROL: return FIELD_SIZE;  // One FIELD_SIZE padding at start of each entry
         default: return 0;
     }
 }
@@ -129,7 +145,7 @@ void EriscL1Layout::compute_layout(
 
     auto allocate = [&](L1Block block) {
         next_addr = tt::align(next_addr, get_block_alignment(block));
-        size_t size = get_block_size(block, spec_);
+        size_t size = get_block_size(block, spec);
         regions_[idx(block)] = MemoryRegion(next_addr, size);
         next_addr += size;
     };
@@ -155,27 +171,47 @@ void EriscL1Layout::compute_layout(
     // 3. Handshake (always)
     allocate(L1Block::HANDSHAKE);
 
-    // 4. Remote counter bases (multi-TXQ mode only)
-    enable_multi_txq ? allocate(L1Block::REMOTE_COUNTER_BASES) : skip(L1Block::REMOTE_COUNTER_BASES);
+    // 4-5. Remote counter bases (multi-TXQ mode only - split into sender/receiver)
+    if (enable_multi_txq) {
+        allocate(L1Block::SENDER_REMOTE_COUNTERS);
+        const auto& sender_region = regions_[idx(L1Block::SENDER_REMOTE_COUNTERS)];
+        size_t per_counter_region = sender_region.size / RemoteCounterAddresses::NUM_COUNTER_REGIONS;
+        sender_remote_counters_ = RemoteCounterAddresses{
+            .ack_counters_base_addr = sender_region.start_address,
+            .completion_counters_base_addr = sender_region.start_address + per_counter_region,
+        };
 
-    // 5-8. Fixed control blocks
+        allocate(L1Block::RECEIVER_REMOTE_COUNTERS);
+        const auto& receiver_region = regions_[idx(L1Block::RECEIVER_REMOTE_COUNTERS)];
+        per_counter_region = receiver_region.size / RemoteCounterAddresses::NUM_COUNTER_REGIONS;
+        receiver_remote_counters_ = RemoteCounterAddresses{
+            .ack_counters_base_addr = receiver_region.start_address,
+            .completion_counters_base_addr = receiver_region.start_address + per_counter_region,
+        };
+    } else {
+        skip(L1Block::SENDER_REMOTE_COUNTERS);
+        skip(L1Block::RECEIVER_REMOTE_COUNTERS);
+        // sender_remote_counters_ and receiver_remote_counters_ remain {0, 0} from initialization
+    }
+
+    // 6-9. Fixed control blocks
     allocate(L1Block::EDM_CHANNEL_ACK);
     allocate(L1Block::TERMINATION_SIGNAL);
     allocate(L1Block::EDM_LOCAL_SYNC);
     allocate(L1Block::EDM_STATUS);
 
-    // 9-10. Per-channel control
+    // 10-11. Per-channel control
     allocate(L1Block::SENDER_CHANNEL_CONTROL);
     allocate(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
 
-    // 11-12. Tensix extension
+    // 12-13. Tensix extension
     allocate(L1Block::TENSIX_RELAY_BUFFER_INDEX);
     allocate(L1Block::EDM_LOCAL_TENSIX_SYNC);
 
-    // 13. Blackhole-specific
+    // 14. Blackhole-specific
     is_blackhole ? allocate(L1Block::NOTIFY_WORKER_SRC_ADDR) : skip(L1Block::NOTIFY_WORKER_SRC_ADDR);
 
-    // 14. Channel buffers (remaining space)
+    // 15. Channel buffers (remaining space)
     allocate_remaining(L1Block::CHANNEL_BUFFERS);
 
     // Pre-compute and cache all per-channel addresses to avoid repeated arithmetic

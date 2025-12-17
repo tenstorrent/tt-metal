@@ -294,17 +294,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // Only fields needed for strided calculations are populated here
 
     // Remote counter bases (multi-TXQ mode)
-    const auto& counter_bases = l1_layout_.get(L1Block::REMOTE_COUNTER_BASES);
-    if (counter_bases.size > 0) {
+    // NOTE: Addresses now accessed via l1_layout_.get_sender_remote_counter_addresses()
+    // and l1_layout_.get_receiver_remote_counter_addresses()
+    const auto& sender_counters = l1_layout_.get(L1Block::SENDER_REMOTE_COUNTERS);
+    if (sender_counters.size > 0) {
+        // Calculate size for buffer clear operations
         size_t num_words_per_counter =
             tt::align(sizeof(uint32_t) * channel_spec_.get_total_sender_channels(), field_size);
         this->router_buffer_clear_size_words = num_words_per_counter;
-        this->to_sender_channel_remote_ack_counters_base_addr = counter_bases.start_address;
-        this->to_sender_channel_remote_completion_counters_base_addr =
-            counter_bases.start_address + num_words_per_counter;
-        this->receiver_channel_remote_ack_counters_base_addr = counter_bases.start_address + 2 * num_words_per_counter;
-        this->receiver_channel_remote_completion_counters_base_addr =
-            counter_bases.start_address + 3 * num_words_per_counter;
     }
 
     // NOTE: Per-channel addresses are no longer stored in arrays.
@@ -363,9 +360,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Compute available channel buffering space
     size_t available_channel_buffering_space = buffer_region.size;
-
-    // Apply edm_noc_vc from noc_config_
-    this->edm_noc_vc = noc_config_.edm_noc_vc;
 
     // Create allocators (same as before)
     auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
@@ -573,7 +567,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     handshake_address(
         tt::round_up(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), EriscL1Layout::ETH_CHANNEL_SYNC_SIZE)),
     channel_buffer_size(config.channel_buffer_size_bytes),
-    local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
+    local_sender_channels_connection_info_addr(),  // Initialize empty, populate from L1 layout below
     termination_signal_ptr(config.get_l1_layout().get(L1Block::TERMINATION_SIGNAL).start_address),
     edm_local_sync_ptr(config.get_l1_layout().get(L1Block::EDM_LOCAL_SYNC).start_address),
     edm_local_tensix_sync_ptr(config.get_l1_layout().get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address),
@@ -604,6 +598,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         actual_sender_channels_per_vc.value_or(config.get_channel_spec().sender_channels_per_vc);
     const auto& receiver_counts =
         actual_receiver_channels_per_vc.value_or(config.get_channel_spec().receiver_channels_per_vc);
+
+    // Populate sender channel connection info addresses from L1 layout
+    for (size_t ch = 0; ch < config.get_channel_spec().get_total_sender_channels(); ++ch) {
+        local_sender_channels_connection_info_addr[ch] =
+            config.get_l1_layout().get_sender_channel_addresses(ch).conn_info;
+    }
 
     bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
                                                 tt::tt_fabric::FabricTensixConfig::MUX);
@@ -1024,10 +1024,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
-        ct_args.push_back(config.to_sender_channel_remote_ack_counters_base_addr);
-        ct_args.push_back(config.to_sender_channel_remote_completion_counters_base_addr);
-        ct_args.push_back(config.receiver_channel_remote_ack_counters_base_addr);
-        ct_args.push_back(config.receiver_channel_remote_completion_counters_base_addr);
+        auto sender_counters = config.get_l1_layout().get_sender_remote_counter_addresses();
+        auto receiver_counters = config.get_l1_layout().get_receiver_remote_counter_addresses();
+        ct_args.push_back(sender_counters.ack_counters_base_addr);
+        ct_args.push_back(sender_counters.completion_counters_base_addr);
+        ct_args.push_back(receiver_counters.ack_counters_base_addr);
+        ct_args.push_back(receiver_counters.completion_counters_base_addr);
     }
 
     ct_args.push_back(0x30c0ffee);

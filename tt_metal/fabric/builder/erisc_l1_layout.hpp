@@ -34,12 +34,13 @@ enum class L1Block : uint8_t {
     // ═══════════════════════════════════════════════════════════
     // Global Control & Synchronization
     // ═══════════════════════════════════════════════════════════
-    HANDSHAKE,             // Ethernet handshake
-    REMOTE_COUNTER_BASES,  // Multi-TXQ counter regions (optional, 4 counter blocks)
-    EDM_CHANNEL_ACK,       // Channel acknowledgment region
-    TERMINATION_SIGNAL,    // Teardown signal address
-    EDM_LOCAL_SYNC,        // Local sync semaphore
-    EDM_STATUS,            // Router status word
+    HANDSHAKE,                 // Ethernet handshake
+    SENDER_REMOTE_COUNTERS,    // Multi-TXQ sender ack/completion counter blocks (optional)
+    RECEIVER_REMOTE_COUNTERS,  // Multi-TXQ receiver ack/completion counter blocks (optional)
+    EDM_CHANNEL_ACK,           // Channel acknowledgment region
+    TERMINATION_SIGNAL,        // Teardown signal address
+    EDM_LOCAL_SYNC,            // Local sync semaphore
+    EDM_STATUS,                // Router status word
 
     // ═══════════════════════════════════════════════════════════
     // Per-Channel Control Regions
@@ -67,6 +68,17 @@ enum class L1Block : uint8_t {
 };
 
 /**
+ * Remote counter addresses for multi-TXQ crediting.
+ * Used for both sender and receiver channels.
+ */
+struct RemoteCounterAddresses {
+    size_t ack_counters_base_addr;
+    size_t completion_counters_base_addr;
+
+    static constexpr size_t NUM_COUNTER_REGIONS = 2;  // Derived from struct member count
+};
+
+/**
  * Per-sender-channel addresses (all in local L1).
  */
 struct SenderChannelAddresses {
@@ -76,6 +88,8 @@ struct SenderChannelAddresses {
     size_t terminate_conn;
     size_t connection_sem;
     size_t buffer_index_sem;
+
+    static constexpr size_t NUM_FIELDS = 6;  // Derived from struct member count
 };
 
 /**
@@ -84,6 +98,8 @@ struct SenderChannelAddresses {
 struct ReceiverDownstreamAddresses {
     size_t flow_control_sem;
     size_t teardown_sem;
+
+    static constexpr size_t NUM_FIELDS = 2;  // Derived from struct member count (excludes padding)
 };
 
 /**
@@ -135,11 +151,21 @@ public:
      */
     static constexpr size_t get_block_stride(L1Block block);
 
+    /**
+     * Returns number of padding fields (FIELD_SIZE each) for per-channel control blocks.
+     * Returns 0 for blocks without padding.
+     */
+    static constexpr size_t get_block_padding(L1Block block);
+
     // ═══════════════════════════════════════════════════════════
     // Block Access
     // ═══════════════════════════════════════════════════════════
 
     const MemoryRegion& get(L1Block block) const { return regions_[idx(block)]; }
+
+    // Remote counter addresses (multi-TXQ mode only - both blocks may be empty)
+    RemoteCounterAddresses get_sender_remote_counter_addresses() const { return sender_remote_counters_; }
+    RemoteCounterAddresses get_receiver_remote_counter_addresses() const { return receiver_remote_counters_; }
 
     // Per-channel addresses
     SenderChannelAddresses get_sender_channel_addresses(size_t ch) const;
@@ -183,6 +209,10 @@ private:
     size_t receiver_downstream_stride_;
 
     std::array<MemoryRegion, static_cast<size_t>(L1Block::COUNT)> regions_{};
+
+    // Cached remote counter addresses (computed during allocation, zero if multi-TXQ disabled)
+    RemoteCounterAddresses sender_remote_counters_{0, 0};
+    RemoteCounterAddresses receiver_remote_counters_{0, 0};
 
     // Pre-computed per-channel addresses (cached after compute_layout)
     std::vector<SenderChannelAddresses> sender_channel_addresses_;
