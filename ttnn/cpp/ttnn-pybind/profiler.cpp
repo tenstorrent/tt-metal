@@ -140,6 +140,7 @@ void ProfilerModule(py::module& m_profiler) {
         []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetLatestProgramsPerfData()); },
         R"doc(
         Get performance results for all programs that were read in the most recent call to `ttnn.ReadDeviceProfiler()`.
+        Returns a dictionary mapping chip IDs to lists of ProgramAnalysisData objects. The list contains only the latest entry for each program.
     )doc");
 
     m_profiler.def(
@@ -147,6 +148,7 @@ void ProfilerModule(py::module& m_profiler) {
         []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetAllProgramsPerfData()); },
         R"doc(
         Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfiler()`.
+        Returns a dictionary mapping chip IDs to lists of ProgramAnalysisData objects. The list contains all entries for each program.
     )doc");
 }
 
