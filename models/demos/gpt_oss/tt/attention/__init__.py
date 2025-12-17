@@ -88,6 +88,9 @@ class Attention:
                 tensor_cache_path=tensor_cache_path,
             )
             self.layer_past = self.kv_cache  # For tt-transformers compatibility
+        else:
+            self.kv_cache = None
+            self.layer_past = None
 
         # Get KV memory config for decode mode
         self.kv_mem_cfg = get_kv_memory_config(
@@ -104,7 +107,9 @@ class Attention:
         self.head_dim = config.head_dim
         self.scaling = config.scaling
 
-    def __call__(self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None, is_decode=True, user_id=0):
+    def __call__(
+        self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None, is_decode=True, user_id=0
+    ):
         """
         Forward pass - automatically dispatches to decode or prefill.
 

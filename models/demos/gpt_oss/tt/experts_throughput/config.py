@@ -138,7 +138,9 @@ class ThroughputProgramConfig:
     down_cores: tuple[int, int] = (5, 9)
 
     # Sparse matmul parameters
-    in0_block_w: int = 2
+    # in0_block_w: int = 2
+    in0_block_w: int = 10
+    ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
     out_subblock_h: int = 1
     out_subblock_w: int = 1
     per_core_M: int = 1
@@ -168,7 +170,7 @@ class ThroughputProgramConfig:
         core_x, core_y = self.gate_up_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
-        per_core_N = 2
+        # per_core_N = 2
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),

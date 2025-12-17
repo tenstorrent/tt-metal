@@ -221,8 +221,8 @@ class Model:
             logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
             logits.deallocate(True)
             logits = logits_sliced
-            if len(logits.shape) == 4 and logits.shape[1] == 1:
-                logits = ttnn.squeeze(logits, dim=1)
+            # if len(logits.shape) == 4 and logits.shape[1] == 1:
+            #     logits = ttnn.squeeze(logits, dim=1)
             hidden_states = logits
 
         # Final norm and lm_head
@@ -232,9 +232,16 @@ class Model:
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
         if config.tp > 1:
-            logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
+            logits_gathered = self.mesh_config.allgather(
+                logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
+            )
             logits.deallocate(True)
             logits = logits_gathered
+        # if get_last_token == -1:
+        #     # i.e decode, we need to collect all the users
+        #     logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=0, dim=-2)
+        #     logits.deallocate(True)
+        #     logits = logits_gathered
         return logits
 
     def ttnn_decode_forward(
@@ -369,7 +376,7 @@ class Model:
 
         # Ensure position indices are non-negative (matches tt-transformers)
         rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
-        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=False)
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
         # Prepare current position tensor
         current_pos_tt = ttnn.from_torch(
@@ -386,7 +393,7 @@ class Model:
                 page_table,
                 device=None,
                 dtype=ttnn.int32,
-                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+                # mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
             )
 
@@ -437,7 +444,14 @@ class Model:
         tt_page_table = None
         tt_chunk_page_table = None
         if page_table is not None:
-            tt_page_table = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # tt_page_table = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -458,18 +472,22 @@ class Model:
         if is_tokens:
             return concat_out[:B, 0]  # [batch_size]
 
-        torch_out = concat_out[:, 0, : self.vocab_size]  # [batch, vocab_size]
-        return torch_out.unsqueeze(1).view(B, S, -1)
+        torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
+        return torch_out.view(B, S, -1)
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
-        tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
-        return ttnn.to_torch(tt_output_tensor)
+        # tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
+        tt_output_tensor = ttnn.get_device_tensors(tt_out)[::8]
+        # tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
+        # return ttnn.to_torch(tt_output_tensor)
+        return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
+        # tt_output_tensor = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, 1), mesh_shape=tuple(self.mesh_device.shape)))
+        # return tt_output_tensor
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Process prefill output and extract last token logits"""
         tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
         torch_output = ttnn.to_torch(tt_output_tensor)
-        result = torch_output[:, last_token_idx, : self.vocab_size]
+        result = torch_output[..., last_token_idx, : self.vocab_size]
         return result

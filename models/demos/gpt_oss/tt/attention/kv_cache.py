@@ -37,14 +37,19 @@ def init_kv_cache(
     if paged_attention_config:
         # Paged attention cache shape: [max_num_blocks, num_kv_heads, block_size, head_dim]
         cache_shape = [
-            paged_attention_config.max_num_blocks,
-            1,
+            paged_attention_config.max_num_blocks * mesh_device.shape[0],
+            config.num_kv_heads // mesh_device.shape[1],
             paged_attention_config.block_size,
             config.head_dim,
         ]
     else:
         # Standard cache shape: [batch_size, num_kv_heads, max_seq_len, head_dim]
-        cache_shape = [config.max_local_batch_size, 1, config.max_seq_len, config.head_dim]
+        cache_shape = [
+            config.max_local_batch_size * mesh_device.shape[0],
+            config.num_kv_heads // mesh_device.shape[1],
+            config.max_seq_len,
+            config.head_dim,
+        ]
 
     # Create K cache
     k_cache = ttnn.as_tensor(
@@ -53,8 +58,8 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         # mesh_mapper=mesh_config.sequence_parallel(mesh_device),
-        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -3)),  this started randomly hanging for me??
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
+        # mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -66,8 +71,8 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         # mesh_mapper=mesh_config.sequence_parallel(mesh_device),
-        # mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -3)),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
+        # mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )

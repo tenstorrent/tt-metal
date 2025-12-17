@@ -362,8 +362,8 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     [
         # (1, 1),  # decode
         # (32, 1),  # decode
-        (128, 1),  # decode
-        # (1, 128),  # prefill
+        # (128, 1),  # decode
+        (1, 128),  # prefill
         # (1, 4096),  # prefill 4k
     ],
 )
@@ -415,7 +415,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # Create reference model
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
 
-    reference_layer = GptOssDecoderLayer(config, layer_idx=0)
+    reference_layers = [GptOssDecoderLayer(config, layer_idx=i) for i in range(config.num_hidden_layers)]
+    # reference_layer = GptOssDecoderLayer(config, layer_idx=0)
+    reference_layer = reference_layers[0]
 
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
@@ -439,17 +441,32 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
-    decoder_layer = DecoderLayer(
-        setup["mesh_device"],
-        config,
-        reference_state_swizzled,
-        layer_idx=0,
-        ccl_manager=setup["ccl_manager"],
-        dtype=setup["dtype"],
-        mesh_config=setup["mesh_config"],
-        transformation_mats=transformation_mats,
-        max_local_batch_size=local_batch_size,
-    )
+    # decoder_layer = DecoderLayer(
+    #     setup["mesh_device"],
+    #     config,
+    #     reference_state_swizzled,
+    #     layer_idx=1,
+    #     ccl_manager=setup["ccl_manager"],
+    #     dtype=setup["dtype"],
+    #     mesh_config=setup["mesh_config"],
+    #     transformation_mats=transformation_mats,
+    #     max_local_batch_size=local_batch_size,
+    # )
+    decoder_layers = [
+        DecoderLayer(
+            setup["mesh_device"],
+            config,
+            reference_state_swizzled,
+            layer_idx=i,
+            ccl_manager=setup["ccl_manager"],
+            dtype=setup["dtype"],
+            mesh_config=setup["mesh_config"],
+            transformation_mats=transformation_mats,
+            max_local_batch_size=local_batch_size,
+        )
+        for i in range(config.num_hidden_layers)
+    ]
+    decoder_layer = decoder_layers[0]
 
     # Create input
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
@@ -491,8 +508,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     rope_embeddings_ref = GptOssRotaryEmbedding(config)
     cos_hf_ref, sin_hf_ref = rope_embeddings_ref(hidden_states, position_ids.unsqueeze(1 if is_decode else 0))
     position_embeddings_ref = (cos_hf_ref, sin_hf_ref)
-    with torch.no_grad():
-        reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings_ref)
 
     # Create TTNN RoPE embeddings in Meta format using gather_cos_sin
     cos_meta, sin_meta = gather_cos_sin(position_ids, cos_full, sin_full)
@@ -639,9 +654,12 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
         )
-        for _ in range(100):
+        for _ in range(len(decoder_layers)):
             # Test full decoder layer integration
-            tt_output = decoder_layer(
+            with torch.no_grad():
+                reference_output = reference_layers[i](hidden_states, position_embeddings=position_embeddings_ref)
+
+            tt_output = decoder_layers[i](
                 tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode
             )
 
@@ -662,6 +680,10 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
                 logger.info(f"Decoder Layer test passed. Output: {output}")
             else:
                 assert passing, f"Decoder Layer test failed. Output: {output}"
+
+            tt_hidden_states = tt_output
+            hidden_states = reference_output
+
         # passing, output = run_component_comparison(
         #     tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         # )
@@ -670,3 +692,238 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
 
     tested_modules = [m for m in modules_to_test if m != "router" or seq_len == 1]
     logger.info(f"✓ Tests completed successfully: {', '.join(tested_modules)}")
+
+
+def run_model_forward_test(
+    mesh_device,
+    config,
+    state_dict_meta,
+    state_dict_hf,
+    mesh_config,
+    batch_size,
+    seq_len,
+    is_decode,
+    pcc_threshold=0.88,
+):
+    """
+    Run a single forward pass test comparing TT model to reference model.
+
+    Args:
+        mesh_device: TTNN mesh device
+        config: HuggingFace config (with num_hidden_layers already modified)
+        state_dict_meta: Model weights in meta format for TT model
+        state_dict_hf: Model weights in HF format for reference model
+        mesh_config: Mesh configuration
+        batch_size: Batch size
+        seq_len: Sequence length
+        is_decode: True for decode mode (seq_len=1), False for prefill mode
+        pcc_threshold: PCC threshold for comparison
+    """
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+
+    from models.demos.gpt_oss.tt.ccl import CCLManager
+    from models.demos.gpt_oss.tt.model import Model
+
+    # Determine local batch size for row sharding
+    if batch_size > 32:
+        is_row_sharded = True
+        assert batch_size % mesh_device.shape[0] == 0, "Batch size must be divisible by mesh rows"
+        local_batch_size = batch_size // mesh_device.shape[0]
+    else:
+        is_row_sharded = False
+        local_batch_size = batch_size
+
+    # Create CCL manager
+    ccl_manager = CCLManager(mesh_device)
+
+    # Create TT model with meta format weights
+    tt_model = Model(
+        mesh_device=mesh_device,
+        hf_config=config,
+        state_dict=state_dict_meta,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat8_b,
+        tensor_cache_path=None,
+        paged_attention_config=None,
+        mesh_config=mesh_config,
+        create_kv_cache=True,
+        max_local_batch_size=local_batch_size,
+    )
+
+    # Create reference model with HF format weights
+    reference_model = GptOssForCausalLM(config)
+    reference_model.load_state_dict(state_dict_hf, strict=False)
+    reference_model.eval()
+
+    # Create random input tokens
+    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+
+    # Create position IDs
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    # Run reference forward pass
+    with torch.no_grad():
+        reference_output = reference_model(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=None,  # Let the model handle masking
+            use_cache=False,
+        )
+        reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+
+    # Prepare inputs for TT model
+    if is_decode:
+        # Decode mode: use ttnn_decode_forward
+        # Flatten tokens for decode
+        tokens_flat = input_ids.reshape(-1)  # [batch_size]
+        current_pos = torch.zeros(batch_size, dtype=torch.long)
+
+        # Prepare inputs using model's method
+        tt_tokens, tt_current_pos, tt_rope_idxs, _ = tt_model.prepare_inputs_decode(
+            tokens_flat, current_pos, page_table=None
+        )
+
+        # Run TT decode forward
+        tt_logits = tt_model.ttnn_decode_forward(
+            tokens=tt_tokens,
+            current_pos=tt_current_pos,
+            rot_mat_idxs=tt_rope_idxs,
+            page_table=None,
+            kv_cache=None,
+        )
+    else:
+        # Prefill mode: use ttnn_prefill_forward
+        # Embed tokens first
+        tt_tokens = ttnn.from_torch(
+            input_ids.unsqueeze(0).unsqueeze(0),  # [1, 1, batch, seq]
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_embeds = ttnn.embedding(tt_tokens, tt_model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        if len(tt_embeds.shape) == 3:
+            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+
+        # Run TT prefill forward
+        tt_logits = tt_model.ttnn_prefill_forward(
+            x=tt_embeds,
+            user_id=0,
+            rot_mats_global=None,  # Let model compute RoPE
+            page_table=None,
+            kv_cache=None,
+            get_last_token=-1,  # Get all tokens
+        )
+
+    # Convert TT output to torch
+    mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
+    tt_logits_torch = ttnn.to_torch(
+        tt_logits,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
+        ),
+    )
+
+    # Slice to match reference shape
+    tt_logits_torch = tt_logits_torch[0, 0]
+
+    # Reshape to match reference
+    tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
+
+    # Compare outputs
+    passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
+    return passing, output
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize(
+    "batch_size, seq_len, mode",
+    [
+        (1, 128, "prefill"),  # Prefill test: batch=1, seq=128
+        (128, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
+    ],
+    ids=["prefill_b1_s128", "decode_b128_s1"],
+)
+@pytest.mark.parametrize(
+    "mesh_shape",
+    [
+        (4, 8),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    [1],
+    ids=["1_layer"],
+)
+def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
+    """
+    Test full model forward pass comparing TT implementation to HuggingFace reference.
+
+    This test:
+    1. Loads model config and overrides num_hidden_layers
+    2. Creates both TT model and reference model with real weights
+    3. Runs prefill (batch=1, seq=128) or decode (batch=128, seq=1) forward pass
+    4. Compares outputs using PCC
+
+    Args:
+        mesh_device: TTNN mesh device fixture
+        device_params: Device parameters fixture
+        batch_size: Batch size for the test
+        seq_len: Sequence length for the test
+        mode: "prefill" or "decode"
+        mesh_shape: Mesh shape tuple
+        num_layers: Number of layers to use (overrides config.num_hidden_layers)
+        reset_seeds: Fixture to reset random seeds
+    """
+    from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    is_decode = mode == "decode"
+
+    # Create submesh with specified shape
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+
+    # Setup test using TestFactory
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    config = setup["config"]
+
+    # Override number of layers
+    original_num_layers = config.num_hidden_layers
+    config.num_hidden_layers = num_layers
+    logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
+
+    # Set attention implementation
+    config._attn_implementation = "eager"
+
+    # Create mesh config
+    mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
+
+    # Load state dict in HF format for reference model
+    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False)
+    state_dict_hf = model_args.load_state_dict(
+        weights_path=model_args.model_path,
+        dummy_weights=False,
+        convert_to_meta_format=False,  # HF format for reference
+    )
+
+    # Convert to meta format for TT model
+    state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
+
+    logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
+
+    # Run the forward test
+    passing, output = run_model_forward_test(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict_meta=state_dict_meta,
+        state_dict_hf=state_dict_hf,
+        mesh_config=mesh_config,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        is_decode=is_decode,
+        pcc_threshold=0.85,  # Use slightly lower threshold for full model
+    )
+
+    if passing:
+        logger.info(f"✓ Model {mode} test passed. PCC: {output}")
+    else:
+        assert passing, f"Model {mode} test failed. PCC: {output}"

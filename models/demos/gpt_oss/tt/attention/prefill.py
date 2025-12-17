@@ -18,7 +18,6 @@ from .weights import AttentionWeights
 def prefill_forward(
     hidden_states,
     rope_mats,
-    user_id,
     weights: AttentionWeights,
     kv_cache,
     config: AttentionConfig,
@@ -29,6 +28,7 @@ def prefill_forward(
     position_idx,
     page_table,
     ccl_manager,
+    user_id=0,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).

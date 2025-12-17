@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_rope, get_mesh_coords
+from .operations import apply_allreduce, apply_rope
 from .weights import AttentionWeights
 
 
@@ -162,6 +162,6 @@ def decode_forward(
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
-    # tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out
