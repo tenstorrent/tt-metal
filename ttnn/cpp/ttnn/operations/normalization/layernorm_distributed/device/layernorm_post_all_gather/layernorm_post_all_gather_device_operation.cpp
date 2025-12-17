@@ -1,40 +1,51 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_post_all_gather_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/math.hpp"
+#include "layernorm_post_all_gather_device_operation.hpp"
+
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
 
-#include <optional>
+#include <string_view>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layernorm_post_all_gather {
 
-void LayerNormPostAllGather::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(
-        input_tensors.size() == 2 and optional_input_tensors.size() <= 2, "Must have between 12 to 4 input tensors");
-    const auto& a = input_tensors.at(0);
-    const auto& stats = input_tensors.at(1);
-    const auto& gamma = optional_input_tensors.at(0);
-    const auto& beta = optional_input_tensors.at(1);
-
-    for (const auto& tensor : input_tensors) {
-        TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
-        TT_FATAL(
-            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
-            "Input tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
-            tensor.dtype());
-        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
+        return program::LayerNormPostAllGather2DProgramFactory{};
     }
+    return program::LayerNormPostAllGatherProgramFactory{};
+}
+
+void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& a = tensor_args.input;
+    const auto& stats = tensor_args.stats;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
+
+    auto validate_input_tensor = [](const Tensor& t, std::string_view name) {
+        TT_FATAL(t.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, t.layout());
+        TT_FATAL(
+            t.dtype() == DataType::BFLOAT16 || t.dtype() == DataType::BFLOAT8_B,
+            "{} tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
+            name,
+            t.dtype());
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(t.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+    };
+
+    validate_input_tensor(a, "Input");
+    validate_input_tensor(stats, "Stats");
 
     // stats has 2 or 1 tile columns per device if layernorm or rmsnorm
     TT_FATAL(
@@ -100,7 +111,7 @@ void LayerNormPostAllGather::validate(
                 "Gamma tensor must be BFLOAT16, got: {}",
                 gamma_tensor.dtype());
         }
-        const bool is_layernorm = this->norm_type == LayerNormDistributedType::LAYERNORM;
+        const bool is_layernorm = args.norm_type == LayerNormDistributedType::LAYERNORM;
         const bool has_beta = beta.has_value();
         TT_FATAL(is_layernorm == has_beta, "Beta tensor must be present if and only if using layernorm (vs rmsnorm)");
 
@@ -156,34 +167,53 @@ void LayerNormPostAllGather::validate(
     }
 }
 
-std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {TensorSpec(
+spec_return_value_t LayerNormPostAllGatherDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    return TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
-            this->dtype.value_or(input_tensor.dtype()), tt::tt_metal::PageConfig(Layout::TILE), memory_config))};
+            args.output_dtype.value_or(input_tensor.dtype()),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            args.memory_config));
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& a = input_tensors.at(0);
-    const auto& stats = input_tensors.at(1);
-    const auto& gamma = optional_input_tensors.at(0);
-    const auto& beta = optional_input_tensors.at(1);
-    auto& output_tensor = output_tensors.at(0);
-
-    return layernorm_post_allgather_multi_core(
-        a,
-        stats,
-        gamma,
-        beta,
-        output_tensor,
-        this->norm_type,
-        this->eps,
-        this->compute_kernel_config,
-        this->use_2d_core_grid,
-        this->program_config);
+tensor_return_value_t LayerNormPostAllGatherDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
-}  // namespace ttnn::operations::normalization
+
+std::tuple<
+    LayerNormPostAllGatherDeviceOperation::operation_attributes_t,
+    LayerNormPostAllGatherDeviceOperation::tensor_args_t>
+LayerNormPostAllGatherDeviceOperation::invoke(
+    const Tensor& input,
+    const Tensor& stats,
+    const std::optional<Tensor>& gamma,
+    const std::optional<Tensor>& beta,
+    LayerNormDistributedType norm_type,
+    float eps,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
+    const std::optional<bool>& use_2d_core_grid,
+    const LayerNormDistributedDefaultProgramConfig& program_config) {
+    return {
+        operation_attributes_t{
+            .norm_type = norm_type,
+            .eps = eps,
+            .memory_config = memory_config,
+            .compute_kernel_config = compute_kernel_config,
+            .output_dtype = output_dtype,
+            .use_2d_core_grid = use_2d_core_grid,
+            .program_config = program_config,
+        },
+        tensor_args_t{
+            .input = input,
+            .stats = stats,
+            .gamma = gamma,
+            .beta = beta,
+        }};
+}
+
+}  // namespace ttnn::operations::normalization::layernorm_post_all_gather
