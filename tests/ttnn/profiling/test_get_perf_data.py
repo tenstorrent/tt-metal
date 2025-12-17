@@ -107,7 +107,9 @@ def _format_perf_data(perf_data: dict) -> str:
         for program in programs:
             uid = program.program_execution_uid
             analyses_items = sorted(program.program_analyses_results.items())
-            lines.append(f"  uid(runtime={uid.runtime_id}, trace={uid.trace_id}, ctr={uid.trace_id_counter}), ")
+            lines.append(
+                f"  uid(runtime={uid.runtime_id}, trace={uid.trace_id}, counter={uid.trace_id_counter}), cores={program.core_count}, num_available_cores={program.num_available_cores}"
+            )
             for name, res in analyses_items:
                 lines.append(
                     f"    {name}: start={res.start_timestamp}, end={res.end_timestamp}, duration={res.duration}"
