@@ -145,7 +145,7 @@ void setup_reader_defines(
     bool pred_is_bcast,
     bool true_is_bcast,
     bool false_is_bcast,
-    bool native_sharding) {
+    bool has_sharding) {
     using TernaryVariant = ttnn::operations::ternary::TernaryVariant;
 
     // Get sharding status for all tensors
@@ -169,14 +169,20 @@ void setup_reader_defines(
     }
 
     // Set sharding defines after dataflow defines
-    reader_defines["SRC_SHARDED_A"] = (predicate_sharded && native_sharding) ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = (value_true_sharded && native_sharding) ? "1" : "0";
-    reader_defines["SRC_SHARDED_C"] = (value_false_sharded && native_sharding) ? "1" : "0";
+    reader_defines["SRC_SHARDED_A"] = (predicate_sharded && has_sharding) ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = (value_true_sharded && has_sharding) ? "1" : "0";
+    reader_defines["SRC_SHARDED_C"] = (value_false_sharded && has_sharding) ? "1" : "0";
 }
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
+
+std::uint32_t* copy_common_runtime_args(const tt::tt_metal::Buffer& buffer, std::uint32_t* dst) {
+    const auto src = tt::tt_metal::TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+                         .get_common_runtime_args();
+    return std::copy(src.begin(), src.end(), dst);
+}
 
 bool is_llk_bcast(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
@@ -245,133 +251,6 @@ TensorMemoryLayout get_memory_layout(
     return TensorMemoryLayout::INTERLEAVED;
 }
 
-// Helper function to check if tensor has uneven sharding
-inline auto is_uneven(const ttnn::Tensor& t) {
-    if (!t.is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = t.shard_spec()->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-// AllShardSpecs structure for ternary
-struct AllShardSpecs {
-    tt::tt_metal::ShardSpec predicate_shard_spec;
-    tt::tt_metal::ShardSpec true_shard_spec;
-    tt::tt_metal::ShardSpec false_shard_spec;
-    tt::tt_metal::ShardSpec output_shard_spec;
-};
-
-// Check if native L1 sharding is supported
-// Only supports TTT variant
-bool is_native_L1_sharding(
-    const ttnn::Tensor& predicate_tensor,
-    const std::optional<ttnn::Tensor>& value_true_tensor,
-    const std::optional<ttnn::Tensor>& value_false_tensor,
-    const ttnn::Tensor& output) {
-    // Only support TTT variant
-    if (!value_true_tensor.has_value() || !value_false_tensor.has_value()) {
-        return false;
-    }
-
-    // Output must be sharded
-    if (!output.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // TTT: all three tensors exist
-    const auto& pred_shape = predicate_tensor.logical_shape();
-    const auto& true_shape = value_true_tensor->logical_shape();
-    const auto& false_shape = value_false_tensor->logical_shape();
-
-    // All shapes must be identical and predicate/true/false must have matching layouts
-    if (pred_shape == true_shape && pred_shape == false_shape &&
-        predicate_tensor.memory_config().memory_layout() == value_true_tensor->memory_config().memory_layout() &&
-        predicate_tensor.memory_config().memory_layout() == value_false_tensor->memory_config().memory_layout()) {
-        if (is_uneven(predicate_tensor) || is_uneven(*value_true_tensor) || is_uneven(*value_false_tensor) ||
-            is_uneven(output)) {
-            return false;
-        }
-        if (predicate_tensor.memory_config().buffer_type() == BufferType::DRAM ||
-            value_true_tensor->memory_config().buffer_type() == BufferType::DRAM ||
-            value_false_tensor->memory_config().buffer_type() == BufferType::DRAM ||
-            output.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((predicate_tensor.memory_config().is_sharded() &&
-             predicate_tensor.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((value_true_tensor->memory_config().is_sharded() &&
-             value_true_tensor->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((value_false_tensor->memory_config().is_sharded() &&
-             value_false_tensor->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((output.memory_config().is_sharded() && output.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// Get shard specs for ternary operation
-// Only supports TTT variant
-std::optional<AllShardSpecs> get_shard_specs(
-    const ttnn::Tensor& predicate_tensor,
-    const std::optional<ttnn::Tensor>& value_true_tensor,
-    const std::optional<ttnn::Tensor>& value_false_tensor,
-    const ttnn::Tensor& output) {
-    // Only support TTT variant
-    if (!value_true_tensor.has_value() || !value_false_tensor.has_value()) {
-        return std::nullopt;
-    }
-
-    bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-    bool true_sharded = value_true_tensor->memory_config().is_sharded();
-    bool false_sharded = value_false_tensor->memory_config().is_sharded();
-    bool output_sharded = output.memory_config().is_sharded();
-
-    if ((!predicate_sharded && !true_sharded && !false_sharded) && !output_sharded) {
-        return std::nullopt;
-    }
-
-    if (!is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output)) {
-        // treat as interleaved
-        return std::nullopt;
-    }
-
-    const auto& predicate_shape = predicate_tensor.padded_shape();
-    const auto& true_shape = value_true_tensor->padded_shape();
-    const auto& false_shape = value_false_tensor->padded_shape();
-    const auto& output_shape = output.padded_shape();
-
-    // Output must have a shard spec
-    TT_FATAL(output.shard_spec().has_value(), "Output must have a shard spec");
-    return AllShardSpecs{
-        predicate_sharded
-            ? *predicate_tensor.shard_spec()
-            : ttnn::operations::binary_ng::adjust_to_shape(*output.shard_spec(), output_shape, predicate_shape),
-        true_sharded ? *value_true_tensor->shard_spec()
-                     : ttnn::operations::binary_ng::adjust_to_shape(*output.shard_spec(), output_shape, true_shape),
-        false_sharded ? *value_false_tensor->shard_spec()
-                      : ttnn::operations::binary_ng::adjust_to_shape(*output.shard_spec(), output_shape, false_shape),
-        *output.shard_spec()};
-}
-
 // Get number of shards per width dimension
 uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -387,6 +266,117 @@ uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorM
     const auto& start = bbox.start_coord;
     const auto& end = bbox.end_coord;
     return (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
+}
+
+// Helper functions for TensorSpec
+const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+    return tensor_spec.memory_config().shard_spec();
+}
+
+inline auto is_uneven(const TensorSpec& t) {
+    if (not t.memory_config().is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = get_shard_spec(t)->shape;
+    const auto rank = shape.rank();
+
+    // Compute product of all dimensions except the last
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const TensorSpec& output_spec) {
+    // Only support TTT variant
+    if (!true_spec.has_value() || !false_spec.has_value()) {
+        return false;
+    }
+
+    // Output must be sharded
+    if (!output_spec.memory_config().is_sharded()) {
+        return false;
+    }
+
+    // All shapes must be identical and predicate/true/false must have matching layouts
+    if (predicate_spec.logical_shape() == true_spec->logical_shape() &&
+        predicate_spec.logical_shape() == false_spec->logical_shape() &&
+        predicate_spec.memory_config() == true_spec->memory_config() &&
+        predicate_spec.memory_config() == false_spec->memory_config()) {
+        if (is_uneven(predicate_spec) || is_uneven(*true_spec) || is_uneven(*false_spec) || is_uneven(output_spec)) {
+            return false;
+        }
+        if (predicate_spec.memory_config().buffer_type() == BufferType::DRAM ||
+            true_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            false_spec->memory_config().buffer_type() == BufferType::DRAM ||
+            output_spec.memory_config().buffer_type() == BufferType::DRAM) {
+            return false;
+        }
+        if ((predicate_spec.memory_config().is_sharded() &&
+             predicate_spec.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((true_spec->memory_config().is_sharded() && true_spec->memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if ((output_spec.memory_config().is_sharded() && output_spec.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const TensorSpec& output_spec) {
+    // Only support TTT variant
+    if (!true_spec.has_value() || !false_spec.has_value()) {
+        return std::nullopt;
+    }
+
+    bool predicate_sharded = predicate_spec.memory_config().is_sharded();
+    bool true_sharded = true_spec->memory_config().is_sharded();
+    bool false_sharded = false_spec->memory_config().is_sharded();
+    bool output_sharded = output_spec.memory_config().is_sharded();
+
+    if ((!predicate_sharded && !true_sharded && !false_sharded) && !output_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec)) {
+        // treat as interleaved
+        return std::nullopt;
+    }
+
+    const auto& predicate_shape = predicate_spec.padded_shape();
+    const auto& true_shape = true_spec->padded_shape();
+    const auto& false_shape = false_spec->padded_shape();
+    const auto& output_shape = output_spec.padded_shape();
+
+    // Output must have a shard spec
+    TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have a shard spec");
+    return AllShardSpecs{
+        predicate_sharded ? *get_shard_spec(predicate_spec)
+                          : adjust_to_shape(*get_shard_spec(output_spec), output_shape, predicate_shape),
+        true_sharded ? *get_shard_spec(*true_spec)
+                     : adjust_to_shape(*get_shard_spec(output_spec), output_shape, true_shape),
+        false_sharded ? *get_shard_spec(*false_spec)
+                      : adjust_to_shape(*get_shard_spec(output_spec), output_shape, false_shape),
+        *get_shard_spec(output_spec)};
 }
 
 // ShardShapeGenerator class
@@ -585,7 +575,11 @@ void set_or_update_runtime_arguments(
     uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // Get shard specs early
-    const auto shard_specs = get_shard_specs(predicate_tensor, value_true_tensor, value_false_tensor, output);
+    const auto shard_specs = get_shard_specs(
+        predicate_tensor.tensor_spec(),
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        output.tensor_spec());
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->predicate_shard_spec.grid : CoreRangeSet{};
 
@@ -709,12 +703,8 @@ void set_or_update_runtime_arguments(
                 auto false_shard_shape = false_shard_shape_generator(core);
                 f_num_tiles = false_shard_shape[0] * false_shard_shape[1];  // actual
             }
-            if (is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output)) {
-                c_start_id = (i / num_shards_per_width) * (c_shard_height * output_dims.Wt) +
-                             (i % num_shards_per_width) * c_shard_width;
-            } else {
-                c_start_id = start_tile_id;
-            }
+            c_start_id = (i / num_shards_per_width) * (c_shard_height * output_dims.Wt) +
+                         (i % num_shards_per_width) * c_shard_width;
         } else {
             c_start_id = start_tile_id;
         }
@@ -850,6 +840,37 @@ void set_or_update_runtime_arguments(
 }  // namespace
 
 namespace ttnn::operations::ternary {
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const TensorSpec& predicate_spec,
+    const std::optional<TensorSpec>& true_spec,
+    const std::optional<TensorSpec>& false_spec,
+    const TensorSpec& output_spec) {
+    const auto shard_specs =
+        CMAKE_UNIQUE_NAMESPACE::get_shard_specs(predicate_spec, true_spec, false_spec, output_spec);
+
+    if (not shard_specs.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto predicate_sharded = predicate_spec.memory_config().is_sharded();
+    const auto true_sharded = true_spec.has_value() and true_spec->memory_config().is_sharded();
+    const auto false_sharded = false_spec.has_value() and false_spec->memory_config().is_sharded();
+    const auto output_sharded = output_spec.memory_config().is_sharded();
+    const auto tile_hw = output_spec.tile().get_tile_hw();
+
+    return AllShardVolumes{
+        .predicate_shard_volume =
+            predicate_sharded ? shard_specs->predicate_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .true_shard_volume =
+            true_sharded ? shard_specs->true_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .false_shard_volume =
+            false_sharded ? shard_specs->false_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .output_shard_volume =
+            output_sharded ? shard_specs->output_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+    };
+}
+
 TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOperation::TernaryProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -900,41 +921,34 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    // Get shard specs
-    const auto shard_specs =
-        CMAKE_UNIQUE_NAMESPACE::get_shard_specs(predicate_tensor, value_true_tensor, value_false_tensor, output);
-    const bool has_sharding = shard_specs.has_value();
-
-    // Compute native_sharding
-    const bool native_sharding =
-        CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output);
-
-    auto tile_hw = output.tensor_spec().tile().get_tile_hw();
-    uint32_t predicate_num_tiles_per_shard = has_sharding ? shard_specs->predicate_shard_spec.numel() / tile_hw : 0;
-    uint32_t true_num_tiles_per_shard =
-        has_sharding ? (value_true_tensor.has_value() ? shard_specs->true_shard_spec.numel() / tile_hw : 0) : 0;
-    uint32_t false_num_tiles_per_shard =
-        has_sharding ? (value_false_tensor.has_value() ? shard_specs->false_shard_spec.numel() / tile_hw : 0) : 0;
-    uint32_t output_num_tiles_per_shard = has_sharding ? shard_specs->output_shard_spec.numel() / tile_hw : 0;
+    // Get shard volumes (using TensorSpec like binary_ng)
+    const auto shard_volumes = get_shard_volumes(
+        predicate_tensor.tensor_spec(),
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        output.tensor_spec());
+    const bool has_sharding = shard_volumes.has_value();
+    const auto predicate_sharded = has_sharding and shard_volumes->predicate_shard_volume.has_value();
+    const auto true_sharded = has_sharding and shard_volumes->true_shard_volume.has_value();
+    const auto false_sharded = has_sharding and shard_volumes->false_shard_volume.has_value();
+    const auto output_sharded = has_sharding and shard_volumes->output_shard_volume.has_value();
+    const auto predicate_num_tiles_per_shard = has_sharding ? shard_volumes->predicate_shard_volume : std::nullopt;
+    const auto true_num_tiles_per_shard = has_sharding ? shard_volumes->true_shard_volume : std::nullopt;
+    const auto false_num_tiles_per_shard = has_sharding ? shard_volumes->false_shard_volume : std::nullopt;
+    const auto output_num_tiles_per_shard = has_sharding ? shard_volumes->output_shard_volume : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     constexpr uint32_t num_tiles_per_cb = 2;
-
-    bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-    bool true_sharded = value_true_tensor.has_value() && value_true_tensor->memory_config().is_sharded();
-    bool false_sharded = value_false_tensor.has_value() && value_false_tensor->memory_config().is_sharded();
-    bool output_sharded = output.memory_config().is_sharded();
     // Input buffers - Create predicate CB (always c_0)
-    const bool predicate_native_sharding = predicate_sharded && native_sharding;
     auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
         program,
         all_device_cores,
         predicate_single_tile_size,
-        predicate_native_sharding ? predicate_num_tiles_per_shard : num_tiles_per_cb,
+        predicate_num_tiles_per_shard.value_or(num_tiles_per_cb),
         predicate_data_format,
-        predicate_native_sharding ? predicate_tensor.buffer() : nullptr);
+        predicate_sharded ? predicate_tensor.buffer() : nullptr);
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
@@ -944,41 +958,37 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)
-        const bool true_native_sharding = true_sharded && native_sharding;
         auto [cb, cb_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
             all_device_cores,
             value_true_single_tile_size,
-            true_native_sharding ? true_num_tiles_per_shard : num_tiles_per_cb,
+            true_num_tiles_per_shard.value_or(num_tiles_per_cb),
             value_true_data_format,
-            true_native_sharding ? value_true_tensor->buffer() : nullptr);
+            true_sharded ? value_true_tensor->buffer() : nullptr);
         value_true_tensor_cb = cb;
         value_true_tensor_cb_handle = cb_handle;
     } else if (variant == TernaryVariant::TST) {
         // TST: c_1 = value_false tensor (value_true is scalar)
-        const bool false_native_sharding = false_sharded && native_sharding;
         auto [cb, cb_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
             all_device_cores,
             value_false_single_tile_size,
-            false_native_sharding ? false_num_tiles_per_shard : num_tiles_per_cb,
+            false_num_tiles_per_shard.value_or(num_tiles_per_cb),
             value_false_data_format,
-            false_native_sharding ? value_false_tensor->buffer() : nullptr);
+            false_sharded ? value_false_tensor->buffer() : nullptr);
         value_false_tensor_cb = cb;
         value_false_tensor_cb_handle = cb_handle;
     } else if (variant == TernaryVariant::TTT) {
-        const bool true_native_sharding = true_sharded && native_sharding;
-        const bool false_native_sharding = false_sharded && native_sharding;
         auto [cb1, cb1_handle] = create_cb(
             tt::CBIndex::c_1,
             program,
             all_device_cores,
             value_true_single_tile_size,
-            true_native_sharding ? true_num_tiles_per_shard : num_tiles_per_cb,
+            true_num_tiles_per_shard.value_or(num_tiles_per_cb),
             value_true_data_format,
-            true_native_sharding ? value_true_tensor->buffer() : nullptr);
+            true_sharded ? value_true_tensor->buffer() : nullptr);
         value_true_tensor_cb = cb1;
         value_true_tensor_cb_handle = cb1_handle;
 
@@ -988,9 +998,9 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
             program,
             all_device_cores,
             value_false_single_tile_size,
-            false_native_sharding ? false_num_tiles_per_shard : num_tiles_per_cb,
+            false_num_tiles_per_shard.value_or(num_tiles_per_cb),
             value_false_data_format,
-            false_native_sharding ? value_false_tensor->buffer() : nullptr);
+            false_sharded ? value_false_tensor->buffer() : nullptr);
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
@@ -1022,15 +1032,14 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     }
     // Output buffer - use c_3 for all cases now
     auto output_cb_index = tt::CBIndex::c_3;
-    const bool output_native_sharding = output_sharded && native_sharding;
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         output_cb_index,
         program,
         all_device_cores,
         output_single_tile_size,
-        output_native_sharding ? output_num_tiles_per_shard : num_tiles_per_cb,
+        output_num_tiles_per_shard.value_or(num_tiles_per_cb),
         output_data_format,
-        output_native_sharding ? output.buffer() : nullptr);
+        output_sharded ? output.buffer() : nullptr);
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
     bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
@@ -1056,7 +1065,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         pred_is_bcast,
         true_is_bcast,
         false_is_bcast,
-        native_sharding);
+        has_sharding);
 
     std::map<std::string, std::string> kernel_defines;
     if (variant == TernaryVariant::TTT) {
@@ -1073,32 +1082,44 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         }
     }
     tt_metal::ReaderDataMovementConfig reader_config;
+    std::vector<uint32_t> reader_common_runtime_args;
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
-        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
+        tt::tt_metal::TensorAccessorArgs(
+            *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
 
     } else if (variant == TernaryVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
-        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
+        tt::tt_metal::TensorAccessorArgs(
+            *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else if (variant == TernaryVariant::TTT) {
         std::vector<uint32_t> reader_compile_time_args;
         reader_compile_time_args.push_back((std::uint32_t)predicate_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_true_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_false_tensor_cb);
-        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding && native_sharding));
+        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
+        tt::tt_metal::TensorAccessorArgs(
+            *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
+        tt::tt_metal::TensorAccessorArgs(
+            *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            .append_to(reader_compile_time_args, reader_common_runtime_args);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     }
 
@@ -1113,17 +1134,21 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     auto reader_kernel_id =
         tt_metal::CreateKernel(program, get_kernel_file_path(reader_kernel, is_fpu), all_device_cores, reader_config);
+    tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
-    tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
-    writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding && native_sharding));
+    std::vector<uint32_t> writer_common_runtime_args;
+    tt::tt_metal::TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     std::map<std::string, std::string> writer_defines;
-    writer_defines["DST_SHARDED"] = (output_sharded && native_sharding) ? "1" : "0";
+    writer_defines["DST_SHARDED"] = (output_sharded && has_sharding) ? "1" : "0";
     tt_metal::WriterDataMovementConfig writer_config =
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines);
 
     auto writer_kernel_id =
         tt_metal::CreateKernel(program, get_kernel_file_path(writer_kernel, is_fpu), all_device_cores, writer_config);
+    tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
@@ -1242,7 +1267,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         set_runtime_args);
 
     // Update dynamic circular buffer addresses for sharded tensors
-    if (has_sharding && native_sharding) {
+    if (has_sharding) {
         TT_FATAL(
             value_true_tensor.has_value() && value_false_tensor.has_value(),
             "Dynamic buffer updates only supported for TTT variant");
@@ -1268,12 +1293,39 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto update_args =
-        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
-            auto& all_args = GetRuntimeArgs(program, kernel_id);
-            auto& core_args = all_args.at(core.x).at(core.y);
-            std::copy(args.begin(), args.end(), core_args.data());
-        };
+    auto& program = cached_program.program;
+    auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+
+    {
+        const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
+        auto* predicate_buffer = predicate_tensor.buffer();
+        auto* output_buffer = output.buffer();
+
+        // Update common runtime args for reader kernel
+        auto* args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
+        if (operation_attributes.ternary_variant == TernaryVariant::TTS) {
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
+        } else if (operation_attributes.ternary_variant == TernaryVariant::TST) {
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
+        } else {  // TTT
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
+            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
+        }
+
+        // Update common runtime args for writer kernel
+        args = GetCommonRuntimeArgs(program, writer_kernel_id).data();
+        CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*output_buffer, args);
+    }
+
+    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
+        auto& all_args = GetRuntimeArgs(program, kernel_id);
+        auto& core_args = all_args.at(core.x).at(core.y);
+        std::copy(args.begin(), args.end(), core_args.data());
+    };
 
     // Detect broadcast type for the cached program
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
@@ -1294,9 +1346,9 @@ void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
     }
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        cached_program.program,
-        cached_program.shared_variables.reader_kernel_id,
-        cached_program.shared_variables.writer_kernel_id,
+        program,
+        reader_kernel_id,
+        writer_kernel_id,
         cached_program.shared_variables.compute_kernel_id,
         operation_attributes,
         tensor_args,

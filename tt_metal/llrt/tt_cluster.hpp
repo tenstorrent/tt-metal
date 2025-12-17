@@ -41,7 +41,7 @@ class RunTimeOptions;
 namespace tt_fabric {
 class ControlPlane;
 class FabricNodeId;
-}
+}  // namespace tt_fabric
 namespace tt_metal {
 class Hal;
 }
@@ -103,6 +103,12 @@ public:
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
+
+    // Returns map of logical chip ID to PCIe device ID
+    const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
+        return this->cluster_desc_->get_chips_with_mmio();
+    }
+
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
@@ -316,6 +322,8 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
+    // Returns whether NOC mapping is enabled on the system (cached at init time)
+    bool is_noc_mapping_enabled() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -389,6 +397,8 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
+    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
+    bool noc_mapping_enabled_ = false;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped

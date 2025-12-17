@@ -103,11 +103,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = NUM_HOPS;
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = FABRIC_2D;
 
@@ -225,6 +222,8 @@ struct PrefetchExecBufState {
     uint32_t log_page_size;
     uint32_t pages;
     uint32_t length;
+    uint32_t read_ptr;
+    uint32_t prefetch_length;
 };
 
 // Global Variables
@@ -236,6 +235,11 @@ static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
+
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
@@ -1057,34 +1061,115 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_state) {
+// This function reads data from the DRAM and populates the cmddat_q l1 buffer.
+// It starts by fetching initial chunk of 16KB from DRAM and then prefetches
+// the rest and returns to have the initial cmddat_q to be processed.
+// All fetching from DRAM stops at the end of cmddat_q until the cmddat_q are
+// processed.  Then it repeats again. Note: exec_buf_state struct must be
+// initialized to start using this function.
+void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_state) {
     uint32_t page_id = exec_buf_state.page_id;
     uint32_t base_addr = exec_buf_state.base_addr;
     uint32_t log_page_size = exec_buf_state.log_page_size;
     uint32_t page_size = 1 << log_page_size;
     uint32_t pages = exec_buf_state.pages;
+    uint32_t read_ptr = exec_buf_state.read_ptr;
+    constexpr uint32_t INITIAL_FETCH_SIZE = 16 * 1024;                           // 16KB (OPTIMIZE HERE)
+    constexpr uint32_t PREFETCH_FETCH_SIZE = cmddat_q_size - INITIAL_FETCH_SIZE;  // the rest
 
-    // TODO: tune how much is read
-    uint32_t max_trace_buffer_pages_in_cmd_dat_q = cmddat_q_size >> log_page_size;
-    uint32_t pages_at_once =
-        (max_trace_buffer_pages_in_cmd_dat_q > pages) ? pages : max_trace_buffer_pages_in_cmd_dat_q;
-    uint32_t read_length = pages_at_once << log_page_size;
-    uint32_t pages_read = pages_at_once;
+    // To handle cmddat_q that are non multiples of page_size
+    uint32_t trace_q_end = cmddat_q_base + (((cmddat_q_end - cmddat_q_base) >> log_page_size) << log_page_size);
 
-    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
-
-    while (pages_at_once != 0) {
-        invalidate_l1_cache();
-        uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-        noc_async_read(noc_addr, read_ptr, page_size);
-        read_ptr += page_size;
-        page_id++;
-        pages_at_once--;
+    // This function also resets the cmd_ptr when it is at the end of cmddat_q.
+    // That is the only thing related to cmd_ptr in this function.
+    if (cmd_ptr == trace_q_end) {
+        cmd_ptr = cmddat_q_base;
     }
 
-    exec_buf_state.page_id = page_id;
-    exec_buf_state.pages -= pages_read;
-    exec_buf_state.length += read_length;
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
+    // set transaction ID to 1 for all read
+    noc_async_read_set_trid(1);
+    ASSERT(page_size <= NOC_MAX_BURST_SIZE);
+    // Initialize the read size for all later commands.
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
+
+    // initial read
+    if (exec_buf_state.prefetch_length == 0) {
+        uint32_t initial_read_pages = INITIAL_FETCH_SIZE >> log_page_size;
+        uint32_t initial_pages_at_once = (initial_read_pages > pages) ? pages : initial_read_pages;
+        uint32_t initial_read_length = initial_pages_at_once << log_page_size;
+        pages -= initial_pages_at_once;
+
+        while (initial_pages_at_once != 0) {
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            if (pages_to_read > initial_pages_at_once) {
+                pages_to_read = initial_pages_at_once;
+            }
+            initial_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
+        }
+        noc_async_read_barrier_with_trid(1);
+        // update length always after barrier to make sure data in cmddat_q
+        exec_buf_state.page_id = page_id;
+        exec_buf_state.pages = pages;
+        exec_buf_state.length += initial_read_length;
+        exec_buf_state.read_ptr = read_ptr;
+    } else {
+        ASSERT(exec_buf_state.length == 0);
+        // add barrier to wait for prefetch noc read to complete
+        noc_async_read_barrier_with_trid(1);
+        // update always after barrier to make sure data in cmddat_q
+        exec_buf_state.length += exec_buf_state.prefetch_length;
+        exec_buf_state.prefetch_length = 0;
+    }
+
+    // prefetch only when there are still pages to prefetch
+    if (exec_buf_state.pages > 0) {
+        // wrap around to prefetch from beginning again
+        uint32_t max_prefetch_size = PREFETCH_FETCH_SIZE;
+        if (read_ptr == trace_q_end) {
+            max_prefetch_size = INITIAL_FETCH_SIZE;
+            read_ptr = cmddat_q_base;
+        }
+        uint32_t prefetch_read_pages = max_prefetch_size >> log_page_size;
+        uint32_t prefetch_pages_at_once = (prefetch_read_pages > pages) ? pages : prefetch_read_pages;
+        uint32_t prefetch_read_length = prefetch_pages_at_once << log_page_size;
+        pages -= prefetch_pages_at_once;
+
+        while (prefetch_pages_at_once != 0) {
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            if (pages_to_read > prefetch_pages_at_once) {
+                pages_to_read = prefetch_pages_at_once;
+            }
+            prefetch_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
+        }
+        // update length always after barrier to make sure data in cmddat_q
+        exec_buf_state.page_id = page_id;
+        exec_buf_state.pages = pages;
+        exec_buf_state.prefetch_length = prefetch_read_length;
+        exec_buf_state.read_ptr = read_ptr;
+    }
+
+    // set transaction ID to 0 for other noc read to not use transaction id 1
+    // to remove unnecessary barrier delay
+    noc_async_read_set_trid(0);
+    // Ensure reads receive the updated data.
+    invalidate_l1_cache();
 }
 
 // processes the relay_inline cmd from an exec_buf
@@ -1122,15 +1207,14 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
-        data_ptr = cmddat_q_base;
-        cmd_ptr = cmddat_q_base;
+        cmd_ptr += remaining_stride;
 
         // fetch more
         noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
+        data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
-        noc_async_read_barrier();
     }
     write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
         data_ptr,
@@ -1177,13 +1261,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
-        data_ptr = cmddat_q_base;
-        cmd_ptr = cmddat_q_base;
+        cmd_ptr += remaining_stride;
 
         // fetch more
         noc_async_writes_flushed();
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
-        noc_async_read_barrier();
+        data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -1218,10 +1301,9 @@ void* copy_into_l1_cache(
         sub_cmds_length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
-        cmd_ptr = cmddat_q_base;
-        l1_ptr = (volatile uint32_t tt_l1_ptr*)(cmd_ptr);
+        cmd_ptr += remaining_stride;
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
-        noc_async_read_barrier();
+        l1_ptr = (volatile uint32_t tt_l1_ptr*)(cmd_ptr);
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -1266,18 +1348,19 @@ uint32_t process_exec_buf_cmd(
     // the exec_buf contains the release commands
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr_outer;
 
+    // setup exec_buf_state the first time
     exec_buf_state.page_id = 0;
     exec_buf_state.base_addr = cmd->exec_buf.base_addr;
     exec_buf_state.log_page_size = cmd->exec_buf.log_page_size;
     exec_buf_state.pages = cmd->exec_buf.pages;
     exec_buf_state.length = 0;
+    exec_buf_state.read_ptr = cmddat_q_base;
+    exec_buf_state.prefetch_length = 0;
+    uint32_t cmd_ptr = cmddat_q_base;
 
     bool done = false;
     while (!done) {
-        uint32_t cmd_ptr = cmddat_q_base;
-
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
-        noc_async_read_barrier();
 
         while (exec_buf_state.length > 0) {
             uint32_t stride;
@@ -1841,14 +1924,11 @@ void kernel_main_h() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
-        my_dev_id,
-        to_dev_id,
         to_mesh_id,
         ew_dim,
-        router_direction,
         fabric_header_rb_base,
         num_hops,
-        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 
     while (!done) {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
@@ -1901,14 +1981,11 @@ void kernel_main_d() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
-        my_dev_id,
-        to_dev_id,
         to_mesh_id,
         ew_dim,
-        router_direction,
         fabric_header_rb_base,
         num_hops,
-        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
@@ -1984,6 +2061,11 @@ void kernel_main() {
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

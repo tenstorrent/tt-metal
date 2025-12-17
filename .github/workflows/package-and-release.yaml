@@ -1,4 +1,4 @@
-name: Package and release
+name: "Package and release"
 on:
   workflow_dispatch:
     inputs:
@@ -258,11 +258,15 @@ jobs:
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
     runs-on: ubuntu-latest
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     concurrency: create_upload_draft_release
     outputs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check release conditions and existing assets
         id: check-release-conditions
         env:
@@ -360,7 +364,10 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ needs.check-existing-release.outputs.should-skip-release != 'true' }}
+    if: ${{ !cancelled() &&
+            needs.check-existing-release.result == 'success' &&
+            needs.check-existing-release.outputs.should-skip-release != 'true'
+        }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -442,7 +449,7 @@ jobs:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ !inputs.dry-run }}
+    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

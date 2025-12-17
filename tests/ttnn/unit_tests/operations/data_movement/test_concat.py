@@ -335,3 +335,20 @@ def test_concat_sharded_pad(device, core_grid, hw, channels1, channels2, shard_h
     )
     expected = torch.concat([torch_input_tensor1, torch_input_tensor2], dim=-1)
     assert_equal(expected, ttnn.to_torch(actual))
+
+
+@pytest.mark.parametrize("input_shapes", [(32, 96), (31, 95), (1023, 1023), (64, 31), (127, 32), (7, 1), (1, 1)])
+@pytest.mark.parametrize("dim", [0, -1])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_concat_1d(device, layout, dim, input_shapes):
+    a = torch.randn(input_shapes[0], dtype=torch.bfloat16)
+    b = torch.randn(input_shapes[1], dtype=torch.bfloat16)
+    torch_output_tensor = torch.concat([a, b], dim=dim)
+
+    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout)
+    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout)
+
+    output = ttnn.concat([in1, in2], dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_equal(torch_output_tensor, output)

@@ -1,5 +1,5 @@
 name: "[internal] C++ tests impl"
-
+# This workflow file does not run in APC (CCL runs in merge-gate and the others run in Nightly L2)
 on:
   workflow_call:
     inputs:
@@ -19,11 +19,16 @@ on:
       build-artifact-name:
         required: true
         type: string
-      wheel-artifact-name:
-        required: true
-        type: string
       enable-watcher:
         description: 'Enable watcher'
+        default: false
+        type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
         default: false
         type: boolean
       gtest_filter:
@@ -36,6 +41,10 @@ on:
         required: false
         type: boolean
         default: false
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
 jobs:
   define-cpp-tests:
     runs-on: ubuntu-latest
@@ -45,23 +54,15 @@ jobs:
       matrix:
         default-cpp-tests:
           [[
-            # Nigthly jobs that currently don't run any tests in the L2-Nightly pipeline are commented out
-            { name: "All C++", cmd: '{ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && (echo "Running sdpa_reduce_c C++ nightly (nightly filter: $GTEST_FILTER)" && ./build/test/tt_metal/test_sdpa_reduce_c) || ./tests/scripts/run_cpp_unit_tests.sh', nightly: false }, # 15 minutes
-            { name: "Nightly All C++", cmd: '{ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && (echo "Running sdpa_reduce_c C++ nightly (nightly filter: $GTEST_FILTER)" && ./build/test/tt_metal/test_sdpa_reduce_c) || ./tests/scripts/run_cpp_unit_tests.sh', nightly: true }, # 15 minutes
-            { name: "CCL", cmd: './build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter=$GTEST_FILTER && ./build/test/ttnn/unit_tests_ttnn_ccl_ops --gtest_filter=$GTEST_FILTER', nightly: false },
-            # { name: "Nightly CCL", cmd: './build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter=$GTEST_FILTER && ./build/test/ttnn/unit_tests_ttnn_ccl_ops --gtest_filter=$GTEST_FILTER', nightly: true },
-            { name: "dispatch", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER', nightly: false },
-            { name: "Nightly dispatch", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER', nightly: true },
+            # Nightly jobs that currently don't run any tests in the L2-Nightly pipeline are commented out
+            { name: "All C++", cmd: '{ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && (echo "Running sdpa_reduce_c C++ nightly (nightly filter: $GTEST_FILTER)" && ./build/test/tt_metal/test_sdpa_reduce_c) && ./tests/scripts/run_cpp_unit_tests.sh', nightly: true }, # 15 minutes -  Only runs on Nightly-L2
+            { name: "dispatch", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*', nightly: true },  # Only runs on Nightly-L2
             { name: "dispatch multicmd queue", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*', nightly: true }, # Only runs on Nightly-L2
-            { name: "distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=$GTEST_FILTER && ({ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_multiprocess_socket_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh)', nightly: false },
-            # { name: "Nightly distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=$GTEST_FILTER && ({ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_multiprocess_socket_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh)', nightly: true },
-            { name: "eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}', nightly: false },
-            # { name: "Nightly eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}', nightly: true },
-            { name: "tools", cmd: '({ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_tools_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_tools_tests.sh) && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER', nightly: false },
-            # { name: "Nightly tools", cmd: '({ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_tools_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_tools_tests.sh) && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER', nightly: true },
-            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: false },
-            # { name: "Nightly ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: true },
-            { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true },
+            { name: "distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=* && ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh', nightly: true, auto-triage: true },  # Only runs on Nightly-L2
+            { name: "eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth && ./build/test/tt_metal/unit_tests_misc && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*', nightly: true, auto-triage: true },
+            { name: "tools", cmd: './tests/scripts/run_tools_tests.sh && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=* && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=*', nightly: true, auto-triage: false },  # Only runs on Nightly-L2
+            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true },
+            { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true, auto-triage: true },
           ]]
     steps:
       - name: Compute tests
@@ -77,6 +78,8 @@ jobs:
 
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
+
+          # If a test needs to run in merge-gate, filter will be added to include only those tests here
 
           # Check that we have a valid test list that's not empty
           echo "$requested_cpp_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
@@ -116,19 +119,25 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
-          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
-          # https://github.com/tenstorrent/tt-metal/issues/20166
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
+          slow-dispatch-timeout: 10
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.nightly-run && 45 || inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
             GTEST_FILTER="${{inputs.gtest_filter}}"

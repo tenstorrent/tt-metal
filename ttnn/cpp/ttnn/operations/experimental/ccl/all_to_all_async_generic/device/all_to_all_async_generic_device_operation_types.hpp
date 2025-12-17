@@ -9,8 +9,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <optional>
 
-namespace ttnn::operations::experimental::ccl {
-namespace all_to_all_async_generic {
+namespace ttnn::operations::experimental::ccl::all_to_all_async_generic {
 
 struct operation_attributes_t {
     const uint32_t in_dim;
@@ -31,5 +30,4 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = TensorSpec;
 
-}  // namespace all_to_all_async_generic
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic

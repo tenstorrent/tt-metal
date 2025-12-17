@@ -33,6 +33,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
@@ -61,6 +63,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     using tt::tt_metal::TensorMemoryLayout;
 
     // currently only support transpose of the full tile
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     bool fuse_op = fused_op_signaler.has_value();
@@ -128,8 +131,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_height();
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
 
@@ -315,6 +318,18 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
     }
 
+    const auto in0_tensor_stride_w = transpose_a ? M : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+    const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
+    const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
+    const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
+    const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
+
     if (in0_block_sharded) {
         uint32_t num_x = in0_sender_num_cores_along_width;
         uint32_t num_y = 1;
@@ -352,10 +367,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     } else {
         in0_sender_compile_time_args = {
             // in0 tensor args
-            (std::uint32_t)1,                // in0_tensor_stride_w
-            (std::uint32_t)K,                // in0_tensor_stride_h
-            (std::uint32_t)in0_block_w,      // in0_tensor_next_inner_dim_block_stride
-            (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+            (std::uint32_t)in0_tensor_stride_w,
+            (std::uint32_t)in0_tensor_stride_h,
+            (std::uint32_t)in0_tensor_next_block_stride,
+            (std::uint32_t)in0_tensor_next_h_dim_block_stride,
             // in0 block args
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)in0_block_h,          // in0_block_h
@@ -392,10 +407,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
         // in1 tensor args
-        (std::uint32_t)1,                // in1_tensor_stride_w
-        (std::uint32_t)N,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
         // in1 block args
         (std::uint32_t)in1_block_w,                // in1_block_w
         (std::uint32_t)in0_block_w,                // in1_block_h
@@ -753,7 +768,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
-        false          // get_batch_from_reader
+        false,         // get_batch_from_reader
+        in0_transpose_tile,
     };
 
     // Create compute kernel
@@ -919,6 +935,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 .set_tile_dims(in0_intermediate_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
+
+    if (in0_transpose_tile) {
+        uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
+        auto in0_transpose_cb_config =
+            tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
+                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_transpose_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
+    }
+
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
@@ -1044,7 +1070,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
-                (std::uint32_t)K * per_core_M * in0_idx,  // in0_tensor_start_tile_id
+                (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
                 (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
@@ -1092,7 +1118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     // READER
                     // in1 tensor args
                     (std::uint32_t)in1_buffer->address(),
-                    (std::uint32_t)per_core_N * in1_idx,  // in1_tensor_start_tile_id
+                    (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
                     (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
@@ -1407,11 +1433,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
 }  // namespace reuse_mcast_optimized_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     tt::tt_metal::Program& program,
@@ -1420,6 +1442,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const std::optional<const Tensor>& bias,
     Tensor& output,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1434,21 +1458,21 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    auto in0_tile = a.tensor_spec().tile();
-    auto in1_tile = b.tensor_spec().tile();
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, transpose_b);
+    const auto in0_tile = get_matmul_tile(a, transpose_a);
+    const auto in1_tile = get_matmul_tile(b, transpose_b);
+
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
@@ -1484,30 +1508,30 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         in1_single_tile_size);
 
     TT_FATAL(
-        ashape[-1] == bshape[-2],
+        a_shape_padded[-1] == b_shape_padded[-2],
         "Dimension K (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
-        ashape[-1],
-        bshape[-2]);
+        a_shape_padded[-1],
+        b_shape_padded[-2]);
     TT_FATAL(
-        ashape[-2] % in0_tile_shape[0] == 0,
+        a_shape_padded[-2] % in0_tile.get_height() == 0,
         "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
-        ashape[-2],
-        in0_tile_shape[0]);
+        a_shape_padded[-2],
+        in0_tile.get_height());
     TT_FATAL(
-        ashape[-1] % in0_tile_shape[1] == 0,
+        a_shape_padded[-1] % in0_tile.get_width() == 0,
         "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
-        ashape[-1],
-        in0_tile_shape[1]);
+        a_shape_padded[-1],
+        in0_tile.get_width());
     TT_FATAL(
-        bshape[-2] % in1_tile_shape[0] == 0,
+        b_shape_padded[-2] % in1_tile.get_height() == 0,
         "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
-        bshape[-2],
-        in1_tile_shape[0]);
+        b_shape_padded[-2],
+        in1_tile.get_height());
     TT_FATAL(
-        bshape[-1] % in1_tile_shape[1] == 0,
+        b_shape_padded[-1] % in1_tile.get_width() == 0,
         "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
-        bshape[-1],
-        in1_tile_shape[1]);
+        b_shape_padded[-1],
+        in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1516,15 +1540,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
+    const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
+    const auto Kt = get_K_dim(a_shape_padded, in0_tile);
+    const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    if (fuse_batch) {
-        Mt = B * Mt;
-        B = 1;
-    }
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
@@ -1572,6 +1592,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         Nt,
         Kt,
         bcast_batch,
+        transpose_a,
+        transpose_b,
         ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
@@ -1605,6 +1627,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
     bool broadcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -1628,6 +1652,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         bias,
         output_tensor,
         broadcast_batch,
+        transpose_a,
+        transpose_b,
         compute_with_storage_grid_size,
         compute_kernel_config,
         in0_block_w,
@@ -1665,6 +1691,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         bias,
         output_tensor,
         broadcast_batch,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
         config.in0_block_w,
@@ -1681,8 +1709,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         fused_op_signaler);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

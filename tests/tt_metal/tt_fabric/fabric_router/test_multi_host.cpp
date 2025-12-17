@@ -20,8 +20,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <hostdevcommon/fabric_common.h>
 
-namespace tt::tt_fabric {
-namespace multi_host_tests {
+namespace tt::tt_fabric::multi_host_tests {
 
 std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_connections(const ControlPlane& control_plane) {
     std::vector<std::pair<FabricNodeId, FabricNodeId>> all_intermesh_connections;
@@ -806,5 +805,102 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
 }
 
-}  // namespace multi_host_tests
-}  // namespace tt::tt_fabric
+TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
+    const std::filesystem::path t3k_2x2_assign_z_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(t3k_2x2_assign_z_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Verify that MeshGraph correctly identifies mesh pairs that should use Z direction
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(MeshId{0}, MeshId{1}))
+        << "Mesh 0 <-> Mesh 1 should use Z direction";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(MeshId{1}, MeshId{0}))
+        << "Mesh 1 <-> Mesh 0 should use Z direction (bidirectional)";
+
+    control_plane.print_routing_tables();
+
+    // Test Z direction functionality
+    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
+    EXPECT_EQ(
+        control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
+        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+
+    // Verify get_forwarding_eth_chans_to_chip can handle Z direction for intermesh connections
+    const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
+    EXPECT_EQ(intermesh_connections.size(), 8);  // 2x2 mesh, 4 chips per mesh, bidirectional = 8 total
+
+    size_t z_direction_intermesh_count = 0;
+    for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        // Verify that intermesh connections use Z direction when assign_z_direction is set
+        if (direction == RoutingDirection::Z) {
+            z_direction_intermesh_count++;
+        }
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+
+        // Verify Z direction channels can be retrieved
+        const auto& z_chans =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::Z);
+        // For intermesh connections with assign_z_direction, Z channels should exist
+        if (direction == RoutingDirection::Z) {
+            EXPECT_TRUE(!z_chans.empty())
+                << "Z direction channels should exist for intermesh connections with assign_z_direction";
+            for (const auto& chan : z_chans) {
+                bool is_valid_chan = (chan == 0 || chan == 1 || chan == 6 || chan == 7);
+                EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
+            }
+        }
+    }
+
+    // Verify that all intermesh connections use Z direction (since assign_z_direction is set)
+    EXPECT_EQ(z_direction_intermesh_count, intermesh_connections.size())
+        << "All intermesh connections should use Z direction when assign_z_direction is set";
+
+    // Verify Z direction channels are properly assigned for intermesh connections
+    // Check if any fabric node has Z direction channels assigned for intermesh connections
+    const auto& mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
+    size_t z_channel_count = 0;
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& chip_ids = control_plane.get_mesh_graph().get_chip_ids(mesh_id);
+        for (const auto& [_, chip_id] : chip_ids) {
+            auto fabric_node_id = FabricNodeId(mesh_id, static_cast<std::uint32_t>(chip_id));
+            const auto& z_direction_chans =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, RoutingDirection::Z);
+            z_channel_count += z_direction_chans.size();
+
+            // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
+            for (const auto& chan : z_direction_chans) {
+                bool is_valid_chan = (chan == 0 || chan == 1 || chan == 6 || chan == 7);
+                EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
+                EXPECT_EQ(
+                    control_plane.get_eth_chan_direction(fabric_node_id, chan),
+                    static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+            }
+        }
+    }
+    // Verify that we found Z channels for intermesh connections
+    // For 2x2 T3K with 4 channels per connection, bidirectional, we expect Z channels
+    EXPECT_GT(z_channel_count, 0) << "Expected Z channels for intermesh connections with assign_z_direction";
+}
+
+}  // namespace tt::tt_fabric::multi_host_tests

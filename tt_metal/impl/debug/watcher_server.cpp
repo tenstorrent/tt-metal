@@ -247,7 +247,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
         s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(":") + 2));
+        kernel_names_.push_back(s.substr(s.find(':') + 2));
     }
 }
 
@@ -475,7 +475,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values

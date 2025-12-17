@@ -86,7 +86,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12768
+#define MEM_MAILBOX_SIZE 12800
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)
@@ -117,11 +117,11 @@
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
 #define MEM_ROUTING_TABLE_SIZE \
-    2096  // struct layout: base(484) + 1d_path(64) + 2d_path(512) + exit_table(1024) + padding(12)
+    2288  // struct layout: base(484) + 1d_path(256) + 2d_path(512) + exit_table(1024) + padding(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
 #define MEM_ROUTING_TABLE_PADDING 12
 
-#define ROUTING_PATH_SIZE_1D 64
+#define ROUTING_PATH_SIZE_1D 256
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0    // sizeof(intra_mesh_routing_path_t<1, true>)
 #define COMPRESSED_ROUTING_PATH_SIZE_2D 512  // sizeof(intra_mesh_routing_path_t<2, true>)
@@ -140,7 +140,7 @@
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
-#define PACKET_HEADER_MAX_SIZE 96                                // sizeof(UDMHybridMeshPacketHeader)
+#define PACKET_HEADER_MAX_SIZE 112                               // sizeof(UDMHybridMeshPacketHeader)
 #define NUM_PACKET_HEADERS (4 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
 
 // Packet header pool for fabric networking
@@ -257,7 +257,13 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE)
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 128
 
-#define MEM_AERISC_ROUTING_TABLE_BASE (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE)
+// Reserved region for fabric postcodes and scratch space
+#define MEM_AERISC_FABRIC_POSTCODES_BASE (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE)
+#define MEM_AERISC_FABRIC_POSTCODES_SIZE 4
+#define MEM_AERISC_FABRIC_SCRATCH_BASE (MEM_AERISC_FABRIC_POSTCODES_BASE + MEM_AERISC_FABRIC_POSTCODES_SIZE)
+#define MEM_AERISC_FABRIC_SCRATCH_SIZE 28
+
+#define MEM_AERISC_ROUTING_TABLE_BASE (MEM_AERISC_FABRIC_SCRATCH_BASE + MEM_AERISC_FABRIC_SCRATCH_SIZE)
 #define MEM_AERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
 #define MEM_AERISC_ROUTING_TABLE_END (MEM_AERISC_ROUTING_TABLE_BASE + MEM_AERISC_ROUTING_TABLE_SIZE)
 

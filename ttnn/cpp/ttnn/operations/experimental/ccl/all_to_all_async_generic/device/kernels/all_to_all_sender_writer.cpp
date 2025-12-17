@@ -134,7 +134,7 @@ void write_data(
 
             pkt_hdr->to_noc_unicast_scatter_write(
                 NocUnicastScatterCommandHeader(
-                    {{noc_address0, noc_address1}, static_cast<uint16_t>(payload_size_bytes0)}),
+                    {noc_address0, noc_address1}, {static_cast<uint16_t>(payload_size_bytes0)}),
                 payload_size);
             perform_payload_send(
                 select_connection(fabric_connection, device_offset), l1_read_addr, payload_size, pkt_hdr);
