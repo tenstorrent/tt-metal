@@ -2281,8 +2281,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     const auto backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, mesh_coordinate, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value(), "forward_coord is null");
-    TT_FATAL(backward_coord.has_value(), "backward_coord is null");
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
 
     const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
