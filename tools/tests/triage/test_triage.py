@@ -163,6 +163,12 @@ class TestTriage:
         if result is not None:
             for check in result:
                 if check.result is not None:
+                    assert hasattr(check.result, "location"), "Missing location field"
+                    assert hasattr(check.result, "postcode"), "Missing postcode field"
+                    assert hasattr(check.result, "uptime"), "Missing uptime field"
+                    assert hasattr(check.result, "clock_mhz"), "Missing clock_mhz field"
+                    assert hasattr(check.result, "heartbeats_per_second"), "Missing heartbeats_per_second field"
+
                     assert (
                         check.result.location == check.device_description.device.arc_block.location
                     ), f"Incorrect ARC location: {check.result.location}"
@@ -176,12 +182,11 @@ class TestTriage:
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
-        result = run_script(
+        run_script(
             script_path=os.path.join(triage_home, "check_binary_integrity.py"),
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -197,7 +202,6 @@ class TestTriage:
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -213,7 +217,6 @@ class TestTriage:
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -229,7 +232,6 @@ class TestTriage:
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -245,7 +247,6 @@ class TestTriage:
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -256,12 +257,11 @@ class TestTriage:
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
-        result = run_script(
+        run_script(
             script_path=os.path.join(triage_home, "check_noc_status.py"),
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         # Some mismatches may occur on unused cores.
         non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
@@ -301,12 +301,11 @@ class TestTriage:
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
-        result = run_script(
+        run_script(
             script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
@@ -393,7 +392,6 @@ class TestTriage:
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
