@@ -6,6 +6,7 @@ from torch import nn
 import ttnn
 from models.tt_cnn.tt.builder import Conv2dConfiguration, TtConv2d
 from models.tt_symbiote.core.module import TTNNModule
+from models.tt_symbiote.modules.tensor import TTNNPermute
 
 
 class TTNNConv2dNHWC(TTNNModule):
@@ -157,6 +158,8 @@ class TTNNBottleneck(TTNNModule):
             "eps": self.torch_layer.bn3.eps,
         }
         self.relu = nn.ReLU()
+        self.nchw_to_nhwc_permute = TTNNPermute(perm=[0, 2, 3, 1])
+        self.nhwc_to_nchw_permute = TTNNPermute(perm=[0, 3, 1, 2])
 
     @classmethod
     def from_torch(cls, bottleneck: "torchvision.models.resnet.Bottleneck") -> "TTNNBottleneck":
@@ -174,6 +177,8 @@ class TTNNBottleneck(TTNNModule):
         self.conv1.to_device(device)
         self.conv2.to_device(device)
         self.conv3.to_device(device)
+        self.nhwc_to_nchw_permute.to_device(device)
+        self.nchw_to_nhwc_permute.to_device(device)
 
     def preprocess_weights_impl(self):
         """Preprocess attention weights for TTNN."""
@@ -223,9 +228,9 @@ class TTNNBottleneck(TTNNModule):
         """Forward pass through Bottleneck block."""
         if self.downsample is not None:
             identity = x
-            x = ttnn.permute(x, [0, 2, 3, 1])
+            x = self.nchw_to_nhwc_permute(x)
         else:
-            x = ttnn.permute(x, [0, 2, 3, 1])
+            x = self.nchw_to_nhwc_permute(x)
             identity = x
         out = self.conv1(x)
         out = self.relu(out)
@@ -238,14 +243,14 @@ class TTNNBottleneck(TTNNModule):
         if self.downsample is not None:
             from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-            identity = TorchTTNNTensor(self.downsample(TorchTTNNTensor(identity).to_torch.to(torch.float32)))
+            identity = self.downsample(TorchTTNNTensor(identity))
             if identity.to_ttnn.device() != out.to_ttnn.device():
                 identity = ttnn.to_device(identity.to_ttnn, out.to_ttnn.device())
-            out = TorchTTNNTensor(ttnn.permute(out.to_ttnn, [0, 3, 1, 2]))
+            out = self.nhwc_to_nchw_permute(out)
             out += identity
         else:
             out += identity
         out = self.relu(out)
         if self.downsample is None:
-            out = ttnn.permute(out.to_ttnn, [0, 3, 1, 2])
+            out = self.nhwc_to_nchw_permute(out)
         return out
