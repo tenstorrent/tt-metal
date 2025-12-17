@@ -25,7 +25,7 @@ namespace tt::tt_metal::allocator {
 // - Metadata reuse to avoid allocations
 class FreeListOpt : public Algorithm {
 public:
-    enum class SearchPolicy {
+    enum class SearchPolicy : std::uint8_t {
         FIRST,
         BEST,
     };

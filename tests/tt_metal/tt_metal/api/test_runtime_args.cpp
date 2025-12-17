@@ -43,7 +43,7 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::runtime_args {
 
-enum class KernelType {
+enum class KernelType : std::uint8_t {
     DATA_MOVEMENT = 0,
     COMPUTE = 1,
 };

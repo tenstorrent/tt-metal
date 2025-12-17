@@ -167,7 +167,12 @@ struct Conv2dConfig {
 };
 
 // TODO: Accept parallelization
-enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
+enum class Conv2dOpParallelizationStrategy : std::uint8_t {
+    MULTI_CORE,
+    MULTI_CORE_REUSE,
+    MULTI_CORE_REUSE_MCAST,
+    SINGLE_CORE
+};
 
 struct Conv2dParallelizationConfig {
     CoreCoord grid_size;  // (x,y)

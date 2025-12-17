@@ -9,7 +9,7 @@
 
 namespace tt::tt_fabric {
 
-enum class FabricConfig : uint32_t {
+enum class FabricConfig : std::uint8_t {
     DISABLED = 0,
     FABRIC_1D_NEIGHBOR_EXCHANGE = 1,  // 1D topology with no forwarding between non-adjacent devices
     FABRIC_1D = 2,                    // 1D routing and no deadlock avoidance
@@ -23,19 +23,19 @@ enum class FabricConfig : uint32_t {
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
 // - downstream fabric router.
-enum class FabricTensixConfig : uint32_t {
+enum class FabricTensixConfig : std::uint8_t {
     DISABLED = 0,  // not using tensix extension
     MUX = 1,       // using mux kernel as tensix extension
     UDM = 2,       // in udm (unified datamovement) mode, we build both mux and relay kernels as tensix extension
 };
 
 // Unified Datamovement knob for configuring fabric with different parameters
-enum class FabricUDMMode : uint32_t {
+enum class FabricUDMMode : std::uint8_t {
     DISABLED = 0,
     ENABLED = 1,
 };
 
-enum class FabricType {
+enum class FabricType : std::uint8_t {
     MESH = 1 << 0,
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
     TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
@@ -46,7 +46,7 @@ FabricType operator|(FabricType lhs, FabricType rhs);
 FabricType operator&(FabricType lhs, FabricType rhs);
 bool has_flag(FabricType flags, FabricType test_flag);
 
-enum class FabricReliabilityMode : uint32_t {
+enum class FabricReliabilityMode : std::uint8_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.
     // Any downed devices/links will result in some sort of error condition being reported.

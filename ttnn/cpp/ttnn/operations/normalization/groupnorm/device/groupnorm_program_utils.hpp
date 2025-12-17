@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::normalization::group_norm {
 
-enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
+enum class GroupNormMode : std::uint8_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 

@@ -15,6 +15,6 @@ struct LayerNormDistributedDefaultProgramConfig {
     bool legacy_rsqrt = true;
 };
 
-enum class LayerNormDistributedType { LAYERNORM, RMSNORM };
+enum class LayerNormDistributedType : std::uint8_t { LAYERNORM, RMSNORM };
 
 }  // namespace ttnn::operations::normalization

@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal {
 
-enum DispatchWorkerType : uint32_t {
+enum DispatchWorkerType : std::uint8_t {
     PREFETCH = 0,
     PREFETCH_HD = 1,
     PREFETCH_H = 2,
@@ -28,9 +28,9 @@ enum DispatchWorkerType : uint32_t {
     COUNT,
 };
 
-enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
+enum class DispatchCoreType : std::uint8_t { WORKER, ETH, COUNT };
 
-enum class DispatchCoreAxis { ROW, COL, COUNT };
+enum class DispatchCoreAxis : std::uint8_t { ROW, COL, COUNT };
 
 class DispatchCoreConfig {
 private:

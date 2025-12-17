@@ -20,9 +20,9 @@
 
 namespace tt::tt_fabric::system_health_tests {
 
-enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
+enum class ConnectorType : std::uint8_t { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
-enum class LinkingBoardType {
+enum class LinkingBoardType : std::uint8_t {
     A,
     B,
 };

@@ -9,11 +9,11 @@
 
 namespace tt::tt_metal {
 
-enum class ReduceOpMath { SUM, MAX, MIN };
+enum class ReduceOpMath : std::uint8_t { SUM, MAX, MIN };
 
-enum class ReduceOpDim { H, W, HW };
+enum class ReduceOpDim : std::uint8_t { H, W, HW };
 
-enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW };
+enum class ReduceOpParallelizationStrategy : std::uint8_t { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW };
 
 }  // namespace tt::tt_metal
 

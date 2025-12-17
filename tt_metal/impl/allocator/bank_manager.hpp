@@ -23,7 +23,7 @@
 #include <tt-metalium/allocator_state.hpp>
 
 namespace tt::tt_metal {
-enum class BufferType;
+enum class BufferType : std::uint8_t;
 namespace allocator {
 class Algorithm;
 }  // namespace allocator

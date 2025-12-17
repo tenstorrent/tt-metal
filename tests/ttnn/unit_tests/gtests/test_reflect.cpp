@@ -8,7 +8,7 @@
 
 using namespace std::literals;
 
-enum E { A, B };
+enum E : std::uint8_t { A, B };
 struct foo {
     int a;
     E b;

@@ -24,7 +24,7 @@ uint32_t determine_max_grid_dimension(const shared_ptr<distributed::MeshDevice>&
     return (smaller_dimension - 1);
 }
 
-enum class MulticastSchemeType {
+enum class MulticastSchemeType : std::uint8_t {
     // Sender is IN the grid
     SenderInGridTopRight = 1,
     SenderInGridBottomRight,

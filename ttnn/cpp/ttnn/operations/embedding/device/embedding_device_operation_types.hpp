@@ -8,8 +8,8 @@
 
 namespace ttnn::operations::embedding {
 
-enum class EmbeddingsType { GENERIC, PADDED, BINARY };
-enum class EmbeddingsIndexType { UINT32, BFP16 };
+enum class EmbeddingsType : std::uint8_t { GENERIC, PADDED, BINARY };
+enum class EmbeddingsIndexType : std::uint8_t { UINT32, BFP16 };
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;

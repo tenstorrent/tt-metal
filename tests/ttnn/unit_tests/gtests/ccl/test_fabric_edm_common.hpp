@@ -49,7 +49,7 @@ using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-enum TwoInputReaderKernelWriteMode { LOCAL_WRITEBACK, FABRIC_UNICAST, FABRIC_MULTICAST };
+enum TwoInputReaderKernelWriteMode : std::uint8_t { LOCAL_WRITEBACK, FABRIC_UNICAST, FABRIC_MULTICAST };
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;
 static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
@@ -262,7 +262,7 @@ struct KernelXY {
     uint32_t to_uint32() const { return y << 16 | x; }
 };
 
-enum Correctness { Correct, Incorrect };
+enum Correctness : std::uint8_t { Correct, Incorrect };
 
 template <typename CONTAINER_T>
 Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffer) {

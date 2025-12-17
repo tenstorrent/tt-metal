@@ -57,7 +57,7 @@ public:
     /// corresponding core in 2D grid.
     TensorSpec block_sharded(CoreRange grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
 
-    enum class ShardShapeAlignment {
+    enum class ShardShapeAlignment : std::uint8_t {
         /// No shard shape alignment will be performed. If the shard shape is not following the alignment requirements,
         /// an exception will be thrown.
         NONE,

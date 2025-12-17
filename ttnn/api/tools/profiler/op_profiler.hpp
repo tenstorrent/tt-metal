@@ -26,7 +26,7 @@ using json = nlohmann::json;
 
 namespace tt::tt_metal::op_profiler {
 
-enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
+enum class OpType : std::uint8_t { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };
 
 #if defined(TRACY_ENABLE)
 class thread_safe_cached_ops_map {

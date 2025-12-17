@@ -20,7 +20,7 @@ namespace ttnn::operations::conv::conv2d {
 constexpr static uint32_t kInvalidCBIndex = 32;
 
 // List of all circular buffers used in Conv2d operations.
-enum class Conv2dCb {
+enum class Conv2dCb : std::uint8_t {
     ACT_SHARDED,
     ACT,
     ACT_ROW_MAJOR_BFLOAT16,

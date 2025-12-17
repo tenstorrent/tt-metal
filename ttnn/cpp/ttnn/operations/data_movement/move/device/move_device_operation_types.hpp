@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::data_movement::move {
 
-enum class MoveOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_OVERLAP, MULTI_CORE_SHARDED };
+enum class MoveOpParallelizationStrategy : std::uint8_t { MULTI_CORE, MULTI_CORE_OVERLAP, MULTI_CORE_SHARDED };
 
 // Operation attributes - non-tensor parameters
 struct operation_attributes_t {

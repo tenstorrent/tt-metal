@@ -49,7 +49,7 @@ struct CorePageStride {
     PageStride page_stride;
 };
 
-enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
+enum class ReshardStridesInRange : std::uint8_t { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_reshard(
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page,

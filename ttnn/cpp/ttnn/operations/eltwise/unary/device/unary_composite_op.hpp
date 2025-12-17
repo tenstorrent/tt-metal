@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::unary {
 
-enum class UnaryCompositeOpType {
+enum class UnaryCompositeOpType : std::uint8_t {
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,

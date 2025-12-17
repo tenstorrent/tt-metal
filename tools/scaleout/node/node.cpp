@@ -136,7 +136,7 @@ public:
     // X_TORUS = 0b01 - X-axis torus only (bit 0)
     // Y_TORUS = 0b10 - Y-axis torus only (bit 1)
     // XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
-    enum class WHGalaxyTopology {
+    enum class WHGalaxyTopology : std::uint8_t {
         MESH = 0b00,                   // Mesh
         X_TORUS = 0b01,                // X-axis torus only
         Y_TORUS = 0b10,                // Y-axis torus only
@@ -304,7 +304,7 @@ public:
     // X_TORUS = 0b01 - X-axis torus only (bit 0)
     // Y_TORUS = 0b10 - Y-axis torus only (bit 1)
     // XY_TORUS = 0b11 - Both X and Y torus (bits 0+1)
-    enum class BHGalaxyTopology {
+    enum class BHGalaxyTopology : std::uint8_t {
         MESH = 0b00,                   // Mesh
         X_TORUS = 0b01,                // X-axis torus only
         Y_TORUS = 0b10,                // Y-axis torus only

@@ -39,7 +39,7 @@ constexpr uint32_t TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER = TT_FABRIC_MISC_INDEX 
 // constexpr uint32_t TX_TEST_IDX_ = TT_FABRIC_MISC_INDEX + ;
 // constexpr uint32_t TX_TEST_IDX_ = TT_FABRIC_MISC_INDEX + ;
 
-enum class pkt_dest_size_choices_t {
+enum class pkt_dest_size_choices_t : std::uint8_t {
     RANDOM = 0,
     SAME_START_RNDROBIN_FIX_SIZE = 1  // max packet size used
 };

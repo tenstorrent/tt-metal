@@ -104,12 +104,12 @@ struct ncrisc_halt_msg_t {
     volatile uint32_t stack_save;
 };
 
-enum dispatch_mode {
+enum dispatch_mode : uint8_t {
     DISPATCH_MODE_DEV,
     DISPATCH_MODE_HOST,
 };
 
-enum noc_index {
+enum noc_index : uint8_t {
     NOC_0 = 0,
     NOC_1 = 1,
 };
@@ -230,7 +230,7 @@ struct debug_insert_delays_msg_t {
     volatile uint32_t feedback = 0;                     // Stores the feedback about delays (used for testing)
 };
 
-enum debug_sanitize_noc_return_code_enum {
+enum debug_sanitize_noc_return_code_enum : uint8_t {
     // 0 and 1 are a common stray values to write, so don't use those
     DebugSanitizeOK = 2,
     DebugSanitizeNocAddrUnderflow = 3,
@@ -253,7 +253,7 @@ struct debug_assert_msg_t {
     volatile uint8_t which;
 };
 
-enum debug_assert_type_t {
+enum debug_assert_type_t : uint8_t {
     DebugAssertOK = 2,
     DebugAssertTripped = 3,
     DebugAssertNCriscNOCReadsFlushedTripped = 4,
@@ -262,7 +262,12 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCPostedWritesSentTripped = 7
 };
 
-enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
+enum debug_transaction_type_t : uint8_t {
+    TransactionRead = 0,
+    TransactionWrite = 1,
+    TransactionAtomic = 2,
+    TransactionNumTypes
+};
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[MaxProcessorsPerCoreType];
@@ -292,7 +297,7 @@ struct debug_eth_link_t {
     volatile uint8_t link_down;
 };
 
-enum watcher_enable_msg_t {
+enum watcher_enable_msg_t : uint8_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
 };

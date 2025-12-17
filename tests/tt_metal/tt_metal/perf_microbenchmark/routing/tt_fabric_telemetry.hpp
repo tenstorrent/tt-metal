@@ -47,7 +47,4 @@ struct CodeProfilingEntry {
 const uint32_t telemetry_addr = ::tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
 // TODO: Define enum for filtering
-enum class EthCoreFilter {
-    All,
-    IgnoreTunnelerRouter
-};
+enum class EthCoreFilter : std::uint8_t { All, IgnoreTunnelerRouter };

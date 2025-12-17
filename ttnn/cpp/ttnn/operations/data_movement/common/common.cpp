@@ -80,7 +80,7 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     }
 }
 
-enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
+enum DatumIndex : std::uint8_t { WormholeIndex = 0, BlackholeIndex = 1 };
 
 float get_transaction_noc_bw(
     uint32_t transaction_size, const std::map<uint32_t, std::array<float, 2>>& dict, int index) {

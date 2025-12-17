@@ -39,7 +39,7 @@ address: bytes
 size: bytes
 */
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
-enum class BufferType;
+enum class BufferType : std::uint8_t;
 
 class Allocator;
 class AllocatorImpl;

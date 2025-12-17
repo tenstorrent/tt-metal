@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::broadcast_to {
 
-enum class KernelName {
+enum class KernelName : std::uint8_t {
     ReaderNoBcast,
     ReaderRowBcast,
     ReaderColBcast,

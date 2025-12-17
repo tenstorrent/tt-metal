@@ -27,7 +27,7 @@ namespace tt::scaleout_tools {
 using tt::tt_metal::AsicTopology;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
-enum class CommandMode {
+enum class CommandMode : std::uint8_t {
     VALIDATE,
     LINK_RETRAIN,
 };

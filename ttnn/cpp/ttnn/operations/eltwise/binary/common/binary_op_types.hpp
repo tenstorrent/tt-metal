@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace ttnn::operations::binary {
 
-enum class BinaryOpType {
+enum class BinaryOpType : std::uint8_t {
     ADD,
     SUB,
     MUL,

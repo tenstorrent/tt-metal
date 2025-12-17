@@ -19,7 +19,7 @@
 
 namespace ttnn::operations::ternary {
 
-enum class TernaryCompositeOpType {
+enum class TernaryCompositeOpType : std::uint8_t {
     ADDCMUL,
     ADDCDIV,
     LERP,

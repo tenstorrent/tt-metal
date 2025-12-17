@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 namespace ttnn::operations::binary_ng {
 
-enum class SubtileBroadcastType {
+enum class SubtileBroadcastType : std::uint8_t {
     NONE,         // both tensors have equal tile dimensions (H & W)
     SCALAR_A,     // a is a scalar (H = 1, W = 1)
     SCALAR_B,     // b is a scalar (H = 1, W = 1)

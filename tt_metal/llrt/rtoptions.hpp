@@ -29,14 +29,14 @@
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
-enum class EnvVarID;
+enum class EnvVarID : std::uint8_t;
 
 inline std::string g_root_dir;
 inline std::once_flag g_root_once;
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
-enum RunTimeDebugFeatures {
+enum RunTimeDebugFeatures : std::uint8_t {
     RunTimeDebugFeatureDprint,
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
@@ -47,7 +47,7 @@ enum RunTimeDebugFeatures {
 };
 
 // Enumerates a class of cores to enable features on at runtime.
-enum RunTimeDebugClass {
+enum RunTimeDebugClass : std::uint8_t {
     RunTimeDebugClassNoneSpecified,
     RunTimeDebugClassWorker,
     RunTimeDebugClassDispatch,

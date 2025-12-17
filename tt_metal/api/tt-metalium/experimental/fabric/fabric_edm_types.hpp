@@ -8,7 +8,7 @@
 
 namespace tt::tt_fabric {
 
-enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
+enum class Topology : std::uint8_t { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
 
 // Topology classification utilities
 constexpr bool is_2D_topology(Topology topology) { return topology == Topology::Mesh || topology == Topology::Torus; }

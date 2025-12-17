@@ -21,7 +21,7 @@
 
 namespace tt::tt_metal {
 class IDevice;
-enum class TensorMemoryLayout;
+enum class TensorMemoryLayout : std::uint8_t;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {

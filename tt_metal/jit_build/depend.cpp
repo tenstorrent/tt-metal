@@ -18,7 +18,7 @@ namespace tt::jit_build {
 // dep_file = { target ':' { dep } { '\' '\n' { dep } } '\n' }
 ParsedDependencies parse_dependency_file(std::istream& file) {
     ParsedDependencies dependencies;
-    enum class ParseState { Target, Dependencies };
+    enum class ParseState : std::uint8_t { Target, Dependencies };
     ParseState state = ParseState::Target;
     std::string line;
     std::vector<std::string>* current_deps = nullptr;

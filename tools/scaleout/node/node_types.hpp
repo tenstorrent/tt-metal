@@ -8,7 +8,7 @@
 
 namespace tt::scaleout_tools {
 
-enum class NodeType {
+enum class NodeType : std::uint8_t {
     N300_LB,
     N300_LB_DEFAULT,
     N300_QB,

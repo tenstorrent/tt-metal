@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::binary_ng {
 
-enum class KernelName {
+enum class KernelName : std::uint8_t {
     ReaderNoBcast,
     WriterScalar,
     ComputeNoBcast,
@@ -43,8 +43,8 @@ struct BinaryNgKernelConfig {
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
 
 struct OpConfig {
-    enum class FpuBinaryOp { ADD, SUB, MUL };
-    enum class SfpuBinaryOp {
+    enum class FpuBinaryOp : std::uint8_t { ADD, SUB, MUL };
+    enum class SfpuBinaryOp : std::uint8_t {
         ADD,
         SUB,
         MUL,

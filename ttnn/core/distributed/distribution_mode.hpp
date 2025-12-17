@@ -12,7 +12,7 @@
 namespace ttnn::distributed {
 
 // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device
-enum class DistributionMode {
+enum class DistributionMode : std::uint8_t {
     // Tensor shards will be distributed in row-major order over a mesh device.
     ROW_MAJOR,
 

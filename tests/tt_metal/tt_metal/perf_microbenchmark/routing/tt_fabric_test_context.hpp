@@ -94,7 +94,7 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
 
 // Bandwidth Summary Statistics
 // If you want to add new statistics, populate this enum with their names
-enum class BandwidthStatistics {
+enum class BandwidthStatistics : std::uint8_t {
     BandwidthMean,
     BandwidthMin,
     BandwidthMax,

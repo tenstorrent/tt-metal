@@ -548,7 +548,7 @@ void dump_issue_queue_entries(
 }
 
 // Define a queue type, for when they're interchangeable.
-enum cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 };
+enum cq_queue_t : std::uint8_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 };
 
 void dump_command_queue_raw_data(
     std::ofstream& out_file,

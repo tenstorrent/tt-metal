@@ -429,7 +429,7 @@ ResultWithOptions result_to_result_with_options(
 }
 
 // Enum to represent the execution path for conv2d operations
-enum class Conv2dExecutionPath {
+enum class Conv2dExecutionPath : std::uint8_t {
     L1,   // Execute conv2d using L1 memory
     DRAM  // Execute conv2d using DRAM slicing
 };

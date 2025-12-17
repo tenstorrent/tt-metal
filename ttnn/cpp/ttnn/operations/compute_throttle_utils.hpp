@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::compute_throttle_utils {
 
-enum class ThrottleLevel : uint32_t {
+enum class ThrottleLevel : std::uint8_t {
     NO_THROTTLE = 0,
     LEVEL_1 = 1,
     LEVEL_2 = 2,

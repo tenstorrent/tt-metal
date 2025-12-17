@@ -12,9 +12,9 @@
 
 namespace ttnn::operations::normalization {
 
-enum class LayerNormType { LAYERNORM, RMSNORM };
+enum class LayerNormType : std::uint8_t { LAYERNORM, RMSNORM };
 
-enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
+enum class DistributedLayerNormStage : std::uint8_t { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
 
 struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;

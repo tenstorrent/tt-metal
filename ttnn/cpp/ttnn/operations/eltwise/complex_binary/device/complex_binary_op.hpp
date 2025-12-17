@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::complex_binary {
 
-enum class ComplexBinaryOpType {
+enum class ComplexBinaryOpType : std::uint8_t {
     ADD,
     SUB,
     MUL,

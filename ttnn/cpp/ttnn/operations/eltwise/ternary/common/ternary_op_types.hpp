@@ -14,14 +14,14 @@ namespace ttnn::operations::ternary {
 using TensorScalarVariant = std::variant<float, int, Tensor>;
 
 // Ternary operation types
-enum class TernaryOpType {
+enum class TernaryOpType : std::uint8_t {
     WHERE,    // conditional selection: out = predicate ? value_true : value_false
     LERP,     // linear interpolation: out = input + weight * (end - input)
     ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
 };
 
 // Variant types for ternary operations
-enum class TernaryVariant {
+enum class TernaryVariant : std::uint8_t {
     TTT,  // tensor-tensor-tensor
     TTS,  // tensor-tensor-scalar
     TST,  // tensor-scalar-tensor
@@ -29,7 +29,7 @@ enum class TernaryVariant {
 };
 
 // Broadcast types for ternary operations
-enum class TernaryBroadcastType {
+enum class TernaryBroadcastType : std::uint8_t {
     NONE,
     OUTER_BCAST,     // bcast for outer dims -5, -4, -3, no subtile bcast.
     COL_BCAST,       // bcast for W-dim and outer dims -5, -4, -3.

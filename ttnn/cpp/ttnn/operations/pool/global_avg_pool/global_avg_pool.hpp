@@ -10,7 +10,7 @@
 
 namespace tt::tt_metal {
 
-enum class PoolType { AVG };
+enum class PoolType : std::uint8_t { AVG };
 
 Tensor global_avg_pool2d(
     const Tensor& input,

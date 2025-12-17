@@ -23,7 +23,7 @@
 namespace tt::tt_fabric::fabric_tests {
 
 // Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
-enum class PerformanceTestMode {
+enum class PerformanceTestMode : std::uint8_t {
     NONE,       // No performance testing (functional test only)
     BANDWIDTH,  // Bandwidth/throughput test mode (formerly benchmark_mode)
     LATENCY     // Latency measurement test mode (formerly latency_test_mode)
@@ -110,7 +110,7 @@ struct SyncConfig {
     SenderConfig sender_config;  // Sync messages sent by this device
 };
 
-enum class HighLevelTrafficPattern {
+enum class HighLevelTrafficPattern : std::uint8_t {
     AllToAll,
     OneToAll,
     AllToOne,
@@ -212,7 +212,7 @@ constexpr uint32_t DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES = 0x80000;  // 512KB
 constexpr uint32_t DEFAULT_RECEIVER_L1_SIZE = 0x100000;
 }  // namespace detail
 
-enum class CoreType {
+enum class CoreType : std::uint8_t {
     SENDER,
     RECEIVER,
 };
@@ -220,7 +220,7 @@ enum class CoreType {
 constexpr size_t SENDER_TYPE_IDX = static_cast<size_t>(CoreType::SENDER);
 constexpr size_t RECEIVER_TYPE_IDX = static_cast<size_t>(CoreType::RECEIVER);
 
-enum class CoreAllocationPolicy {
+enum class CoreAllocationPolicy : std::uint8_t {
     RoundRobin,    // Cycle through available cores to distribute load.
     ExhaustFirst,  // Fill one core with workers before moving to the next.
 };

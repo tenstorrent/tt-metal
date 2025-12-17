@@ -92,7 +92,7 @@ struct CommandConstants {
     uint32_t packed_write_max_unicast_sub_cmds;
 };
 
-enum DispatchWriteOffsets {
+enum DispatchWriteOffsets : std::uint8_t {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
     DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
     DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,

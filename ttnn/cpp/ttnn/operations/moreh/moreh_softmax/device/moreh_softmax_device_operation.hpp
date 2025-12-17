@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-enum class MorehSoftmaxOpParallelizationStrategy {
+enum class MorehSoftmaxOpParallelizationStrategy : std::uint8_t {
     NONE,
     SMALL_W,
     SMALL_H,
@@ -18,7 +18,7 @@ enum class MorehSoftmaxOpParallelizationStrategy {
     LARGE_C,
 };
 
-enum class MorehSoftmaxOp {
+enum class MorehSoftmaxOp : std::uint8_t {
     SOFTMAX,
     SOFTMIN,
     LOGSOFTMAX,

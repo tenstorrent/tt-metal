@@ -32,7 +32,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
 }  // namespace detail
 
 struct AllToAllDispatchDeviceOperation {
-    enum AllToAllTransferType {
+    enum AllToAllTransferType : std::uint8_t {
         FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
         PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
     };

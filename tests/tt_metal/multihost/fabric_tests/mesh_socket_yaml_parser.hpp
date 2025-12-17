@@ -30,7 +30,7 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
     3. socket level patterns (number of connection in each socket)
     Currently patterns are only at the device level,
     going between all host pairs and one connection per socket. */
-enum class PatternType : uint32_t {
+enum class PatternType : std::uint8_t {
     AllToAllDevices = 0,
     AllHostsRandomSockets = 1,
     AllDeviceBroadcast = 2,

@@ -25,8 +25,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         return t0_to_any_riscfw_end;
     }
     // TODO: use enums from profiler_common.h
-    enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
-    enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
+    enum BufferIndex : std::uint8_t { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
+    enum TimerDataIndex : std::uint8_t { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
         program.impl()
@@ -95,13 +95,13 @@ inline T calculate_average(const std::vector<T>& vec, bool skip_first_run = true
     return average;
 }
 
-enum class NOC_INDEX { NOC_RISCV_0, NOC_RISCV_1 };
+enum class NOC_INDEX : std::uint8_t { NOC_RISCV_0, NOC_RISCV_1 };
 
-enum class NOC_DIRECTION { X_PLUS_DIR, Y_MINUS_DIR, X_MINUS_DIR, Y_PLUS_DIR };
+enum class NOC_DIRECTION : std::uint8_t { X_PLUS_DIR, Y_MINUS_DIR, X_MINUS_DIR, Y_PLUS_DIR };
 
-enum class ACCESS_TYPE { READ, WRITE };
+enum class ACCESS_TYPE : std::uint8_t { READ, WRITE };
 
-enum class BUFFER_TYPE { DRAM, L1 };
+enum class BUFFER_TYPE : std::uint8_t { DRAM, L1 };
 
 inline std::string NOC_INDEXToString(NOC_INDEX enumValue) {
     switch (enumValue) {

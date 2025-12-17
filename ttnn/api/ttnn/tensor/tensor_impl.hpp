@@ -220,13 +220,13 @@ Tensor unpad(
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype);
 
-enum class TensorPrintProfile {
+enum class TensorPrintProfile : std::uint8_t {
     Empty,
     Short,
     Full,
 };
 
-enum class SciMode {
+enum class SciMode : std::uint8_t {
     Enable,
     Disable,
     Default,

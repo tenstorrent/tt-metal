@@ -571,7 +571,7 @@ Result conv_transpose2d_DRAM(
 }
 
 // Enum to represent the execution path for conv2d operations
-enum class ConvT2dExecutionPath {
+enum class ConvT2dExecutionPath : std::uint8_t {
     L1,   // Execute conv2d using L1 memory
     DRAM  // Execute conv2d using DRAM slicing
 };

@@ -20,7 +20,7 @@ namespace tt::tt_fabric::fabric_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
-enum class HighLevelTrafficPattern;  // Forward declaration
+enum class HighLevelTrafficPattern : std::uint8_t;  // Forward declaration
 
 class IDeviceInfoProvider {
 public:

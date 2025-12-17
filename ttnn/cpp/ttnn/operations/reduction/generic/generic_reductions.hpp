@@ -14,7 +14,7 @@
 namespace ttnn {
 namespace operations::reduction {
 
-enum class ReduceType {
+enum class ReduceType : std::uint8_t {
     Sum,
     Mean,
     Max,

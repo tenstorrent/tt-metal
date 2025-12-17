@@ -1720,7 +1720,7 @@ process_mcast_in1_program_and_create_override_variables(
         ttnn::operations::matmul::Matmul1DType::MCAST_IN1};
 }
 
-enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
+enum class CORE_TYPE : std::uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
 process_gather_in0_program_and_create_override_variables(

@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::pool {
 
-enum class Pool2DType {
+enum class Pool2DType : std::uint8_t {
     MAX_POOL2D = 0,
     AVG_POOL2D = 1,
 };

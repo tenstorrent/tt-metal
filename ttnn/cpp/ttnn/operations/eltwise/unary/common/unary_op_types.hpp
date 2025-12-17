@@ -10,7 +10,7 @@
 namespace ttnn::operations::unary {
 
 // These operations have a corresponding LLK available
-enum class UnaryOpType {
+enum class UnaryOpType : std::uint8_t {
     EXP,
     RECIP,
     GELU,
@@ -124,7 +124,7 @@ enum class UnaryOpType {
     LOGIT,
 };
 
-enum class VecMode {
+enum class VecMode : std::uint8_t {
     None = 0,
     R = 1,
     C = 2,

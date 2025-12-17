@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::complex_unary_backward {
 
-enum class ComplexUnaryBackwardOpType {
+enum class ComplexUnaryBackwardOpType : std::uint8_t {
     POLAR_BW,
     IMAG_BW,
     REAL_BW,

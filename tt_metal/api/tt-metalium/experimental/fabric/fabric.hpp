@@ -27,7 +27,7 @@ class MeshShape;
 
 namespace tt::tt_fabric {
 class FabricNodeId;
-enum class RoutingDirection;
+enum class RoutingDirection : std::uint8_t;
 struct FabricEriscDatamoverConfig;
 size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
