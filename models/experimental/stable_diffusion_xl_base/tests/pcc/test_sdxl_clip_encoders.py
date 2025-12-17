@@ -57,12 +57,6 @@ def test_clip_encoder(
 
     has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
-    parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
-    ccl_manager = None
-
     # Build kwargs conditionally to avoid transformers subfolder=None bug
     model_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
     tokenizer_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
@@ -106,6 +100,13 @@ def test_clip_encoder(
     start_time = time.time()
 
     # === TT-DiT CLIP ====
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+    ccl_manager = None
+
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
