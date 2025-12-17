@@ -20,12 +20,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"
 
-WHISPER_BATCH_SIZE = 2
+WHISPER_BATCH_SIZE = [1, 2]
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize(
     "sequence_size, use_encoder_states, use_attn_mask, use_kv_cache",
     (
@@ -193,7 +193,7 @@ def test_whisper_attention(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_size):
@@ -236,7 +236,7 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
@@ -282,7 +282,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -383,7 +383,7 @@ def test_decoder_layer(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -490,7 +490,7 @@ def test_decoder(
         [1, True],
     ),
 )
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_whisper(
     tmp_path, mesh_device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, batch_size_per_device
@@ -570,7 +570,7 @@ def test_ttnn_whisper(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [WHISPER_BATCH_SIZE])
+@pytest.mark.parametrize("batch_size_per_device", WHISPER_BATCH_SIZE)
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize("num_decode_iterations", [5])
 @pytest.mark.parametrize(
