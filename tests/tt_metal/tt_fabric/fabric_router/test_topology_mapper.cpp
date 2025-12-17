@@ -770,7 +770,7 @@ TEST_F(TopologyMapperTest, MeshSpecificPinningsHonorsFixedAsicPosition) {
 
     // Create TopologyMapper with mesh-specific pinnings
     TopologyMapper topology_mapper_with_mesh_pins(
-        mesh_graph, *physical_system_descriptor_, local_mesh_binding, mesh_specific_pinnings);
+        mesh_graph, *physical_system_descriptor_, local_mesh_binding, {}, mesh_specific_pinnings);
 
     // Verify that the pinnings are honored
     std::vector<tt::tt_metal::AsicID> potential_mapped_asics;

@@ -91,42 +91,6 @@ std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_positio
     return fixed_asic_position_pinnings;
 }
 
-// Generate mesh-specific fixed ASIC position pinnings by iterating through all meshes.
-// This function goes through the control host and generates pinnings for each mesh.
-std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>
-generate_mesh_specific_fixed_asic_position_pinnings(
-    const MeshGraph& mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& /* physical_system_descriptor */,
-    size_t board_size,
-    bool is_galaxy,
-    bool is_1d,
-    size_t distributed_size) {
-    std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> fixed_asic_position_pinnings_by_mesh;
-
-    // Iterate through all meshes in the mesh graph
-    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-        // Check if this mesh needs pinnings (e.g., galaxy topology)
-        if (is_galaxy && !is_1d && board_size == 32 && distributed_size == 1) {
-            // Generate pinnings for this specific mesh
-            // For galaxy topology, pin top left and bottom right corners
-            auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-            auto mesh_size = mesh_shape.mesh_size();
-
-            if (mesh_size > 0) {
-                std::vector<std::pair<AsicPosition, FabricNodeId>> mesh_pinnings;
-                // Top left corner: chip_id 0
-                mesh_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(mesh_id, 0)});
-                // Bottom right corner: last chip_id
-                mesh_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(mesh_id, mesh_size - 1)});
-                fixed_asic_position_pinnings_by_mesh[mesh_id] = mesh_pinnings;
-            }
-        }
-        // Add other mesh-specific pinning logic here as needed
-    }
-
-    return fixed_asic_position_pinnings_by_mesh;
-}
-
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -491,10 +455,6 @@ void ControlPlane::init_control_plane(
         const size_t distributed_size = *distributed_context->size();
         const bool is_galaxy = cluster.is_ubb_galaxy();
 
-        // Generate mesh-specific pinnings for all meshes
-        auto fixed_asic_position_pinnings_by_mesh = generate_mesh_specific_fixed_asic_position_pinnings(
-            *this->mesh_graph_, *this->physical_system_descriptor_, board_size, is_galaxy, is_1d, distributed_size);
-
         // Generate global pinnings (legacy vector-based)
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
@@ -511,8 +471,7 @@ void ControlPlane::init_control_plane(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
-            fixed_asic_position_pinnings_by_mesh);
+            fixed_asic_position_pinnings);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
@@ -561,10 +520,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const size_t distributed_size = *distributed_context->size();
     const bool is_galaxy = cluster.is_ubb_galaxy();
 
-    // Generate mesh-specific pinnings for all meshes
-    auto fixed_asic_position_pinnings_by_mesh = generate_mesh_specific_fixed_asic_position_pinnings(
-        *this->mesh_graph_, *this->physical_system_descriptor_, board_size, is_galaxy, is_1d, distributed_size);
-
     // Generate global pinnings (legacy vector-based)
     std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
@@ -581,8 +536,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         *this->mesh_graph_,
         *this->physical_system_descriptor_,
         this->local_mesh_binding_,
-        fixed_asic_position_pinnings,
-        fixed_asic_position_pinnings_by_mesh);
+        fixed_asic_position_pinnings);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
     // Initialize routing table generator after topology_mapper is created

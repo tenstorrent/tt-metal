@@ -181,63 +181,6 @@ tt::tt_metal::AsicID TopologyMapper::get_asic_id_from_fabric_node_id(const Fabri
 TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const LocalMeshBinding& local_mesh_binding) :
-    mesh_graph_(mesh_graph),
-    physical_system_descriptor_(physical_system_descriptor),
-    local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
-    fixed_asic_position_pinnings_by_mesh_({}) {
-    // Initialize containers; population will occur during build_mapping
-    mesh_host_ranks_.clear();
-    mesh_host_rank_coord_ranges_.clear();
-    mesh_host_rank_to_mpi_rank_.clear();
-    build_asic_physical_chip_id_mappings();
-    initialize_chip_topology_mapping_map();
-    build_mapping();
-}
-
-// Removed bus-id pinning constructor
-TopologyMapper::TopologyMapper(
-    const MeshGraph& mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const LocalMeshBinding& local_mesh_binding,
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings) :
-    mesh_graph_(mesh_graph),
-    physical_system_descriptor_(physical_system_descriptor),
-    local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
-    fixed_asic_position_pinnings_by_mesh_({}) {
-    mesh_host_ranks_.clear();
-    mesh_host_rank_coord_ranges_.clear();
-    mesh_host_rank_to_mpi_rank_.clear();
-    build_asic_physical_chip_id_mappings();
-    initialize_chip_topology_mapping_map();
-    build_mapping();
-}
-
-// Constructor with mesh-specific pinnings
-TopologyMapper::TopologyMapper(
-    const MeshGraph& mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const LocalMeshBinding& local_mesh_binding,
-    const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>& fixed_asic_position_pinnings_by_mesh) :
-    mesh_graph_(mesh_graph),
-    physical_system_descriptor_(physical_system_descriptor),
-    local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
-    fixed_asic_position_pinnings_by_mesh_(fixed_asic_position_pinnings_by_mesh) {
-    mesh_host_ranks_.clear();
-    mesh_host_rank_coord_ranges_.clear();
-    mesh_host_rank_to_mpi_rank_.clear();
-    build_asic_physical_chip_id_mappings();
-    initialize_chip_topology_mapping_map();
-    build_mapping();
-}
-
-// Constructor with both global and mesh-specific pinnings (combined)
-TopologyMapper::TopologyMapper(
-    const MeshGraph& mesh_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
     const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
     const std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>>& fixed_asic_position_pinnings_by_mesh) :
@@ -246,6 +189,7 @@ TopologyMapper::TopologyMapper(
     local_mesh_binding_(local_mesh_binding),
     fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
     fixed_asic_position_pinnings_by_mesh_(fixed_asic_position_pinnings_by_mesh) {
+    // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
     mesh_host_rank_to_mpi_rank_.clear();
