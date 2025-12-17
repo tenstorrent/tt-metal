@@ -153,17 +153,25 @@ void kernel_main() {
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
             Slice q_slice;
+            uint32_t end_seq_tile;
             if (is_joint_q) {
                 // Get row index into the joint Q tensor
                 const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                 q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                end_seq_tile = Lt;
             } else {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+                end_seq_tile = local_padded_Nt;
             }
 
             read_block(
-                is_joint_q ? joint_q_generator : q_generator, q_slice, cb_q_in, q_tile_bytes, false /*transpose*/
+                is_joint_q ? joint_q_generator : q_generator,
+                q_slice,
+                end_seq_tile,
+                cb_q_in,
+                q_tile_bytes,
+                false /*transpose*/
             );
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
@@ -183,21 +191,26 @@ void kernel_main() {
                 }
 
                 Slice kv_slice;
+                uint32_t
+                    end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
 
                 if (kv_chunk_is_joint) {
                     const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
                     const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
                     kv_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
                 } else {
                     if (ring_iter == 0) {
                         // Local KV
                         const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        end_seq_tile = local_padded_Nt;
                     } else {
                         // Gathered KV
                         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        end_seq_tile = local_padded_Nt * (ring_id + 1);
                     }
                 }
 
@@ -212,6 +225,7 @@ void kernel_main() {
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
                         kv_slice,
+                        end_seq_tile,
                         cb_k_in,
                         k_tile_bytes,
                         true /*transpose*/
@@ -243,6 +257,7 @@ void kernel_main() {
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
                         kv_slice,
+                        end_seq_tile,
                         cb_v_in,
                         v_tile_bytes,
                         false /*transpose*/
