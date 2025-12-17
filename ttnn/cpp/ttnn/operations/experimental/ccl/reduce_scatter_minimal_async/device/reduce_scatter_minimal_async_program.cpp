@@ -819,6 +819,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
 
+    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+        return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());
+    };
+
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
     std::vector<CoreRange> termination_master_core_ranges;
@@ -826,7 +830,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const auto& mux_core = all_cores[core_id++];
-            mux_core_ranges.emplace_back(mux_core);
+            if (mux_connection_valid(dir)) {
+                mux_core_ranges.emplace_back(mux_core);
+            }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
@@ -1104,21 +1110,24 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            auto mux_logical_core = *((mux_core_iter++)->begin());
-            CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+            CoreCoord mux_virtual_core = {0, 0};
+            if (mux_connection_valid(dir)) {
+                auto mux_logical_core = *((mux_core_iter++)->begin());
+                mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
 
-            std::vector<uint32_t> mux_rt_args = {};
-            const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-            if (dir) {  // forward
-                const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
-            } else {
-                const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, program, {mux_logical_core});
+                std::vector<uint32_t> mux_rt_args = {};
+                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+                if (dir) {  // forward
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                } else {
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                        src_node_id, dst_node_id, link, program, {mux_logical_core});
+                }
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
 
             auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -1194,7 +1203,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 };
                 append_fabric_mux_connection_rt_args(
-                    true,
+                    mux_connection_valid(dir),
                     mux_virtual_core,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
@@ -2281,8 +2290,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     const auto backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, mesh_coordinate, -1, operation_attributes.topology, operation_attributes.cluster_axis);
-    TT_FATAL(forward_coord.has_value(), "forward_coord is null");
-    TT_FATAL(backward_coord.has_value(), "backward_coord is null");
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
 
     const uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
