@@ -276,6 +276,18 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
+    uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const override {
+        auto cached = device_frequency_cache_.find(device_id);
+        if (cached != device_frequency_cache_.end()) {
+            return cached->second;
+        }
+        auto& metal_context = tt::tt_metal::MetalContext::instance();
+        auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+        auto freq = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
+        device_frequency_cache_.emplace(device_id, freq);
+        return freq;
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -1540,6 +1552,7 @@ private:
 
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+    mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
