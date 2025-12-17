@@ -41,73 +41,81 @@ struct MeshGcoreAccessorArgs;
  * adjusts them to the same rank by prepending 1s to the shorter shape before generating defines.
  * Example: mesh (2,2,2) + grid (16,16) → grid becomes (1,16,16)
  */
+/**
+ * @brief Mapping of global core coordinate to grid_id and local bank_id
+ */
+struct GridBankMapping {
+    size_t grid_id;  // which device/grid
+    size_t bank_id;  // which bank within the device
+};
+
+/**
+ * @brief NOC address with fabric node information (for gcore accessor)
+ */
+struct GcoreNocAddrWithFabricNode {
+    uint64_t noc_addr;        // NOC address for accessing memory
+    uint32_t fabric_mesh_id;  // Fabric mesh ID of the device
+    uint32_t fabric_chip_id;  // Fabric chip ID of the device
+};
+
+/**
+ * @brief Configuration for mesh topology
+ * @tparam NumDims Compile-time number of dimensions
+ */
+template <uint32_t NumDims>
+struct MeshConfig {
+    static constexpr uint32_t num_dims = NumDims;
+    uint32_t dim[NumDims];      // mesh dimensions (e.g., 2x2x2)
+    uint32_t strides[NumDims];  // pre-computed mesh strides for indexing
+};
+
+/**
+ * @brief Configuration for grid topology (cores per device)
+ * @tparam NumDims Compile-time number of dimensions
+ */
+template <uint32_t NumDims>
+struct GridConfig {
+    static constexpr uint32_t num_dims = NumDims;
+    uint32_t dim[NumDims];      // grid dimensions (e.g., 16,16)
+    uint32_t strides[NumDims];  // pre-computed grid strides for indexing
+};
+
+/**
+ * @brief Configuration for grid to fabric node id mapping
+ * @tparam NumGrids Compile-time number of grids
+ */
+template <uint32_t NumGrids>
+struct GcoreGridToFabricNodeMapping {
+    static constexpr uint32_t num_grids = NumGrids;
+    uint32_t fabric_mesh_ids[NumGrids];  // mesh_id for each grid
+    uint32_t fabric_chip_ids[NumGrids];  // chip_id for each grid
+};
+
+/**
+ * @brief Worker core to NOC coordinate mapping
+ * @tparam NumCores Compile-time number of worker cores
+ */
+template <uint32_t NumCores>
+struct WorkerCoreNocMapping {
+    static constexpr uint32_t num_cores = NumCores;
+    uint8_t noc_x[NumCores];  // NOC x coordinate for each core
+    uint8_t noc_y[NumCores];  // NOC y coordinate for each core
+};
+
+/**
+ * @brief Accessor for direct core-to-core access across devices in a mesh
+ * @tparam MeshNumDims Compile-time number of mesh dimensions
+ * @tparam GridNumDims Compile-time number of grid dimensions
+ * @tparam NumGrids Compile-time number of grids
+ * @tparam NumWorkerCores Compile-time number of worker cores
+ */
+template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
 struct MeshGcoreAccessor {
-    static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
-
-    /**
-     * @brief Configuration for mesh topology
-     */
-    struct MeshConfig {
-        uint32_t num_dims;
-        uint32_t dim[MAX_DIMS];      // mesh dimensions (e.g., 2x2x2)
-        uint32_t strides[MAX_DIMS];  // pre-computed mesh strides for indexing
-        // No constructor - trivially default constructible (uninitialized)
-    };
-
-    /**
-     * @brief Configuration for grid topology (cores per device)
-     */
-    struct GridConfig {
-        uint32_t num_dims;
-        uint32_t dim[MAX_DIMS];      // grid dimensions (e.g., 16,16)
-        uint32_t strides[MAX_DIMS];  // pre-computed grid strides for indexing
-        // No constructor - trivially default constructible (uninitialized)
-    };
-
-    /**
-     * @brief Mapping of global core coordinate to grid_id and local bank_id
-     */
-    struct GridBankMapping {
-        size_t grid_id;  // which device/grid
-        size_t bank_id;  // which bank within the device
-    };
-
-    /**
-     * @brief NOC address with fabric node information
-     */
-    struct NocAddrWithFabricNode {
-        uint64_t noc_addr;        // NOC address for accessing memory
-        uint32_t fabric_mesh_id;  // Fabric mesh ID of the device
-        uint32_t fabric_chip_id;  // Fabric chip ID of the device
-    };
-
-    /**
-     * @brief Configuration for grid to fabric node id mapping
-     */
-    struct GridToFabricNodeMapping {
-        uint32_t num_grids;
-        uint32_t fabric_mesh_ids[MAX_DIMS];  // mesh_id for each grid
-        uint32_t fabric_chip_ids[MAX_DIMS];  // chip_id for each grid
-        // No constructor - trivially default constructible (uninitialized)
-    };
-
-    /**
-     * @brief Worker core to NOC coordinate mapping
-     * Maps linearized worker core index to NOC (x, y) coordinates
-     * Note: Actual size is determined by NUM_WORKER_CORES compile-time define
-     */
-    struct WorkerCoreNocMapping {
-        uint32_t num_cores;
-        uint8_t noc_x[NUM_WORKER_CORES];  // NOC x coordinate for each core
-        uint8_t noc_y[NUM_WORKER_CORES];  // NOC y coordinate for each core
-        // No constructor - trivially default constructible (uninitialized)
-    };
-
 private:
-    MeshConfig mesh_config_;
-    GridConfig grid_config_;
-    GridToFabricNodeMapping fabric_node_mapping_;
-    WorkerCoreNocMapping worker_core_noc_mapping_;
+    MeshConfig<MeshNumDims> mesh_config_;
+    GridConfig<GridNumDims> grid_config_;
+    GcoreGridToFabricNodeMapping<NumGrids> fabric_node_mapping_;
+    WorkerCoreNocMapping<NumWorkerCores> worker_core_noc_mapping_;
 
 public:
     /**
@@ -122,6 +130,7 @@ public:
      * @brief Initialize accessor from MeshGcoreAccessorArgs
      *
      * @param args MeshGcoreAccessorArgs containing preprocessor define readers
+     * @note Implementation defined after MeshGcoreAccessorArgs is fully declared
      */
     void init(const MeshGcoreAccessorArgs& args);
 
@@ -129,26 +138,11 @@ public:
      * @brief Construct a MeshGcoreAccessor from MeshGcoreAccessorArgs
      *
      * @param args MeshGcoreAccessorArgs containing preprocessor define readers
+     * @note Implementation defined after MeshGcoreAccessorArgs is fully declared
      */
     MeshGcoreAccessor(const MeshGcoreAccessorArgs& args);
 
     // ==================== Methods ====================
-
-    /**
-     * @brief Compute strides from configuration dimensions
-     * Strides are computed in row-major order (last dimension has stride 1)
-     *
-     * @tparam ConfigT Configuration type with num_dims, dim[], and strides[]
-     * @param config Configuration to compute strides for (modified in place)
-     */
-    template <typename ConfigT>
-    static void compute_strides(ConfigT& config) {
-        uint32_t stride = 1;
-        for (int i = config.num_dims - 1; i >= 0; --i) {
-            config.strides[i] = stride;
-            stride *= config.dim[i];
-        }
-    }
 
     /**
      * @brief Get grid_id and bank_id from global core coordinate
@@ -166,11 +160,10 @@ public:
         size_t grid_id = 0;
         size_t bank_id = 0;
 
-        // Dimensions should match (host side adjusts ranks before passing compile-time args)
-        uint32_t num_dims = mesh_config_.num_dims;
-        ASSERT(num_dims == grid_config_.num_dims);
+        // Use compile-time num_dims (MeshNumDims should equal GridNumDims after host alignment)
+        static_assert(MeshNumDims == GridNumDims, "Mesh and grid dimensions must match");
 
-        for (size_t i = 0; i < num_dims; ++i) {
+        for (size_t i = 0; i < MeshNumDims; ++i) {
             grid_id += (gcore_coord[i] / grid_config_.dim[i]) * mesh_config_.strides[i];
             bank_id += (gcore_coord[i] % grid_config_.dim[i]) * grid_config_.strides[i];
         }
@@ -187,10 +180,10 @@ public:
      * @param gcore_coord Global core coordinate
      * @param offset Additional offset within the bank
      * @param noc NOC index to use (0 or 1)
-     * @return NocAddrWithFabricNode containing NOC address and fabric node IDs
+     * @return GcoreNocAddrWithFabricNode containing NOC address and fabric node IDs
      */
     template <typename ArrType>
-    FORCE_INLINE NocAddrWithFabricNode
+    FORCE_INLINE GcoreNocAddrWithFabricNode
     get_fabric_node_and_noc_addr(const ArrType& gcore_coord, uint32_t offset = 0, uint8_t noc = noc_index) const {
         GridBankMapping mapping = get_grid_and_bank_id(gcore_coord);
 
@@ -207,19 +200,19 @@ public:
         uint32_t fabric_mesh_id = fabric_node_mapping_.fabric_mesh_ids[mapping.grid_id];
         uint32_t fabric_chip_id = fabric_node_mapping_.fabric_chip_ids[mapping.grid_id];
 
-        return NocAddrWithFabricNode{noc_addr, fabric_mesh_id, fabric_chip_id};
+        return GcoreNocAddrWithFabricNode{noc_addr, fabric_mesh_id, fabric_chip_id};
 #else
         // Compile-time error: this method cannot be called from host code
         static_assert(false, "get_noc_addr() can only be called from kernel/firmware code (KERNEL_BUILD or FW_BUILD)");
-        return NocAddrWithFabricNode{0, 0, 0};
+        return GcoreNocAddrWithFabricNode{0, 0, 0};
 #endif
     }
 
     // ==================== Getters ====================
 
-    const MeshConfig& mesh_config() const { return mesh_config_; }
-    const GridConfig& grid_config() const { return grid_config_; }
-    const GridToFabricNodeMapping& fabric_node_mapping() const { return fabric_node_mapping_; }
+    const MeshConfig<MeshNumDims>& mesh_config() const { return mesh_config_; }
+    const GridConfig<GridNumDims>& grid_config() const { return grid_config_; }
+    const GcoreGridToFabricNodeMapping<NumGrids>& fabric_node_mapping() const { return fabric_node_mapping_; }
 };
 
 // ==================== MeshGcoreAccessorArgs ====================
@@ -260,7 +253,7 @@ struct MeshGcoreAccessorArgs {
         static_assert(false, "MESH_STRIDES must be defined");
 #endif
 
-        config.num_dims = MESH_NUM_DIMS;
+        // num_dims is now static constexpr from template parameter
 
         constexpr uint32_t mesh_dims[] = MESH_DIMS;
         for (uint32_t i = 0; i < MESH_NUM_DIMS; ++i) {
@@ -288,7 +281,7 @@ struct MeshGcoreAccessorArgs {
         static_assert(false, "GRID_STRIDES must be defined");
 #endif
 
-        config.num_dims = GRID_NUM_DIMS;
+        // num_dims is now static constexpr from template parameter
 
         constexpr uint32_t grid_dims[] = GRID_DIMS;
         for (uint32_t i = 0; i < GRID_NUM_DIMS; ++i) {
@@ -316,7 +309,7 @@ struct MeshGcoreAccessorArgs {
         static_assert(false, "FABRIC_CHIP_IDS must be defined");
 #endif
 
-        mapping.num_grids = NUM_GRIDS;
+        // num_grids is now static constexpr from template parameter
 
         constexpr uint32_t fabric_mesh_ids_arr[] = FABRIC_MESH_IDS;
         constexpr uint32_t fabric_chip_ids_arr[] = FABRIC_CHIP_IDS;
@@ -342,7 +335,7 @@ struct MeshGcoreAccessorArgs {
         static_assert(false, "WORKER_CORE_NOC_Y must be defined");
 #endif
 
-        mapping.num_cores = NUM_WORKER_CORES;
+        // num_cores is now static constexpr from template parameter
 
         constexpr uint32_t noc_x_arr[] = WORKER_CORE_NOC_X;
         constexpr uint32_t noc_y_arr[] = WORKER_CORE_NOC_Y;
@@ -354,17 +347,27 @@ struct MeshGcoreAccessorArgs {
     }
 };
 
-// ==================== MeshGcoreAccessor method definitions ====================
-// (defined after MeshGcoreAccessorArgs to avoid incomplete type errors)
+// ==================== MeshGcoreAccessor Method Implementations ====================
+// Defined after MeshGcoreAccessorArgs to avoid incomplete type errors
 
-inline void MeshGcoreAccessor::init(const MeshGcoreAccessorArgs& args) {
+template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
+inline void MeshGcoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::init(
+    const MeshGcoreAccessorArgs& args) {
     args.populate_mesh_config(mesh_config_);
     args.populate_grid_config(grid_config_);
     args.populate_fabric_node_mapping(fabric_node_mapping_);
     args.populate_worker_core_noc_mapping(worker_core_noc_mapping_);
 }
 
-inline MeshGcoreAccessor::MeshGcoreAccessor(const MeshGcoreAccessorArgs& args) :
+template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
+inline MeshGcoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::MeshGcoreAccessor(
+    const MeshGcoreAccessorArgs& args) :
     mesh_config_(), grid_config_(), fabric_node_mapping_(), worker_core_noc_mapping_() {
     init(args);
 }
+
+// ==================== Default MeshGcoreAccessor Type ====================
+// Use preprocessor defines to create a concrete type alias
+// These defines are set at kernel compile time
+
+using DefaultMeshGcoreAccessor = MeshGcoreAccessor<MESH_NUM_DIMS, GRID_NUM_DIMS, NUM_GRIDS, NUM_WORKER_CORES>;

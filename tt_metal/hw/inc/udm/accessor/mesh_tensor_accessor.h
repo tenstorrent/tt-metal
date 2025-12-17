@@ -16,6 +16,53 @@ template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 struct MeshTensorAccessorArgs;
 
 /**
+ * @brief Mapping of global page coordinate to grid_id and local page_id
+ */
+struct PageMapping {
+    size_t grid_id;        // which device/grid
+    size_t local_page_id;  // which page within the device/grid
+};
+
+/**
+ * @brief NOC address with fabric node information
+ */
+struct NocAddrWithFabricNode {
+    uint64_t noc_addr;        // NOC address for accessing memory
+    uint32_t fabric_mesh_id;  // Fabric mesh ID of the device
+    uint32_t fabric_chip_id;  // Fabric chip ID of the device
+};
+
+/**
+ * @brief Distribution specification for mesh tensor (multi-device tensor)
+ * @tparam Rank Compile-time rank of the tensor
+ */
+template <uint32_t Rank>
+struct MeshDSpec {
+    static constexpr uint32_t rank = Rank;
+    std::array<uint32_t, Rank> mesh_tensor_shape;    // global shape across all devices
+    std::array<uint32_t, Rank> mesh_tensor_strides;  // strides for global tensor
+    std::array<uint32_t, Rank> tensor_shape;         // local shape on single device
+    std::array<uint32_t, Rank> tensor_strides;       // strides for local tensor
+    std::array<uint32_t, Rank> mesh_shape;           // mesh device shape (mesh_tensor_shape / tensor_shape)
+    std::array<uint32_t, Rank> mesh_strides;         // strides for mesh device space
+
+    constexpr MeshDSpec() :
+        mesh_tensor_shape{}, mesh_tensor_strides{}, tensor_shape{}, tensor_strides{}, mesh_shape{}, mesh_strides{} {}
+};
+
+/**
+ * @brief Configuration for grid to fabric node id mapping
+ * @tparam NumGrids Compile-time number of grids
+ */
+template <uint32_t NumGrids>
+struct GridToFabricNodeMapping {
+    static constexpr uint32_t num_grids = NumGrids;
+    std::array<std::pair<uint32_t, uint32_t>, NumGrids> fabric_node_ids;  // (mesh_id, chip_id) for each grid
+
+    constexpr GridToFabricNodeMapping() : fabric_node_ids{} {}
+};
+
+/**
  * @brief Accessor for distributed tensor page access across devices in a mesh
  *
  * MeshTensorAccessor allows access via global page IDs that span across the entire
@@ -39,65 +86,19 @@ struct MeshTensorAccessorArgs;
  * @endcode
  *
  * @tparam TensorAccessorT The underlying TensorAccessor type (auto-deduced)
+ * @tparam Rank Compile-time rank of the tensor
+ * @tparam NumGrids Compile-time number of grids in the mesh
  */
-template <typename TensorAccessorT>
+template <typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids>
 struct MeshTensorAccessor {
     using TensorAccessorType = TensorAccessorT;
-    static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
-
-    /**
-     * @brief Distribution specification for mesh tensor (multi-device tensor)
-     */
-    struct MeshDSpec {
-        uint32_t rank;
-        std::array<uint32_t, MAX_DIMS> mesh_tensor_shape;    // global shape across all devices
-        std::array<uint32_t, MAX_DIMS> mesh_tensor_strides;  // strides for global tensor
-        std::array<uint32_t, MAX_DIMS> tensor_shape;         // local shape on single device
-        std::array<uint32_t, MAX_DIMS> tensor_strides;       // strides for local tensor
-        std::array<uint32_t, MAX_DIMS> mesh_shape;           // mesh device shape (mesh_tensor_shape / tensor_shape)
-        std::array<uint32_t, MAX_DIMS> mesh_strides;         // strides for mesh device space
-
-        constexpr MeshDSpec() :
-            rank(0),
-            mesh_tensor_shape{},
-            mesh_tensor_strides{},
-            tensor_shape{},
-            tensor_strides{},
-            mesh_shape{},
-            mesh_strides{} {}
-    };
-
-    /**
-     * @brief Mapping of global page coordinate to grid_id and local page_id
-     */
-    struct PageMapping {
-        size_t grid_id;        // which device/grid
-        size_t local_page_id;  // which page within the device/grid
-    };
-
-    /**
-     * @brief NOC address with fabric node information
-     */
-    struct NocAddrWithFabricNode {
-        uint64_t noc_addr;        // NOC address for accessing memory
-        uint32_t fabric_mesh_id;  // Fabric mesh ID of the device
-        uint32_t fabric_chip_id;  // Fabric chip ID of the device
-    };
-
-    /**
-     * @brief Configuration for grid to fabric node id mapping
-     */
-    struct GridToFabricNodeMapping {
-        uint32_t num_grids;
-        std::array<std::pair<uint32_t, uint32_t>, MAX_DIMS> fabric_node_ids;  // (mesh_id, chip_id) for each grid
-
-        constexpr GridToFabricNodeMapping() : num_grids(0), fabric_node_ids{} {}
-    };
+    static constexpr uint32_t rank = Rank;
+    static constexpr uint32_t num_grids = NumGrids;
 
 private:
     TensorAccessorType tensor_accessor_;
-    MeshDSpec mesh_dspec_;
-    GridToFabricNodeMapping fabric_node_mapping_;
+    MeshDSpec<Rank> mesh_dspec_;
+    GridToFabricNodeMapping<NumGrids> fabric_node_mapping_;
 
 public:
     /**
@@ -141,7 +142,7 @@ public:
      */
     template <typename ArrType>
     FORCE_INLINE void get_global_page_coord(uint32_t global_page_id, ArrType& global_page_coord) const {
-        for (int i = mesh_dspec_.rank - 1; i >= 0; --i) {
+        for (int i = Rank - 1; i >= 0; --i) {
             global_page_coord[i] = global_page_id % mesh_dspec_.mesh_tensor_shape[i];
             global_page_id /= mesh_dspec_.mesh_tensor_shape[i];
         }
@@ -163,7 +164,7 @@ public:
         size_t grid_id = 0;
         size_t local_page_id = 0;
 
-        for (size_t i = 0; i < mesh_dspec_.rank; ++i) {
+        for (size_t i = 0; i < Rank; ++i) {
             // Use mesh_strides (from compile-time args) to map to grid_id correctly
             grid_id += (global_page_coord[i] / mesh_dspec_.tensor_shape[i]) * mesh_dspec_.mesh_strides[i];
             local_page_id += (global_page_coord[i] % mesh_dspec_.tensor_shape[i]) * mesh_dspec_.tensor_strides[i];
@@ -185,8 +186,8 @@ public:
     FORCE_INLINE NocAddrWithFabricNode
     get_fabric_node_and_noc_addr(uint32_t global_page_id, uint32_t offset = 0, uint8_t noc = noc_index) const {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        // Convert global page ID to coordinate
-        uint32_t global_page_coord[MAX_DIMS];
+        // Convert global page ID to coordinate - use compile-time sized array
+        uint32_t global_page_coord[Rank];
         get_global_page_coord(global_page_id, global_page_coord);
 
         // Get mapping to local page
@@ -240,8 +241,8 @@ public:
 
     // ==================== Getters ====================
 
-    const MeshDSpec& mesh_dspec() const { return mesh_dspec_; }
-    const GridToFabricNodeMapping& fabric_node_mapping() const { return fabric_node_mapping_; }
+    const MeshDSpec<Rank>& mesh_dspec() const { return mesh_dspec_; }
+    const GridToFabricNodeMapping<NumGrids>& fabric_node_mapping() const { return fabric_node_mapping_; }
 };
 
 // ==================== Deduction Guide ====================
@@ -256,13 +257,15 @@ public:
  *   auto accessor = MeshTensorAccessor(args);
  *   // DSpec and buffer address are automatically deduced!
  */
-// Deduction guide: auto-deduce TensorAccessor type from TensorAccessorArgs
+// Deduction guide: auto-deduce TensorAccessor type, Rank, and NumGrids from MeshTensorAccessorArgs
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
-MeshTensorAccessor(const MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args)
-    -> MeshTensorAccessor<decltype(TensorAccessor(
+MeshTensorAccessor(const MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args) -> MeshTensorAccessor<
+    decltype(TensorAccessor(
         typename MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorAccessorArgsT(),
         args.get_buffer_address(),
-        args.get_aligned_page_size()))>;
+        args.get_aligned_page_size())),
+    MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::mesh_dspec_rank,
+    MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::num_grids>;
 
 // ==================== MeshTensorAccessorArgs ====================
 
@@ -281,11 +284,12 @@ MeshTensorAccessor(const MeshTensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args)
  * 6. mesh_tensor_strides[mesh_dspec_rank]
  * 7. tensor_shape[mesh_dspec_rank]
  * 8. tensor_strides[mesh_dspec_rank]
- * 9. num_grids (1 uint32_t)
- * 10. fabric_mesh_ids[num_grids]
- * 11. fabric_chip_ids[num_grids]
+ * 9. mesh_shape[mesh_dspec_rank]
+ * 10. mesh_strides[mesh_dspec_rank]
+ * 11. num_grids (1 uint32_t)
+ * 12. fabric_mesh_ids[num_grids]
+ * 13. fabric_chip_ids[num_grids]
  *
- * @tparam DSpecT Distribution spec type
  * @tparam TENSOR_ACCESSOR_CTA_OFFSET Offset where TensorAccessorArgs start
  * @tparam TENSOR_ACCESSOR_CRTA_OFFSET Offset where TensorAccessor CRTA args start
  */
@@ -293,7 +297,6 @@ template <std::size_t TENSOR_ACCESSOR_CTA_OFFSET, std::size_t TENSOR_ACCESSOR_CR
 struct MeshTensorAccessorArgs {
     // TensorAccessorArgs for the underlying local tensor accessor
     using TensorAccessorArgsT = TensorAccessorArgs<TENSOR_ACCESSOR_CTA_OFFSET, TENSOR_ACCESSOR_CRTA_OFFSET>;
-    static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
     static constexpr uint32_t tensor_accessor_args_size = TensorAccessorArgsT::num_compile_time_args();
 
     // Offset calculations for MeshTensorAccessor-specific args
@@ -336,12 +339,11 @@ struct MeshTensorAccessorArgs {
     static constexpr uint32_t get_aligned_page_size() { return get_compile_time_arg_val(AlignedPageSizeOffset); }
 
     /**
-     * @brief Populate MeshDSpec from compile-time args (runtime function)
+     * @brief Populate MeshDSpec from compile-time args
+     * Uses compile-time rank for loop bounds
      */
-    template <typename MeshDSpecT>
-    static void populate_mesh_dspec(MeshDSpecT& dspec) {
-        dspec.rank = mesh_dspec_rank;
-        // Use runtime loop to read compile-time args array with runtime index
+    static void populate_mesh_dspec(MeshDSpec<mesh_dspec_rank>& dspec) {
+        // Use compile-time loop bounds for exact sizing
         for (uint32_t i = 0; i < mesh_dspec_rank; ++i) {
             dspec.mesh_tensor_shape[i] = kernel_compile_time_args[MeshTensorShapeOffset + i];
             dspec.mesh_tensor_strides[i] = kernel_compile_time_args[MeshTensorStridesOffset + i];
@@ -353,12 +355,11 @@ struct MeshTensorAccessorArgs {
     }
 
     /**
-     * @brief Populate GridToFabricNodeMapping from compile-time args (runtime function)
+     * @brief Populate GridToFabricNodeMapping from compile-time args
+     * Uses compile-time num_grids for loop bounds
      */
-    template <typename MappingT>
-    static void populate_fabric_node_mapping(MappingT& mapping) {
-        mapping.num_grids = num_grids;
-        // Use runtime loop to read compile-time args array with runtime index
+    static void populate_fabric_node_mapping(GridToFabricNodeMapping<num_grids>& mapping) {
+        // Use compile-time loop bounds for exact sizing
         for (uint32_t i = 0; i < num_grids; ++i) {
             uint32_t mesh_id = kernel_compile_time_args[FabricMeshIdsOffset + i];
             uint32_t chip_id = kernel_compile_time_args[FabricChipIdsOffset + i];

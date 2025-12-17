@@ -19,8 +19,8 @@ namespace tt::tt_fabric::experimental::udm {
 template <typename T>
 struct is_mesh_tensor_accessor : std::false_type {};
 
-template <typename TensorAccessorT>
-struct is_mesh_tensor_accessor<MeshTensorAccessor<TensorAccessorT>> : std::true_type {};
+template <typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids>
+struct is_mesh_tensor_accessor<MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>> : std::true_type {};
 
 /**
  * @brief Helper to check if destination fabric node is local
@@ -55,12 +55,12 @@ inline bool dest_is_local(uint32_t dest_fabric_mesh_id, uint32_t dest_fabric_chi
  *
  * @return Pair of [accessor reference, is_newly_initialized]
  */
-FORCE_INLINE std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
-    static MeshGcoreAccessor* accessor_ptr = nullptr;
+FORCE_INLINE std::pair<DefaultMeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
+    static DefaultMeshGcoreAccessor* accessor_ptr = nullptr;
     static bool initialized = false;
 
     if (!initialized) {
-        static MeshGcoreAccessor accessor;
+        static DefaultMeshGcoreAccessor accessor;
         auto gcore_args = MeshGcoreAccessorArgs();
         accessor.init(gcore_args);
         accessor_ptr = &accessor;
@@ -80,6 +80,8 @@ FORCE_INLINE std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
  *   async_read(accessor, page_id, l1_addr, size, offset);      // with offset
  *
  * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam Rank Compile-time rank of the tensor (auto-deduced)
+ * @tparam NumGrids Compile-time number of grids (auto-deduced)
  * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
  * @param accessor MeshTensorAccessor instance
  * @param coord Global page_id
@@ -88,9 +90,9 @@ FORCE_INLINE std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
  * @param offset Offset within the page (default 0)
  * @param noc NOC index to use
  */
-template <typename TensorAccessorT, typename CoordT>
+template <typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
 inline void async_read(
-    const MeshTensorAccessor<TensorAccessorT>& accessor,
+    const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
     uint32_t size,
@@ -118,6 +120,8 @@ inline void async_read(
  *
  * @tparam posted Posted write flag (0 = non-posted, 1 = posted, default 0)
  * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam Rank Compile-time rank of the tensor (auto-deduced)
+ * @tparam NumGrids Compile-time number of grids (auto-deduced)
  * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
  * @param accessor MeshTensorAccessor instance
  * @param coord Global page_id
@@ -126,9 +130,9 @@ inline void async_read(
  * @param offset Offset within the page (default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename TensorAccessorT, typename CoordT>
+template <uint8_t posted = 0, typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
 inline void async_write(
-    const MeshTensorAccessor<TensorAccessorT>& accessor,
+    const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
     uint32_t size,
@@ -251,6 +255,8 @@ inline void async_write(
  *
  * @tparam posted Posted atomic flag (0 = non-posted, 1 = posted, default 0)
  * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam Rank Compile-time rank of the tensor (auto-deduced)
+ * @tparam NumGrids Compile-time number of grids (auto-deduced)
  * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
  * @param accessor MeshTensorAccessor instance
  * @param coord Global page_id
@@ -258,9 +264,9 @@ inline void async_write(
  * @param offset Offset within the page (semaphore address, default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename TensorAccessorT, typename CoordT>
+template <uint8_t posted = 0, typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
 inline void semaphore_inc(
-    const MeshTensorAccessor<TensorAccessorT>& accessor,
+    const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t incr_val,
     uint32_t offset = 0,
