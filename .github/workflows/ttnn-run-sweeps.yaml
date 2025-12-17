@@ -569,6 +569,10 @@ on:
         description: "Measure device performance using device profiler (--device-perf flag)."
         type: boolean
         default: true
+      measure_e2e_perf:
+        description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
+        type: boolean
+        default: false
       arch:
         required: true
         type: choice
@@ -627,6 +631,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
@@ -979,6 +984,8 @@ jobs:
           merge-multiple: true
       - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
+          SUITE_NAME="${{ github.event.inputs.suite_name }}"
+
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
@@ -989,13 +996,37 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
-          python3 tests/sweep_framework/sweeps_runner.py \
-          --module-name ${{ github.event.inputs.sweep_name }} \
-          --vector-source vectors_export \
-          --result-dest results_export \
-          --tag ci-main \
-          --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG \
-          --suite-name ${{ github.event.inputs.suite_name }} \
+          E2E_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+            E2E_PERF_FLAG="--perf-with-cache"
+          fi
+
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name ${{ github.event.inputs.sweep_name }}
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
+          fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          "${CMD[@]}"
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -1067,6 +1098,7 @@ jobs:
           echo "│ Runner:               ${{ matrix.runs_on }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
           echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
+          echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -1099,6 +1131,12 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
+          # Enable e2e performance for manual dispatch only (not scheduled runs)
+          E2E_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+            E2E_PERF_FLAG="--perf-with-cache"
+          fi
+
           CMD=(
             python3 tests/sweep_framework/sweeps_runner.py
             --module-name "$MODULE_SELECTOR"
@@ -1114,6 +1152,10 @@ jobs:
 
           if [[ -n "$DEVICE_PERF_FLAG" ]]; then
             CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
           fi
 
           if [[ -n "$SUITE_NAME" ]]; then
