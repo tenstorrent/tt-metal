@@ -268,17 +268,20 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 }},
             shared_vars.matmul_shared_variables);
 
-        if (shared_vars.all_gather_override_runtime_arguments_callback.has_value()) {
-            shared_vars.all_gather_override_runtime_arguments_callback
-                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in
-                           // all_gather_async old program factories
-                    &operation_attributes,
-                    program,
-                    {tensor_args.input_tensor}, /* input tensor */
-                    {tensor_args.bias},
-                    {tensor_return_value[0]} /* all gather output tensor */
-                );
-        }
+        ttnn::all_gather_async_minimal_default_helper_override_runtime_arguments(
+            program,
+            shared_vars.all_gather_async_shared_variables.reader_kernel_id,
+            shared_vars.all_gather_async_shared_variables.writer_kernel_id,
+            shared_vars.all_gather_async_shared_variables.all_cores,
+            operation_attributes.all_gather_async_attributes.num_links,
+            shared_vars.all_gather_async_shared_variables.num_directions_per_link,
+            shared_vars.all_gather_async_shared_variables.num_workers_per_direction,
+            shared_vars.all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
+            shared_vars.all_gather_async_shared_variables.num_cores_per_link,
+            operation_attributes.all_gather_async_attributes.barrier_semaphore,
+            operation_attributes.all_gather_async_attributes.semaphore,
+            tensor_args.input_tensor,
+            tensor_return_value[0]);
     }
 }
 
