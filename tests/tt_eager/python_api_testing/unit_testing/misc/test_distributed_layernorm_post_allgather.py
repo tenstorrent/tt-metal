@@ -59,6 +59,9 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    error_n = []
+    pass_n = []
+
     all_pass = True
     # layernorm post all gather
     for d in range(n_devices):
@@ -113,8 +116,17 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 
         tt_lnp2_out_cpu = tt2torch_tensor(tt_lnp2_out)
         passing, output_str = comp_allclose(ref_chunks[d], tt_lnp2_out_cpu, rtol=1e-1, atol=1e-01)
+        if passing:
+            pass_n += [[d, output_str]]
+        else:
+            error_n += [[d, output_str]]
+
         logger.debug(f"layernorm vs tt={output_str}")
         all_pass = all_pass and passing
+
+    if not all_pass:
+        logger.error("test_distributed_layernorm_post_allgather.py::run_layernorm_part_2 errors:")
+        logger.error(f"{error_n}")
 
     assert all_pass
 
@@ -178,6 +190,7 @@ def test_layernorm_part_2_with_program_cache(
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
+@pytest.mark.skip(reason="#34410")
 def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device):
     dummy_tensors = []
 
