@@ -93,6 +93,8 @@ void MAIN {
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+
+        uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
         }
@@ -150,6 +152,8 @@ void MAIN {
                     // DPRINT << "ring id: " << ring_id << " KV chunk is beyond logical N" << ENDL();
                     continue;
                 }
+
+                KV_chunks_processed_in_iter++;
 
                 bool should_mask = false;
                 if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
@@ -329,6 +333,12 @@ void MAIN {
             }
 
             cb_pop_front(cb_q_in, q_chunk_tiles);
+        }
+        if (KV_chunks_processed_in_iter % 2 == 0) {
+            cb_wait_front(cb_k_in, k_chunk_tiles);
+            cb_wait_front(cb_v_in, k_chunk_tiles);
+            cb_pop_front(cb_k_in, k_chunk_tiles);
+            cb_pop_front(cb_v_in, k_chunk_tiles);
         }
     }
 }
