@@ -50,7 +50,7 @@ void golden_matmul(
                 idx_a += 1;
                 idx_b += N;
             }
-            output.at(idx_c) = bfloat16(c_f);
+            output.at(idx_c) = static_cast<bfloat16>(c_f);
         }
     }
 }
@@ -65,7 +65,6 @@ void matmul_single_core_tensor(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool /*bcast_batch*/,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -75,8 +74,8 @@ void matmul_single_core_tensor(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
-    // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
-    CoreCoord core({0, 0});
+    // Core range from x: [0, 0] to y: [0, 0] (i.e. single core at {0, 0})
+    tt::tt_metal::CoreCoord core({0, 0});
 
     // Calcaulate the number of tiles for each dimension.
     uint32_t Mt = M / TILE_HEIGHT;
@@ -87,28 +86,18 @@ void matmul_single_core_tensor(
     // We use TILE layout as that's what the hardware expects for matmul operations.
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    // Create tensor specs for src0 (MxK), src1 (KxN), and dst (MxN)
-    Shape src0_shape({M, K});
-    Shape src1_shape({K, N});
-    Shape dst_shape({M, N});
-
-    MemoryConfig dram_mem_config(BufferType::DRAM);
-    TensorSpec src0_spec(src0_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
-    TensorSpec src1_spec(src1_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
-    TensorSpec dst_spec(dst_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), dram_mem_config));
+    // Create tensors in device DRAM for src0 (MxK), src1 (KxN), and dst (MxN)
+    TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
+    TensorSpec src0_spec(Shape({M, K}), tile_layout);
+    TensorSpec src1_spec(Shape({K, N}), tile_layout);
+    TensorSpec dst_spec(Shape({M, N}), tile_layout);
 
     // Create device tensors from input data using Tensor::from_vector
     // This creates the tensors and transfers data to device in one step
     auto src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), src0_spec, mesh_device.get());
     auto src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), src1_spec, mesh_device.get());
-    // Create output tensor initialized with zeros
-    auto dst_tensor =
-        Tensor::from_vector<bfloat16>(std::vector<bfloat16>(output.size(), 0), dst_spec, mesh_device.get());
-
-    // Get mesh buffers from tensors for use with TensorAccessorArgs and runtime args
-    auto src0_mesh_buffer = src0_tensor.mesh_buffer();
-    auto src1_mesh_buffer = src1_tensor.mesh_buffer();
-    auto dst_mesh_buffer = dst_tensor.mesh_buffer();
+    // Allocate output tensor on device (no initialization needed - hardware will zero it via tile_regs_acquire)
+    auto dst_tensor = allocate_tensor_on_device(dst_spec, mesh_device.get());
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
@@ -135,6 +124,11 @@ void matmul_single_core_tensor(
         CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
             .set_page_size(output_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+
+    // Get mesh buffers from tensors for use with TensorAccessorArgs and runtime args
+    auto src0_mesh_buffer = src0_tensor.mesh_buffer();
+    auto src1_mesh_buffer = src1_tensor.mesh_buffer();
+    auto dst_mesh_buffer = dst_tensor.mesh_buffer();
 
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args;
@@ -232,7 +226,7 @@ int main() {
 
         // Invoke the matrix multiplication on the Tensix device
         std::vector<bfloat16> result_vec(M * N, 0);
-        matmul_single_core_tensor(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
+        matmul_single_core_tensor(src0_vec, src1_vec, result_vec, M, N, K, mesh_device);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
