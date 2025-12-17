@@ -24,7 +24,7 @@ def tracy_frame():
     ttnn._ttnn.profiler.tracy_frame()
 
 
-def GetLatestProgramsPerfData():
+def get_latest_programs_perf_data():
     return ttnn._ttnn.profiler.GetLatestProgramsPerfData()
 
 
