@@ -7,10 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.common.utility_functions import comp_pcc, comp_allclose
 
 
 def pad_to_next_multiple(tensor):
@@ -99,7 +96,7 @@ class TtLlamaMLP(LightweightModule):
 
         # sharded
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat16, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
@@ -117,7 +114,7 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and not tt_ccl.is_qwen:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
@@ -159,8 +156,10 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            core_grid=None,
+            global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"] and not self.args.is_qwen
+            else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
@@ -172,15 +171,6 @@ class TtLlamaMLP(LightweightModule):
             comp_out = ttnn.to_torch(w1_out, mesh_composer=mesh_composer).sum(0)
             comp_out = torch.permute(comp_out, (1, 0, 2))
             passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
-            # save x and self.w1
-            mesh_composer2d = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=[8, 4])
-            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer2d)
-            torch_w1 = ttnn.to_torch(self.w1, mesh_composer=mesh_composer2d)
-            if self.layer_num == 2:
-                torch.save(torch_x, "models/demos/llama3_70b_galaxy/tests/w1_in.pt")
-                torch.save(torch_w1, "models/demos/llama3_70b_galaxy/tests/w1_weight.pt")
-                torch.save(ref_after_w1, "models/demos/llama3_70b_galaxy/tests/ref_after_w1.pt")
-                torch.save(comp_out, "models/demos/llama3_70b_galaxy/tests/comp_out.pt")
             print(f"W1 out PCC: {pcc_message}")
             print(comp_allclose(ref_after_w1, comp_out))
             print()
@@ -216,7 +206,9 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"] and not self.args.is_qwen
+            else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(x)
@@ -310,7 +302,9 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_2,
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"] and not self.args.is_qwen
+            else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
