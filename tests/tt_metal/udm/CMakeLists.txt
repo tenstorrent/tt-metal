@@ -6,6 +6,7 @@ find_package(Python3 REQUIRED COMPONENTS Development)
 
 set(UDM_TEST_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_copy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_udm_reduction.cpp
 )
 
