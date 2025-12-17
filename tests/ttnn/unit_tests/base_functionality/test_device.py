@@ -95,8 +95,6 @@ ttnn.close_device(device)
 """
     result = subprocess.run(
         ["python3", "-c", subprocess_code],
-        capture_output=True,
-        text=True,
     )
     assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
 
