@@ -46,7 +46,6 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         persistent_output_buffer_v,
     };
 
-    // this->all_gather_struct.validate_with_output_tensors(ring_gather_input_tensors, ring_gather_output_tensors);
     RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         this->all_gather_struct,
         {.input_tensor = ring_gather_input_tensors, .persistent_output_buffer = ring_gather_output_tensors});
@@ -272,8 +271,6 @@ tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_progra
         RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
             this->all_gather_struct,
             {.input_tensor = {input_tensors.at(1), input_tensors.at(2)}}) /*all_gather input tensors*/
-        // this->all_gather_struct.compute_program_hash(
-        //     {input_tensors.at(1), input_tensors.at(2)}) /*all_gather input tensors*/
     );
 }
 
@@ -388,7 +385,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         persistent_output_buffer_k,
         persistent_output_buffer_v,
     };
-    // TODO: Migrate this code to use new API
+    // TODO: TODO: Remove the following helper function once ring_join_sdpa is migrated to new infra
     auto all_gather_program = ttnn::ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
         ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,

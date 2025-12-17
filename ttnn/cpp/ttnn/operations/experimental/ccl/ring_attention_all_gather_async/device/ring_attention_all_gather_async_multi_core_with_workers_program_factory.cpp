@@ -541,6 +541,7 @@ void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_run
     const std::vector<Tensor>& input_tensors,
     const std::vector<Tensor>& output_tensors,
     const std::vector<GlobalSemaphore>& semaphore) {
+    // Extract shared variables
     auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
     auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
     auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;

@@ -17,10 +17,10 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables {
     tt::tt_metal::KernelHandle worker_sender_reader_backward_kernel_id{};
     tt::tt_metal::KernelHandle worker_sender_writer_backward_kernel_id{};
     std::vector<CoreCoord> sender_worker_cores;
-    uint32_t num_inputs{};
-    uint32_t reader_sender_rt_offset{};
-    uint32_t writer_sender_rt_offset{};
-    uint32_t num_links{};
+    uint32_t num_inputs = 0;
+    uint32_t reader_sender_rt_offset = 0;
+    uint32_t writer_sender_rt_offset = 0;
+    uint32_t num_links = 0;
 };
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {

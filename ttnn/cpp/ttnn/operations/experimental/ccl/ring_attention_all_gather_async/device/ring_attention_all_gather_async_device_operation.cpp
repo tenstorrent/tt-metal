@@ -12,9 +12,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-// TODO: Remove these extra headers once ring join sdpa is migrated to new infra
-#include <tt-metalium/tensor_accessor_args.hpp>
-
 namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
@@ -239,6 +236,7 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
 
 }  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
 
+// TODO: Remove the following helper function once ring_join_sdpa is migrated to new infra
 namespace ttnn {
 tt::tt_metal::operation::ProgramWithCallbacks
 ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
