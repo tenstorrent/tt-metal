@@ -462,7 +462,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
 
                     _multibox_weight_device_cache[cache_key] = (weight_prep, bias_prep)
                 except (RuntimeError, ValueError):
-                    pass
+                    pass  # Weight prep failed; fall through to use weights directly
             except RuntimeError as e:
                 error_msg = str(e) if e else ""
                 if (

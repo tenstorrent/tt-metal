@@ -111,8 +111,8 @@ def draw_detections(image, detections, output_path, model_name):
     # Try to load a font, fallback to default if not available
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-    except:
-        font = ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()  # Font file may not exist on all systems
 
     colors = [
         (255, 0, 0),  # Red

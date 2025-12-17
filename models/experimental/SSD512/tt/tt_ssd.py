@@ -422,7 +422,7 @@ def forward_extras(
 
                             _extras_weight_device_cache[cache_key] = (weight_prep, bias_prep)
                         except (RuntimeError, ValueError):
-                            pass
+                            pass  # Weight prep failed; fall through to use weights directly
                     except RuntimeError as e:
                         error_msg = str(e) if e else ""
                         if (
@@ -725,7 +725,6 @@ class SSD512Network:
         loc_outputs = []
         conf_outputs = []
         for idx, source in enumerate(processed_sources):
-            source_h, source_w = source.shape[1], source.shape[2]
             source_channels = source.shape[3]
             source_memory_config = ttnn.L1_MEMORY_CONFIG
 

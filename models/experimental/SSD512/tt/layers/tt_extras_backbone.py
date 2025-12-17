@@ -374,7 +374,7 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                             except Exception as e:
                                 raise RuntimeError(f"Error preparing weights: {e}") from e
                         except ValueError:
-                            pass
+                            pass  # Invalid weight config; fall through to use weights directly
                         except RuntimeError as e:
                             error_msg = str(e) if e else ""
                             if (

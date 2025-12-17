@@ -23,13 +23,13 @@ def setup_seeds_and_deterministic(reset_seeds=True, seed=0):
     try:
         torch.use_deterministic_algorithms(True)
     except Exception:
-        pass
+        pass  # Not all PyTorch versions/backends support deterministic algorithms
 
     try:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     except Exception:
-        pass
+        pass  # cuDNN settings may not be available on all platforms
 
 
 def build_and_init_torch_model(phase="test", size=512, num_classes=21):
@@ -107,7 +107,7 @@ def cleanup_device_memory(device):
             if hasattr(ttnn, "deallocate_buffers"):
                 ttnn.deallocate_buffers(device)
         except Exception:
-            pass
+            pass  # Best-effort cleanup; deallocation may fail during tracing
 
         # Additional synchronization to ensure all operations complete
         ttnn.synchronize_device(device)

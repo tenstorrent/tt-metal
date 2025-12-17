@@ -424,7 +424,7 @@ def apply_vgg_backbone(
                                 bias_ttnn = bias_prep
                                 used_cache_fallback = True
                             except (RuntimeError, ValueError):
-                                pass
+                                pass  # Weight prep failed; fall through to use weights directly
                         except RuntimeError as e:
                             error_msg = str(e) if e else ""
                             if (
