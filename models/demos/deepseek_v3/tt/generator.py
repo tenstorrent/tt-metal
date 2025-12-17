@@ -564,19 +564,40 @@ class DeepseekGenerator:
             logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
             positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
-            # NOTE: Do NOT apply teacher forcing here after prefill.
-            # The model's natural first token (A') should be used as input to decode step 0.
-            # If the model is deterministic, A' = A (Phase 1's prefill output), so:
-            # - Decode 0 with input A' will predict B' ≈ B (Phase 1's decode 0 output)
-            # Teacher forcing starts in the decode loop below.
-
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+
+            # Force the first token after prefill if teacher forcing is enabled
+            if teacher_forcing is not None:
+                # Collect the first token prediction and get the forced token
+                forced = teacher_forcing.collect_predicted_tokens(token_value)
+                next_tokens[0] = int(forced)
+                logger.info(f"First token forced to: {self.tokenizer.decode(int(forced), skip_special_tokens=True)}")
+                # Add the first forced token to generations
+                generations[0].append(int(forced))
+                if early_print_first_user:
+                    print(self.tokenizer.decode(int(forced), skip_special_tokens=True), end="", flush=True)
+
             logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
             if early_print_first_user:
                 logger.info("===== Generation for first user =====")
 
             profiler.start("inference_decode")
+            eos_token_id = None
+            if (
+                self.tokenizer is not None
+                and hasattr(self.tokenizer, "eos_token_id")
+                and self.tokenizer.eos_token_id is not None
+            ):
+                eos_token_id = self.tokenizer.eos_token_id
+
             for gen_idx in range(max_new_tokens):
+                # Check if we've already collected all ground truth tokens (before decode to avoid wasting compute)
+                if teacher_forcing is not None and len(teacher_forcing._pred_tokens) >= teacher_forcing.num_gt_tokens():
+                    logger.info(
+                        f"Exhausted all {teacher_forcing.num_gt_tokens()} ground truth tokens, stopping generation early at step {gen_idx}"
+                    )
+                    break
+
                 # Decode one step with previous next_tokens
                 logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                 profiler.start(f"decode_time_{gen_idx}")
@@ -598,11 +619,19 @@ class DeepseekGenerator:
                 positions += 1
 
                 # Collect only for the original batch size
+                should_stop = False
                 for i in range(num_of_prompts):
                     token_value = int(next_tokens[i].item())
                     generations[i].append(token_value)
                     if early_print_first_user and i == 0:
                         print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+                    # Check for EOS token
+                    if eos_token_id is not None and token_value == eos_token_id:
+                        logger.info(f"EOS token generated at step {gen_idx} for user {i}, stopping generation")
+                        should_stop = True
+
+                if should_stop:
+                    break
 
             profiler.end("inference_decode")
 
@@ -612,7 +641,14 @@ class DeepseekGenerator:
         profiler.end("run")
         # Calculate statistics
         prefill_time = profiler.get_duration("inference_prefill")
-        decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(max_new_tokens)]
+
+        decode_times = []
+        for i in range(max_new_tokens):
+            try:
+                decode_times.append(profiler.get_duration(f"decode_time_{i}"))
+            except KeyError:
+                # Generation stopped early
+                break
 
         # Get config preparation times
         prefill_config_time = profiler.get_duration("preparing_prefill_config")
