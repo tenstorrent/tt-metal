@@ -388,7 +388,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         persistent_output_buffer_k,
         persistent_output_buffer_v,
     };
-    auto all_gather_program = ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
+    // TODO: Migrate this code to use new API
+    auto all_gather_program = ttnn::ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
         ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
         target_device,

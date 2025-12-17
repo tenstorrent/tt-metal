@@ -56,7 +56,8 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
 // TODO: Remove the following once ring_join_sdpa is migrated to new infra
 namespace ttnn {
-tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
+tt::tt_metal::operation::ProgramWithCallbacks
+ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
     IDevice* target_device,

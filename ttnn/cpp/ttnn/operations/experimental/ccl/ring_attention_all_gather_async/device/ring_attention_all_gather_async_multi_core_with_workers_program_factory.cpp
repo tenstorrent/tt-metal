@@ -534,6 +534,70 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_mesh_workl
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
+template <typename shared_variables_t>
+void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments_helper(
+    const shared_variables_t& shared_variables,
+    Program& program,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<Tensor>& output_tensors,
+    const std::vector<GlobalSemaphore>& semaphore) {
+    auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
+    auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
+    auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;
+    auto& worker_sender_writer_backward_kernel_id = shared_variables.worker_sender_writer_backward_kernel_id;
+    auto& sender_worker_cores = shared_variables.sender_worker_cores;
+    auto& num_inputs = shared_variables.num_inputs;
+    auto& reader_sender_rt_offset = shared_variables.reader_sender_rt_offset;
+    auto& writer_sender_rt_offset = shared_variables.writer_sender_rt_offset;
+    auto& num_links = shared_variables.num_links;
+
+    // update senders
+    auto& worker_reader_sender_forward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
+    auto& worker_writer_sender_forward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_writer_forward_kernel_id);
+    auto& worker_reader_sender_backward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_reader_backward_kernel_id);
+    auto& worker_writer_sender_backward_runtime_args_by_core =
+        GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
+
+    for (int link = 0; link < num_links; link++) {
+        auto& worker_reader_sender_forward_runtime_args =
+            worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                             [sender_worker_cores[1 + (link * 2)].y];
+        auto& worker_reader_sender_backward_runtime_args =
+            worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                              [sender_worker_cores[0 + (link * 2)].y];
+        auto& worker_writer_sender_forward_runtime_args =
+            worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                             [sender_worker_cores[1 + (link * 2)].y];
+        auto& worker_writer_sender_backward_runtime_args =
+            worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                              [sender_worker_cores[0 + (link * 2)].y];
+
+        worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
+        worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
+        worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
+        worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            // sender reader
+            worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
+                input_tensors[input_idx].buffer()->address();
+            worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
+                input_tensors[input_idx].buffer()->address();
+            worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            // sender writer
+            worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+            worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
+                output_tensors[input_idx].buffer()->address();
+        }
+    }
+}
+
 void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_program,
     const operation_attributes_t& operation_attributes,
@@ -541,65 +605,11 @@ void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_run
     tensor_return_value_t& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_program.workload.get_programs()) {
         auto& shared_variables = cached_program.shared_variables.at(coordinate_range);
-        auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
-        auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
-        auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;
-        auto& worker_sender_writer_backward_kernel_id = shared_variables.worker_sender_writer_backward_kernel_id;
-        auto& sender_worker_cores = shared_variables.sender_worker_cores;
-        auto& num_inputs = shared_variables.num_inputs;
-        auto& reader_sender_rt_offset = shared_variables.reader_sender_rt_offset;
-        auto& writer_sender_rt_offset = shared_variables.writer_sender_rt_offset;
-        auto& num_links = shared_variables.num_links;
-
         const auto& input_tensors = tensor_args.input_tensor;
         const auto& output_tensors = tensor_return_value;
         const auto& semaphore = operation_attributes.semaphore;
 
-        // update senders
-        auto& worker_reader_sender_forward_runtime_args_by_core =
-            GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
-        auto& worker_writer_sender_forward_runtime_args_by_core =
-            GetRuntimeArgs(program, worker_sender_writer_forward_kernel_id);
-        auto& worker_reader_sender_backward_runtime_args_by_core =
-            GetRuntimeArgs(program, worker_sender_reader_backward_kernel_id);
-        auto& worker_writer_sender_backward_runtime_args_by_core =
-            GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
-
-        for (int link = 0; link < num_links; link++) {
-            auto& worker_reader_sender_forward_runtime_args =
-                worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
-                                                                 [sender_worker_cores[1 + (link * 2)].y];
-            auto& worker_reader_sender_backward_runtime_args =
-                worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
-                                                                  [sender_worker_cores[0 + (link * 2)].y];
-            auto& worker_writer_sender_forward_runtime_args =
-                worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
-                                                                 [sender_worker_cores[1 + (link * 2)].y];
-            auto& worker_writer_sender_backward_runtime_args =
-                worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
-                                                                  [sender_worker_cores[0 + (link * 2)].y];
-
-            worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
-            worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
-            worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
-            worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
-            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                // sender reader
-                worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
-                    input_tensors[input_idx].buffer()->address();
-                worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                    output_tensors[input_idx].buffer()->address();
-                worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
-                    input_tensors[input_idx].buffer()->address();
-                worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                    output_tensors[input_idx].buffer()->address();
-                // sender writer
-                worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
-                    output_tensors[input_idx].buffer()->address();
-                worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
-                    output_tensors[input_idx].buffer()->address();
-            }
-        }
+        override_runtime_arguments_helper(shared_variables, program, input_tensors, output_tensors, semaphore);
     }
 }
 
