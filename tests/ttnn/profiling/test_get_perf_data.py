@@ -31,7 +31,7 @@ def test_profiler_perf_data_with_workload(monkeypatch):
     device = ttnn.open_device(device_id=0)
     try:
         try:
-            baseline_all_data = ttnn.GetAllProgramsPerfData()
+            baseline_all_data = ttnn.get_all_programs_perf_data()
         except RuntimeError as exc:
             if "profiler_state_manager is nullptr" in str(exc):
                 pytest.skip("Profiler state manager not initialized (profiling disabled?)")
@@ -45,8 +45,8 @@ def test_profiler_perf_data_with_workload(monkeypatch):
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
 
-        latest_data_1 = ttnn.GetLatestProgramsPerfData()
-        all_data = ttnn.GetAllProgramsPerfData()
+        latest_data_1 = ttnn.get_latest_programs_perf_data()
+        all_data = ttnn.get_all_programs_perf_data()
         print("\nFirst call to Latest programs perf data:\n" + _format_perf_data(latest_data_1))
         print("\nFirst call to All programs perf data:\n" + _format_perf_data(all_data))
 
@@ -59,8 +59,8 @@ def test_profiler_perf_data_with_workload(monkeypatch):
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
 
-        latest_data = ttnn.GetLatestProgramsPerfData()
-        all_data = ttnn.GetAllProgramsPerfData()
+        latest_data = ttnn.get_latest_programs_perf_data()
+        all_data = ttnn.get_all_programs_perf_data()
         print("\nSecond call to Latest programs perf data (after mul workload):\n" + _format_perf_data(latest_data))
         print("\nSecond call to All programs perf data (after mul workload):\n" + _format_perf_data(all_data))
     finally:

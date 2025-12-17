@@ -29,7 +29,7 @@ py::dict convert_sets_to_lists(const std::map<tt::ChipId, std::set<ttm::ProgramA
         for (const auto& program_data : program_set) {
             programs.append(py::cast(program_data));
         }
-        out[py::int_(chip_id)] = std::move(programs);
+        out[py::int_(chip_id)] = programs;
     }
     return out;
 }
@@ -136,17 +136,17 @@ void ProfilerModule(py::module& m_profiler) {
     )doc");
 
     m_profiler.def(
-        "GetLatestProgramsPerfData",
+        "get_latest_programs_perf_data",
         []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetLatestProgramsPerfData()); },
         R"doc(
-        Get performance results for all programs that were read in the most recent call to `ttnn.ReadDeviceProfile()`.
+        Get performance results for all programs that were read in the most recent call to `ttnn.ReadDeviceProfiler()`.
     )doc");
 
     m_profiler.def(
-        "GetAllProgramsPerfData",
+        "get_all_programs_perf_data",
         []() { return convert_sets_to_lists(tt::tt_metal::experimental::GetAllProgramsPerfData()); },
         R"doc(
-        Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfile()`.
+        Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfiler()`.
     )doc");
 }
 

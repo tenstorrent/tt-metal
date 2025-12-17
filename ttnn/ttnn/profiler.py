@@ -25,11 +25,11 @@ def tracy_frame():
 
 
 def get_latest_programs_perf_data():
-    return ttnn._ttnn.profiler.GetLatestProgramsPerfData()
+    return ttnn._ttnn.profiler.get_latest_programs_perf_data()
 
 
 def get_all_programs_perf_data():
-    return ttnn._ttnn.profiler.GetAllProgramsPerfData()
+    return ttnn._ttnn.profiler.get_all_programs_perf_data()
 
 
 __all__ = []
