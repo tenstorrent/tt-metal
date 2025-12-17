@@ -43,11 +43,9 @@ public:
 
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
 
-    const SubDeviceManager* get_active_sub_device_manager() const;
+    SubDeviceManager* get_active_sub_device_manager() const;
 
-    const SubDeviceManager* get_default_sub_device_manager() const;
-    SubDeviceManager* get_active_sub_device_manager();
-    SubDeviceManager* get_default_sub_device_manager();
+    SubDeviceManager* get_default_sub_device_manager() const;
 
     // Used for caching program state by manager and buffers to check that the required manager is still active
     SubDeviceManagerId get_active_sub_device_manager_id() const;
