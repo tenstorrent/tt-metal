@@ -84,17 +84,23 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # )
             # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
-            self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-            self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
-            self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
-            self.worker_sub_device_id = ttnn.SubDeviceId(1)
+            # self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
+            # self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
+            # self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
+            # self.worker_sub_device_id = ttnn.SubDeviceId(1)
+
+            self.worker_sub_device = ttnn.SubDevice([self.all_core_range_set])
+            self.worker_sub_device_id = ttnn.SubDeviceId(0)
+
             if mesh_sub_device_manager_id_decode is None:
-                mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager(
-                    [self.prefetcher_sub_device, self.worker_sub_device], 0
-                )
+                # mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager(
+                #     [self.prefetcher_sub_device, self.worker_sub_device], 0
+                # )
+                mesh_sub_device_manager_id_decode = mesh_device.create_sub_device_manager([self.worker_sub_device], 0)
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
-            mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+            # mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
+            mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses

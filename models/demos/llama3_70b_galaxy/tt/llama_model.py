@@ -144,8 +144,8 @@ class TtTransformer(LightweightModule):
             # Switch back to decode mode if needed (to restore decode prefetcher with tensors)
             if mode == "decode":
                 self.switch_mode("decode")
-        elif mode == "decode":
-            self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+        # elif mode == "decode":
+        #     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
@@ -174,15 +174,17 @@ class TtTransformer(LightweightModule):
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
-            n_tensors=5,
+            # n_tensors=5,
+            n_tensors=0,
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
-        self.mesh_device.set_sub_device_stall_group(
-            [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
-        )
+        # self.mesh_device.set_sub_device_stall_group(
+        #     [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
+        # )
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         if mesh_sub_device_manager_id_decode is None:
             self.tt_ccl = TT_CCL(
                 self.mesh_device,
@@ -631,9 +633,9 @@ class TtTransformer(LightweightModule):
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                # self.tt_tensors = self.prefetcher_setup.get_input_tensors()
                 # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                # self.prefetcher_setup.create_global_cb()
 
         else:
             if self.is_decode_setup:
@@ -663,15 +665,15 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
-            self.prefetcher_setup.create_global_cb()
-            garbage_tensor = ttnn.dram_prefetcher(
-                self.tt_tensors,
-                num_layers=self.n_layers,
-                global_cb=self.prefetcher_setup.global_circular_buffer,
-                enable_performance_mode=self.enable_prefetcher_performance_mode,
-            )
-            self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        # if mode == "decode":
+        # self.prefetcher_setup.create_global_cb()
+        # garbage_tensor = ttnn.dram_prefetcher(
+        #     self.tt_tensors,
+        #     num_layers=self.n_layers,
+        #     global_cb=self.prefetcher_setup.global_circular_buffer,
+        #     enable_performance_mode=self.enable_prefetcher_performance_mode,
+        # )
+        # self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
@@ -692,8 +694,8 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
-            ttnn.deallocate(garbage_tensor)
+        # if mode == "decode":
+        #     ttnn.deallocate(garbage_tensor)
 
         if mode == "prefill":
             return x

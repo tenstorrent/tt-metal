@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+import os
 
 from models.common.utility_functions import (
     comp_pcc,
@@ -117,10 +118,10 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
-            self.prefetcher_setup.insert_tensor(self.w1)
-            self.prefetcher_setup.insert_tensor(self.w3)
-            self.prefetcher_setup.insert_tensor(self.w2)
+        # if tt_ccl.mode == "decode":
+        #     self.prefetcher_setup.insert_tensor(self.w1)
+        #     self.prefetcher_setup.insert_tensor(self.w3)
+        #     self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -150,6 +151,7 @@ class TtLlamaMLP(LightweightModule):
 
         # ttnn.deallocate(x)
 
+        # ring matmul
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -160,9 +162,24 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        # normal matmul
+        # w1_out = ttnn.linear(
+        #     x,
+        #     self.w1_interleaved,
+        #     compute_kernel_config=self.args.compute_kernel_config_lofi
+        #     if self.four_bit_mlp
+        #     else self.args.compute_kernel_config_hifi2,
+        #     dtype=ttnn.bfloat8_b,
+        #     # program_config=pc_1_3,
+        #     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #     # core_grid=ttnn.CoreGrid(y=8, x=8),
+        #     # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        # )
 
         # debug pcc
         if self.reference_model is not None:
@@ -206,19 +223,50 @@ class TtLlamaMLP(LightweightModule):
         #     print(comp_allclose(ref_after_w1, comp_out))
         #     print()
 
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1_3,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-        )
+        if os.getenv("USE_INTERLEAVED", "0") == "1":
+            # Debug path: use interleaved weights for W3 to isolate ring-matmul issues
+            w3_out = ttnn.linear(
+                x,
+                self.w3_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                # Keep output layout/memory consistent with downstream ops
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+        else:
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+                # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+
+        breakpoint()
+
+        # w3_out = ttnn.linear(
+        #     x,
+        #     self.w3_interleaved,
+        #     compute_kernel_config=self.args.compute_kernel_config_lofi
+        #     if self.four_bit_mlp
+        #     else self.args.compute_kernel_config_hifi2,
+        #     dtype=ttnn.bfloat8_b,
+        #     # program_config=pc_1_3,
+        #     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #     # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+        #     # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        # )
+
         ttnn.deallocate(x)
 
         # debug pcc
@@ -310,9 +358,21 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_2,
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        # w2_out = ttnn.linear(
+        #     w2_in,
+        #     self.w2_interleaved,
+        #     compute_kernel_config=self.args.compute_kernel_config_hifi2,
+        #     dtype=ttnn.bfloat8_b,
+        #     # program_config=pc_2,
+        #     memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
+        #     # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+        #     # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        # )
 
         # debug pcc
         if self.reference_model is not None:

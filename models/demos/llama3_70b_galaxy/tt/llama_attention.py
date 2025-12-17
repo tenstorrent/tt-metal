@@ -22,8 +22,11 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        reference_model=None,
     ):
         super().__init__()
+
+        self.reference_model = reference_model
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -310,9 +313,9 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
-            self.prefetcher_setup.insert_tensor(self.wqkv)
-            self.prefetcher_setup.insert_tensor(self.wo)
+        # if tt_ccl.mode == "decode":
+        #     self.prefetcher_setup.insert_tensor(self.wqkv)
+        #     self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
 
     def init_kv_cache(self, configuration, weight_cache_path):
@@ -392,12 +395,27 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
+
+        # x_dram = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # xqkv_fused_dram = ttnn.matmul(  # [1, 1, 32, 1280]
+        #     x_dram,  # [1, 1, 32, 1280]
+        #     self.wqkv_interleaved,
+        #     # program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
+        #     # memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
+        #     compute_kernel_config=self.compute_kernel_config_hifi2,
+        #     # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     dtype=ttnn.bfloat16,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+        # )
+
+        # xqkv_fused_sharded = ttnn.to_memory_config(xqkv_fused_dram, memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"])
+
         ttnn.deallocate(x)
-        # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         ###
         # Reshape and rotary embeddings
@@ -546,10 +564,21 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
+
+        # dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
+        #     attn_output_cat,
+        #     self.wo_interleaved,
+        #     # program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
+        #     memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
+        #     compute_kernel_config=self.compute_kernel_config_hifi2,
+        #     # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #     dtype=ttnn.bfloat8_b,
+        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+        # )
         # [1, 1, 32, 2304]
         dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
             dense_out_ttnn,
