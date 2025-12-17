@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -26,7 +28,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::state_tracker {
 
-struct ReconfigConfig {
+struct StateTrackerTestConfig {
     size_t num_tiles = 0;
     // Whether or not we want the result to be stored in DST in FP32 and/or
     // accumulated with previous DST value is controlled with this flag:
@@ -38,18 +40,20 @@ struct ReconfigConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_state_tracker(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReconfigConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const StateTrackerTestConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////
-    uint32_t in0_id = 0;
-    uint32_t in1_id = 1;
-    uint32_t in2_id = 2;
-    uint32_t out0_id = 16;
-    uint32_t out1_id = 17;
-    uint32_t single_tile_size_fp32 = 4 * 32 * 32;          // Single 32x32 tile size for Float32
-    uint32_t single_tile_size_bfp16b = 2 * 32 * 32;        // Single 32x32 tile size for Float16_b
-    uint32_t single_tile_size_bfp8b = (1 * 32 * 32) + 64;  // Single 32x32 tile size for Bfp8_b
+    constexpr uint32_t in0_id = 0;
+    constexpr uint32_t in1_id = 1;
+    constexpr uint32_t in2_id = 2;
+    constexpr uint32_t out0_id = 16;
+    constexpr uint32_t out1_id = 17;
+    constexpr uint32_t TILE_DIM = 32;
+    constexpr uint32_t TILE_ELEMENTS = TILE_DIM * TILE_DIM;
+    constexpr uint32_t single_tile_size_fp32 = 4 * TILE_ELEMENTS;    // 4 bytes per element
+    constexpr uint32_t single_tile_size_bfp16b = 2 * TILE_ELEMENTS;  // 2 bytes per element
+    constexpr uint32_t single_tile_size_bfp8b = TILE_ELEMENTS + 64;  // 1 byte per element + exponent header
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;
@@ -123,38 +127,15 @@ bool single_core_state_tracker(
 ////////////////////////////////////////////////////////////////////////////
 //                             Test Description
 // ------------------------------------------------------------------------
-// These tests aim to cover usage of these API calls:
-// - copy_tile_init
-// - copy_tile_to_dst_init_short
-// - copy_tile_to_dst_init_short_with_dt
-// - unpack_reconfig_data_format
-// - unpack_reconfig_data_format_srca
-// - unpack_reconfig_data_format_srcb
-// - pack_reconfig_l1_acc
+// These tests aim to cover usage of state tracker API.
 ////////////////////////////////////////////////////////////////////////////
 
-// Test fixture that enables lightweight asserts for the duration of the test
-class MeshStateTrackerFixture : public MeshDeviceFixture {
-protected:
-    bool lightweight_prev_state{};
-    void SetUp() override {
-        lightweight_prev_state = tt::tt_metal::MetalContext::instance().rtoptions().get_lightweight_kernel_asserts();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_lightweight_kernel_asserts(true);
-        MeshDeviceFixture::SetUp();
-    }
-
-    void TearDown() override {
-        tt::tt_metal::MetalContext::instance().rtoptions().set_lightweight_kernel_asserts(lightweight_prev_state);
-        MeshDeviceFixture::TearDown();
-    }
-};
-
-TEST_F(MeshStateTrackerFixture, TensixComputeStateTracker) {
-    unit_tests::compute::state_tracker::ReconfigConfig test_config = {
+TEST_F(MeshDeviceFixture, TensixComputeStateTracker) {
+    unit_tests::compute::state_tracker::StateTrackerTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 
     for (unsigned int id = 0; id < devices_.size(); id++) {
-        ASSERT_TRUE(unit_tests::compute::state_tracker::single_core_state_tracker(devices_.at(id), test_config));
+        EXPECT_TRUE(unit_tests::compute::state_tracker::single_core_state_tracker(devices_.at(id), test_config));
     }
 }
 

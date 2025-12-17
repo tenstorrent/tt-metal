@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
-#include "tt_metal/include/compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
@@ -28,9 +28,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
-    // TODO(issue #34432): reset_state_tracker is a workaround for an existing problem - needs more investigation
-    reset_state_tracker();
-    state_configure<OperationType::TRANSPOSE>(icb, ocb);
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -61,7 +60,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb) {
-    state_configure<OperationType::TRANSPOSE>(icb);
+    PACK(state_configure(icb));
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;

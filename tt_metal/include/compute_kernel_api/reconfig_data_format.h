@@ -5,14 +5,9 @@
 #pragma once
 
 #include "common_globals.h"
+#include "compute_kernel_api/state_tracker.h"
 
 namespace ckernel {
-
-// Forward declarations of state tracking functions
-// Implementations are in state_tracker.h
-ALWI void set_global_srca(uint32_t cb_a);
-ALWI void set_global_srcb(uint32_t cb_b);
-ALWI void set_global_srca_srcb(uint32_t cb_a, uint32_t cb_b);
 
 /**
  * Helper function to reconfigure srca and srcb data formats.
@@ -21,7 +16,7 @@ template <bool to_from_int8 = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(srca_new_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(srca_new_operand, srcb_new_operand)));
-    set_global_srca_srcb(srca_new_operand, srcb_new_operand);
+    StateTracker::instance().set_srca(srca_new_operand).set_srcb(srcb_new_operand);
 }
 
 /**
@@ -37,7 +32,7 @@ ALWI void reconfig_data_format(
         srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(
         srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
-    set_global_srca_srcb(srca_new_operand, srcb_new_operand);
+    StateTracker::instance().set_srca(srca_new_operand).set_srcb(srcb_new_operand);
 }
 
 /**
@@ -47,7 +42,7 @@ template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_new_operand)));
-    set_global_srca(srca_new_operand);
+    StateTracker::instance().set_srca(srca_new_operand);
 }
 
 /**
@@ -57,7 +52,7 @@ template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_old_operand, srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_old_operand, srca_new_operand)));
-    set_global_srca(srca_new_operand);
+    StateTracker::instance().set_srca(srca_new_operand);
 }
 
 /**
@@ -67,7 +62,7 @@ template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_new_operand)));
-    set_global_srcb(srcb_new_operand);
+    StateTracker::instance().set_srcb(srcb_new_operand);
 }
 
 /**
@@ -77,7 +72,7 @@ template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
     UNPACK((llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_old_operand, srcb_new_operand)));
-    set_global_srcb(srcb_new_operand);
+    StateTracker::instance().set_srcb(srcb_new_operand);
 }
 
 }  // namespace ckernel

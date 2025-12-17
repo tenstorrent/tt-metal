@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
-#include "tt_metal/include/compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/state_tracker.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -30,7 +30,7 @@ namespace ckernel {
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(
     uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
-    state_configure<OperationType::COPY>(cbid);
+    PACK(state_configure(cbid));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));

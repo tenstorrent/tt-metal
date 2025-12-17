@@ -9,10 +9,10 @@ set(UNIT_TESTS_LLK_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_single_core_binary_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_single_core_matmul_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_state_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_unary_broadcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_untilize_tilize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_state_tracker.cpp
 )
 
 add_executable(unit_tests_llk ${UNIT_TESTS_LLK_SRC})

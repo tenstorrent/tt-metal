@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
-#include "tt_metal/include/compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -31,7 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void untilize_init(uint32_t icb) {
-    state_configure<OperationType::UNTILIZE>(icb);
+    PACK(state_configure(icb));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
