@@ -1,4 +1,4 @@
-# Bug Report: LayerNorm Backward Kernel Accumulation Bug
+# [TT-Train] LayerNorm Backward Kernel Accumulation Bug
 
 ## Summary
 
