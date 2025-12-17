@@ -36,10 +36,16 @@ def run_prefetcher_mm(
     is_functional_test=False,
     enable_performance_mode=False,
     batch_weights=False,
+    iterations=1,
+    enable_trace=True,
 ):
-    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
+    logger.info(
+        f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}, iterations={iterations}, enable_trace={enable_trace}"
+    )
     assert len(input_shapes) == len(dtypes)
     assert num_tensors == len(input_shapes)
+
+    device.disable_and_clear_program_cache()
 
     num_global_cb_receivers = 2
 
@@ -86,7 +92,7 @@ def run_prefetcher_mm(
     # Total: 1470
 
     # global_cb_size = 1000 * max_tile_size # works without profiler, fails with profiler, 900 doesn't provide tracy info
-    global_cb_size = 600 * max_tile_size
+    global_cb_size = 800 * max_tile_size
     sender_receiver_mapping = list(zip(all_sender_cores, all_receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     logger.info(f"global cb size {global_cb_size}")
@@ -327,7 +333,7 @@ def run_prefetcher_mm(
     )
 
     def run_op():
-        ttnn.dram_prefetcher(
+        garbage_tensor = ttnn.dram_prefetcher(
             tt_tensors,
             num_layers,
             global_cb=global_circular_buffer,
@@ -372,55 +378,58 @@ def run_prefetcher_mm(
             for t in range(num_tensors):
                 outputs_dram.append(ttnn.to_memory_config(outputs_l1[t], ttnn.DRAM_MEMORY_CONFIG))
         device.reset_sub_device_stall_group()
+        ttnn.deallocate(garbage_tensor)
         return outputs_dram
 
     ##### Compile Model #####
     logger.info("Compiling model")
-    outputs_t = run_op()
+    # outputs_t = run_op()
 
-    ##### Capture Trace #####
-    logger.info("Capturing trace")
+    if enable_trace:
+        ##### Capture Trace #####
+        logger.info("Capturing trace")
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    outputs_t = run_op()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        outputs_t = run_op()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
-    ##### Run Trace #####
-    logger.info("Running trace")
-    signpost("start")
-    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-    signpost("stop")
-
-    ##### Check Results #####
+    ##### Run Multiple Iterations #####
     all_passing = True
-    for l in range(num_layers):
-        for t in range(num_tensors):
-            idx = l * num_tensors + t
-            logger.info(f"Checking matmul for layer {l}, tensor {t}")
-            tt_out = ttnn.to_torch(
-                outputs_t[idx],
-                mesh_composer=mesh_composer,
-            )[:1, :1, ...]
-            pt_out = in0_tensors[t] @ pt_tensors[idx]
+    for iteration in range(iterations):
+        if enable_trace:
+            logger.info(f"Running trace - Iteration {iteration + 1}/{iterations}")
+            signpost("start")
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            signpost("stop")
+        else:
+            logger.info(f"Running op (no trace) - Iteration {iteration + 1}/{iterations}")
+            signpost("start")
+            outputs_t = run_op()
+            signpost("stop")
 
-            dtype = dtypes[t]
-            if dtype == ttnn.bfloat4_b:
-                pcc_threshold = 0.99
-            elif dtype == ttnn.bfloat8_b:
-                pcc_threshold = 0.999
-            elif dtype == ttnn.bfloat16:
-                pcc_threshold = 0.999
+        ##### Check Results for this iteration #####
+        logger.info(f"Checking results - Iteration {iteration + 1}/{iterations}")
+        for l in range(num_layers):
+            for t in range(num_tensors):
+                idx = l * num_tensors + t
+                logger.info(f"Iteration {iteration + 1}: Checking matmul for layer {l}, tensor {t}")
+                tt_out = ttnn.to_torch(
+                    outputs_t[idx],
+                    mesh_composer=mesh_composer,
+                )[:1, :1, ...]
+                pt_out = in0_tensors[t] @ pt_tensors[idx]
 
-            passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
-            logger.info(output)
+                dtype = dtypes[t]
+                if dtype == ttnn.bfloat4_b:
+                    pcc_threshold = 0.99
+                elif dtype == ttnn.bfloat8_b:
+                    pcc_threshold = 0.999
+                elif dtype == ttnn.bfloat16:
+                    pcc_threshold = 0.999
 
-            if not passing:
-                logger.error(
-                    f"prefetcher_common::run_prefetcher_mm: failue on {output}\n\t"
-                    f"layer {l}, tensor {t}, dtype {dtype}"
-                )
-
-            all_passing = passing and all_passing
+                passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
+                logger.info(f"Iteration {iteration + 1}: {output}")
+                all_passing = passing and all_passing
 
     device.clear_loaded_sub_device_manager()
     device.remove_sub_device_manager(sub_device_manager)

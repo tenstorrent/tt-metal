@@ -385,7 +385,7 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 184915840,
+            "trace_region_size": 214915840,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,

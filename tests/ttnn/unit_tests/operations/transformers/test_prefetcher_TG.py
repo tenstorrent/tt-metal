@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]
 LLAMA_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
 QWEN_INPUT_SHAPES = [(1536, 1536), (1536, 1536), (1536, 3840), (1536, 3840), (3840, 1536)]
-QWEN_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
+QWEN_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b]
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS not supported")
@@ -200,7 +200,7 @@ def test_run_prefetcher_qwen_perf(
     num_tensors = len(QWEN_INPUT_SHAPES)
     input_shapes = QWEN_INPUT_SHAPES
     dtypes = QWEN_INPUT_DTYPES
-    num_layers = 1
+    num_layers = 3
 
     run_prefetcher_mm(
         mesh_device,
@@ -210,4 +210,7 @@ def test_run_prefetcher_qwen_perf(
         num_reader_cores,
         dtypes,
         enable_performance_mode=True,
+        batch_weights=False,
+        iterations=3,
+        enable_trace=False,
     )

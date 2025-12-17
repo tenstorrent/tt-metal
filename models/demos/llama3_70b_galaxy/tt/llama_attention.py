@@ -207,8 +207,8 @@ class TtLlamaAttention(LightweightModule):
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
-        if tt_ccl.mode == "decode":
-            self.prefetch(prefetcher_setup, tt_ccl)
+        # if tt_ccl.mode == "decode":
+        #     self.prefetch(prefetcher_setup, tt_ccl)
 
         # If we are using qk_norm, we need to add a layer norm to the q and k
         q_norm_str = f"{layer_name}.q_norm"
