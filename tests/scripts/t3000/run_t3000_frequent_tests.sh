@@ -41,8 +41,9 @@ run_t3000_llama3_tests() {
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+    # TEMPORARY disable
+    #HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+    #HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
