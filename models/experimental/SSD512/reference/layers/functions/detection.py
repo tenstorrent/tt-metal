@@ -43,11 +43,7 @@ class Detect(nn.Module):
         else:
             conf = conf_data
 
-        # Prior data -> [num_priors, 4]
-        if prior_data.dim() == 3 and prior_data.size(0) == 1:
-            priors = prior_data.squeeze(0)
-        else:
-            priors = prior_data
+        # Note: prior_data available if box decoding is needed in the future
 
         # Prepare output container
         output = torch.zeros(batch, self.num_classes, self.top_k, 5, device=device)
@@ -57,8 +53,6 @@ class Detect(nn.Module):
             for cl in range(1, self.num_classes):
                 scores = conf[i, :, cl]  # [num_priors]
                 keep_mask = scores > self.conf_thresh
-                # if keep_mask.sum().item() == 0:
-                #     continue
                 if not keep_mask.any():  # still returns a tensor; must avoid .item()
                     continue
                 boxes = loc[i][keep_mask]  # [k, 4]  (decode if necessary)
@@ -76,9 +70,6 @@ class Detect(nn.Module):
                 # cap top_k
                 keep_idx = keep_idx[: self.top_k]
 
-                # for out_i, idx in enumerate(keep_idx):
-                #     output[i, cl, out_i, 0] = scores_k[idx]
-                #     output[i, cl, out_i, 1:] = boxes[idx]
                 K = self.top_k
                 pad_idx = torch.zeros(K, dtype=torch.long, device=device)
                 n = keep_idx.size(0)

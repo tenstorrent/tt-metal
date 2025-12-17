@@ -297,7 +297,6 @@ def forward_extras(
     sources = []
     current_h = input_height
     current_w = input_width
-    current_c = extras_config[0]["in_channels"]
 
     # Track conv_count as we iterate
     conv_count = 0

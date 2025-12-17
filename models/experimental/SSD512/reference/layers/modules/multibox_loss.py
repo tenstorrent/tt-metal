@@ -73,7 +73,6 @@ class MultiBoxLoss(nn.Module):
         num = loc_data.size(0)
         priors = priors[: loc_data.size(1), :]
         num_priors = priors.size(0)
-        num_classes = self.num_classes
 
         # match priors (default boxes) and ground truth boxes
         loc_t = torch.Tensor(num, num_priors, 4)
@@ -91,7 +90,6 @@ class MultiBoxLoss(nn.Module):
         conf_t = Variable(conf_t, requires_grad=False)
 
         pos = conf_t > 0
-        num_pos = pos.sum(dim=1, keepdim=True)
 
         # Localization Loss (Smooth L1)
         # Shape: [batch,num_priors,4]

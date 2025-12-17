@@ -39,7 +39,6 @@ def test_l2norm(device):
     torch_output = torch_l2norm(torch_input)
     tt_output = tt_l2norm(ttnn_input)
     tt_output_torch = tt_to_torch_tensor(tt_output)
-    ttnn_output = torch.permute(tt_output_torch, (0, 3, 1, 2))
 
     output_pass, pcc_value = comp_pcc(torch_output, tt_output_torch, 0.99)
     logger.info(f"L2Norm PCC: {pcc_value}")

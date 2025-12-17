@@ -162,10 +162,6 @@ def test_ssd512_e2e_performant(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
     )
 
-    dram_output_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
-    )
-
     logger.info(f"Configuring pipeline (2CQ with trace and overlapped input)...")
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False),
@@ -188,7 +184,7 @@ def test_ssd512_e2e_performant(
 
     logger.info(f"Running {num_iterations} inference iterations...")
     start = time.time()
-    outputs = pipeline.enqueue(input_tensors).pop_all()
+    _ = pipeline.enqueue(input_tensors).pop_all()  # Execute pipeline, outputs not needed for perf test
     end = time.time()
 
     pipeline.cleanup()
