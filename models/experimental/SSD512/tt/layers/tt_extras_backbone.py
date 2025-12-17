@@ -373,7 +373,7 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                                 _weight_device_cache[cache_key] = (weight_prep, bias_prep)
                             except Exception as e:
                                 raise RuntimeError(f"Error preparing weights: {e}") from e
-                        except (RuntimeError, ValueError):
+                        except ValueError:
                             pass
                         except RuntimeError as e:
                             error_msg = str(e) if e else ""
