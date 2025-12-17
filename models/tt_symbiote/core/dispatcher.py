@@ -233,14 +233,14 @@ def handle_cat(func, args, kwargs):
             tensors[index].ttnn_tensor = tensors[index].to_ttnn
             deallocate_tensor = True
         deallocate_tensors.append(deallocate_tensor)
-        device = tensor.to_ttnn.device() if device is None else device
+        device = tensors[index].to_ttnn.device() if device is None else device
     assert device is not None, "At least one of the inputs must be a TTNN tensor."
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
             tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
         if tensor.ttnn_tensor.layout != ttnn.TILE_LAYOUT:
             tensor.ttnn_tensor = ttnn.to_layout(tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    res = TorchTTNNTensor(ttnn.concat([tensor.to_ttnn for tensor in tensors], dim))
+    res = TorchTTNNTensor(ttnn.concat([tensor.to_ttnn for tensor in tensors if tensor.numel() > 0], dim))
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
             ttnn.deallocate(tensor.ttnn_tensor)
