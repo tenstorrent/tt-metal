@@ -40,27 +40,7 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
-            # {"model":"common_models"},
-            {"model":"functional_unet"},
-            # {"model":"ttt-llama3.2-1B"},
-            # {"model":"qwen25_vl-3B"},
-            # {"model":"resnet50"},
-            # {"model":"whisper"},
-            # {"model":"openpdn_mnist"},
-            # {"model":"vit"},
-            # {"model":"sentence_bert"},
-            # {"model":"swin_s"},
-            # {"model":"swin_v2"},
-            # {"model":"mobilenetv2"},
-            # {"model":"segformer"},
-            # {"model":"vgg_unet"},
-            # {"model":"vanilla_unet"},
-            # {"model":"efficientnetb0"},
-            # {"model":"vovnet"},
-            # {"model":"ufld_v2"},
-            # {"model":"ttt-mistral-7B-v0.3"},
-            # {"model":"stable_diffusion_xl_base","timeout":75},
-            # {"model":"stable_diffusion","timeout":45}
+            {"model":"functional_unet"}
           ]'
 
           # Stable set (CIv2)
