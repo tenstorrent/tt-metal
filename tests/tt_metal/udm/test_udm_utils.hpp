@@ -10,11 +10,13 @@
 
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
 #include "ttnn/api/ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 
 #include "tt_metal/udm/mesh_program.hpp"
 #include "tt_metal/udm/mesh_builder.hpp"
@@ -176,9 +178,31 @@ inline ttnn::Tensor create_tensor_with_random_values(
 }
 
 /**
- * @brief Create a width-sharded tensor
+ * @brief Create a bfloat16 tensor with random values
  */
-inline ttnn::Tensor create_width_sharded_tensor(
+inline ttnn::Tensor create_bfloat16_tensor_with_random_values(
+    const tt::tt_metal::Shape& shape, const tt::tt_metal::TensorSpec& tensor_spec, uint32_t seed = 42) {
+    uint32_t volume = 1;
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        volume *= shape[i];
+    }
+
+    std::vector<bfloat16> src_data(volume);
+
+    // Generate random data in bfloat16 range
+    std::mt19937 gen(seed);                                  // Fixed seed for reproducibility
+    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);  // Small values to avoid overflow when summing
+    for (uint32_t i = 0; i < volume; ++i) {
+        src_data[i] = bfloat16(dis(gen));
+    }
+
+    return ttnn::Tensor::from_vector(src_data, tensor_spec);
+}
+
+/**
+ * @brief Create tensor: mesh width-distributed, grid interleaved
+ */
+inline ttnn::Tensor create_width_distributed_interleaved_bfloat16_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
     const tt::tt_metal::Shape& local_shape) {
@@ -186,17 +210,17 @@ inline ttnn::Tensor create_width_sharded_tensor(
     tt::tt_metal::TensorSpec tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
 
-    auto host_tensor = create_tensor_with_random_values(global_shape, tensor_spec);
+    auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, tensor_spec);
     auto mapper = create_width_sharded_mesh_mapper(mesh_device, global_shape.rank());
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
 /**
- * @brief Create a block-sharded tensor
+ * @brief Create tensor: mesh block-distributed, grid interleaved
  */
-inline ttnn::Tensor create_block_sharded_tensor(
+inline ttnn::Tensor create_block_distributed_interleaved_bfloat16_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
     const tt::tt_metal::Shape& local_shape) {
@@ -204,11 +228,109 @@ inline ttnn::Tensor create_block_sharded_tensor(
     tt::tt_metal::TensorSpec tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
 
-    auto host_tensor = create_tensor_with_random_values(global_shape, tensor_spec);
+    auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, tensor_spec);
     auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank());
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+}
+
+/**
+ * @brief Create tensor: mesh block-distributed, grid block-sharded
+ * @param grid_size The grid shape {num_cores_x, num_cores_y} to use for sharding within each device
+ */
+inline ttnn::Tensor create_block_distributed_block_sharded_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape,
+    std::pair<uint32_t, uint32_t> grid_size) {
+    uint32_t num_cores_x = grid_size.first;
+    uint32_t num_cores_y = grid_size.second;
+
+    // Calculate shard shape (height and width per shard in elements)
+    uint32_t shard_height = local_shape[-2] / num_cores_y;
+    uint32_t shard_width = local_shape[-1] / num_cores_x;
+
+    // Step 1: Create host tensor with global_shape and INTERLEAVED memory config
+    tt::tt_metal::MemoryConfig interleaved_mem_config(
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+
+    tt::tt_metal::TensorSpec host_tensor_spec(
+        global_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            interleaved_mem_config));
+
+    auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, host_tensor_spec);
+
+    // Step 2: Distribute across mesh devices (creates interleaved device tensors)
+    auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    auto distributed_tensor = ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+
+    // Step 3: Convert to BLOCK_SHARDED using ttnn::to_memory_config
+    auto shard_spec = ShardSpec(
+        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
+        std::array<uint32_t, 2>{shard_height, shard_width},
+        ShardOrientation::ROW_MAJOR);
+
+    tt::tt_metal::MemoryConfig sharded_mem_config(
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+
+    return ttnn::to_memory_config(distributed_tensor, sharded_mem_config);
+}
+
+/**
+ * @brief Create tensor: mesh height-distributed (replicated on width), grid height-sharded
+ * Used for reduction outputs where width is reduced to a single tile
+ * @param grid_size The grid shape {num_cores_x, num_cores_y} to use for sharding within each device
+ */
+inline ttnn::Tensor create_height_distributed_height_sharded_bfloat16_tensor(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    const tt::tt_metal::Shape& local_shape,
+    std::pair<uint32_t, uint32_t> grid_size) {
+    // For height-sharded output: use only 1 core in X (width reduced to single tile)
+    uint32_t num_cores_x = 1;
+    uint32_t num_cores_y = grid_size.second;
+
+    // Calculate shard shape
+    uint32_t shard_height = local_shape[-2] / num_cores_y;
+    uint32_t shard_width = local_shape[-1];  // Full width per core (single tile after reduction)
+
+    // Step 1: Create host tensor with global_shape and INTERLEAVED memory config
+    tt::tt_metal::MemoryConfig interleaved_mem_config(
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+
+    tt::tt_metal::TensorSpec host_tensor_spec(
+        global_shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            interleaved_mem_config));
+
+    // Create host tensor with zeros (for output)
+    uint32_t volume = 1;
+    for (size_t i = 0; i < global_shape.rank(); ++i) {
+        volume *= global_shape[i];
+    }
+    std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
+    auto host_tensor = ttnn::Tensor::from_vector(src_data, host_tensor_spec);
+
+    // Step 2: Distribute across mesh devices (height-sharded, replicated on width)
+    auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    auto distributed_tensor = ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
+
+    // Step 3: Convert to HEIGHT_SHARDED using ttnn::to_memory_config
+    auto shard_spec = ShardSpec(
+        CoreRangeSet({CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})}),
+        std::array<uint32_t, 2>{shard_height, shard_width},
+        ShardOrientation::ROW_MAJOR);
+
+    tt::tt_metal::MemoryConfig sharded_mem_config(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
+
+    return ttnn::to_memory_config(distributed_tensor, sharded_mem_config);
 }
 
 /**
