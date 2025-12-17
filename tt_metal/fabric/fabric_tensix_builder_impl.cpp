@@ -468,7 +468,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
     fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    fabric_endpoint_status_address_ = fabric_router_config.get_l1_layout().get(L1Block::EDM_STATUS).start_address;
     wait_for_fabric_endpoint_ready_ = true;
 
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
@@ -1074,7 +1074,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     // Order must match kernel expectations: bubble_flow_control, num_upstream_routers, sync_address
     ct_args.push_back(fabric_context.is_bubble_flow_control_enabled());
     ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
+    ct_args.push_back(fabric_router_config.get_l1_layout().get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address);
 
     // Append stream IDs and persistent flags grouped by channel type
     // For each channel type: [stream_ids...], [persistent_flags...]
@@ -1221,7 +1221,9 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args()
     // 50: fabric_router_sync_address
     const auto& fabric_router_config =
         fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config);
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 50: fabric_router_sync_address
+    ct_args.push_back(fabric_router_config.get_l1_layout()
+                          .get(L1Block::EDM_LOCAL_TENSIX_SYNC)
+                          .start_address);  // 50: fabric_router_sync_address
 
     return ct_args;
 }

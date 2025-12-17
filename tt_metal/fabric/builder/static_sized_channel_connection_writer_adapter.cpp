@@ -181,9 +181,10 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
             static_cast<uint32_t>(
                 this->relay_connection_info.worker_location_info_address),            // relay_worker_location_info_addr
             static_cast<uint32_t>(this->relay_connection_info.free_slots_stream_id),  // relay_free_slots_stream_id
-            static_cast<uint32_t>(
-                fabric_router_config.tensix_relay_connection_buffer_index_id),  // relay_connection_buffer_index_id
-                                                                                // (queried from fabric context)
+            static_cast<uint32_t>(fabric_router_config.get_l1_layout()
+                                      .get(L1Block::TENSIX_RELAY_BUFFER_INDEX)
+                                      .start_address),  // relay_connection_buffer_index_id
+                                                        // (queried from fabric context)
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());

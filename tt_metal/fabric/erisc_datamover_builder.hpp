@@ -201,55 +201,23 @@ struct StreamRegAssignments {
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
-    static constexpr std::size_t field_size = 16;
-    static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
-    static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
-
-    // Global
-    static constexpr std::size_t eth_channel_sync_size = 16;
-    std::size_t handshake_addr = 0;
-    std::size_t edm_channel_ack_addr = 0;
-    std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
-    std::size_t edm_local_sync_address = 0;
-    std::size_t edm_local_tensix_sync_address = 0;
-    std::size_t edm_status_address = 0;
-    std::size_t notify_worker_of_read_counter_update_src_address = 0;
-
-    // Performance telemetry buffer address (16B aligned)
-    std::size_t perf_telemetry_buffer_address = 0;
-
-    // Code profiling buffer address (16B aligned)
-    std::size_t code_profiling_buffer_address = 0;
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_address = {};
-    // Connection info layout:
-    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
-    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
-    // 2: WorkerXY (as uint32_t)
-    // 3: Hold's EDM's rdptr for the buffer index in the channel
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_worker_conn_info_base_address = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels>
-        sender_channels_local_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels>
-        sender_channels_producer_terminate_connection_address = {};
-    // persistent mode field
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_address = {};
-    // persistent mode field
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_address =
-        {};
-
-    static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
+    // NOTE: Per-sender-channel addresses are now accessed via:
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).buffer_index
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).conn_info
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).flow_control_sem
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).terminate_conn
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).connection_sem
+    //   config.get_l1_layout().get_sender_channel_addresses(ch).buffer_index_sem
 
     // ----------- Receiver Channels
-    // persistent mode field
-    std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_teardown_semaphore_address = {};
+    // NOTE: Per-receiver-downstream addresses are now accessed via:
+    //   config.get_l1_layout().get_receiver_downstream_addresses(idx).flow_control_sem
+    //   config.get_l1_layout().get_receiver_downstream_addresses(idx).teardown_sem
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
@@ -309,6 +277,7 @@ struct FabricEriscDatamoverConfig {
     // Accessors for component members
     const RouterNocConfig& get_noc_config() const { return noc_config_; }
     const MeshChannelSpec& get_channel_spec() const { return channel_spec_; }
+    const EriscL1Layout& get_l1_layout() const { return l1_layout_; }
 
 private:
     // ═══════════════════════════════════════════════════════════

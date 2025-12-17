@@ -2138,11 +2138,11 @@ void fill_connection_info_fields(
     connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);
     connection_info.num_buffers_per_channel =
         static_channel_allocator->get_sender_channel_number_of_slots(sender_channel);
-    connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
-    connection_info.edm_worker_location_info_addr =
-        config.sender_channels_worker_conn_info_base_address[sender_channel];
+    auto sender_addrs = config.get_l1_layout().get_sender_channel_addresses(sender_channel);
+    connection_info.edm_connection_handshake_addr = sender_addrs.connection_sem;
+    connection_info.edm_worker_location_info_addr = sender_addrs.conn_info;
     connection_info.buffer_size_bytes = config.channel_buffer_size_bytes;
-    connection_info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[sender_channel];
+    connection_info.buffer_index_semaphore_id = sender_addrs.buffer_index_sem;
     connection_info.worker_free_slots_stream_id = worker_free_slots_stream_id;
 }
 

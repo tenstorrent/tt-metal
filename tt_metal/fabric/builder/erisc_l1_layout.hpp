@@ -95,6 +95,11 @@ struct ReceiverDownstreamAddresses {
  */
 class EriscL1Layout {
 public:
+    // L1 layout constants
+    static constexpr size_t FIELD_SIZE = 16;             // Standard field size for L1 addresses
+    static constexpr size_t BUFFER_ALIGNMENT = 32;       // Channel buffer alignment requirement
+    static constexpr size_t ETH_CHANNEL_SYNC_SIZE = 16;  // Ethernet channel synchronization size
+
     EriscL1Layout(
         size_t base_address,
         size_t max_address,
@@ -137,8 +142,8 @@ public:
     const MemoryRegion& get(L1Block block) const { return regions_[idx(block)]; }
 
     // Per-channel addresses
-    SenderChannelAddresses get_sender_channel(size_t ch) const;
-    ReceiverDownstreamAddresses get_receiver_downstream(size_t downstream_idx) const;
+    SenderChannelAddresses get_sender_channel_addresses(size_t ch) const;
+    ReceiverDownstreamAddresses get_receiver_downstream_addresses(size_t downstream_idx) const;
 
     // NOTE: No emit_ct_args() method - L1 addresses are scattered throughout CT args,
     // not consecutive. Use individual accessors: get(L1Block::*).start_address
@@ -152,6 +157,7 @@ private:
     void compute_layout(
         size_t base_address,
         size_t max_address,
+        const MeshChannelSpec& spec,
         bool enable_telemetry,
         bool enable_code_profiling,
         bool enable_multi_txq,
@@ -167,18 +173,20 @@ private:
     void dump_block_row(std::ostream& os, L1Block block, bool show_gaps, DumpStats& stats) const;
     void dump_summary(std::ostream& os, bool show_gaps, const DumpStats& stats) const;
 
-    const MeshChannelSpec& spec_;  // Reference, not copy
-
     size_t base_address_;
     size_t max_address_;
 
-    // Cached from spec
+    // Cached from spec during construction
     size_t num_sender_channels_;
     size_t num_downstream_edms_;
     size_t sender_control_stride_;
     size_t receiver_downstream_stride_;
 
     std::array<MemoryRegion, static_cast<size_t>(L1Block::COUNT)> regions_{};
+
+    // Pre-computed per-channel addresses (cached after compute_layout)
+    std::vector<SenderChannelAddresses> sender_channel_addresses_;
+    std::vector<ReceiverDownstreamAddresses> receiver_downstream_addresses_;
 };
 
 }  // namespace tt::tt_fabric

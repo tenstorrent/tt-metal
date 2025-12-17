@@ -16,8 +16,8 @@ namespace tt::tt_fabric {
 // ═══════════════════════════════════════════════════════════
 
 size_t EriscL1Layout::get_block_size(L1Block block, const MeshChannelSpec& spec) {
-    constexpr size_t FIELD_SIZE = FabricEriscDatamoverConfig::field_size;                        // 16
-    constexpr size_t ETH_CHANNEL_SYNC_SIZE = FabricEriscDatamoverConfig::eth_channel_sync_size;  // 16
+    constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;                        // 16
+    constexpr size_t ETH_CHANNEL_SYNC_SIZE = EriscL1Layout::ETH_CHANNEL_SYNC_SIZE;  // 16
     constexpr size_t CONN_INFO_SIZE = sizeof(EDMChannelWorkerLocationInfo);
 
     switch (block) {
@@ -68,8 +68,8 @@ size_t EriscL1Layout::get_block_size(L1Block block, const MeshChannelSpec& spec)
 }
 
 constexpr size_t EriscL1Layout::get_block_alignment(L1Block block) {
-    constexpr size_t FIELD_SIZE = FabricEriscDatamoverConfig::field_size;
-    constexpr size_t BUFFER_ALIGNMENT = FabricEriscDatamoverConfig::buffer_alignment;
+    constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
+    constexpr size_t BUFFER_ALIGNMENT = EriscL1Layout::BUFFER_ALIGNMENT;
 
     switch (block) {
         case L1Block::CHANNEL_BUFFERS: return BUFFER_ALIGNMENT;  // 32
@@ -78,7 +78,7 @@ constexpr size_t EriscL1Layout::get_block_alignment(L1Block block) {
 }
 
 constexpr size_t EriscL1Layout::get_block_stride(L1Block block) {
-    constexpr size_t FIELD_SIZE = FabricEriscDatamoverConfig::field_size;
+    constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
     constexpr size_t CONN_INFO_SIZE = sizeof(EDMChannelWorkerLocationInfo);
 
     switch (block) {
@@ -99,14 +99,15 @@ EriscL1Layout::EriscL1Layout(
     bool enable_telemetry,
     bool enable_code_profiling,
     bool enable_multi_txq,
-    bool is_blackhole) :
-    spec_(spec) {
-    compute_layout(base_address, max_address, enable_telemetry, enable_code_profiling, enable_multi_txq, is_blackhole);
+    bool is_blackhole) {
+    compute_layout(
+        base_address, max_address, spec, enable_telemetry, enable_code_profiling, enable_multi_txq, is_blackhole);
 }
 
 void EriscL1Layout::compute_layout(
     size_t base_address,
     size_t max_address,
+    const MeshChannelSpec& spec,
     bool enable_telemetry,
     bool enable_code_profiling,
     bool enable_multi_txq,
@@ -115,8 +116,8 @@ void EriscL1Layout::compute_layout(
     max_address_ = max_address;
 
     // Cache from spec for address computations
-    num_sender_channels_ = spec_.get_total_sender_channels();
-    num_downstream_edms_ = spec_.get_total_downstream_edms();
+    num_sender_channels_ = spec.get_total_sender_channels();
+    num_downstream_edms_ = spec.get_total_downstream_edms();
     sender_control_stride_ = get_block_stride(L1Block::SENDER_CHANNEL_CONTROL);
     receiver_downstream_stride_ = get_block_stride(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
 
@@ -176,47 +177,68 @@ void EriscL1Layout::compute_layout(
 
     // 14. Channel buffers (remaining space)
     allocate_remaining(L1Block::CHANNEL_BUFFERS);
+
+    // Pre-compute and cache all per-channel addresses to avoid repeated arithmetic
+    sender_channel_addresses_.reserve(num_sender_channels_);
+    for (size_t ch = 0; ch < num_sender_channels_; ++ch) {
+        constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
+        constexpr size_t CONN_INFO_SIZE = sizeof(EDMChannelWorkerLocationInfo);
+
+        size_t base = regions_[idx(L1Block::SENDER_CHANNEL_CONTROL)].start_address;
+        size_t offset = ch * sender_control_stride_;
+
+        // Calculate addresses sequentially to make field layout explicit
+        size_t buffer_index = base + offset;
+        size_t conn_info = buffer_index + FIELD_SIZE;
+        size_t flow_control_sem = conn_info + CONN_INFO_SIZE;
+        size_t terminate_conn = flow_control_sem + FIELD_SIZE;
+        size_t connection_sem = terminate_conn + FIELD_SIZE;
+        size_t buffer_index_sem = connection_sem + FIELD_SIZE;
+
+        sender_channel_addresses_.push_back(SenderChannelAddresses{
+            .buffer_index = buffer_index,
+            .conn_info = conn_info,
+            .flow_control_sem = flow_control_sem,
+            .terminate_conn = terminate_conn,
+            .connection_sem = connection_sem,
+            .buffer_index_sem = buffer_index_sem,
+        });
+    }
+
+    receiver_downstream_addresses_.reserve(num_downstream_edms_);
+    for (size_t idx = 0; idx < num_downstream_edms_; ++idx) {
+        constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
+
+        size_t base = regions_[idx(L1Block::RECEIVER_DOWNSTREAM_CONTROL)].start_address;
+        size_t offset = idx * receiver_downstream_stride_;
+
+        // Calculate addresses sequentially (skip padding field at base + offset)
+        size_t flow_control_sem = base + offset + FIELD_SIZE;
+        size_t teardown_sem = flow_control_sem + FIELD_SIZE;
+
+        receiver_downstream_addresses_.push_back(ReceiverDownstreamAddresses{
+            .flow_control_sem = flow_control_sem,
+            .teardown_sem = teardown_sem,
+        });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
 // Per-Channel Address Helpers
 // ═══════════════════════════════════════════════════════════
 
-SenderChannelAddresses EriscL1Layout::get_sender_channel(size_t ch) const {
+SenderChannelAddresses EriscL1Layout::get_sender_channel_addresses(size_t ch) const {
     TT_ASSERT(ch < num_sender_channels_, "Sender channel {} out of bounds (max {})", ch, num_sender_channels_);
-
-    constexpr size_t FIELD_SIZE = FabricEriscDatamoverConfig::field_size;
-    constexpr size_t CONN_INFO_SIZE = sizeof(EDMChannelWorkerLocationInfo);
-
-    size_t base = regions_[idx(L1Block::SENDER_CHANNEL_CONTROL)].start_address;
-    size_t offset = ch * sender_control_stride_;
-
-    return SenderChannelAddresses{
-        .buffer_index = base + offset,
-        .conn_info = base + offset + FIELD_SIZE,
-        .flow_control_sem = base + offset + FIELD_SIZE + CONN_INFO_SIZE,
-        .terminate_conn = base + offset + FIELD_SIZE + CONN_INFO_SIZE + FIELD_SIZE,
-        .connection_sem = base + offset + FIELD_SIZE + CONN_INFO_SIZE + 2 * FIELD_SIZE,
-        .buffer_index_sem = base + offset + FIELD_SIZE + CONN_INFO_SIZE + 3 * FIELD_SIZE,
-    };
+    return sender_channel_addresses_[ch];
 }
 
-ReceiverDownstreamAddresses EriscL1Layout::get_receiver_downstream(size_t downstream_idx) const {
+ReceiverDownstreamAddresses EriscL1Layout::get_receiver_downstream_addresses(size_t downstream_idx) const {
     TT_ASSERT(
         downstream_idx < num_downstream_edms_,
         "Downstream EDM {} out of bounds (max {})",
         downstream_idx,
         num_downstream_edms_);
-
-    constexpr size_t FIELD_SIZE = FabricEriscDatamoverConfig::field_size;
-
-    size_t base = regions_[idx(L1Block::RECEIVER_DOWNSTREAM_CONTROL)].start_address;
-    size_t offset = downstream_idx * receiver_downstream_stride_;
-
-    return ReceiverDownstreamAddresses{
-        .flow_control_sem = base + offset + FIELD_SIZE,  // Skip padding field
-        .teardown_sem = base + offset + 2 * FIELD_SIZE,
-    };
+    return receiver_downstream_addresses_[downstream_idx];
 }
 
 // ═══════════════════════════════════════════════════════════

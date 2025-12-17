@@ -308,17 +308,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     // Populate address fields from L1 layout (l1_layout_ was constructed in initializer list)
-    this->handshake_addr = l1_layout_.get(L1Block::HANDSHAKE).start_address;
-    this->edm_channel_ack_addr = l1_layout_.get(L1Block::EDM_CHANNEL_ACK).start_address;
-    this->termination_signal_address = l1_layout_.get(L1Block::TERMINATION_SIGNAL).start_address;
-    this->edm_local_sync_address = l1_layout_.get(L1Block::EDM_LOCAL_SYNC).start_address;
-    this->edm_local_tensix_sync_address = l1_layout_.get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address;
-    this->edm_status_address = l1_layout_.get(L1Block::EDM_STATUS).start_address;
-    this->perf_telemetry_buffer_address = l1_layout_.get(L1Block::TELEMETRY_BUFFER).start_address;
-    this->code_profiling_buffer_address = l1_layout_.get(L1Block::CODE_PROFILING_BUFFER).start_address;
-    this->tensix_relay_connection_buffer_index_id = l1_layout_.get(L1Block::TENSIX_RELAY_BUFFER_INDEX).start_address;
-    this->notify_worker_of_read_counter_update_src_address =
-        l1_layout_.get(L1Block::NOTIFY_WORKER_SRC_ADDR).start_address;
+    // Note: Most addresses are now accessed via get_*() methods that query l1_layout_ directly
+    // Only fields needed for strided calculations are populated here
 
     // Remote counter bases (multi-TXQ mode)
     const auto& counter_bases = l1_layout_.get(L1Block::REMOTE_COUNTER_BASES);
@@ -333,71 +324,46 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             counter_bases.start_address + 3 * num_words_per_counter;
     }
 
-    // Sender channel control addresses (strided layout)
-    const auto& sender_control = l1_layout_.get(L1Block::SENDER_CHANNEL_CONTROL);
-    if (sender_control.size > 0) {
-        size_t stride = EriscL1Layout::get_block_stride(L1Block::SENDER_CHANNEL_CONTROL);
-        for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-            size_t base = sender_control.start_address + i * stride;
-            this->sender_channels_buffer_index_address[i] = base;
-            this->sender_channels_worker_conn_info_base_address[i] = base + field_size;
-            this->sender_channels_local_flow_control_semaphore_address[i] =
-                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
-            this->sender_channels_producer_terminate_connection_address[i] =
-                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + field_size;
-            this->sender_channels_connection_semaphore_address[i] =
-                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + 2 * field_size;
-            this->sender_channels_buffer_index_semaphore_address[i] =
-                base + field_size + sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) + 3 * field_size;
-        }
-    }
-
-    // Receiver downstream control addresses (strided layout)
-    const auto& receiver_control = l1_layout_.get(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
-    if (receiver_control.size > 0) {
-        size_t stride = EriscL1Layout::get_block_stride(L1Block::RECEIVER_DOWNSTREAM_CONTROL);
-        size_t num_downstream = channel_spec_.get_total_downstream_edms();
-        for (uint32_t i = 0; i < num_downstream; i++) {
-            size_t base = receiver_control.start_address + i * stride;
-            // Skip padding field (first field_size bytes)
-            this->receiver_channels_downstream_flow_control_semaphore_address[i] = base + field_size;
-            this->receiver_channels_downstream_teardown_semaphore_address[i] = base + 2 * field_size;
-        }
-    }
+    // NOTE: Per-channel addresses are no longer stored in arrays.
+    // They are computed on-demand via l1_layout_.get_sender_channel_addresses(ch)
+    // and l1_layout_.get_receiver_downstream_addresses(idx).
 
     // Validation: sender addresses must be aligned
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        auto addrs = l1_layout_.get_sender_channel_addresses(i);
         TT_FATAL(
-            (sender_channels_buffer_index_address[i] % eth_word_l1_alignment == 0),
-            "sender_channels_buffer_index_address[{}] {} must be aligned to {} bytes",
+            (addrs.buffer_index % eth_word_l1_alignment == 0),
+            "sender channel {} buffer_index address {} must be aligned to {} bytes",
             i,
-            sender_channels_buffer_index_address[i],
+            addrs.buffer_index,
             eth_word_l1_alignment);
         TT_FATAL(
-            (sender_channels_worker_conn_info_base_address[i] % eth_word_l1_alignment == 0),
-            "sender_channels_worker_conn_info_base_address[{}] {} must be aligned to {} bytes",
+            (addrs.conn_info % eth_word_l1_alignment == 0),
+            "sender channel {} conn_info address {} must be aligned to {} bytes",
             i,
-            sender_channels_worker_conn_info_base_address[i],
+            addrs.conn_info,
             eth_word_l1_alignment);
         TT_FATAL(
-            (sender_channels_local_flow_control_semaphore_address[i] % eth_word_l1_alignment == 0),
-            "sender_channels_local_flow_control_semaphore_address[{}] {} must be aligned to {} bytes",
+            (addrs.flow_control_sem % eth_word_l1_alignment == 0),
+            "sender channel {} flow_control_sem address {} must be aligned to {} bytes",
             i,
-            sender_channels_local_flow_control_semaphore_address[i],
+            addrs.flow_control_sem,
             eth_word_l1_alignment);
         TT_FATAL(
-            (sender_channels_producer_terminate_connection_address[i] % eth_word_l1_alignment == 0),
-            "sender_channels_producer_terminate_connection_address[{}] {} must be aligned to {} bytes",
+            (addrs.terminate_conn % eth_word_l1_alignment == 0),
+            "sender channel {} terminate_conn address {} must be aligned to {} bytes",
             i,
-            sender_channels_producer_terminate_connection_address[i],
+            addrs.terminate_conn,
             eth_word_l1_alignment);
     }
+    // Verify buffer index addresses are unique
+    std::unordered_set<size_t> buffer_index_addrs;
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        buffer_index_addrs.insert(l1_layout_.get_sender_channel_addresses(i).buffer_index);
+    }
     TT_FATAL(
-        std::unordered_set<size_t>(
-            sender_channels_buffer_index_address.begin(),
-            sender_channels_buffer_index_address.begin() + this->num_used_sender_channels)
-                .size() == this->num_used_sender_channels,
-        "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
+        buffer_index_addrs.size() == this->num_used_sender_channels,
+        "FabricEriscDatamoverConfig sender channel buffer index addresses are not unique");
 
     const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
     TT_FATAL(
@@ -621,14 +587,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
     is_inter_mesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
-    handshake_address(tt::round_up(
-        tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
+    handshake_address(
+        tt::round_up(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), EriscL1Layout::ETH_CHANNEL_SYNC_SIZE)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
-    termination_signal_ptr(config.termination_signal_address),
-    edm_local_sync_ptr(config.edm_local_sync_address),
-    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
-    edm_status_ptr(config.edm_status_address),
+    termination_signal_ptr(config.get_l1_layout().get(L1Block::TERMINATION_SIGNAL).start_address),
+    edm_local_sync_ptr(config.get_l1_layout().get(L1Block::EDM_LOCAL_SYNC).start_address),
+    edm_local_tensix_sync_ptr(config.get_l1_layout().get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address),
+    edm_status_ptr(config.get_l1_layout().get(L1Block::EDM_STATUS).start_address),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -774,7 +740,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     ct_args.push_back(bw_telemetry_mode);
 
     // Add telemetry buffer address (16B aligned)
-    ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
+    ct_args.push_back(static_cast<uint32_t>(config.get_l1_layout().get(L1Block::TELEMETRY_BUFFER).start_address));
 
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
@@ -783,7 +749,8 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
         ct_args.push_back(code_profiling_enabled_timers);
 
         // Add code profiling buffer address (16B aligned)
-        ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
+        ct_args.push_back(
+            static_cast<uint32_t>(config.get_l1_layout().get(L1Block::CODE_PROFILING_BUFFER).start_address));
     } else {
         // Code profiling disabled - add zeros
         ct_args.push_back(0); // No timers enabled
@@ -946,21 +913,21 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         enable_risc_cpu_data_cache};
 
     const std::vector<uint32_t> main_args_part2 = {
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[0]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[1]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[2]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[3]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[4]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[5]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[6]),
-        static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[7]),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(0).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(1).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(2).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(3).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(4).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(5).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(6).conn_info),
+        static_cast<uint32_t>(config.get_l1_layout().get_sender_channel_addresses(7).conn_info),
 
         static_cast<uint32_t>(this->termination_signal_ptr),
         static_cast<uint32_t>(this->edm_local_sync_ptr),
         static_cast<uint32_t>(this->edm_local_tensix_sync_ptr),
         static_cast<uint32_t>(this->edm_status_ptr),
 
-        static_cast<uint32_t>(config.notify_worker_of_read_counter_update_src_address),
+        static_cast<uint32_t>(config.get_l1_layout().get(L1Block::NOTIFY_WORKER_SRC_ADDR).start_address),
         0x7a9b3c4d,  // DELETEME Issue #33360 special tag marker to catch incorrect ct args
 
         this->is_sender_channel_serviced_[risc_id][0],
@@ -1223,9 +1190,10 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             receiver_channels_downstream_teardown_semaphore_id[i] = 0;
         }
         // Sender channel 0 uses addresses instead of ids in persistent mode
-        sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
-        sender_channels_flow_control_semaphore_id[0] = config.sender_channels_local_flow_control_semaphore_address[0];
-        sender_channels_connection_semaphore_id[0] = config.sender_channels_connection_semaphore_address[0];
+        auto sender_0_addrs = config.get_l1_layout().get_sender_channel_addresses(0);
+        sender_channels_buffer_index_semaphore_id[0] = sender_0_addrs.buffer_index_sem;
+        sender_channels_flow_control_semaphore_id[0] = sender_0_addrs.flow_control_sem;
+        sender_channels_connection_semaphore_id[0] = sender_0_addrs.connection_sem;
         for (uint32_t i = 1; i < builder_config::num_max_sender_channels; i++) {
             sender_channels_flow_control_semaphore_id[i] = 0;
             sender_channels_connection_semaphore_id[i] = 0;
@@ -1240,29 +1208,30 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         // 1D has 1 downstream edm. 2D has 3 downstream EDMs (excluding router's own direction)
         // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
         for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
-            receiver_channels_downstream_flow_control_semaphore_id[i] =
-                config.receiver_channels_downstream_flow_control_semaphore_address[i];
-            receiver_channels_downstream_teardown_semaphore_id[i] =
-                config.receiver_channels_downstream_teardown_semaphore_address[i];
+            auto downstream_addrs = config.get_l1_layout().get_receiver_downstream_addresses(i);
+            receiver_channels_downstream_flow_control_semaphore_id[i] = downstream_addrs.flow_control_sem;
+            receiver_channels_downstream_teardown_semaphore_id[i] = downstream_addrs.teardown_sem;
         }
 
         // Setup VC1 downstream edm semaphore settings (only for 2D routing)
         if (is_2D_routing) {
             uint32_t num_vc1_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
             for (uint32_t i = 0; i < num_vc1_downstream_edms; i++) {
+                auto downstream_addrs =
+                    config.get_l1_layout().get_receiver_downstream_addresses(num_vc0_downstream_edms + i);
                 receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms + i] =
-                    config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms + i];
+                    downstream_addrs.flow_control_sem;
                 receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms + i] =
-                    config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms + i];
+                    downstream_addrs.teardown_sem;
             }
         }
 
         uint32_t num_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
         for (uint32_t i = 0; i < num_sender_channels; i++) {
-            sender_channels_buffer_index_semaphore_id[i] = config.sender_channels_buffer_index_semaphore_address[i];
-            sender_channels_flow_control_semaphore_id[i] =
-                config.sender_channels_local_flow_control_semaphore_address[i];
-            sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
+            auto sender_addrs = config.get_l1_layout().get_sender_channel_addresses(i);
+            sender_channels_buffer_index_semaphore_id[i] = sender_addrs.buffer_index_sem;
+            sender_channels_flow_control_semaphore_id[i] = sender_addrs.flow_control_sem;
+            sender_channels_connection_semaphore_id[i] = sender_addrs.connection_sem;
         }
     }
     return FabricEriscDatamoverBuilder(
@@ -1354,7 +1323,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         sender_channels_num_buffer,
         this->sender_channels_flow_control_semaphore_id[absolute_sender_channel_index],
         this->sender_channels_connection_semaphore_id[absolute_sender_channel_index],
-        this->config.sender_channels_worker_conn_info_base_address[absolute_sender_channel_index],
+        this->config.get_l1_layout().get_sender_channel_addresses(absolute_sender_channel_index).conn_info,
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[absolute_sender_channel_index],
         eth_chan_directions::EAST};
@@ -1437,7 +1406,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
         d->logical_core_from_ethernet_core(CoreCoord(this->noc_x_, this->noc_y_)),
-        config.termination_signal_address,
+        config.get_l1_layout().get(L1Block::TERMINATION_SIGNAL).start_address,
         val,
         CoreType::ETH);
 }

@@ -198,16 +198,17 @@ void append_fabric_connection_rt_args(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         // Sender channel 0 is always for local worker in the new design
         const auto sender_channel = 0;
+        auto sender_addrs = edm_config.get_l1_layout().get_sender_channel_addresses(sender_channel);
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
             .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
             .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(sender_channel),
-            .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-            .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-            .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
+            .edm_l1_sem_addr = sender_addrs.flow_control_sem,
+            .edm_connection_handshake_addr = sender_addrs.connection_sem,
+            .edm_worker_location_info_addr = sender_addrs.conn_info,
             .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-            .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+            .buffer_index_semaphore_id = sender_addrs.buffer_index_sem,
             .edm_direction = router_direction};
         auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
         append_worker_to_fabric_edm_sender_rt_args(
