@@ -1,6 +1,6 @@
 import os
 
-import torch.functional as F
+import torch.nn.functional as F
 
 
 def load_partial_weights(auto_model, weights_path, layer_prefix):
