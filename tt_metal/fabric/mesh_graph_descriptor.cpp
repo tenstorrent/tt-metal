@@ -93,7 +93,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     }
 
     const auto& topology_types = device_topology->dim_types();
-    const auto& channels_count = channels->count();
+    const uint32_t channels_count = static_cast<uint32_t>(channels->count());
     const auto& policy = channels->policy();
 
     MeshShape mesh_shape = mesh_coord_range.shape();
@@ -820,7 +820,7 @@ GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
     const auto* mesh_desc = it->second;
 
     InstanceData data{
-        .local_id = mesh_ref.mesh_id(),
+        .local_id = static_cast<LocalNodeId>(mesh_ref.mesh_id()),
         .name = mesh_desc->name(),
         .type = "MESH",
         .kind = NodeKind::Mesh,
@@ -863,7 +863,7 @@ GlobalNodeId MeshGraphDescriptor::populate_switch_instance(
     const auto* switch_desc = it->second;
 
     InstanceData data{
-        .local_id = switch_ref.switch_id(),
+        .local_id = static_cast<LocalNodeId>(switch_ref.switch_id()),
         .name = switch_desc->name(),
         .type = "SWITCH",
         .kind = NodeKind::Switch,
@@ -1100,7 +1100,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data{
                 .nodes = {src_device_id, dst_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1111,7 +1111,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data_reverse{
                 .nodes = {dst_device_id, src_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1129,7 +1129,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data{
                 .nodes = {src_device_id, dst_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1140,7 +1140,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
 
             ConnectionData data_reverse{
                 .nodes = {dst_device_id, src_device_id},
-                .count = channels->count(),
+                .count = static_cast<uint32_t>(channels->count()),
                 .policy = channels->policy(),
                 .parent_instance_id = mesh_id,
                 .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
@@ -1295,10 +1295,11 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
             ConnectionData data{
                 .nodes = nodes_copy,
-                .count = connection.channels().count(),
+                .count = static_cast<uint32_t>(connection.channels().count()),
                 .policy = connection.channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
+                .assign_z_direction = connection.has_assign_z_direction() && connection.assign_z_direction(),
             };
 
             add_connection_to_fast_lookups(data, instance.type);
@@ -1348,10 +1349,12 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
             // Create a connection between the two instances
             ConnectionData data{
                 .nodes = {sub_instance_a, sub_instance_b},
-                .count = graph_desc->graph_topology().channels().count(),
+                .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
                 .policy = graph_desc->graph_topology().channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
+                .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                      graph_desc->graph_topology().assign_z_direction(),
             };
 
             const auto id = data.connection_id;
@@ -1378,10 +1381,12 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data{
             .nodes = {src_instance, dst_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
+            .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                  graph_desc->graph_topology().assign_z_direction(),
         };
 
         const auto id = data.connection_id;
@@ -1390,10 +1395,12 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
 
         ConnectionData data_reverse{
             .nodes = {dst_instance, src_instance},
-            .count = graph_desc->graph_topology().channels().count(),
+            .count = static_cast<uint32_t>(graph_desc->graph_topology().channels().count()),
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
+            .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                  graph_desc->graph_topology().assign_z_direction(),
         };
 
         const auto id_reverse = data_reverse.connection_id;

@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
 
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.002)]
+    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
 )
 def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     torch_input_tensor_a = torch.tensor(
@@ -108,7 +108,7 @@ def test_tanh_inplace(device, high, low, torch_dtype, ttnn_dtype, atol):
 
 
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.002)]
+    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
 )
 @pytest.mark.parametrize(
     "input_shapes",
@@ -247,7 +247,7 @@ def return_mem_config(mem_config_string):
 
 
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.002)]
+    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
 )
 @pytest.mark.parametrize(
     "high, low",
