@@ -160,8 +160,8 @@ if(TARGET all_generated_files)
         capnp_generated_files
         DEPENDS
             ${INSPECTOR_RPC_CAPNP_HEADER}
-            ${INSPECTOR_RPC_GENERATED_HEADER}
             ${RUNTIME_INSPECTOR_RPC_CAPNP_HEADER}
+            ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
     )
     add_dependencies(all_generated_files capnp_generated_files)
 endif()

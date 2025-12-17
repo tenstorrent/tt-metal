@@ -6,8 +6,7 @@
 #include "core/inspector/ttnn_rpc_channel_generated.hpp"
 #include "tt-metalium/inspector.hpp"
 
-namespace ttnn {
-namespace inspector {
+namespace ttnn::inspector {
 
 void register_inspector_rpc() {
     static rpc::TtnnInspectorRpcChannel ttnn_inspector_rpc_channel;
@@ -18,5 +17,4 @@ void register_inspector_rpc() {
             ::kj::Own<rpc::TtnnInspectorRpcChannel>(&ttnn_inspector_rpc_channel, ::kj::NullDisposer::instance)));
 }
 
-}  // namespace inspector
-}  // namespace ttnn
+}  // namespace ttnn::inspector
