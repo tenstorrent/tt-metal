@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
+from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm as RefRMSNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
@@ -53,7 +53,7 @@ def test_rms_norm_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + f"{norm_type}_norm."
     partial_state_dict = {k[-6:]: v for k, v in state_dict.items() if (k.startswith(f"layers.0.{norm_type}_norm."))}
-    reference_model = RefRMSNorm(dim=model_args.dim)
+    reference_model = RefRMSNorm(hidden_size=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
     # Create the inner RMSNormxw
