@@ -71,8 +71,8 @@
 | [ViT-base (224x224)  (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/vit)         | 16    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 1,900   | 3,200      | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
 | [ViT-base (224x224)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vit)             | 10    | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)     | 3,700   | 3,200      |              |
 | [ViT-base (224x224)  (DP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/vit)         | 64    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 7,700   | 12,800     | [v0.60.0-rc4](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc4) |
-| [MobileNet-v2 (224x224)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mobilenetv2)           | 10    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 3,030   | 3,500      |  |
-| [MobileNet-v2 (224x224) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/mobilenetv2)    | 20    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 5,280   | 7,000      |  |
+| [MobileNet-v2 (224x224)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mobilenetv2)           | 10    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 3,030   | 3,500      |  |
+| [MobileNet-v2 (224x224) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mobilenetv2)    | 20    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 5,280   | 7,000      |  |
 
 ### Segmentation
 | Model                                                                       | Batch | Hardware                                                 | Frame/sec (FPS)     | Target FPS | Release     |

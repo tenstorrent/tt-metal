@@ -41,7 +41,7 @@ run_python_model_tests_wormhole_b0() {
     pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
     # Mobilenetv2git
-    pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
+    pytest -svv models/demos/wormhole/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
     # ViT-base
     pytest -svv models/demos/wormhole/vit/tests/test_ttnn_optimized_sharded_vit_wh.py
