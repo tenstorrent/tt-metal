@@ -656,7 +656,7 @@ bool is_split_reader_viable(
     const bool is_viable = activation_cycles / 2 + std::max(weight_cycles, tilize_cycles) <
                            std::max(activation_cycles + tilize_cycles, weight_cycles);
 
-    log_debug(
+    log_trace(
         tt::LogOp,
         "Split reader viability: activation_cycles={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, is_viable={}",
         activation_cycles,
