@@ -237,11 +237,28 @@ Tested across multiple containerized tt-metal builds to verify reproducibility a
 
 ### Conclusion
 
-The bug is **reproducible in containers** and was **FIXED** between:
+The bug is **reproducible in containers** and **appears fixed** between:
 - **Failing:** `b747edd158` (2025-12-12)
 - **Passing:** `b0304ff7a5` (2025-12-16)
 
-The fix was likely included in one of the commits merged between Dec 12-16.
+### ⚠️ WARNING: Fix Not Identified
+
+**The exact commit that fixed this bug could NOT be identified.**
+
+Commits analyzed between Dec 12-16 that mention layernorm:
+- `b165c6a01d` - "Fix default program config for sharded rms norm and layer norm" - Affects FORWARD path only, not backward
+- `0fdc9ece00` - "test: disable constantly failing layernorm test" - Disables a different test
+- `81510ec23d` - "Revert welford support for Distributed Layernorm" - Affects distributed ops, not backward kernel
+
+None of these directly affect the `LayerNormBackwardOperation` or `ttml_layernorm_bw` primitive used by the failing test.
+
+**Implications:**
+1. **Root cause unknown** - We don't understand why the test was failing
+2. **Fix may be accidental** - The fix could be a side effect of unrelated changes
+3. **Regression risk HIGH** - The bug could reappear if code is modified or reverted
+4. **No targeted test protection** - Without understanding the fix, we can't ensure it stays fixed
+
+**Recommendation:** This test should be monitored. If it starts failing again, a deeper investigation into the layernorm backward kernel precision is warranted.
 
 ## Comparison Summary
 
