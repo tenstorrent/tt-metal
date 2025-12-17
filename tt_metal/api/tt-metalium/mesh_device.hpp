@@ -57,7 +57,7 @@ class MeshDevice;
 
 namespace tt::tt_metal::experimental::MeshDevice {
 void SetUserData(distributed::MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> value);
-std::shared_ptr<void> GetUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
+std::shared_ptr<void> GetUserData(const distributed::MeshDevice& mesh_device, uintptr_t key);
 void RemoveUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
 }  // namespace tt::tt_metal::experimental::MeshDevice
 namespace tt::tt_metal {
@@ -122,7 +122,7 @@ private:
     // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
-    std::mutex api_mutex_;
+    mutable std::mutex api_mutex_;
     bool is_internal_state_initialized = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
@@ -136,7 +136,7 @@ private:
     friend void experimental::MeshDevice::SetUserData(
         distributed::MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> value);
     friend std::shared_ptr<void> experimental::MeshDevice::GetUserData(
-        distributed::MeshDevice& mesh_device, uintptr_t key);
+        const distributed::MeshDevice& mesh_device, uintptr_t key);
     friend void experimental::MeshDevice::RemoveUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
@@ -164,7 +164,7 @@ private:
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
-    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+    std::lock_guard<std::mutex> lock_api() const { return std::lock_guard<std::mutex>(api_mutex_); }
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

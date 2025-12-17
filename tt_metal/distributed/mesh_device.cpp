@@ -1196,9 +1196,9 @@ void SetUserData(distributed::MeshDevice& mesh_device, uintptr_t key, std::share
     mesh_device.user_data_[key] = std::move(value);
 }
 
-std::shared_ptr<void> GetUserData(distributed::MeshDevice& mesh_device, uintptr_t key) {
+std::shared_ptr<void> GetUserData(const distributed::MeshDevice& mesh_device, uintptr_t key) {
     auto lock = mesh_device.lock_api();
-    auto it = mesh_device.user_data_.find(key);
+    const auto it = mesh_device.user_data_.find(key);
     if (it != mesh_device.user_data_.end()) {
         return it->second;
     }

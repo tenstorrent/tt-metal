@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental::MeshDevice {
  * @param key Unique identifier for the user data (typically derived from a pointer or type hash).
  * @param value Shared pointer to the data to store. Ownership is shared with the MeshDevice.
  */
-void SetUserData(MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> value);
+void SetUserData(distributed::MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> value);
 
 /**
  * @brief Retrieves user data previously stored on a MeshDevice.
@@ -34,7 +34,7 @@ void SetUserData(MeshDevice& mesh_device, uintptr_t key, std::shared_ptr<void> v
  * @param key Unique identifier for the user data.
  * @return Shared pointer to the stored data, or nullptr if the key does not exist.
  */
-std::shared_ptr<void> GetUserData(MeshDevice& mesh_device, uintptr_t key);
+std::shared_ptr<void> GetUserData(const distributed::MeshDevice& mesh_device, uintptr_t key);
 
 /**
  * @brief Removes user data from a MeshDevice.
@@ -45,6 +45,6 @@ std::shared_ptr<void> GetUserData(MeshDevice& mesh_device, uintptr_t key);
  * @param mesh_device Reference to the MeshDevice from which to remove the data.
  * @param key Unique identifier for the user data to remove.
  */
-void RemoveUserData(MeshDevice& mesh_device, uintptr_t key);
+void RemoveUserData(distributed::MeshDevice& mesh_device, uintptr_t key);
 
 }  // namespace tt::tt_metal::experimental::MeshDevice
