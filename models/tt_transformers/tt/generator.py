@@ -296,7 +296,10 @@ class Generator:
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
-            last_token_idx = seq_len - 1  # Last token index of the current prompt
+            last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
+            last_token_idx_relative = (
+                last_token_idx - num_cached_tokens
+            )  # Last token index of the current prompt, excluding the cached tokens
             prefill_seq_len = get_padded_prefill_len(
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
@@ -365,9 +368,7 @@ class Generator:
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(
-                    logits, last_token_idx - num_cached_tokens
-                )
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_relative)
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
@@ -383,7 +384,7 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx - num_cached_tokens) % 32))
+            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx_relative) % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -434,7 +435,6 @@ class Generator:
             page_table_user = page_table[user_id : user_id + 1, :]
             # Pad page table to match number of blocks in seq_len
             num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
-            num_cached_blocks = num_blocks_in_seq(num_cached_tokens, block_size)
             page_table_user_padded = torch.cat(
                 [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
             )
@@ -484,7 +484,7 @@ class Generator:
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=((last_token_idx_in_chunk) // 32) * 32,
+                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                 )
 
