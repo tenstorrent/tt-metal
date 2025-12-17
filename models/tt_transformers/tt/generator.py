@@ -390,7 +390,7 @@ class Generator:
 
     def prefill_forward_single_user_text(
         self,
-        tokens,  # New tokens to prefill (without the cached tokens), padded to 128, power of 2 or multiple of 2048
+        tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
         page_table,  # Cached and new pages
         user_id,
         last_token_idx,  # Last token index of the full prompt, including the cached tokens
@@ -414,9 +414,10 @@ class Generator:
             """
             assert page_table is not None, "page_table must be provided for chunked prefill"
             assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
-            assert (
-                last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens
-            ), "last_token_idx must be provided and less than seq_len + num_cached_tokens"
+            assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (
+                f"last_token_idx must be provided and less than seq_len + num_cached_tokens: "
+                f"last_token_idx={last_token_idx}, seq_len={seq_len}, num_cached_tokens={num_cached_tokens}"
+            )
 
             if use_chunked_prefill:
                 # If chunked prefill (more than one chunk is needed), we want to use the maximum chunk size.
@@ -439,15 +440,28 @@ class Generator:
             )
             CHUNK_USER_ID = 0
 
-            for chunk_start in range(0, seq_len, chunk_size):
+            for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
+                # These are absolute, i.e. including the cached tokens
                 chunk_end = chunk_start + chunk_size
-                assert (
-                    chunk_end <= seq_len
-                ), f"Chunk end should be less or equal to seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
-                chunk_tokens = tokens[:, chunk_start:chunk_end]
-                chunk_page_table = page_table_user_padded[
-                    :, num_cached_blocks + chunk_start // block_size : num_cached_blocks + chunk_end // block_size
-                ]
+                # These are relative, i.e. excluding the cached tokens
+                chunk_start_relative = chunk_start - num_cached_tokens
+                chunk_end_relative = chunk_end - num_cached_tokens
+                assert chunk_end <= num_cached_tokens + seq_len, (
+                    f"chunk_end should be less or equal to "
+                    f"num_cached_tokens + seq_len. "
+                    f"Got: chunk_end={chunk_end}, "
+                    f"num_cached_tokens={num_cached_tokens}, seq_len={seq_len}"
+                )
+
+                # Select tokens for the current chunk.
+                # Cached tokens were allready excluded (not part of the input),
+                # so using relative indexes.
+                chunk_tokens = tokens[:, chunk_start_relative:chunk_end_relative]
+
+                # Select pages for the current chunk.
+                # Cached pages must be skipped as well,
+                # so using absolute indexes.
+                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
 
                 (
                     chunk_prefill_input,
@@ -457,7 +471,7 @@ class Generator:
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
-                    start_pos=num_cached_tokens + chunk_start,
+                    start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                     **kwargs,
@@ -469,7 +483,7 @@ class Generator:
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=num_cached_tokens + chunk_start,
+                    chunk_start_idx=chunk_start,
                     get_last_token=((last_token_idx_in_chunk) // 32) * 32,
                     kv_cache=kv_cache,
                 )
