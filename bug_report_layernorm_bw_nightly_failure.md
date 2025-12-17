@@ -84,19 +84,16 @@ deactivate
 
 #### Step 2: Get Bug Reproduction Tests
 
-The bug reproduction tests are available in a fork branch. Fetch and apply them:
+The bug reproduction tests are available in the bug report branch:
 
 ```bash
-# Fetch the test code from the fork
-git remote add bug-report-fork https://github.com/ivoitovych/tt-metal.git
-git fetch bug-report-fork ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2
-
-# Cherry-pick the commit with bug reproduction tests
+# Fetch and cherry-pick the bug reproduction tests
+git fetch origin ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3
 git cherry-pick 16165972af  # "[tt-train] Add bug reproduction tests for LayerNorm backward accumulation bug"
 ```
 
 **Alternative:** View the test source code directly at:
-https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
+https://github.com/tenstorrent/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
 
 #### Step 3: Build and Run Tests
 
@@ -175,9 +172,9 @@ docker run --rm \
 
 Seven new tests added to `tt-train/tests/ops/layernorm_bw_fused_op_test.cpp`.
 
-**Source code:** https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
+**Source code:** https://github.com/tenstorrent/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp
 
-**Note:** These tests are in a fork branch, not the main tt-metal repository. See "Step 2: Get Bug Reproduction Tests" above for how to apply them.
+**Note:** These tests are in the bug report branch. See "Step 2: Get Bug Reproduction Tests" above for how to apply them to main.
 
 ### Deterministic Tests (Constant Inputs)
 - `BugRepro_Deterministic_256Tiles` - 8192 features (256 tiles)
@@ -285,15 +282,15 @@ Use circular buffer for accumulator persistence across loop iterations:
 | **Program factory** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp) | Kernel program setup |
 | **High-level wrapper** | [`tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp`](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/sources/ttml/metal/ops/layernorm_bw/layernorm_bw.cpp) | TTML operation entry point |
 
-### Files in Fork (bug reproduction tests)
+### Files in Bug Report Branch (bug reproduction tests)
 
 | File | URL | Description |
 |------|-----|-------------|
-| **Test file** | [tt-train/tests/ops/layernorm_bw_fused_op_test.cpp](https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp) | Bug reproduction tests (BugRepro_* tests) |
-| **This bug report** | [bug_report_layernorm_bw_nightly_failure.md](https://github.com/ivoitovych/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2/bug_report_layernorm_bw_nightly_failure.md) | This document |
+| **Test file** | [tt-train/tests/ops/layernorm_bw_fused_op_test.cpp](https://github.com/tenstorrent/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3/tt-train/tests/ops/layernorm_bw_fused_op_test.cpp) | Bug reproduction tests (BugRepro_* tests) |
+| **This bug report** | [bug_report_layernorm_bw_nightly_failure.md](https://github.com/tenstorrent/tt-metal/blob/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3/bug_report_layernorm_bw_nightly_failure.md) | This document |
 
-- **Fork branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2`
-- **Fork URL:** https://github.com/ivoitovych/tt-metal/tree/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-2
+- **Branch:** `ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3`
+- **Branch URL:** https://github.com/tenstorrent/tt-metal/tree/ivoitovych/layernorm-bw-nightly-test-failure-bug-report-3
 
 ## Reporter
 
