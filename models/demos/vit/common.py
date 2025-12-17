@@ -24,3 +24,10 @@ def load_torch_model(model_location_generator=None, embedding=False):
         state_dict = torch.load(weights_path)
         model.load_state_dict(state_dict)
         return model.eval()
+
+
+def load_siglip_torch_model():
+    from timm.models import create_model
+
+    torch_model = create_model("vit_so400m_patch14_siglip_224", pretrained=True)
+    return torch_model.eval()
