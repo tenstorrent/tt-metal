@@ -31,11 +31,14 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(5));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_addr, .shard_array = mapping_table};
 
-    // Transaction ID pattern constants
+    // Transaction ID pipelining strategy:
+    // Use 2 transaction IDs to overlap NOC reads with computation.
+    // This enables pipelined execution, where while one transaction is being processed,
+    // the next transaction's NOC read can be issued, improving throughput.
     constexpr uint32_t trid_base = 1;
     constexpr uint32_t num_of_trids = 2;
     auto cb_interface = get_local_cb_interface(cb_id_in0);
-    uint32_t aligned_page_size = get_local_cb_interface(cb_id_in0).fifo_page_size;
+    uint32_t aligned_page_size = cb_interface.fifo_page_size;
     uint32_t num_of_transactions = num_sticks * num_shards;
 
     // Calculate stick indices based on direction
@@ -83,4 +86,5 @@ void kernel_main() {
             trid_to_issue = (trid_to_issue + 1) % num_of_trids;
         }
     }
+    noc_async_read_set_trid(0);
 }
