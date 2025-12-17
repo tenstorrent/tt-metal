@@ -249,6 +249,7 @@ def run_llama3_decode_performance(
     ttnn.plus_one(
         current_pos_tensor,
         sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        skip_negative_entries=True,
     )
 
     # Capture Trace

@@ -7,7 +7,7 @@ import json
 import time
 
 from loguru import logger
-from models.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from typing import Tuple, Union
 
 import ttnn
@@ -241,6 +241,74 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     return equal_passed, equal_message
 
 
+def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
+    """
+    Compute the relative Frobenius norm of the difference between two tensors.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F.
+    If ||expected||_F == 0, returns the absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+
+    Returns:
+        float: The (relative or absolute) Frobenius norm of the error.
+        bool: True if the expected norm is zero, False otherwise.
+    """
+    if isinstance(expected_pytorch_result, ttnn.Tensor):
+        expected_pytorch_result = ttnn.to_torch(expected_pytorch_result)
+    if isinstance(actual_pytorch_result, ttnn.Tensor):
+        actual_pytorch_result = ttnn.to_torch(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    error = expected_pytorch_result - actual_pytorch_result
+    frob_error = torch.norm(error, p="fro")
+    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+
+    expected_norm_is_zero = frob_expected == 0
+    rel_norm_value = float(frob_error / frob_expected) if not expected_norm_is_zero else float(frob_error)
+
+    return rel_norm_value, expected_norm_is_zero
+
+
+def assert_relative_frobenius(expected_pytorch_result, actual_pytorch_result, threshold=0.01):
+    """
+    Assert that the relative Frobenius norm of the difference between two tensors is below a specified threshold.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F. If ||expected||_F == 0, uses absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+        threshold (float): The maximum allowed relative Frobenius norm of the error.
+
+    Returns:
+        tuple: A tuple containing:
+            - relative_frobenius_passed (bool): True if the relative Frobenius norm is below the threshold, False otherwise
+            - relative_frobenius_message (str): A message describing the relative Frobenius norm comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the relative Frobenius norm is above the threshold.
+    """
+    rel_norm_value, expected_norm_is_zero = comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result)
+
+    relative_frobenius_passed = rel_norm_value <= threshold
+    relative_frobenius_message = f"Relative Frobenius norm {rel_norm_value} is below threshold {threshold}."
+    if not relative_frobenius_passed:
+        if expected_norm_is_zero:
+            relative_frobenius_message = (
+                f"Frobenius norm of expected is 0. Absolute error {rel_norm_value} exceeds threshold {threshold}."
+            )
+        else:
+            relative_frobenius_message = (
+                f"Relative Frobenius norm of error {rel_norm_value} exceeds threshold {threshold}."
+            )
+    assert relative_frobenius_passed, relative_frobenius_message
+    return relative_frobenius_passed, relative_frobenius_message
+
+
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     if expected_pytorch_result.shape != actual_pytorch_result.shape:
         return (
@@ -309,3 +377,24 @@ def start_measuring_time() -> int:
 
 def stop_measuring_time(start_time) -> int:
     return time.time_ns() - start_time
+
+
+def maybe_trace(op_func, enable_trace, device):
+    if enable_trace:
+        # Compile the op
+        output = op_func()
+        ttnn.synchronize_device(device)
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        output = op_func()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        # Execute trace
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)
+    else:
+        output = op_func()
+    return output

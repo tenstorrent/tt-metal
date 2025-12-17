@@ -6,7 +6,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -14,7 +14,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -34,7 +33,8 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
+        auto value =
+            BinaryFunction{}(static_cast<float>(input_a_buffer[index]), static_cast<float>(input_b_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
@@ -65,7 +65,7 @@ int main() {
 
     int device_id = 0;
     auto device_owner = MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});

@@ -2,19 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dev_msgs.h"
-#include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <memory>
 #include <numeric>
 #include <string>
-#include <vector>
+#include <string_view>
 
-#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
-#include "hw/inc/wormhole/eth_l1_address_map.h"
+#include "eth_l1_address_map.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -22,6 +18,14 @@
 #include "wormhole/wh_hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_1xx_common.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
+
+namespace {
+
+// Wrap enum definitions in anonymous namespace so as to not clash with other archs.
+#include "core_config.h"  // MaxProcessorsPerCoreType
+
+}  // namespace
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -31,35 +35,41 @@ constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
+constexpr static std::uint32_t get_dram_profiler_size(
+    [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
 #if defined(TRACY_ENABLE)
-constexpr static std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 80;
-constexpr static std::uint32_t MAX_NUM_ETH_CORES = 16;
-constexpr static std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
-constexpr static std::uint32_t NUM_DRAM_CHANNELS = 12;
-constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
-    (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
-constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
-      DRAM_ALIGNMENT - 1) /
-     DRAM_ALIGNMENT) *
-    DRAM_ALIGNMENT;
+    constexpr std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 80;
+    constexpr std::uint32_t MAX_NUM_ETH_CORES = 16;
+    constexpr std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
+    constexpr std::uint32_t NUM_DRAM_CHANNELS = 12;
+    constexpr std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
+        (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
+    return (((profiler_dram_bank_size_per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+             DRAM_ALIGNMENT - 1) /
+            DRAM_ALIGNMENT) *
+           DRAM_ALIGNMENT;
 #else
-constexpr static std::uint32_t DRAM_PROFILER_SIZE = 0;
+    return 0;
 #endif
+}
 
-constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_PROFILER_BASE + DRAM_PROFILER_SIZE;
-constexpr static std::uint32_t DRAM_UNRESERVED_SIZE = MEM_DRAM_SIZE - DRAM_UNRESERVED_BASE;
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+    return DRAM_PROFILER_BASE + dram_profiler_size;
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+}
 
 static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
@@ -92,9 +102,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/wormhole");
-        includes.push_back("tt_metal/hw/inc/wormhole/wormhole_b0_defines");
-        includes.push_back("tt_metal/hw/inc/wormhole/noc");
+        includes.push_back("tt_metal/hw/inc/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 
@@ -149,7 +160,10 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-wh ";
+        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
+                                     params.processor_class == HalProcessorClassType::COMPUTE
+                                 ? "-mcpu=tt-wh-tensix "
+                                 : "-mcpu=tt-wh ";
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             cflags += "-fno-delete-null-pointer-checks ";
         } else if (
@@ -163,44 +177,30 @@ public:
 
     std::string linker_script(const Params& params) const override {
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const std::string_view path = "runtime/hw/toolchain/wormhole";
+        std::string_view fork = params.is_fw ? "firmware" : "kernel";
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
                 switch (params.processor_class) {
-                    case HalProcessorClassType::DM: {
-                        return fmt::format(
-                            "runtime/hw/toolchain/wormhole/{}_{}risc.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id == 0 ? "b" : "nc");
-                    }
+                    case HalProcessorClassType::DM:
+                        return fmt::format("{}/{}_{}risc.ld", path, fork, params.processor_id == 0 ? "b" : "nc");
                     case HalProcessorClassType::COMPUTE:
-                        return fmt::format(
-                            "runtime/hw/toolchain/wormhole/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id);
+                        return fmt::format("{}/{}_trisc{}.ld", path, fork, params.processor_id);
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
                 if (params.is_fw) {
-                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-app_iram.ld"
-                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-app.ld";
-                } else {
-                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-kernel_iram.ld"
-                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-kernel.ld";
+                    // Firmware is named 'app' in this case.
+                    fork = "app";
                 }
-                break;
+                return fmt::format(
+                    "{}/erisc-b0-{}{}.ld", path, fork, rtoptions.get_erisc_iram_enabled() ? "_iram" : "");
             case HalProgrammableCoreType::IDLE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/wormhole/kernel_ierisc.ld";
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/wormhole/kernel_subordinate_ierisc.ld";
+                if (params.processor_id < 2) {
+                    return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
                 }
                 break;
-            default:
-                TT_THROW(
-                    "Unsupported programmable core type {} to query lflags", enchantum::to_string(params.core_type));
+            default: break;
         }
         TT_THROW(
             "Invalid processor id {} of processor class {} in programmable core type {}",
@@ -208,16 +208,17 @@ public:
             enchantum::to_string(params.processor_class),
             enchantum::to_string(params.core_type));
     }
+
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
 };
 
-void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
+void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+    using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
-
-    static_assert(MaxProcessorsPerCoreType <= MAX_RISCV_PER_CORE);
 
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
@@ -233,9 +234,12 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_SIZE;
-    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_SIZE;
+    const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_size(dram_profiler_size);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -259,7 +263,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -294,6 +298,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_PCIE_ENCODING(x, y) >> 32; };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
     this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
@@ -302,8 +307,19 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+    this->eth_fw_arg_addr_func_ = [&](int, uint32_t) -> uint32_t { return 0; };
 
+    this->device_features_func_ = [](DispatchFeature feature) -> bool {
+        switch (feature) {
+            case DispatchFeature::ETH_MAILBOX_API: return false;
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
+        }
+    };
+
+    this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
@@ -321,13 +337,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
-    this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
-    this->virtualized_core_types_ = {AddressableCoreType::TENSIX, AddressableCoreType::ETH};
+    this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
     this->inf_ = INF_WHB0;
+
+    // PCIe address range for Wormhole. Includes the mapping through the outbound iATU. See
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
+    this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
+    this->supports_64_bit_pcie_addressing_ = false;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -342,7 +363,27 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+
+    this->set_iram_text_size_func_ = [](dev_msgs::launch_msg_t::View launch_msg,
+                                        HalProgrammableCoreType programmable_core_type,
+                                        HalProcessorClassType processor_class,
+                                        uint32_t processor_type_idx,
+                                        uint32_t iram_text_size) {
+        // Only NCRISC on Wormhole needs to set the field ncrisc_kernel_size16 in launch message.
+        if (programmable_core_type == HalProgrammableCoreType::TENSIX && processor_class == HalProcessorClassType::DM &&
+            processor_type_idx == 1) {
+            launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
+        }
+    };
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
+        // No checks
+        return true;
+    };
+
+    this->max_pinned_memory_count_ = 12;
+    this->total_pinned_memory_size_ =
+        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

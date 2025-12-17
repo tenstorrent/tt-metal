@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_unary_max_min.h"
 
 namespace ckernel {
-
-// New LLK SFPU APIs
 
 // Unary maximum
 template <bool APPROXIMATE>

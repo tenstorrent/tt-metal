@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_gather_tosa_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Generate a tensor for which each element in the output is a subtensor of the values tensor based on the indices.
         N is the number of batches, W the number of indices in each batch, K the range of each index and C the number data channels for each index.
@@ -72,12 +72,12 @@ void bind_gather_tosa_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& input_index_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               QueueId queue_id) -> Tensor { return self(queue_id, input_tensor, input_index_tensor, memory_config); },
+               const std::optional<tt::tt_metal::MemoryConfig>& memory_config) -> Tensor {
+                return self(input_tensor, input_index_tensor, memory_config);
+            },
             py::arg("input").noconvert(),
             py::arg("index"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::data_movement::detail

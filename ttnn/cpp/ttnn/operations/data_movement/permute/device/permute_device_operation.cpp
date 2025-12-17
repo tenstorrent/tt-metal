@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& dims = operation_attributes.dims;
+    const auto& dims = operation_attributes.dims;
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         // If the last dimension is not permuted, we can use the row-invariant kernel
         if (dims.back() == tensor_args.input_tensor.logical_shape().rank() - 1) {
@@ -42,7 +42,6 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
-    TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(

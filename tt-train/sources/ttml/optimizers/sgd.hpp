@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,10 @@ struct SGDConfig {
 
 class SGD : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "SGD";
+    }
+
     explicit SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config);
 
     void zero_grad() override;

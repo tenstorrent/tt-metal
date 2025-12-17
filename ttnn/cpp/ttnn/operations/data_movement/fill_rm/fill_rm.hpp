@@ -7,12 +7,11 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct FillRMOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         uint32_t N,
         uint32_t C,
         uint32_t H,
@@ -27,7 +26,6 @@ struct FillRMOperation {
 
 struct FillOnesRMOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         uint32_t N,
         uint32_t C,
         uint32_t H,
@@ -38,8 +36,7 @@ struct FillOnesRMOperation {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto fill_rm = ttnn::register_operation<"ttnn::fill_rm", ttnn::operations::data_movement::FillRMOperation>();
 constexpr auto fill_ones_rm =

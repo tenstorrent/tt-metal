@@ -27,8 +27,6 @@ from models.experimental.functional_unet.tests.common import (
     UNetPerformanceStatistics,
 )
 
-from models.utility_functions import skip_for_grayskull
-
 
 def determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
     number_of_cores = max_cores
@@ -55,7 +53,6 @@ def get_dram_sharded_memory_config_for_tensor(output_tensor, dram_grid_size):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec)
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -176,7 +173,6 @@ def test_unet_trace_2cq(
     return UNetPerformanceStatistics(groups, batch, 1, inference_and_compile_time, inference_time)
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
     [

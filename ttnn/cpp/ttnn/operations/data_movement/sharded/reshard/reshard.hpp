@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@ namespace operations::data_movement {
 
 struct ReshardOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& memory_config,
         const std::optional<Tensor>& optional_output_tensor);

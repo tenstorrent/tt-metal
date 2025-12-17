@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -14,33 +15,68 @@
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/multi_layer_perceptron.hpp"
-#include "serialization/msgpack_file.hpp"
+#include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+
+namespace {
+std::string generate_unique_temp_dir_name() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+
+    constexpr int name_length = 16;
+    std::string name = "tensor_test_";
+
+    for (int i = 0; i < name_length; ++i) {
+        name += "0123456789abcdef"[dis(gen)];
+    }
+
+    return name;
+}
+
+std::filesystem::path create_unique_temp_dir() {
+    std::filesystem::path base_dir = std::filesystem::temp_directory_path();
+
+    size_t max_attempts = 1024;
+    while (--max_attempts > 0) {
+        std::string random_name = generate_unique_temp_dir_name();
+        std::filesystem::path temp_dir = base_dir / random_name;
+
+        if (!std::filesystem::exists(temp_dir)) {
+            std::filesystem::create_directories(temp_dir);
+            return temp_dir;
+        }
+    }
+
+    throw std::runtime_error("Failed to create unique temporary directory after maximum attempts");
+}
+}  // namespace
 
 class TensorFileTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Remove test file if it exists
-        if (std::filesystem::exists(test_filename)) {
-            std::filesystem::remove(test_filename);
-        }
+        temp_dir = create_unique_temp_dir();
+        test_filename = temp_dir.string();  // Use directory path
 
         ttml::autograd::ctx().open_device();
     }
 
     void TearDown() override {
-        // Clean up test file after each test
-        if (std::filesystem::exists(test_filename)) {
-            std::filesystem::remove(test_filename);
-        }
         ttml::autograd::ctx().close_device();
+
+        // Clean up temp directory after each test
+        if (std::filesystem::exists(temp_dir)) {
+            std::filesystem::remove_all(temp_dir);
+        }
     }
 
-    const std::string test_filename = "/tmp/test_tensor.msgpack";
+    std::filesystem::path temp_dir;
+    std::string test_filename;
 };
 
 TEST_F(TensorFileTest, SerializeDeserializeTensor) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
+    // Set output directory before writing tensors
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttnn::Shape({1, 2, 32, 321});
     auto tensor_zeros = ttml::core::zeros(shape, device);
@@ -48,9 +84,20 @@ TEST_F(TensorFileTest, SerializeDeserializeTensor) {
 
     // Write tensor to file
     ttml::serialization::write_ttnn_tensor(serializer, "tensor", tensor_ones);
-    serializer.serialize(test_filename);
-    ttml::serialization::MsgPackFile deserializer;
-    deserializer.deserialize(test_filename);
+    // Use directory path for serialization
+    std::filesystem::path output_dir = temp_dir / "model_data";
+    serializer.serialize(output_dir.string());
+
+    // Verify metadata file exists
+    std::filesystem::path metadata_file = output_dir / "metadata.flatbuffer";
+    ASSERT_TRUE(std::filesystem::exists(metadata_file)) << "Metadata file should exist: " << metadata_file;
+
+    // Verify tensor file was created
+    std::filesystem::path tensor_file = output_dir / "tensor.tensorbin";
+    ASSERT_TRUE(std::filesystem::exists(tensor_file)) << "Tensor file should exist: " << tensor_file;
+
+    ttml::serialization::FlatBufferFile deserializer;
+    deserializer.deserialize(output_dir.string());
 
     // Read tensor from file
     tt::tt_metal::Tensor tensor_read = tensor_zeros;
@@ -70,7 +117,8 @@ bool compare_tensors(const tt::tt_metal::Tensor& tensor1, const tt::tt_metal::Te
 }
 
 TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
+    // Set output directory before writing tensors
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
         .input_features = 128, .hidden_features = {256}, .output_features = 10};
     ttml::modules::MultiLayerPerceptron mlp_to_write(model_params);
@@ -79,7 +127,7 @@ TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
     auto params_to_write = mlp_to_write.parameters();
     ttml::serialization::write_named_parameters(serializer, "mlp", params_to_write);
     serializer.serialize(test_filename);
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(test_filename);
     auto params_to_read = mlp_to_read.parameters();
     ttml::serialization::read_named_parameters(deserializer, "mlp", params_to_read);

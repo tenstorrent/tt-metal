@@ -24,8 +24,7 @@
  * invocations and program creation.
  */
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 enum EriscDataMoverBufferSharingMode : uint32_t {
     NOT_SHARED = 0,
@@ -187,7 +186,7 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
         index -= new_z * y_x;
 
         size_t new_y = index / tensor_slice_shape.x;
-        size_t new_x = index - new_y * tensor_slice_shape.x;
+        size_t new_x = index - (new_y * tensor_slice_shape.x);
 
         curr_page_idx = flattened_index(tensor_shape, tensor_slice_shape + Shape4D<uint32_t>{new_x, new_y, new_z, new_w});
     }
@@ -252,7 +251,7 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
         index -= new_z * y_x;
 
         uint32_t new_y = index / tensor_slice_shape.x;
-        uint32_t new_x = index - new_y * tensor_slice_shape.x;
+        uint32_t new_x = index - (new_y * tensor_slice_shape.x);
 
         curr_page_idx = flattened_index(tensor_shape, tensor_slice_base_offset + Shape4D<uint32_t>{new_w, new_z, new_y, new_x});
     }
@@ -304,5 +303,4 @@ inline void advance_worker_global_page_interleaved (
 static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
 static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

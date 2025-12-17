@@ -47,10 +47,8 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const InterleavedPow2AddrGen<true> s = {
-        .bank_base_address = src_addr,
-
-        .log_base_2_of_page_size = 11};
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

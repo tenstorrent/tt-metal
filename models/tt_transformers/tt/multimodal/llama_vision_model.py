@@ -13,6 +13,7 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
@@ -22,7 +23,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_visi
     TtLlamaCrossAttentionTransformerVision,
 )
 from models.tt_transformers.tt.rope import get_rot_mats
-from models.utility_functions import nearest_32
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8
@@ -739,7 +739,9 @@ class CrossAttentionTransformer(torch.nn.Module):
             cross_page_table=cross_page_table,
         )
         tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-        return tt_out
+
+        # Return logits and None for log-probs for compatibility with generator interface
+        return tt_out, None
 
 
 def _stack_images(

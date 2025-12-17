@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -12,11 +11,7 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -28,9 +23,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
@@ -41,7 +36,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
@@ -76,13 +70,13 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
@@ -90,7 +84,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
         tt_metal::CircularBufferConfig(
             num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
@@ -120,7 +114,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
         // for simplicity
 
-    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
@@ -136,7 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
         };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
             // Nt for simplicity
 
-        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
@@ -182,12 +176,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto src_dram_buffer_b = input_tensors.at(1).buffer();
+            auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+            for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {
@@ -206,8 +200,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

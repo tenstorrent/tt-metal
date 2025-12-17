@@ -6,11 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_erf_erfc.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
+#include "ckernel_sfpu_erf_erfc.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -21,7 +18,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void erf_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_erf_init<fast_and_approx>()));
+    MATH(SFPU_UNARY_KERNEL_INIT(erf, fast_and_approx));
 }
 
 // clang-format off
@@ -37,10 +34,10 @@ ALWI void erf_tile_init() {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_erf<fast_and_approx>(idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_erf_erfc, erf, RC, fast_and_approx, idst));
 }
 
 /************** ERFC *****************/
@@ -50,7 +47,7 @@ ALWI void erf_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = true>
 ALWI void erfc_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_erfc_init<fast_and_approx>()));
+    MATH(SFPU_UNARY_KERNEL_INIT(erfc, fast_and_approx));
 }
 
 // clang-format off
@@ -66,10 +63,10 @@ ALWI void erfc_tile_init() {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = true>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_erfc<fast_and_approx>(idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_erf_erfc, erfc, RC, fast_and_approx, idst));
 }
 
 }  // namespace ckernel

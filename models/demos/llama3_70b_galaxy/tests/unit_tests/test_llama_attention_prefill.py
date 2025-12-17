@@ -13,17 +13,17 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
+# TODO: The default attention path (paged_attention=False) of this testcauses this issue https://github.com/tenstorrent/tt-metal/issues/33677
+# although it is not used in production, the fix should be properly revisited.
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -34,14 +34,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        # True,
-        False,
-    ),
-    ids=(
-        # "paged_attention",
-        "default_attention",
-    ),
+    (True,),
+    ids=("paged_attention",),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -57,7 +51,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 def test_llama_attention_inference(

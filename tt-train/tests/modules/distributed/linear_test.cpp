@@ -1,25 +1,26 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "modules/distributed/linear.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
 auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
 }
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
@@ -40,7 +41,7 @@ protected:
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
 
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }
@@ -460,10 +461,6 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
-
-    auto ones_grad = ttnn::ones_like(output->get_value());
-    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-    output->set_grad(ones_grad);
     output->backward();
 
     auto row_parallel_output_xtensor =
@@ -496,10 +493,11 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[1], row_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
+    xt::xarray<float> row_parallel_input_gradients_combined = row_parallel_input_gradients[0] + row_parallel_input_gradients[1];
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], row_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
         replicate_layer_weight_gradients[0], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,14 +20,6 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_coord_reg_to_coord(uint16_
     constexpr uint32_t NOC_COORD_MASK = 0x3F;
     uint32_t x = noc_xy_bits & NOC_COORD_MASK;
     uint32_t y = (noc_xy_bits >> NOC_ADDR_NODE_ID_BITS) & NOC_COORD_MASK;
-#if defined(ARCH_WORMHOLE)
-    if constexpr (DRAM) {
-        if (noc_index == 1) {
-            x = noc_size_x - 1 - x;
-            y = noc_size_y - 1 - y;
-        }
-    }
-#endif
     return {x, y};
 }
 
@@ -127,114 +119,6 @@ FORCE_INLINE void recordNocEventWithAddr(
     static_assert(std::is_same_v<NocAddrU64, uint64_t>);
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
     recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes, vc);
-}
-
-// For Unicasts
-template <typename NocAddrU64, uint32_t STATIC_ID = 12345>
-FORCE_INLINE void recordFabricNocEvent(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
-    KernelProfilerNocEventMetadata::FabricPacketType packet_type,
-    NocAddrU64 noc_addr,
-    uint32_t routing_fields) {
-    static_assert(std::is_same_v<NocAddrU64, uint64_t>);
-    auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
-
-    // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
-    KernelProfilerNocEventMetadata ev_md;
-
-    auto& fabric_noc_event = ev_md.data.fabric_event;
-    fabric_noc_event.noc_xfer_type = noc_event_type;
-    fabric_noc_event.dst_x = decoded_x;
-    fabric_noc_event.dst_y = decoded_y;
-    fabric_noc_event.mcast_end_dst_x = -1;
-    fabric_noc_event.mcast_end_dst_y = -1;
-    fabric_noc_event.routing_fields_type = packet_type;
-
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
-
-    // following profiler event just stores the routing fields value
-    KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
-        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
-    event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
-
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
-}
-
-template <uint32_t STATIC_ID = 12345>
-FORCE_INLINE void recordFabricNocEventMulticast(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
-    KernelProfilerNocEventMetadata::FabricPacketType packet_type,
-    uint8_t noc_x_start,
-    uint8_t noc_y_start,
-    uint8_t mcast_rect_size_x,
-    uint8_t mcast_rect_size_y,
-    uint32_t routing_fields) {
-    // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
-    KernelProfilerNocEventMetadata ev_md;
-
-    auto& fabric_noc_event = ev_md.data.fabric_event;
-    fabric_noc_event.noc_xfer_type = noc_event_type;
-    fabric_noc_event.dst_x = noc_x_start;
-    fabric_noc_event.dst_y = noc_y_start;
-    fabric_noc_event.mcast_end_dst_x = noc_x_start + mcast_rect_size_x - 1;
-    fabric_noc_event.mcast_end_dst_y = noc_y_start + mcast_rect_size_y - 1;
-    fabric_noc_event.routing_fields_type = packet_type;
-
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
-
-    // following profiler event just stores the routing fields value
-    KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
-        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
-    event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
-
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
-}
-
-template <uint32_t STATIC_ID = 12345>
-FORCE_INLINE void recordFabricScatterEvent(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
-    KernelProfilerNocEventMetadata::FabricPacketType packet_type,
-    const volatile uint64_t* noc_addr_array,
-    const volatile uint16_t* chunk_sizes,
-    uint32_t num_chunks,
-    uint32_t routing_fields) {
-    // Record each address as a separate event
-    for (uint32_t i = 0; i < num_chunks; i++) {
-        auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr_array[i]);
-
-        // profiler packet stores XY address data as well as packet type tag and address index
-        KernelProfilerNocEventMetadata ev_md;
-
-        auto& fabric_scatter_event = ev_md.data.fabric_scatter_event;
-        fabric_scatter_event.noc_xfer_type = noc_event_type;
-        fabric_scatter_event.dst_x = decoded_x;
-        fabric_scatter_event.dst_y = decoded_y;
-        if (i < num_chunks - 1) {
-            fabric_scatter_event.chunk_size = chunk_sizes[i];
-        } else {
-            fabric_scatter_event.chunk_size = 0;
-        }
-        fabric_scatter_event.num_chunks = num_chunks;
-        fabric_scatter_event.routing_fields_type = packet_type;
-
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
-    }
-
-    // Store routing fields only once after all addresses
-    KernelProfilerNocEventMetadata event_routing_fields;
-    event_routing_fields.data.fabric_routing_fields.noc_xfer_type =
-        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS;
-    event_routing_fields.data.fabric_routing_fields.routing_fields_value = routing_fields;
-
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 }  // namespace noc_event_profiler
 

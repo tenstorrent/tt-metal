@@ -21,9 +21,25 @@ def register_ttnn_cpp_unary_function(unary_function):
             result += 3.434189657547
             return result
 
+        def torch_hardmish(x):
+            x_f32 = x.to(torch.float32)
+            result_f32 = x_f32 * torch.clamp(x_f32 + 2.8, min=0.0, max=5.0) / 5
+
+            if x.dtype == torch.bfloat16:
+                # Simulate SFPSTORE truncating
+                result_int32 = result_f32.view(torch.int32)
+                shifted_int32 = torch.bitwise_right_shift(result_int32, 16)
+                truncated_int16 = shifted_int32.to(torch.int16)
+                final_result = truncated_int16.view(torch.bfloat16)
+            else:
+                final_result = result_f32
+
+            return final_result
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
+            "bitcast": lambda x, dtype, **_: x.view(dtype),
             "cos": torch.cos,
             "erfinv": torch.erfinv,
             "exp2": torch.exp2,
@@ -80,11 +96,12 @@ def register_ttnn_cpp_unary_function(unary_function):
             "lgamma": torch.lgamma,
             "log1p": torch.log1p,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
+            "hardmish": lambda _x: torch_hardmish(_x),
             "multigammaln": torch_multigammaln,
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
             "softsign": torch.nn.functional.softsign,
-            "swish": torch.nn.functional.hardswish,
+            "swish": torch.nn.functional.silu,
             "tril": torch.tril,
             "triu": torch.triu,
         }
@@ -105,6 +122,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.abs,
     ttnn.atan,
+    ttnn.bitcast,
     ttnn.cos,
     ttnn.erfinv,
     ttnn.exp2,
@@ -162,6 +180,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.lgamma,
     ttnn.log1p,
     ttnn.mish,
+    ttnn.hardmish,
     ttnn.multigammaln,
     ttnn.rad2deg,
     ttnn.sinh,
@@ -177,8 +196,12 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.asin(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.asin(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.asin
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
@@ -188,8 +211,12 @@ ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
 def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acos(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.acos(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.acos
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
@@ -530,15 +557,10 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, *args, eps=None, device, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.special.logit(input_tensor_a, eps=eps),
-        nan=device.sfpu_nan(),
-        posinf=device.sfpu_inf(),
-        neginf=-device.sfpu_inf(),
-    )
+    return torch.special.logit(input_tensor_a, eps=eps)
 
 
 ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)

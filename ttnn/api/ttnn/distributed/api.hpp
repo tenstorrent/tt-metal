@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed {
@@ -40,10 +39,14 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor);
 
 // Given a list of host shards, returns a multi-device tensor.
 // Tensor specs (including shapes) must match for all shards, and the number of shards must match the mesh size.
-Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape);
+// `shard_dim` is the dimension that was sharded over, which is used to create the tensor topology (assumes sharded
+// along dim 0 if not provided).
+Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim = 0);
 
 // Combines tensor shards allocated on individual devices into a single multi-device tensor.
 // All tensors shards must be allocated on the same mesh buffer.
-Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards);
+// `shard_dim` is the dimension that was sharded over, which is used to create the tensor topology (assumes sharded
+// along dim 0 if not provided).
+Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim = 0);
 
 }  // namespace ttnn::distributed

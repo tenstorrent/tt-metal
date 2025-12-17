@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include <variant>
 #include <vector>
 #include <cstdint>
-#include <optional>
 
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/core.hpp>
@@ -15,7 +14,6 @@
 #include <ttnn/decorators.hpp>
 #include <ttnn/device_operation.hpp>
 #include <ttnn/distributed/types.hpp>
-#include <ttnn/common/queue_id.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -26,13 +24,10 @@ struct ApplyDeviceDelayDeviceOperation {
     struct operation_attributes_t {
         const std::vector<std::vector<uint32_t>> delays;
         const CoreRangeSet worker_core_range_set;
-        const ttnn::MeshDevice* mesh_device;
+        ttnn::MeshDevice* mesh_device;
     };
 
-    // We need a dummy tensor args that can provide mesh device info
-    struct tensor_args_t {
-        ttnn::Tensor input_tensor;
-    };
+    struct tensor_args_t {};
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
     using tensor_return_value_t = std::vector<ttnn::Tensor>;

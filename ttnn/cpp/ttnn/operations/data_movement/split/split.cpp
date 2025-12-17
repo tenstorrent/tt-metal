@@ -2,16 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/split/device/split_op.hpp"
+#include "ttnn/operations/data_movement/split/device/split_device_operation.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -21,12 +18,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto& input_shape = input_tensor.padded_shape();
-    auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return tt::tt_metal::operation::run_with_autoformat(
-        SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
+    return ttnn::prim::split(input_tensor, 2, 3, mem_config);
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
@@ -54,7 +46,6 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
 }
 
 std::vector<ttnn::Tensor> split_with_slice_impl(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& split_sizes,
     const int32_t dim,
@@ -77,7 +68,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     ends[dim] = 0;
     for (const auto& s : split_sizes) {
         ends[dim] = std::min(static_cast<uint32_t>(ends[dim] + s), input_shape[dim]);
-        results.emplace_back(ttnn::slice(queue_id, input_tensor, sbegins, sends, ssteps, memory_config));
+        results.emplace_back(ttnn::slice(input_tensor, sbegins, sends, ssteps, memory_config));
         begins[dim] += s;
     }
 
@@ -86,7 +77,6 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 }  // namespace detail
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& split_sizes,
     const int64_t dim = 0,
@@ -114,7 +104,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         } else if (input_shape.rank() < detail::RANK_FOUR) {
             input_tensor_4d = core::unsqueeze_to_4D(input_tensor);
         } else {
-            input_tensor_4d = std::move(input_tensor);
+            input_tensor_4d = input_tensor;
         }
         const auto outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
         std::vector<ttnn::Tensor> outputs;
@@ -127,20 +117,11 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         return outputs;
 
     } else {
-        return detail::split_with_slice_impl(queue_id, input_tensor, split_sizes, dim, memory_config);
+        return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
     }
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& split_sizes,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_sizes, dim, memory_config_arg);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t split_size,
     const int64_t dim = 0,
@@ -151,15 +132,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
-    return SplitOperation::invoke(queue_id, input_tensor, split_sizes, dim, memory_config);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int64_t split_size,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_size, dim, memory_config_arg);
+    return SplitOperation::invoke(input_tensor, split_sizes, dim, memory_config);
 }
 
 }  // namespace ttnn::operations::data_movement

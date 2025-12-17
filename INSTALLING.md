@@ -23,6 +23,28 @@ curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/
 chmod +x install.sh
 ./install.sh --no-install-podman --no-install-metalium-container
 ```
+
+> [!WARNING]
+> TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
+> | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
+> |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+
+- If required, add the following flags for specifying dependencies versions:
+
+> [!NOTE]
+> The following dependencies versions are examples. Install the versions above depending on your device.
+
+```
+./install.sh \
+  --smi-version=v3.0.38 \
+  --fw-version=19.2.0 \
+  --kmd-version=2.5.0 \
+  --no-install-podman \
+  --no-install-metalium-container
+```
+
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
 
 #### Option 2: Manual Installation
@@ -164,8 +186,7 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 - First, set the following environment variables:
 
   ```
-  export TT_METAL_HOME=</path/to/your/tt-metal>
-  export PYTHONPATH="${TT_METAL_HOME}" # Same path
+  export PYTHONPATH=</path/to/your/tt-metal>
   ```
 
 - Then, try running a programming example:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 
 namespace ttml::modules {
 
-class GPTMLP : public autograd::ModuleBase {
+class GPTMLP : public modules::ModuleBase {
     std::shared_ptr<LinearLayer> fc1;
     std::shared_ptr<LinearLayer> fc2;
     std::shared_ptr<DropoutLayer> dropout;
@@ -25,7 +25,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
-class GPTBlock : public autograd::ModuleBase {
+class GPTBlock : public modules::ModuleBase {
     std::shared_ptr<GPTMLP> mlp;
     std::shared_ptr<LayerNormLayer> ln1;
     std::shared_ptr<LayerNormLayer> ln2;

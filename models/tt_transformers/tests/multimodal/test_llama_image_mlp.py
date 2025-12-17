@@ -4,19 +4,18 @@
 
 import os
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
+from transformers.models.mllama.modeling_mllama import MllamaVisionMLP
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
-from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
@@ -49,14 +48,22 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dim = model_args.vision_dim
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
     mlp_ratio = model_args.vision_mlp_ratio
-    act_layer = torch.nn.GELU
-    dropout = 0.0
-    reference_model = llama_reference_mod.ImageFeedForward(
-        dim=dim,
-        hidden_dim=int(mlp_ratio * dim),
-        dropout=dropout,
-        act_layer=act_layer,
-    )
+
+    # for HF subclass MllamaVisionMLP the corresponding weights need to be renamed to the following to be loaded correctly.
+    hf_name = ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"]
+    meta_name = ["c_fc.weight", "c_fc.bias", "c_proj.weight", "c_proj.bias"]
+    for hf, meta in zip(hf_name, meta_name):
+        partial_state_dict[hf] = partial_state_dict[meta]
+        partial_state_dict.pop(meta)
+
+    # HF expects the parameters in the following form
+    class Config:
+        def __init__(self, hidden_size=dim, intermediate_size=int(mlp_ratio * dim), hidden_act="gelu"):
+            self.hidden_size = hidden_size
+            self.intermediate_size = intermediate_size
+            self.hidden_act = hidden_act
+
+    reference_model = MllamaVisionMLP(Config())
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)

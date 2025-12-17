@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,13 +8,14 @@
 #include <optional>
 #include <tuple>
 #include <vector>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -25,10 +26,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "common_test_utils.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace conv::conv2d {
-namespace test {
+namespace ttnn::operations::conv::conv2d::test {
 
 struct Conv2DParam {
     uint32_t input_channels;
@@ -86,8 +84,8 @@ std::vector<float> reference_implementation_conv2d(
     uint32_t stride_width = stride[1];
 
     // Calculate output height and width
-    uint32_t Xh = (input_height - kernel_height + 2 * padding_height) / stride_height + 1;
-    uint32_t Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
+    uint32_t Xh = ((input_height - kernel_height + 2 * padding_height) / stride_height) + 1;
+    uint32_t Xw = ((input_width - kernel_width + 2 * padding_width) / stride_width) + 1;
 
     std::vector<float> output = std::vector<float>(batch_size * output_channels * Xh * Xw);
     uint32_t i = 0;
@@ -103,12 +101,12 @@ std::vector<float> reference_implementation_conv2d(
                                 if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
                                     w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
                                     sum += input
-                                               [n * input_channels * input_height * input_width +
-                                                ci * input_height * input_width +
-                                                (h + kh - padding_height) * input_width + w + kw - padding_width] *
+                                               [(n * input_channels * input_height * input_width) +
+                                                (ci * input_height * input_width) +
+                                                ((h + kh - padding_height) * input_width) + w + kw - padding_width] *
                                            kernel
-                                               [co * input_channels * kernel_height * kernel_width +
-                                                ci * kernel_height * kernel_width + kh * kernel_width + kw];
+                                               [(co * input_channels * kernel_height * kernel_width) +
+                                                (ci * kernel_height * kernel_width) + (kh * kernel_width) + kw];
                                 }
                             }
                         }
@@ -159,29 +157,29 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
-            DefaultQueueId,
-            input_tensor,
-            weight_tensor,
-            device.get(),
-            param.input_channels,
-            param.output_channels,
-            param.batch_size,
-            param.input_height,
-            param.input_width,
-            param.kernel_size,
-            param.stride,
-            param.padding,
-            std::array<uint32_t, 2>{1, 1},  // dilation
-            1,                              // groups
-            std::nullopt,                   // dtype
-            std::nullopt,                   // bias tensor
-            std::nullopt,                   // conv config
-            std::nullopt,                   // compute config
-            std::nullopt,                   // memory config
-            std::nullopt,                   // slice config
-            true                            // return_output_dim
-            ));
+        auto [output_tensor, output_dimensions] =
+            std::get<static_cast<int>(ttnn::operations::conv::ResultType::OUTPUT_DIM)>(ttnn::conv2d(
+                input_tensor,
+                weight_tensor,
+                device.get(),
+                param.input_channels,
+                param.output_channels,
+                param.batch_size,
+                param.input_height,
+                param.input_width,
+                param.kernel_size,
+                param.stride,
+                param.padding,
+                std::array<uint32_t, 2>{1, 1},  // dilation
+                1,                              // groups
+                std::nullopt,                   // dtype
+                std::nullopt,                   // bias tensor
+                std::nullopt,                   // conv config
+                std::nullopt,                   // compute config
+                std::nullopt,                   // memory config
+                std::nullopt,                   // slice config
+                true                            // return_output_dim
+                ));
 
         // move output tensor to dram
         output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
@@ -258,7 +256,4 @@ INSTANTIATE_TEST_SUITE_P(
             .padding = {1, 1},
         }));
 
-}  // namespace test
-}  // namespace conv::conv2d
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv2d::test

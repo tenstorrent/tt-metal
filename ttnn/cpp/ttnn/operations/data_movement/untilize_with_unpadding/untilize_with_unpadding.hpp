@@ -11,12 +11,12 @@ namespace operations::data_movement {
 
 struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
-        bool use_pack_untilize = true);
+        bool use_pack_untilize = true,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::data_movement

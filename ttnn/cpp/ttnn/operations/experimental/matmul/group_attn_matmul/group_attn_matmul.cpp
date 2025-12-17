@@ -3,16 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/group_attn_matmul_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "group_attn_matmul.hpp"
-
+#include "ttnn/device.hpp"
 #include <utility>
 
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -33,9 +31,8 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         }
     }
 
-    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
-                    ? input_tensor_a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch()
+                                                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
 
     // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize
@@ -57,40 +54,18 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         },
         kernel_config_val);
 
-    return tt::tt_metal::operation::run(
-               GroupAttnMatmulDeviceOperation{
-                   std::nullopt,
-                   std::nullopt,
-                   out_subblock_w,
-                   compute_with_storage_grid_size,
-                   mem_config,
-                   output_dtype.value_or(input_tensor_a.dtype()),
-                   row_major,
-                   kernel_config_val},
-               {input_tensor_a, input_tensor_b},
-               {},
-               {std::move(optional_output_tensor)},
-               queue_id)
-        .at(0);
-}
-
-ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const CoreCoord& compute_with_storage_grid_size,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> output_dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
+    return ttnn::prim::group_attn_matmul(
         input_tensor_a,
         input_tensor_b,
         compute_with_storage_grid_size,
-        memory_config,
+        mem_config,
         output_dtype,
-        compute_kernel_config,
+        std::make_optional(kernel_config_val),
+        std::nullopt,  // num_tokens
+        std::nullopt,  // transpose_hw
+        out_subblock_w,
+        row_major,
         std::move(optional_output_tensor));
 }
 
-};  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul

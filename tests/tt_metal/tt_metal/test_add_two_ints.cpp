@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -37,7 +37,7 @@ using namespace tt;
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

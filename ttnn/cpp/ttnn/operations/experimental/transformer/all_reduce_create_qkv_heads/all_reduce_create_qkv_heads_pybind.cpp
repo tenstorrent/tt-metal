@@ -1,18 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_pybind.hpp"
+#include "all_reduce_create_qkv_heads.hpp"
+
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/types.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
-#include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/global_semaphore.hpp"
-
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
 
@@ -95,7 +92,6 @@ void py_bind_all_reduce_create_qkv_heads(pybind11::module& module) {
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on
             mesh_device (MeshDevice): Device mesh to perform the operation on
             multi_device_global_semaphore (MultiDeviceGlobalSemaphore): Semaphore for multi-device synchronization
-            queue_id (QueueId): Queue identifier for the operation
             num_heads (int): Number of attention heads
 
         Keyword Args:

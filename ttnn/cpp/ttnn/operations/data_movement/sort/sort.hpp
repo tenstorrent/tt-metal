@@ -12,7 +12,6 @@ namespace ttnn::operations::data_movement {
 
 struct ExecuteSort {
     static std::vector<Tensor> invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         int8_t dim,
         bool descending,

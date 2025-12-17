@@ -1,19 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_rm.hpp"
-#include "device/fill_rm_op.hpp"
+#include "device/fill_rm_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
-
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillRMOperation::invoke(
-    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -24,14 +20,11 @@ ttnn::Tensor FillRMOperation::invoke(
     float val_hi,
     float val_lo,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {}, queue_id)
-        .at(0);
+    const auto output_memory_config = memory_config.value_or(any.memory_config());
+    return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, val_hi, val_lo, output_memory_config);
 }
 
 ttnn::Tensor FillOnesRMOperation::invoke(
-    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -40,10 +33,8 @@ ttnn::Tensor FillOnesRMOperation::invoke(
     uint32_t wFill,
     const ttnn::Tensor& any,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {}, queue_id)
-        .at(0);
+    const auto output_memory_config = memory_config.value_or(any.memory_config());
+    return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, 1.0f, 0.0f, output_memory_config);
 }
 
 }  // namespace ttnn::operations::data_movement

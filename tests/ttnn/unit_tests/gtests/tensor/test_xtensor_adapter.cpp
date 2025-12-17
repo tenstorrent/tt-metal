@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ namespace ttnn {
 namespace {
 
 using ::testing::ElementsAre;
-using ::ttnn::experimental::xtensor::XtensorAdapter;
+using ::tt::tt_metal::experimental::xtensor::XtensorAdapter;
 
 TEST(XtensorAdapterTest, BasicConstruction) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
@@ -40,7 +40,7 @@ TEST(XtensorAdapterTest, CopyConstructor) {
     XtensorAdapter<int> adapter2(adapter1);
 
     EXPECT_EQ(adapter1.data().size(), adapter2.data().size());
-    EXPECT_NE(&adapter1.data()[0], &adapter2.data()[0]);
+    EXPECT_NE(adapter1.data().data(), adapter2.data().data());
 
     adapter2.data()[0] = 10;
     EXPECT_EQ(adapter2.expr()(0, 0), 10);

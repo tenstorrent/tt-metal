@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -236,5 +236,63 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         }
 
         EXPECT_NEAR(expected_value, resulting_vector[i], eps);
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
+    // xarray of shape {1, 1, 32, 32} with max along the diagonal
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 32};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    // Set diagonal max: for each row i, set a(0,0,i,i) = 1000.0f
+    for (size_t i = 0; i < 32; ++i) {
+        a(0, 0, i, i) = 1000.0f;
+    }
+    std::vector<uint32_t> expected_b(32);
+    for (size_t i = 0; i < 32; ++i) {
+        expected_b[i] = i;
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, 0.0F, 42);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    EXPECT_EQ(vector_b, expected_b);
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
+    // Test sampling with positive temperature, no mask, and xarray of shape {1, 1, 32, 64}
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 64};
+    xt::xarray<float> a = xt::random::rand<float>(shape);
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    float temperature = 1.0F;
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    // The output should have shape {1, 1, 32} (one sample per row)
+    EXPECT_EQ(vector_b.size(), 32);
+    // All values should be in the range [0, 63] (since last dim is 64)
+    for (auto v : vector_b) {
+        EXPECT_GE(v, 0);
+        EXPECT_LT(v, 64);
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
+    // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
+    xt::xarray<float> a = xt::random::rand<float>(shape);
+    // Create a mask: mask out the last column (set to large negative value)
+    xt::xarray<float> mask = xt::zeros<float>(shape);
+    for (size_t i = 0; i < 32; ++i) {
+        mask(0, 0, i, 64) = 1e4F;
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto tensor_mask = ttml::core::from_xtensor(mask, &ttml::autograd::ctx().get_device());
+    float temperature = 1.0F;
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42, tensor_mask);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    // The output should have shape {1, 1, 32} (one sample per row)
+    EXPECT_EQ(vector_b.size(), 32);
+    // All values should be in the range [0, 63] (since last dim is 65, but last index is masked)
+    for (auto v : vector_b) {
+        EXPECT_GE(v, 0);
+        EXPECT_LT(v, 64);
     }
 }

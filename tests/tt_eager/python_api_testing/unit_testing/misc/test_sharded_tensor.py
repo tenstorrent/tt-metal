@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import get_debug_tensor
+from models.common.utility_functions import get_debug_tensor
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 from enum import Enum
 

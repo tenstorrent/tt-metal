@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,11 @@
 
 #include <bit>
 #include <cstdint>
-
-#include "metal/ops/common/program_utils.hpp"
-#include "rmsnorm_fw_device_operation_types.hpp"
-
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "metal/common/program_utils.hpp"
+#include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace {
 
@@ -90,7 +90,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -135,8 +135,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -293,14 +293,19 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     RMSNormForwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */ {packed_scaler, packed_eps, mask_w, Wt, block_size},
-        defines,
-        kReaderKernelPath);
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {Wt, block_size}, defines, kWriterKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler, packed_eps, mask_w, Wt, block_size};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+
+    std::vector<uint32_t> writer_compile_time_args{Wt, block_size};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    if (args.return_intermediates) {
+        tt::tt_metal::TensorAccessorArgs(rms_output_buffer).append_to(writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+    }
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for rmsnorm_fw
@@ -395,7 +400,7 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
         core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, rmsnorm_fw_group_2_kernel);
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

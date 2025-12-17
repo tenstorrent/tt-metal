@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,9 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -20,7 +18,6 @@
 namespace ttnn::distributed::test {
 namespace {
 
-using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::HasSubstr;
@@ -38,7 +35,7 @@ TEST(MeshTensorHostTest, ToHostAlreadyOnHost) {
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
     EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
 
-    EXPECT_ANY_THROW(tensor_impl::to_host_wrapper(input_host_tensor));
+    EXPECT_ANY_THROW(tensor_impl::to_host(input_host_tensor));
 }
 
 TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
@@ -52,7 +49,7 @@ TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
                     std::vector<float>(10),
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
-            from_host_shards(shards, MeshShape(2));
+            from_host_shards(shards, MeshShape(1, 2));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must have the same tensor spec")));
 }
@@ -70,7 +67,7 @@ TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
                     mesh_device_.get()),
             };
-            from_host_shards(shards, MeshShape(2));
+            from_host_shards(shards, MeshShape(1, 2));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must be on host")));
 }
@@ -86,7 +83,7 @@ TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
                     std::vector<float>(10),
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
-            from_host_shards(shards, MeshShape(3));
+            from_host_shards(shards, MeshShape(1, 3));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Number of tensor shards must match mesh size")));
 }
@@ -107,10 +104,11 @@ TEST(MeshTensorHostTest, FromHostShards) {
                 host_data2,
                 TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
         },
-        MeshShape(2));
+        MeshShape(1, 2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
     EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
+    EXPECT_EQ(tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2)));
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -127,7 +125,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
     EXPECT_TRUE(input_tensor.is_allocated());
 
     const auto& storage = input_tensor.storage();
-    auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
+    const auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
 
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -138,7 +136,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     for (auto* device : view.get_devices()) {
         auto coordinate = view.find_device(device->id());
-        auto buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
+        auto* buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
         EXPECT_TRUE(buffer->is_allocated());
@@ -161,11 +159,11 @@ TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
     EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
-    Tensor device_tensor_default = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor_default = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
     EXPECT_EQ(device_tensor_default.tensor_spec().memory_config().buffer_type(), BufferType::L1);
 
     Tensor device_tensor_dram =
-        tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
+        tensor_impl::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{BufferType::DRAM});
     EXPECT_EQ(device_tensor_dram.tensor_spec().memory_config().buffer_type(), BufferType::DRAM);
 }
 
@@ -183,8 +181,11 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     EXPECT_EQ(input_host_tensor.tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.
-    Tensor device_tensor = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
+    Tensor device_tensor = tensor_impl::to_device(input_host_tensor, mesh_device_.get(), MemoryConfig{});
     EXPECT_EQ(device_tensor.tensor_spec().logical_shape(), shape);
+    EXPECT_EQ(
+        device_tensor.tensor_topology(),
+        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape()));
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
@@ -192,7 +193,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     EXPECT_THAT(device_storage->coords, SizeIs(mesh_device_->num_devices()));
 
     // Read the tensor back, and compare it with input data.
-    Tensor output_host_tensor = tensor_impl::to_host_wrapper(device_tensor);
+    Tensor output_host_tensor = tensor_impl::to_host(device_tensor);
     EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
@@ -212,7 +213,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -223,7 +224,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     std::vector<distributed::MeshCoordinate> device_shard_coords;
     EXPECT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor_shard : device_tensors) {
-        auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
+        const auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
         ASSERT_NE(shard_storage, nullptr);
         EXPECT_NE(shard_storage->mesh_buffer, nullptr);
         EXPECT_THAT(shard_storage->coords, SizeIs(1));
@@ -249,8 +250,8 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
 
-    Tensor device_tensor1 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
-    Tensor device_tensor2 = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor1 = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
+    Tensor device_tensor2 = tensor_impl::to_device(input_host_tensor, mesh_device_.get());
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -275,12 +276,18 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
 
     // Aggregate every second shard into a new mesh tensor.
+    int shard_dim = 2;
     auto partial_tensor = combine_device_tensors(
-        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]});
+        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]}, shard_dim);
 
     auto* partial_device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&partial_tensor.storage());
     ASSERT_NE(partial_device_storage, nullptr);
     EXPECT_NE(partial_device_storage->mesh_buffer, nullptr);
+
+    EXPECT_EQ(partial_tensor.tensor_topology().distribution_shape(), MeshShape(4));
+    EXPECT_EQ(
+        std::get<distributed::MeshMapperConfig::Shard>(partial_tensor.tensor_topology().placements()[0]).dim,
+        shard_dim);
 
     // Validate the shards are sorted, and are as expected.
     ASSERT_THAT(partial_device_storage->coords, SizeIs(4));
@@ -326,7 +333,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
-    EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
@@ -337,11 +343,11 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
             return device_tensor;
         } else {
-            return tensor_impl::to_device_wrapper(input_host_tensor_sharded, mesh_device_.get());
+            return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
         }
     }();
 
-    EXPECT_EQ(device_tensor.distributed_tensor_config(), mapper->config());
+    EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
@@ -353,10 +359,11 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             write_tensor(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
         } else {
-            return tensor_impl::to_host_wrapper(device_tensor);
+            return tensor_impl::to_host(device_tensor);
         }
     }();
-    EXPECT_EQ(output_host_tensor.distributed_tensor_config(), mapper->config());
+
+    EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
     ASSERT_EQ(output_host_shards.size(), input_host_shards.size());

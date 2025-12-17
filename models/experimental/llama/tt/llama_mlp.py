@@ -6,7 +6,7 @@ from torch import nn
 import ttnn
 
 from models.experimental.llama.llama_utils import linear
-from models.utility_functions import torch_to_tt_tensor_rm
+from models.common.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtLlamaMLP(nn.Module):

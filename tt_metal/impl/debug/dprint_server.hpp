@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <llrt/rtoptions.hpp>
 #include <memory>
 
@@ -36,10 +36,7 @@ public:
     // Clears the log file of a currently-running print server.
     void clear_log_file();
 
-    // Clears any raised signals (so they can be used again in a later run).
-    void clear_signals();
-
-    bool reads_dispatch_cores(chip_id_t device_id);
+    bool reads_dispatch_cores(ChipId device_id);
 
     // Check whether a print hand has been detected by the server.
     // The print server tries to determine if a core is stalled due to the combination of (1) a WAIT

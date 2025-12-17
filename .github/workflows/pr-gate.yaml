@@ -23,7 +23,7 @@ on:
     inputs:
       build-type:
         required: false
-        default: ASan
+        default: ASanCoverage
         type: choice
         options:
           - Release
@@ -31,6 +31,7 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+          - ASanCoverage
   pull_request:
     types:
       - opened
@@ -76,14 +77,17 @@ jobs:
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      build-type: ${{ inputs.build-type || 'ASan' }}
+      build-type: ${{ inputs.build-type || 'ASanCoverage' }}
       publish-artifact: false
       skip-tt-train: true
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
@@ -91,7 +95,7 @@ jobs:
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -108,11 +112,13 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      upload-coverage: false
 
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -130,11 +136,13 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
+      upload-coverage: false
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -149,9 +157,78 @@ jobs:
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+      build-wheel: true
       publish-artifact: false
       skip-tt-train: true
       distributed: false
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+
+  build-tt-train:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [ build, find-changed-files ]
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+      - name: Install packages
+        run: |
+          set -euo pipefail
+
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v5
+        with:
+          # submodules: recursive
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+          fetch-depth: 500
+          fetch-tags: true # Need tags for `git describe`
+          path: docker-job
+          sparse-checkout: |
+            tt-train
+
+      - name: Submodules
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive tt-train
+
+      - name: Configure tt-train
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train
+          mkdir -p .build && cd .build
+          cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
+
+      - name: Build tt-train
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train/.build
+          cmake --build .
+
+  build-docs:
+    if: ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
+            needs.find-changed-files.outputs.docs-changed == 'true'
+        }}
+    needs: [find-changed-files, build]
+    uses: ./.github/workflows/docs-latest-public.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
     needs: [ build, find-changed-files ]
@@ -172,6 +249,40 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+
+  ttnn-examples:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/sdk-examples.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
+
+  ttsim-integration-tests:
+    needs: [ build ]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    with:
+      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      run-ttsim-integration-tests: true
+      run-metal-cpp-unit-tests: false
 
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
@@ -200,7 +311,6 @@ jobs:
         # Run script that compares the models chart in README.md with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
-
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.
   # A proper scan is run in Merge Gate to ensure only clean code lands.
@@ -217,7 +327,7 @@ jobs:
       run: sudo chown -R $(whoami) /github/home # Thanks GH...
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
         fetch-depth: 0
         submodules: "recursive"
     - name: Set safe directory for Git
@@ -232,6 +342,13 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
         pip install pyyaml # Needed for clang-tidy-diff-20.py
+    - name: Prepare .clang-tidy with extra checks
+      run: |
+        if [ -f .clang-tidy-light ]; then
+          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
+          mv .clang-tidy-new .clang-tidy
+        fi
+        cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
@@ -242,7 +359,7 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
-      timeout-minutes: 60 # Big PRs will have a LOT to scan, but most should be well under this.
+      timeout-minutes: 90 # Big PRs will have a LOT to scan, but this should be enough for everyone.
       shell: bash
       run: |
         set -euo pipefail
@@ -293,13 +410,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light, model-charts-sync]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, model-charts-sync"
+          required-jobs: "asan-build, build, build-tt-train"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

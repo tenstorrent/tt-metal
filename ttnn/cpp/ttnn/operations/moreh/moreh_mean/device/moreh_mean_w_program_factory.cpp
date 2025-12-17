@@ -27,7 +27,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
     const auto& shape = input.padded_shape();
 
-    auto device = input.device();
+    auto* device = input.device();
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -110,7 +110,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto reduce_dim = ReduceOpDim::W;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         units_per_core_group_1,  // Ht

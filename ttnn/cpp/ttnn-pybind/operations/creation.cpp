@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/types.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::creation {
@@ -32,10 +31,8 @@ auto create_pybind_full_overload() {
            const std::optional<Layout>& layout,
            const std::optional<std::reference_wrapper<MeshDevice>> device,
            const std::optional<MemoryConfig>& memory_config,
-           std::optional<ttnn::Tensor>& optional_output_tensor,
-           QueueId queue_id) -> ttnn::Tensor {
-            return self(
-                queue_id, ttnn::Shape(shape), fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+           std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+            return self(ttnn::Shape(shape), fill_value, dtype, layout, device, memory_config, optional_output_tensor);
         },
         py::arg("shape"),
         py::arg("fill_value"),
@@ -43,8 +40,7 @@ auto create_pybind_full_overload() {
         py::arg("layout") = std::nullopt,
         py::arg("device") = std::nullopt,
         py::arg("memory_config") = std::nullopt,
-        py::arg("optional_tensor") = std::nullopt,
-        py::arg("queue_id") = ttnn::DefaultQueueId};
+        py::arg("optional_tensor") = std::nullopt};
 }
 
 template <typename creation_operation_t, typename fill_value_t>
@@ -57,9 +53,8 @@ auto create_pybind_full_like_overload() {
            const std::optional<Layout>& layout,
            const std::optional<std::reference_wrapper<MeshDevice>> device,
            const std::optional<MemoryConfig>& memory_config,
-           std::optional<ttnn::Tensor>& optional_output_tensor,
-           QueueId queue_id) -> ttnn::Tensor {
-            return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+           std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+            return self(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
         },
         py::arg("tensor"),
         py::arg("fill_value"),
@@ -67,8 +62,7 @@ auto create_pybind_full_like_overload() {
         py::arg("layout") = std::nullopt,
         py::arg("device") = std::nullopt,
         py::arg("memory_config") = std::nullopt,
-        py::arg("optional_tensor") = std::nullopt,
-        py::arg("queue_id") = ttnn::DefaultQueueId};
+        py::arg("optional_tensor") = std::nullopt};
 }
 
 template <typename creation_operation_t>
@@ -144,7 +138,6 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Note:
             ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
@@ -152,12 +145,6 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 
         Returns:
             ttnn.Tensor: A filled tensor of specified shape and value.
-
-        Example:
-            >>> filled_tensor = ttnn.full(shape=[2, 2], fill_value=7.0, dtype=ttnn.bfloat16)
-            >>> print(filled_tensor)
-            ttnn.Tensor([[[[7.0,  7.0],
-                            [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -195,14 +182,6 @@ void bind_full_operation_with_hard_coded_value(
 
         Note:
             {2}
-
-        Example:
-            >>> tensor = ttnn.{0}(shape=[1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            >>> print(tensor)
-            ttnn.Tensor([[[[{1}, {1}],
-                            [{1}, {1}]],
-                            [[{1}, {1}],
-                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name(),
         value_string,
@@ -242,17 +221,9 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: A filled tensor.
-
-        Example:
-            >>> tensor = ttnn.zeros(shape=(2, 3), dtype=ttnn.bfloat16)
-            >>> filled_tensor = ttnn.full_like(tensor, fill_value=5.0, dtype=ttnn.bfloat16)
-            >>> print(filled_tensor)
-            ttnn.Tensor([[[[5.0,  5.0,  5.0],
-                            [5.0,  5.0,  5.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -281,22 +252,12 @@ void bind_full_like_operation_with_hard_coded_value(
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: A tensor filled with {1}.
 
         Note:
             {2}
-
-        Example:
-            >>> tensor = ttnn.{0}(ttnn.from_torch(torch.randn(1, 2, 2, 2), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            >>> output_tensor = ttnn.{0}(tensor=input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            >>> print(output_tensor)
-            ttnn.Tensor([[[[{1}, {1}],
-                            [{1}, {1}]],
-                            [[{1}, {1}],
-                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)
         )doc",
         operation.base_name(),
         value_string,
@@ -313,17 +274,15 @@ void bind_full_like_operation_with_hard_coded_value(
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<MeshDevice>> device,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
+               std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+                return self(tensor, dtype, layout, device, memory_config, optional_output_tensor);
             },
             py::arg("tensor"),
             py::arg("dtype") = std::nullopt,
             py::arg("layout") = std::nullopt,
             py::arg("device") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("optional_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("optional_tensor") = std::nullopt});
 }
 
 template <typename creation_operation_t>
@@ -343,11 +302,6 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
 
         Returns:
             ttnn.Tensor: A tensor containing evenly spaced values within the specified range.
-
-        Example:
-            >>> tensor = ttnn.arange(start=0, end=10, step=2, dtype=ttnn.float32)
-            >>> print(tensor)
-            ttnn.Tensor([ 0.00000,  2.00000,  ...,  6.00000,  8.00000], shape=Shape([5]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -407,11 +361,6 @@ void bind_empty_operation(py::module& module, const creation_operation_t& operat
 
         Note:
             {1}
-
-        Example:
-            >>> tensor = ttnn.empty(shape=[2, 3], device=device)
-            >>> print(tensor)
-            ttnn.Tensor([[[[0.9, 0.21, 0.5], [0.67, 0.11, 0.30]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
         )doc",
         operation.base_name(),
         info_doc);
@@ -452,11 +401,6 @@ void bind_from_buffer_operation(py::module& module, const creation_operation_t& 
 
         Returns:
             ttnn.Tensor: A tensor with the values from the buffer.
-
-        Example:
-            >>> tensor = ttnn.{0}(buffer=[1, 2, 3, 4, 5, 6], shape=[2, 3], dtype=ttnn.int32, device=device)
-            >>> print(tensor)
-            ttnn.Tensor([[1, 2, 3], [4, 5, 6]], shape=Shape([2, 3]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -480,12 +424,6 @@ void bind_empty_like_operation(py::module& module, const creation_operation_t& o
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor with the same shape as the reference tensor.
-
-        Example:
-            >>> reference = ttnn.from_torch(torch.randn(2, 3), dtype=ttnn.bfloat16)
-            >>> tensor = ttnn.empty_like(reference, dtype=ttnn.float32)
-            >>> print(tensor)
-            ttnn.Tensor([[[[0.87, 0.45, 0.22], [0.60, 0.75, 0.25]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 

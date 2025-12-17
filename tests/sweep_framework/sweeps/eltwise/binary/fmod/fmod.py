@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.common.utility_functions import torch_random, is_wormhole_b0
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -88,7 +88,7 @@ def run(
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.fmod)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

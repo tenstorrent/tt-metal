@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
@@ -14,8 +14,25 @@
 
 namespace tt::tt_metal {
 
+constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CHOICES = {
+    {// TODO: add other tile shapes once llk supported it
+     {{{32, 32}, {16, 16}}},
+     {{{16, 32}, {16, 16}}},
+     {{{32, 16}, {16, 16}}},
+     {{{16, 16}, {16, 16}}},
+     // these shapes are not supported yet on llk, just for host loopback
+     {{{8, 32}, {8, 16}}},
+     {{{4, 32}, {4, 16}}},
+     {{{2, 32}, {2, 16}}},
+     {{{1, 32}, {1, 16}}},
+     // these shapes are not supported yet on llk, just for host loopback
+     {{{8, 16}, {8, 16}}},
+     {{{4, 16}, {4, 16}}},
+     {{{2, 16}, {2, 16}}},
+     {{{1, 16}, {1, 16}}}}};
+
 Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape(tile_shape) {
-    auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
+    const auto* it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
         if (pair[0] == this->tile_shape) {
             this->face_shape = pair[1];
             return true;
@@ -61,16 +78,16 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (tile_hw * 2);
         case DataFormat::Float32: return (tile_hw * 4);
-        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
-        case DataFormat::Int8: return tile_hw;
-        case DataFormat::Lf8: return tile_hw;
-        case DataFormat::UInt8: return tile_hw;
-        case DataFormat::UInt16: return (tile_hw * 2);
-        case DataFormat::UInt32: return (tile_hw * 4);
+        case DataFormat::Int8:
+        case DataFormat::Lf8:
+        case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
+        case DataFormat::UInt16:
         case DataFormat::RawUInt16: return (tile_hw * 2);
-        case DataFormat::Int32: return (tile_hw * 4);
+        case DataFormat::UInt32:
+        case DataFormat::Int32:
         case DataFormat::RawUInt32: return (tile_hw * 4);
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
     }

@@ -1,25 +1,52 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/run_operation.hpp"
-namespace ttnn {
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
+
+namespace ttnn::operations::data_movement::repeat {
 
 struct RepeatDeviceOperation {
-    const uint32_t m_num_repeats;
-    const bool m_is_last_dim;
-    tt::tt_metal::MemoryConfig m_output_mem_config;
+    using operation_attributes_t = repeat::operation_attributes_t;
+    using tensor_args_t = repeat::tensor_args_t;
+    using spec_return_value_t = repeat::spec_return_value_t;
+    using tensor_return_value_t = repeat::tensor_return_value_t;
+    using program_factory_t =
+        std::variant<program::RepeatProgramFactoryLastDim, program::RepeatProgramFactoryHigherDim>;
 
-    // Required functions to all tensor op functions
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
+
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        uint32_t m_num_repeats,
+        bool m_is_last_dim,
+        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement::repeat
+
+namespace ttnn::prim {
+constexpr auto repeat =
+    ttnn::register_operation<"ttnn::prim::repeat", ttnn::operations::data_movement::repeat::RepeatDeviceOperation>();
+}  // namespace ttnn::prim

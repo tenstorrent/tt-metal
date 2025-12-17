@@ -22,7 +22,6 @@
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -34,18 +33,16 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 
 void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId io_cq = ttnn::QueueId(0);
     constexpr DataType dtype = DataType::BFLOAT16;
     constexpr uint32_t datum_size_bytes = 2;
 
@@ -64,7 +61,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
 
-    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
+    Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 

@@ -7,9 +7,11 @@
 #include <utility>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
-namespace tensor_accessor {
-namespace detail {
+#include "compile_time_args.h"
+
+namespace tensor_accessor::detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
 constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
     -> Wrapper<get_compile_time_arg_val(BASE_IDX + Is)...>;
@@ -22,17 +24,31 @@ using struct_cta_sequence_wrapper_t =
 template <bool Enable, typename T = void>
 struct ConditionalField {
     T value;
-    template <typename T_>
+    // Constructor that forwards a single argument
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) : value(std::forward<T_>(val)) {}
+
+    // Variadic constructor that forwards multiple arguments to T's constructor
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
+    ConditionalField(Args&&... args) : value(std::forward<Args>(args)...) {}
+
     ConditionalField() = default;
 };
 
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <typename T>
 struct ConditionalField<false, T> {
-    template <typename T_>
+    // Constructor that ignores a single argument
+    template <typename T_, std::enable_if_t<!std::is_same_v<std::decay_t<T_>, ConditionalField>, int> = 0>
     ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
+
+    // Variadic constructor that ignores all arguments
+    template <typename... Args, std::enable_if_t<sizeof...(Args) != 1, int> = 0>
+    ConditionalField(Args&&... args) {}  // Ignore all arguments if passed to constructor
+
     ConditionalField() = default;
 };
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 template <typename T, bool Enable>
 struct ConditionalStaticInstance {};
@@ -73,5 +89,4 @@ struct Span {
     std::size_t size() const { return _size; }
 };
 
-}  // namespace detail
-}  // namespace tensor_accessor
+}  // namespace tensor_accessor::detail

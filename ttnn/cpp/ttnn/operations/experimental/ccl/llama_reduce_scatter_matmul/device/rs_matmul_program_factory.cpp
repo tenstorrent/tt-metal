@@ -5,8 +5,6 @@
 #include "rs_matmul_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -14,9 +12,8 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 namespace ttnn::operations::experimental::ccl {
 Matmul_RS::Matmul_RS_PF::cached_mesh_workload_t Matmul_RS::Matmul_RS_PF::create_mesh_workload(
     const operation_attributes_t& operation_attributes,

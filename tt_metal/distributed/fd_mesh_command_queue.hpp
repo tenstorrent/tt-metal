@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
@@ -16,6 +16,12 @@
 #include "mesh_trace.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+
+// Forward declaration of the FDMeshCQTestAccessor class
+// This is used to access the system memory manager from cq test fixtures
+namespace tt::tt_dispatch::dispatcher_tests {
+class FDMeshCQTestAccessor;
+}  // namespace tt::tt_dispatch::dispatcher_tests
 
 namespace tt::tt_metal::distributed {
 
@@ -34,6 +40,10 @@ struct DeviceMemoryAddress {
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
+    // This class can now access private members of FDMeshCommandQueue
+    // This is used to access the system memory manager from cq test fixtures
+    friend class tt_dispatch::dispatcher_tests::FDMeshCQTestAccessor;
+
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
@@ -61,7 +71,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
+        const MeshCoordinateRangeSet& active_sub_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
@@ -168,6 +178,27 @@ private:
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
 
+    // Used to define when the exception should be handled.
+    // The goal is to not throw exceptions in loop and do it just once
+    // Once this is set to true, whoever gets to the point to handle the exception,
+    // it will and set this back to false, so no other thread tries to handle it themselves
+    std::atomic<bool> should_handle_exception_{false};
+
+    // Used to store the exception pointer.
+    // Since the exception is captured inside a different thread that the main one,
+    // we need to store it and let the main thread handle it
+    // So python can catch it
+    std::exception_ptr thread_exception_ptr_;
+    // Exceptions are not compatible with std::atomic, so we need a muted to store it.
+    // Since a reader thread will be setting this while the main thread will be handling it,
+    // it must be thread safe
+    std::mutex exception_mutex_;
+
+    // We are in an unrecoverable state, we need to close as many processes as possible.
+    // When this is true, we are generally breaking locks and doing a bit of cleaning
+    // so the main thread can handle the exception
+    std::atomic<bool> thread_exception_state_ = false;
+
 protected:
     void write_shard_to_device(
         const MeshBuffer& buffer,
@@ -186,7 +217,7 @@ protected:
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
 
 public:
     FDMeshCommandQueue(
@@ -250,6 +281,10 @@ public:
     std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
     void reset_prefetcher_cache_manager();
     int get_prefetcher_cache_sizeB() const;
+
+    void wait_for_completion(bool reset_launch_msg_state) override;
+    void finish_and_reset_in_use() override;
+    bool in_use() override { return in_use_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed

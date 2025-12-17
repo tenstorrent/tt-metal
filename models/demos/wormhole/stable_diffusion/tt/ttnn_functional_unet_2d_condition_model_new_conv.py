@@ -10,6 +10,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
@@ -28,26 +29,16 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     get_default_compute_config,
     pre_process_input,
 )
-from models.utility_functions import is_grayskull
 
 fp32_accum = True
-
 conv_compute_kernel_config = None
-if not is_grayskull():
-    if fp32_accum:
-        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-    else:
-        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+if fp32_accum:
+    conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
 
 def permute_conv_weights(weight, bias):
@@ -199,6 +190,7 @@ class UNet2DConditionModel:
             num_groups=self.norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
 
         if not self.fallback_on_groupnorm:
@@ -229,16 +221,10 @@ class UNet2DConditionModel:
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel
+            self.norm_input_mask = ttnn.create_group_norm_input_mask(
+                self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel, ttnn.bfloat8_b
             )
-            self.norm_input_mask = ttnn.from_torch(
-                self.norm_input_mask_torch_tensor,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.norm_input_mask = ttnn.to_device(self.norm_input_mask, device)
 
         # breakpoint()
         # self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, self.norm_num_groups, in_channels)
@@ -352,7 +338,6 @@ class UNet2DConditionModel:
         )
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
             enable_act_double_buffer=True,
@@ -373,36 +358,19 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_in_weights):
-            self.conv_in_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_in_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_in_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_in_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
-            self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.conv_in_weights,
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        sample = reshard_for_output_channels_divisibility(sample, out_channels)
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
@@ -638,7 +606,6 @@ class UNet2DConditionModel:
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
             reshard_if_not_optimal=True,
@@ -659,36 +626,20 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_out_weights):
-            self.conv_out_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_out_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs_1,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_out_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_out_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs_1,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
-            self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(
             input_tensor=sample,
             **conv_kwargs_1,
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        sample = reshard_for_output_channels_divisibility(sample, self.conv_out_out_channels)
+
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         sample = ttnn.reshape(

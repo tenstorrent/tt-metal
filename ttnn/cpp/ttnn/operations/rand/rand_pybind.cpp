@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,10 +35,6 @@ void bind_rand_operation(py::module& pymodule) {
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
-
-        Example:
-            >>> input_tensor_a = ttnn.rand([N,N], dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG )
-            >>> input_tensor_b = ttnn.rand((N, N), device=device)
         )doc";
 
     using OperationType = decltype(ttnn::rand);
@@ -55,10 +51,7 @@ void bind_rand_operation(py::module& pymodule) {
                const MemoryConfig& memory_config,
                float from,
                float to,
-               uint32_t seed,
-               QueueId queue_id) {
-                return self(queue_id, shape, device, dtype, layout, memory_config, from, to, seed);
-            },
+               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
             py::arg("shape"),
             py::arg("device"),
             py::kw_only(),
@@ -67,7 +60,6 @@ void bind_rand_operation(py::module& pymodule) {
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
             py::arg("low") = 0.0f,
             py::arg("high") = 1.0f,
-            py::arg("seed") = 0,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("seed") = 0});
 }
 }  // namespace ttnn::operations::rand

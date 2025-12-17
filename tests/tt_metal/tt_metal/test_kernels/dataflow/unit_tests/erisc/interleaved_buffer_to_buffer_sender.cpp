@@ -17,17 +17,21 @@ void kernel_main() {
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
+    constexpr auto src_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(src_args, src_addr, page_size);
+    uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
 
     uint32_t page_idx = 0;
+
+    experimental::Noc noc;
+
     for (uint32_t i = 0; i < num_loops; ++i) {
-        uint32_t l1_write_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         for (uint32_t j = 0; j < pages_per_loop; ++j) {
-            uint64_t src_noc_addr = get_noc_addr(page_idx, s);
-            noc_async_read(src_noc_addr, l1_write_addr, page_size);
+            noc.async_read(s, src_l1, page_size, {.page_id = page_idx}, {});
             page_idx++;
-            l1_write_addr += page_size;
-            noc_async_read_barrier();
+            src_l1 += elements_per_page;
+            noc.async_read_barrier();
         }
         eth_send_bytes(
             eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
@@ -36,13 +40,12 @@ void kernel_main() {
         eth_wait_for_receiver_done();
     }
     if (remaining_bytes > 0) {
-        uint32_t l1_write_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         for (uint32_t j = 0; j < remaining_pages; ++j) {
-            uint64_t src_noc_addr = get_noc_addr(page_idx, s);
-            noc_async_read(src_noc_addr, l1_write_addr, page_size);
+            noc.async_read(s, src_l1, page_size, {.page_id = page_idx}, {});
             page_idx++;
-            l1_write_addr += page_size;
-            noc_async_read_barrier();
+            src_l1 += elements_per_page;
+            noc.async_read_barrier();
         }
         eth_send_bytes(
             eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,

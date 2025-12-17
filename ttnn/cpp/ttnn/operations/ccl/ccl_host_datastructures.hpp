@@ -53,14 +53,12 @@ public:
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
-    bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
     std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
-    uint32_t page_size;
-    uint32_t shard_grid_size;
+    uint32_t page_size{0};
     Topology topology;
     bool input_sharded;
     bool output_sharded;
@@ -126,13 +124,13 @@ private:
     uint32_t const num_channel_buffers;
     ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
     ccl::EriscDataMoverTerminationMode const termination_mode;
-    uint32_t num_senders;
-    uint32_t num_receivers;
+    uint32_t num_senders{0};
+    uint32_t num_receivers{0};
     std::size_t num_buffers_per_channel;
-    chip_id_t chip_id;
+    tt::ChipId chip_id;
 
-    bool enable_sender;
-    bool enable_receiver;
+    bool enable_sender{false};
+    bool enable_receiver{false};
 
 public:
     struct ChannelBufferInterface {
@@ -144,24 +142,21 @@ public:
     EriscDatamoverBuilder(
         uint32_t eth_buffer_size,
         uint32_t handshake_addr,
-        std::vector<uint32_t> const& local_semaphore_addresses,
-        std::vector<uint32_t> const& local_buffer_addresses,
+        const std::vector<uint32_t>& local_semaphore_addresses,
+        const std::vector<uint32_t>& local_buffer_addresses,
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        chip_id_t chip_id = -1) :
+        tt::ChipId chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
         handshake_addr(handshake_addr),
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
-        num_buffers_per_channel(num_buffers_per_channel),
         termination_mode(termination_mode),
-        enable_sender(false),
-        enable_receiver(false),
-        num_senders(0),
-        num_receivers(0),
+
+        num_buffers_per_channel(num_buffers_per_channel),
         chip_id(chip_id) {
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
@@ -268,7 +263,7 @@ public:
     [[nodiscard]]
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
+        uint32_t size = 3 + (active_channels.size() * 6);
         for (auto const& channel : active_channels) {
             size += channel.worker_coords.size();
         }
@@ -277,7 +272,7 @@ public:
         // Handshake address
         args.push_back(handshake_addr);
 
-        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
+        bool senders_below_receivers = active_channels.empty() || this->active_channels.front().is_sender;
 
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;

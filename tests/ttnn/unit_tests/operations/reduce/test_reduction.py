@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_blackhole, torch_random
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -62,14 +62,26 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("c", [11])
 @pytest.mark.parametrize("h", [67])
 @pytest.mark.parametrize("w", [77])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_pybind.hpp
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
+    # tensor.size, which is called by torch.prod, doesn't accept dim=None,
+    # so we need to handle it separately.
+    # See https://github.com/pytorch/pytorch/issues/127882
+    if dim is None:
+        torch_output_tensor = torch.prod(torch_input_tensor)
+        if keepdim:
+            # torch.prod does not support keepdim=True for dim=None,
+            # so we need to reshape to match the input tensor.
+            new_shape = [1] * torch_input_tensor.dim()
+            torch_output_tensor = torch_output_tensor.reshape(new_shape)
+    else:
+        torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=dtype
@@ -81,10 +93,9 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -110,7 +121,6 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -136,7 +146,6 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -161,7 +170,6 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [7])
@@ -558,7 +566,6 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_grayskull("Not a tile size multiple, will fail on GS. #17132")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4096}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",

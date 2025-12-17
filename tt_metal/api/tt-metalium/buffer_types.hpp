@@ -6,8 +6,7 @@
 
 #include <cstdint>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 enum class TensorMemoryLayout {
     INTERLEAVED = 0,
@@ -28,11 +27,6 @@ enum class ShardDistributionStrategy {
     GRID_2D = 1,
 };
 
-enum class ShardMode {
-    PHYSICAL,  // TODO: Deprecate this option to treat shard shape as physical
-    LOGICAL,
-};
-
 enum class BufferType {
     DRAM,
     L1,
@@ -41,5 +35,4 @@ enum class BufferType {
     TRACE,
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

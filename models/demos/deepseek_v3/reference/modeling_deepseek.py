@@ -20,7 +20,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch DeepSeek model."""
+"""PyTorch DeepSeek model."""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
@@ -29,11 +29,11 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
+from transformers.generation.utils import GenerationMixin
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -387,6 +387,55 @@ class MoEGate(nn.Module):
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
+    def grouped_gate_golden(
+        self, scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
+    ):
+        # first run sigmoid on scores
+        scores = torch.sigmoid(scores)
+
+        # then add bias (used for selection only)
+        biased_scores = scores + bias
+
+        # then reshape based on number of groups
+        grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
+
+        # then sort the scores within each group
+        top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1, sorted=True)
+
+        # then sum the scores of the top p experts in each group
+        summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
+        logger.info(f"summed_scores: {summed_scores}")
+
+        # find the top k groups
+        _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1, sorted=True)
+        logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
+
+        # Create a mask for valid groups
+        # We initialize a mask of allowed groups and fill others with -inf
+        group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
+        group_mask.scatter_(-1, top_k_groups_indices, False)  # Set selected groups to False (keep)
+
+        # Fill ignored groups with -inf
+        masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
+
+        # reshape back to the original shape
+        masked_scores = masked_grouped_scores.reshape(scores.shape)
+
+        # then run topk to find expert indices
+        _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1, sorted=True)
+
+        # then gather the UNBIASED scores (original sigmoid output) based on the top k experts indices
+        # The reference uses 'original_scores' (no bias) for the final weights
+        chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
+
+        # normalize the chosen scores
+        normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
+
+        # then scale the normalized scores by the scales
+        scaled_scores = normalized_scores * route_scale
+
+        return top_k_experts_indices, scaled_scores
+
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
         ### compute gating score
@@ -428,6 +477,21 @@ class MoEGate(nn.Module):
         topk_weight = topk_weight * self.routed_scaling_factor  # must multiply the scaling factor
 
         return topk_idx, topk_weight
+
+    def grouped_forward(self, hidden_states):
+        bsz, seq_len, h = hidden_states.shape
+        hidden_states = hidden_states.view(-1, h)
+        logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        return self.grouped_gate_golden(
+            logits,
+            self.e_score_correction_bias,
+            self.routed_scaling_factor,
+            1e-20,
+            self.n_group,
+            2,
+            self.topk_group,
+            self.top_k,
+        )
 
 
 class DeepseekV3MoE(nn.Module):
@@ -730,7 +794,9 @@ class DeepseekV3Attention(nn.Module):
         key_states[:, :, :, self.kv_lora_rank :] = k_pe
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, _ = past_key_value.update(key_states, key_states, self.layer_idx, cache_kwargs)
+            key_states, _ = past_key_value.update(
+                key_states, torch.empty((*key_states.shape[:-1], 0)), self.layer_idx, cache_kwargs
+            )
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -1140,7 +1206,7 @@ DeepseekV3_START_DOCSTRING = r"""
     "The bare DeepseekV3 Model outputting raw hidden-states without any specific head on top.",
     DeepseekV3_START_DOCSTRING,
 )
-class DeepseekV3PreTrainedModel(PreTrainedModel):
+class DeepseekV3PreTrainedModel(PreTrainedModel, GenerationMixin):
     config_class = DeepseekV3Config
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
@@ -1149,16 +1215,16 @@ class DeepseekV3PreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_cache_class = True
 
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
+    # def _init_weights(self, module):
+    # std = self.config.initializer_range
+    # if isinstance(module, nn.Linear):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.bias is not None:
+    #         module.bias.data.zero_()
+    # elif isinstance(module, nn.Embedding):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.padding_idx is not None:
+    #         module.weight.data[module.padding_idx].zero_()
 
 
 DeepseekV3_INPUTS_DOCSTRING = r"""
@@ -1319,14 +1385,14 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         if self._use_flash_attention_2:
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,
-                (batch_size, seq_length),
-                inputs_embeds,
-                past_key_values_length,
-            )
+        # else: # NOTE: in testing, both for the full model and for separate modules, we use the -inf mask format, not the ones with 1s and 0s
+        #     # 4d mask is passed through the layers
+        #     attention_mask = _prepare_4d_causal_attention_mask(
+        #         attention_mask,
+        #         (batch_size, seq_length),
+        #         inputs_embeds,
+        #         past_key_values_length,
+        #     )
 
         # embed positions
         hidden_states = inputs_embeds
@@ -1334,7 +1400,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
+        next_decoder_cache = past_key_values
 
         for decoder_layer in self.layers:
             if output_hidden_states:
@@ -1386,7 +1452,7 @@ class DeepseekV3ForCausalLM(DeepseekV3PreTrainedModel):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def get_input_embeddings(self):
         return self.model.embed_tokens

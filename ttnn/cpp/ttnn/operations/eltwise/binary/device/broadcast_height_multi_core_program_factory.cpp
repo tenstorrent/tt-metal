@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/device_operation.hpp"
@@ -69,9 +68,9 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->dtype());
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -85,9 +84,9 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
-    auto src0_buffer = a.buffer();
-    auto src1_buffer = b->buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = a.buffer();
+    auto* src1_buffer = b->buffer();
+    auto* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -232,10 +231,10 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    auto src_dram_buffer_a = input_tensor_a.buffer();
-    auto src_dram_buffer_b = input_tensor_b->buffer();
+    auto* src_dram_buffer_a = input_tensor_a.buffer();
+    auto* src_dram_buffer_b = input_tensor_b->buffer();
 
-    auto dst_dram_buffer = output_tensor.buffer();
+    auto* dst_dram_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.padded_shape();
     const auto bshape = input_tensor_b->padded_shape();

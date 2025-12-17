@@ -16,6 +16,8 @@ from ttnn.types import (
     BufferType,
 )
 
+split_work_to_cores = ttnn._ttnn.operations.core.split_work_to_cores
+
 set_printoptions = ttnn._ttnn.core.set_printoptions
 
 
@@ -356,8 +358,6 @@ def create_sharded_memory_config_(
     return memory_config
 
 
-dump_memory_config = ttnn._ttnn.tensor.dump_memory_config
-load_memory_config = ttnn._ttnn.tensor.load_memory_config
-
+get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
 __all__ = []

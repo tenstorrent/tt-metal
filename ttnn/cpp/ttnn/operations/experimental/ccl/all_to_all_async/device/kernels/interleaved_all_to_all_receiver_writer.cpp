@@ -39,9 +39,8 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr bool is_dram = true;
-    auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = output_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr, page_size);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.

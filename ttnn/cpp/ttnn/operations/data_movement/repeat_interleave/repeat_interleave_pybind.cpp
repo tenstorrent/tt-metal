@@ -15,8 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_repeat_interleave(py::module& module) {
-    auto doc =
-        R"doc(
+    const auto* doc = R"doc(
         Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
 
         Args:
@@ -29,20 +28,7 @@ void bind_repeat_interleave(py::module& module) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-
-        Example:
-
-        torch_input_tensor =
-            torch_result = torch.repeat_interleave(torch_input_tensor, repeats, dim=dim)
-
-            input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-            output = ttnn.repeat_interleave(input_tensor, repeats, dim=dim)
-            >>> a = ttnn.from_torch(torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> b = ttnn.repeat_interleave(a, 2, dim=0)
-            >>> print(a.shape, b.shape)
-            ttnn.Shape([1, 1, 32, 32]) ttnn.Shape([2, 1, 32, 32])
-        )doc";
+    )doc";
 
     ttnn::bind_registered_operation(
         module,

@@ -2,9 +2,18 @@ name: "(Single-card) Frequent model and ttnn tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      models-to-run:
+        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        default: "all"
+        type: string
+      enable-ops-recording:
+        description: "Enable Tracy ops recording for all tests (generates operations report)"
+        type: boolean
+        default: false
   workflow_call:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 5,14,23 * * *"
 
 jobs:
   build-artifact:
@@ -15,6 +24,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+      tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
@@ -23,3 +33,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      models-to-run: ${{ inputs.models-to-run }}
+      enable-ops-recording: ${{ inputs.enable-ops-recording || false }}

@@ -148,7 +148,6 @@ class FileVectorSource(VectorSource):
                 for suite_key, suite_content in data.items():
                     if vector_id in suite_content:
                         vector = suite_content[vector_id]
-                        vector["vector_id"] = vector_id
                         vector["input_hash"] = vector_id
                         vector["suite_name"] = suite_key
                         vector["sweep_name"] = module_name
@@ -161,7 +160,6 @@ class FileVectorSource(VectorSource):
                         continue
 
                     for input_hash, vector_data in suite_content.items():
-                        vector_data["vector_id"] = input_hash
                         vector_data["input_hash"] = input_hash
                         vector_data["suite_name"] = suite_key
                         vector_data["sweep_name"] = module_name
@@ -230,25 +228,25 @@ class VectorExportSource(VectorSource):
 
             vectors = []
 
-            if vector_id:
-                # Find specific vector by ID
-                for suite_key, suite_content in data.items():
+            for suite_key, suite_content in data.items():
+                if suite_name and suite_name != suite_key:
+                    continue
+
+                if vector_id:
                     if vector_id in suite_content:
                         vector = suite_content[vector_id]
-                        vector["vector_id"] = vector_id
                         vector["input_hash"] = vector_id
                         vector["suite_name"] = suite_key
                         vector["sweep_name"] = module_name
                         vectors.append(vector)
-                        break
-            else:
-                # Load by suite or all suites
-                for suite_key, suite_content in data.items():
-                    if suite_name and suite_name != suite_key:
-                        continue
-
+                        logger.info(f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}'")
+                    else:
+                        logger.warning(
+                            f"Vector ID '{vector_id}' not found in suite '{suite_name}' of module '{module_name}'"
+                        )
+                    break
+                else:
                     for input_hash, vector_data in suite_content.items():
-                        vector_data["vector_id"] = input_hash
                         vector_data["input_hash"] = input_hash
                         vector_data["suite_name"] = suite_key
                         vector_data["sweep_name"] = module_name

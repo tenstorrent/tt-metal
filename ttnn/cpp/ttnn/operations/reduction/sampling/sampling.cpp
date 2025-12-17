@@ -1,56 +1,24 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/sampling_op.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
 
-#include <utility>
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+namespace ttnn::operations::reduction::sampling {
 
-namespace ttnn::operations::reduction {
-
-ttnn::Tensor SamplingOperation::invoke(
-    QueueId queue_id,
+Tensor ExecuteSampling::invoke(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const Tensor& k,
     const Tensor& p,
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    std::optional<Tensor> optional_output_tensor) {
-    return tt::tt_metal::operation::run(
-               Sampling{seed, sub_core_grids},
-               {input_values_tensor, input_indices_tensor, k, p, temp},
-               {},
-               {std::move(optional_output_tensor)},
-               queue_id)
-        .at(0);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& output_tensor) {
+    return ttnn::prim::sampling(
+        input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
 }
 
-ttnn::Tensor SamplingOperation::invoke(
-    const Tensor& input_values_tensor,
-    const Tensor& input_indices_tensor,
-    const Tensor& k,
-    const Tensor& p,
-    const Tensor& temp,
-    const std::optional<uint32_t>& seed,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        DefaultQueueId,
-        input_values_tensor,
-        input_indices_tensor,
-        k,
-        p,
-        temp,
-        seed,
-        sub_core_grids,
-        std::move(optional_output_tensor));
-}
-
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::sampling

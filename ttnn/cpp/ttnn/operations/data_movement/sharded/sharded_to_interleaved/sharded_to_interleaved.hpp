@@ -11,11 +11,9 @@ namespace operations::data_movement {
 
 struct ShardedToInterleavedOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& memory_config,
-        const std::optional<DataType>& output_dtype,
-        const std::optional<bool>& is_l1_aligned = std::nullopt);
+        const std::optional<DataType>& output_dtype);
 };
 
 }  // namespace operations::data_movement

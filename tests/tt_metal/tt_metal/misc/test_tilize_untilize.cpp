@@ -10,9 +10,8 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 
 namespace {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "autograd/tensor.hpp"
-#include "msgpack_file.hpp"
+#include "flatbuffer_file.hpp"
 
 namespace ttml::serialization {
 using NamedParameters = std::unordered_map<std::string, ttml::autograd::TensorPtr>;

@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 
 
 def skip_resnet_if_blackhole_p100(device):

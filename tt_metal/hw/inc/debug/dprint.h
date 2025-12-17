@@ -78,7 +78,7 @@
 #define DPRINT_DATA1(x)
 #endif
 namespace internal_ {
-void risc_context_switch();
+void risc_context_switch(bool);
 }
 
 struct BF16 {
@@ -130,19 +130,6 @@ struct TYPED_U32_ARRAY : public U32_ARRAY {
         ptr[len] = ((uint32_t)my_type << 16) + (uint32_t)my_subtype;
     }
 } ATTR_PACK;
-
-// These primitives are intended for ordering debug prints
-// A possible use here is to synchronize debug print order between cores/harts
-// It could be implemented, for instance as code = linearize({x,y})*5 + hart_id
-// With another core/hart waiting on that index
-struct RAISE {
-    uint32_t code;
-    RAISE(uint32_t val) : code(val) {}
-} ATTR_PACK;  // raise a condition with specified code
-struct WAIT {
-    uint32_t code;
-    WAIT(uint32_t val) : code(val) {}
-} ATTR_PACK;  // wait for a condition with specified code
 
 // didn't want to include string.h
 inline uint32_t DebugPrintStrLen(const char* val) {
@@ -206,13 +193,27 @@ template <>
 uint8_t DebugPrintTypeToId<uint16_t>() {
     return DPrintUINT16;
 }
+// We can't specialize on uint32_t or uint64_t because we don't know
+// whether on ILP32 unsigned or unsigned long is used for uint32_t and
+// on LP64 whether unsigned long or unsigned long long for uint64_t
 template <>
-uint8_t DebugPrintTypeToId<uint32_t>() {
+uint8_t DebugPrintTypeToId<unsigned>() {
+    static_assert(sizeof(unsigned) == sizeof(uint32_t));
     return DPrintUINT32;
 }
 template <>
-uint8_t DebugPrintTypeToId<uint64_t>() {
+uint8_t DebugPrintTypeToId<unsigned long long>() {
+    static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
     return DPrintUINT64;
+}
+template <>
+uint8_t DebugPrintTypeToId<unsigned long>() {
+    if constexpr (sizeof(unsigned long) == sizeof(unsigned)) {
+        return DebugPrintTypeToId<unsigned>();
+    } else if constexpr (sizeof(unsigned long) == sizeof(unsigned long long)) {
+        return DebugPrintTypeToId<unsigned long long>();
+    } else
+        ;  // Fail to compile
 }
 template <>
 uint8_t DebugPrintTypeToId<int8_t>() {
@@ -223,17 +224,25 @@ uint8_t DebugPrintTypeToId<int16_t>() {
     return DPrintINT16;
 }
 template <>
-uint8_t DebugPrintTypeToId<int32_t>() {
+uint8_t DebugPrintTypeToId<int>() {
+    static_assert(sizeof(int) == sizeof(int32_t));
     return DPrintINT32;
 }
 template <>
-uint8_t DebugPrintTypeToId<int64_t>() {
+uint8_t DebugPrintTypeToId<long long>() {
+    static_assert(sizeof(long long) == sizeof(int64_t));
     return DPrintINT64;
 }
 template <>
-uint8_t DebugPrintTypeToId<int>() {
-    return DPrintINT32;
+uint8_t DebugPrintTypeToId<long>() {
+    if constexpr (sizeof(long) == sizeof(int)) {
+        return DebugPrintTypeToId<int>();
+    } else if constexpr (sizeof(long) == sizeof(long long)) {
+        return DebugPrintTypeToId<long long>();
+    } else
+        ;  // Fail to compile
 }
+
 template <>
 uint8_t DebugPrintTypeToId<float>() {
     return DPrintFLOAT32;
@@ -241,14 +250,6 @@ uint8_t DebugPrintTypeToId<float>() {
 template <>
 uint8_t DebugPrintTypeToId<char>() {
     return DPrintCHAR;
-}
-template <>
-uint8_t DebugPrintTypeToId<RAISE>() {
-    return DPrintRAISE;
-}
-template <>
-uint8_t DebugPrintTypeToId<WAIT>() {
-    return DPrintWAIT;
 }
 template <>
 uint8_t DebugPrintTypeToId<BF16>() {
@@ -457,8 +458,6 @@ template DebugPrinter operator<< <int32_t>(DebugPrinter, int32_t val);
 template DebugPrinter operator<< <int64_t>(DebugPrinter, int64_t val);
 template DebugPrinter operator<< <float>(DebugPrinter, float val);
 template DebugPrinter operator<< <char>(DebugPrinter, char val);
-template DebugPrinter operator<< <RAISE>(DebugPrinter, RAISE val);
-template DebugPrinter operator<< <WAIT>(DebugPrinter, WAIT val);
 template DebugPrinter operator<< <FIXED>(DebugPrinter, FIXED val);
 template DebugPrinter operator<< <DEFAULTFLOAT>(DebugPrinter, DEFAULTFLOAT val);
 template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);

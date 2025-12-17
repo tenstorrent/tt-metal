@@ -1,4 +1,0 @@
-opencv-python==4.6.0.66
-streamlit==1.26.0
-streamlit-webrtc==0.47.0
-orjson==3.10.12

@@ -28,6 +28,8 @@
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
+
 namespace ttsl {
 
 template <typename T>
@@ -37,7 +39,7 @@ constexpr std::string_view get_type_name() {
 }
 
 template <typename T>
-constexpr std::string_view get_type_name(const T& object) {
+constexpr std::string_view get_type_name(const T& /*object*/) {
     return get_type_name<T>();
 }
 
@@ -147,7 +149,10 @@ struct Attribute final {
     std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
     nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
-    template <typename Type, typename BaseType = std::decay_t<Type>>
+    template <
+        typename Type,
+        typename BaseType = std::decay_t<Type>,
+        std::enable_if_t<!std::is_same_v<BaseType, Attribute>, int> = 0>
     Attribute(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
@@ -201,7 +206,7 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
-    Attribute(Attribute&& other) :
+    Attribute(Attribute&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         copy_storage{other.copy_storage},
@@ -209,6 +214,9 @@ struct Attribute final {
         implementations{other.implementations} {}
 
     Attribute& operator=(const Attribute& other) {
+        if (this == &other) {
+            return *this;
+        }
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -223,7 +231,7 @@ struct Attribute final {
         return *this;
     }
 
-    Attribute& operator=(Attribute&& other) {
+    Attribute& operator=(Attribute&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -508,7 +516,8 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -522,7 +531,7 @@ struct visit_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& callback, T&& value) const {
+    void operator()(auto&& /*callback*/, T&& /*value*/) const {
         throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 
@@ -534,7 +543,7 @@ struct visit_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& callback, const T& value) const {
+    void operator()(auto&& /*callback*/, const T& /*value*/) const {
         throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 };
@@ -646,7 +655,8 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -660,7 +670,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, T&& value) const {
+    T operator()(auto&& /*callback*/, T&& value) const {
         log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
@@ -673,7 +683,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, const T& value) const {
+    T operator()(auto&& /*callback*/, const T& value) const {
         log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
@@ -695,6 +705,7 @@ struct transform_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     std::vector<T> operator()(auto&& callback, const std::vector<T>& value) const {
         std::vector<T> return_value;
+        return_value.reserve(value.size());
         for (auto& tensor : value) {
             return_value.emplace_back(transform_object_of_type<object_t>(callback, tensor));
         }
@@ -737,7 +748,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, T&& object) const {
+    T operator()(auto&& /*callback*/, T&& /*object*/) const {
         static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 
@@ -749,7 +760,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, const T& object) const {
+    T operator()(auto&& /*callback*/, const T& /*object*/) const {
         static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 };
@@ -803,54 +814,66 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
-    auto operator()(const T& value) const {
+    auto operator()(const T& value) const -> std::optional<object_t> {
         return value;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& value) const {
-        throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
+    auto operator()(const T& /*value*/) const -> std::optional<object_t> {
+        return std::nullopt;
     }
 };
 
 template <typename T>
 struct get_first_object_of_type_t<std::optional<T>> {
     template <typename object_t>
-    auto operator()(const std::optional<T>& value) const {
+    auto operator()(const std::optional<T>& value) const -> std::optional<object_t> {
         if (value.has_value()) {
             const auto& tensor = value.value();
             return get_first_object_of_type<object_t>(tensor);
         }
+        return std::nullopt;
     }
 };
 
 template <typename T>
 struct get_first_object_of_type_t<std::vector<T>> {
     template <typename object_t>
-    auto operator()(const std::vector<T>& value) const {
-        for (auto& tensor : value) {
-            return get_first_object_of_type<object_t>(tensor);
+    auto operator()(const std::vector<T>& value) const -> std::optional<object_t> {
+        for (const auto& tensor : value) {
+            auto result = get_first_object_of_type<object_t>(tensor);
+            if (result.has_value()) {
+                return result;
+            }
         }
-        throw std::out_of_range("No such element");
+        return std::nullopt;
     }
 };
 
 template <typename T, auto N>
 struct get_first_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
-    auto operator()(const std::array<T, N>& value) const {
-        for (auto& tensor : value) {
-            return get_first_object_of_type<object_t>(tensor);
+    auto operator()(const std::array<T, N>& value) const -> std::optional<object_t> {
+        for (const auto& tensor : value) {
+            auto result = get_first_object_of_type<object_t>(tensor);
+            if (result.has_value()) {
+                return result;
+            }
         }
+        return std::nullopt;
     }
 };
 
 template <typename... Ts>
 struct get_first_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
-    auto operator()(const std::tuple<Ts...>& value) const {
-        return get_first_object_of_type<object_t>(std::get<0>(value));
+    auto operator()(const std::tuple<Ts...>& value) const -> std::optional<object_t> {
+        if constexpr (sizeof...(Ts) > 0) {
+            return get_first_object_of_type<object_t>(std::get<0>(value));
+        } else {
+            return std::nullopt;
+        }
     }
 };
 
@@ -859,31 +882,49 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
-        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return get_first_object_of_type<object_t>(object.attribute_values());
     }
 };
 
+namespace detail {
 template <typename T>
-    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+concept has_first_member = requires(const T& obj) { reflect::get<0>(obj); };
+}  // namespace detail
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>> && (not requires { std::decay_t<T>::attribute_names; })
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return object;
     }
 
     template <typename object_t>
-        requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
-        return get_first_object_of_type<object_t>(reflect::get<0>(object));
+        requires(not std::same_as<std::decay_t<T>, object_t>) && detail::has_first_member<T>
+    auto operator()(const T& object) const -> std::optional<object_t> {
+        std::optional<object_t> result = std::nullopt;
+        reflect::for_each(
+            [&result, &object](auto I) {
+                if (!result.has_value()) {
+                    result = get_first_object_of_type<object_t>(reflect::get<I>(object));
+                }
+            },
+            object);
+        return result;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>) && (!detail::has_first_member<T>)
+    auto operator()(const T& /*object*/) const -> std::optional<object_t> {
+        return std::nullopt;
     }
 };
 
@@ -1120,9 +1161,9 @@ inline hash_t hash_object(const T& object) noexcept {
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
-        [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+        [&hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
-                [&object, &hash, &attribute_values] {
+                [&hash, &attribute_values] {
                     const auto& attribute = std::get<Ns>(attribute_values);
                     hash = hash_objects(hash, attribute);
                 }(),
@@ -1233,6 +1274,13 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
+// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value) {
+    std::hash<T> hasher;
+    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
 }  // namespace hash
 
 namespace json {
@@ -1256,7 +1304,7 @@ struct to_json_t<const char*> {
 
 template <>
 struct from_json_t<const char*> {
-    const char* operator()(const nlohmann::json& json_object) {
+    const char* operator()(const nlohmann::json& /*json_object*/) {
         throw std::runtime_error("Cannot load const char* from JSON");
     }
 };
@@ -1565,7 +1613,7 @@ struct from_json_t<T> {
 
 template <typename T>
 struct to_json_t {
-    nlohmann::json operator()(const T& optional) noexcept {
+    nlohmann::json operator()(const T& /*optional*/) noexcept {
         return fmt::format("ttsl::json::to_json_t: Unsupported type {}", get_type_name<T>());
     }
 };
@@ -1578,3 +1626,5 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

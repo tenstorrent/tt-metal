@@ -12,9 +12,9 @@ from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer, 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
-from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -48,8 +48,6 @@ def run_squeezebert_question_and_answering_inference(
     squeezebert,
     input_path,
 ):
-    disable_persistent_kernel_cache()
-
     hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
@@ -164,8 +162,6 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     squeezebert,
     n_iterations,
 ):
-    disable_persistent_kernel_cache()
-
     hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
@@ -270,8 +266,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
 )
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, reset_seeds):
-    disable_persistent_kernel_cache()
-
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28328")
     return run_squeezebert_question_and_answering_inference(
         device=device,
         model_name=model_name,
@@ -296,8 +291,7 @@ def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, dev
     ((3),),
 )
 def test_demo_squadv2(batch_size, sequence_size, model_name, squeezebert, n_iterations, device, reset_seeds):
-    disable_persistent_kernel_cache()
-
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28328")
     return run_squeezebert_question_and_answering_inference_squad_v2(
         device=device,
         model_name=model_name,

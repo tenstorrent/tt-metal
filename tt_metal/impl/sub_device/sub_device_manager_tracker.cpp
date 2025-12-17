@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -22,19 +22,21 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
@@ -87,7 +89,9 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 }
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    TT_FATAL(!device_->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
     }

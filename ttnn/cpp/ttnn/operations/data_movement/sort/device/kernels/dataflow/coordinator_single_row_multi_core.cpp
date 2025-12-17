@@ -53,7 +53,6 @@ void kernel_main() {
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cores_to_coordinator_semaphore_id);
-    noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
     const uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
         start_core_physical_coord_x,
         start_core_physical_coord_y,
@@ -103,6 +102,7 @@ void kernel_main() {
 
         // Set signal to start processing
         noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+        noc_async_write_barrier();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -115,6 +115,7 @@ void kernel_main() {
                 // Set signal to start processing next sub-stage
                 noc_semaphore_set_multicast(
                     coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+                noc_async_write_barrier();
 
                 // Wait until cores will process and save data
                 noc_semaphore_wait(semaphore_ptr, number_of_confirmations);

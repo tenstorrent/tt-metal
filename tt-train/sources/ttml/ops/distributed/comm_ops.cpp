@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,11 +33,14 @@ autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
     return out;
 }
 
-autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_backward) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_reduce(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        auto reduced_grad = ttnn_fixed::distributed::all_reduce(out->get_grad());
-        tensor->add_grad(reduced_grad);
+    autograd::GradFunction grad = [tensor, out, noop_backward]() {
+        if (noop_backward) {
+            tensor->add_grad(out->get_grad());
+        } else {
+            tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad()));
+        }
     };
     auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));

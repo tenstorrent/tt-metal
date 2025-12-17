@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlo
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -32,6 +32,7 @@ def test_upblock(
     temb_shape,
     residuals,
     block_id,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -48,7 +49,9 @@ def test_upblock(
     torch_crosattn = unet.up_blocks[block_id]
 
     model_config = ModelOptimisations()
-    tt_crosattn = TtUpBlock2D(device, state_dict, f"up_blocks.{block_id}", model_config=model_config)
+    tt_crosattn = TtUpBlock2D(
+        device, state_dict, f"up_blocks.{block_id}", model_config=model_config, debug_mode=debug_mode
+    )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
 
@@ -74,6 +77,7 @@ def test_upblock(
         ttnn_residual_tensors = ttnn_residual_tensors + (ttnn_residual,)
 
     ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape = tt_crosattn.forward(
         ttnn_input_tensor,
         ttnn_residual_tensors,
@@ -88,5 +92,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
     logger.info(f"PCC is: {pcc_message}")

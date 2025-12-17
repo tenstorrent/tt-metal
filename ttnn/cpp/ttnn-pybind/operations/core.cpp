@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,12 +14,13 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
 
 void py_module_types(py::module& module) {
-    py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
+    py::enum_<compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
         Enum for controlling compute throttling.
 
         Higher levels insert NOP instructions to reduce compute throughput:
@@ -31,12 +32,12 @@ void py_module_types(py::module& module) {
 
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc")
-        .value("NO_THROTTLE", ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
-        .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
-        .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
-        .value("LEVEL_4", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_4)
-        .value("LEVEL_5", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_5);
+        .value("NO_THROTTLE", compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+        .value("LEVEL_1", compute_throttle_utils::ThrottleLevel::LEVEL_1)
+        .value("LEVEL_2", compute_throttle_utils::ThrottleLevel::LEVEL_2)
+        .value("LEVEL_3", compute_throttle_utils::ThrottleLevel::LEVEL_3)
+        .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
+        .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
     py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
 
@@ -60,7 +61,7 @@ void py_module_types(py::module& module) {
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false,
             py::arg("dst_full_sync_en") = false,
-            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+            py::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
@@ -86,12 +87,16 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
-            &ttnn::operations::core::to_device),
+        py::overload_cast<
+            const ttnn::Tensor&,
+            MeshDevice*,
+            const std::optional<MemoryConfig>&,
+            std::optional<ttnn::QueueId>>(&ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
-        py::arg("cq_id") = ttnn::DefaultQueueId,
+        py::kw_only(),
+        py::arg("queue_id") = std::nullopt,
         R"doc(
             Copy tensor from host to device.
 
@@ -99,16 +104,12 @@ void py_module(py::module& module) {
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
-                cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+
+            Kwargs:
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
         )doc");
 
     module.def(
@@ -117,7 +118,7 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("blocking") = true,
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
+        py::arg("queue_id") = std::nullopt,
         R"doc(
             Copy tensor from device to host.
 
@@ -125,18 +126,11 @@ void py_module(py::module& module) {
                 tensor (ttnn.Tensor): the tensor to be copied from device to host.
                 blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
 
-            Keyword args:
-                cq_id (int, optional): the command queue ID to use. Defaults to `0`.
+            Kwargs:
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
-
-            Example:
-                >>> device = ttnn.open_device(0)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
-                >>> # non-blocking mode
-                >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
     module.def(
@@ -153,13 +147,6 @@ void py_module(py::module& module) {
 
         Returns:
             `None`: deallocates the tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> ttnn.deallocate(tensor=tensor, force=False)
     )doc");
 
     module.def(
@@ -177,12 +164,6 @@ void py_module(py::module& module) {
 
             Returns:
                 ttnn.Tensor: the reallocated tensor.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-                >>> new_tensor = ttnn.reallocate(tensor, memory_config=my_memory_config)
         )doc");
 
     bind_registered_operation(
@@ -195,23 +176,21 @@ void py_module(py::module& module) {
             tensor (ttnn.Tensor): the input tensor to be converted.
             memory_config (ttnn.MemoryConfig): the desired memory configuration for the tensor.
             dtype (ttnn.DataType, optional): the optional `ttnn` data type. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): the optional output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the converted tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("tensor"),
+            py::arg("memory_config"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 
     bind_registered_operation(
         module,
         ttnn::to_dtype,
-        R"doc(to_dtype(tensor: ttnn.Tensor, dtype: DataType = None) -> ttnn.Tensor
-
+        R"doc(
             Converts a tensor to the desired dtype
 
 
@@ -283,25 +262,27 @@ void py_module(py::module& module) {
 
     module.def(
         "copy_host_to_device_tensor",
-        [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+        [](const ttnn::Tensor& host_tensor,
+           ttnn::Tensor& device_tensor,
+           const std::optional<QueueId>& cq_id = std::nullopt) {
             tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "copy_device_to_host_tensor",
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
            bool blocking = true,
-           QueueId cq_id = ttnn::DefaultQueueId) {
+           std::optional<ttnn::QueueId> cq_id = std::nullopt) {
             tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),
         py::arg("host_tensor"),
         py::arg("blocking") = true,
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     bind_registered_operation(
         module,
@@ -322,27 +303,21 @@ void py_module(py::module& module) {
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> print(tensor[0,0,:3])
-            Tensor([1.42188, -1.25, -0.398438], dtype=bfloat16)
         )doc",
         ttnn::pybind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids);
             },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 
     module.def(
         "num_cores_to_corerangeset",
@@ -354,6 +329,75 @@ void py_module(py::module& module) {
         py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
             &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
+
+    module.def(
+        "split_work_to_cores",
+        py::overload_cast<const CoreCoord, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        py::arg("grid_size"),
+        py::arg("units_to_divide"),
+        py::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a grid.
+
+        This function divides a specified number of work units across cores in a grid.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    module.def(
+        "split_work_to_cores",
+        py::overload_cast<const CoreRangeSet&, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        py::arg("core_grid"),
+        py::arg("units_to_divide"),
+        py::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a CoreRangeSet.
+
+        This function divides a specified number of work units across cores in a CoreRangeSet.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(core_rangeset, 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
 }
 
 }  // namespace ttnn::operations::core

@@ -15,8 +15,6 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.format_input_tensor
-   ttnn.format_output_tensor
    ttnn.pad_to_tile_shape
 
 Memory Config
@@ -52,6 +50,7 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
+   ttnn.split_work_to_cores
 
 
 Tensor Creation
@@ -71,6 +70,8 @@ Tensor Creation
    ttnn.ones_like
    ttnn.full
    ttnn.full_like
+   ttnn.rand
+   ttnn.from_buffer
 
 Matrix Multiplication
 =====================
@@ -82,6 +83,19 @@ Matrix Multiplication
 
    ttnn.matmul
    ttnn.linear
+   ttnn.addmm
+   ttnn.sparse_matmul
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.MatmulMultiCoreReuseProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+
 
 Pointwise Unary
 ================
@@ -98,6 +112,7 @@ Pointwise Unary
    ttnn.asinh
    ttnn.atan
    ttnn.atanh
+   ttnn.bitcast
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
@@ -180,7 +195,6 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
-   ttnn.softmax
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -401,6 +415,7 @@ Reduction
    :template: function.rst
 
    ttnn.cumprod
+   ttnn.ema
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -411,6 +426,8 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+   ttnn.manual_seed
+   ttnn.moe
 
 Data Movement
 =============
@@ -448,19 +465,29 @@ Normalization
 
    ttnn.group_norm
    ttnn.layer_norm
+   ttnn.layer_norm_pre_all_gather
+   ttnn.layer_norm_post_all_gather
    ttnn.rms_norm
+   ttnn.rms_norm_pre_all_gather
+   ttnn.rms_norm_post_all_gather
    ttnn.batch_norm
+   ttnn.softmax
+   ttnn.scale_mask_softmax
+   ttnn.softmax_in_place
+   ttnn.scale_mask_softmax_in_place
+   ttnn.scale_causal_mask_hw_dims_softmax_in_place
 
-
-Moreh Operations
-================
+Normalization Program Configs
+=============================
 
 .. autosummary::
    :toctree: api
    :nosignatures:
-   :template: function.rst
+   :template: class.rst
 
-   ttnn.moreh_sum
+   ttnn.SoftmaxProgramConfig
+   ttnn.SoftmaxDefaultProgramConfig
+   ttnn.SoftmaxShardedMultiCoreProgramConfig
 
 Transformer
 ===========
@@ -485,6 +512,10 @@ CCL
    :toctree: api
    :nosignatures:
    :template: function.rst
+
+   ttnn.all_gather
+   ttnn.reduce_scatter
+   ttnn.all_reduce
 
 Embedding
 =========
@@ -531,6 +562,7 @@ Pooling
 
    ttnn.global_avg_pool2d
    ttnn.max_pool2d
+   ttnn.avg_pool2d
 
 Vision
 ========

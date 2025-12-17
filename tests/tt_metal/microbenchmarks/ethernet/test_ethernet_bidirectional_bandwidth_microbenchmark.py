@@ -7,15 +7,15 @@ import sys
 
 from loguru import logger
 import pytest
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 def fits_in_l1(num_channels, sample_size):
     return num_channels * sample_size <= 150 * 1024
 
 
-@pytest.mark.skip("skip test due to CI error shows test not compelte")
+@pytest.mark.skip("skip test due to CI error shows test not complete")
 @pytest.mark.parametrize("sample_counts", [(1024,)])  # , 8, 16, 64, 256],
 @pytest.mark.parametrize(
     "sample_sizes",

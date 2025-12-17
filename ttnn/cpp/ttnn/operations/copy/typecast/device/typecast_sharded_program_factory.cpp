@@ -6,7 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::copy::program {
@@ -39,8 +38,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
@@ -91,8 +90,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
     log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
@@ -162,8 +161,8 @@ void TypecastShardedProgramFactory::override_runtime_arguments(
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }

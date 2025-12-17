@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,10 @@ struct AdamWConfig {
 
 class MorehAdamW : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "MorehAdamW";
+    }
+
     MorehAdamW(serialization::NamedParameters parameters, const AdamWConfig& config);
 
     void zero_grad() override;
@@ -47,6 +51,10 @@ private:
 
 class AdamW : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "AdamW";
+    }
+
     AdamW(serialization::NamedParameters parameters, const AdamWConfig& config);
 
     void zero_grad() override;

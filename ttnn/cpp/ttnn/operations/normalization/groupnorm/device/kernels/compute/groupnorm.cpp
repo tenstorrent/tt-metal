@@ -90,39 +90,39 @@ void MAIN {
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
-    constexpr uint32_t is_mcast_sender = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
+    constexpr uint32_t is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender");
+    constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
+    constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
+    constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
-    constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr uint32_t group = get_compile_time_arg_val(5);
+    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t group = get_named_compile_time_arg_val("group");
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(6);
-    constexpr uint32_t block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(9);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(10);
+    constexpr uint32_t subblock_w = get_named_compile_time_arg_val("subblock_w");
+    constexpr uint32_t num_subblocks_w = get_named_compile_time_arg_val("num_subblocks_w");
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(11);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(12);
-    constexpr uint32_t per_core_MN = get_compile_time_arg_val(13);
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    constexpr uint32_t per_core_MN = get_named_compile_time_arg_val("per_core_MN");
 
-    constexpr uint32_t per_core_N_tile_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t num_groups_per_reset = get_compile_time_arg_val(15);
+    constexpr uint32_t per_core_N_tile_bytes = get_named_compile_time_arg_val("per_core_N_tile_bytes");
+    constexpr uint32_t num_groups_per_reset = get_named_compile_time_arg_val("num_groups_per_reset");
 
-    constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(16);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(17);
+    constexpr uint32_t single_tile_size_bytes = get_named_compile_time_arg_val("single_tile_size_bytes");
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(19);
+    constexpr uint32_t num_tiles_input_mask = get_named_compile_time_arg_val("num_tiles_input_mask");
+    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(20);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -240,8 +240,9 @@ void MAIN {
     uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = (block_h % num_out_blocks);
+        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
@@ -315,7 +316,7 @@ void MAIN {
 
                 // Partial/E[x]
                 index_h_offset = 0;
-                reduce_init(cb_x, cb_scaler, cb_ex_partial);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, cb_ex_partial);
                 cb_reserve_back(cb_ex_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler, 1);
@@ -324,7 +325,7 @@ void MAIN {
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
-                        reduce_tile(cb_x, cb_scaler, index, scaler0, dst0);
+                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, index, scaler0, dst0);
                     }
                     index_h_offset += block_w;
                 }
@@ -334,14 +335,14 @@ void MAIN {
                 tile_regs_release();
                 cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_ex_partial, 1);
-                reduce_uninit();
+                reduce_uninit<FP32_DEST_ACC>();
 
                 cb_wait_front(cb_ex_partial, 1);
             }
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex, 1);
@@ -350,14 +351,15 @@ void MAIN {
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
                 for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                        cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
                 }
                 cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_uninit();
+                reduce_uninit<FP32_DEST_ACC>();
                 cb_push_back(cb_ex_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex, 1);
@@ -465,7 +467,7 @@ void MAIN {
 
                 // Partial-Var(x)
                 index_h_offset = 0;
-                reduce_init(cb_xmm, cb_scaler, cb_ex2_partial);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, cb_ex2_partial);
                 cb_reserve_back(cb_ex2_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
@@ -473,7 +475,7 @@ void MAIN {
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
-                        reduce_tile(cb_xmm, cb_scaler, index, scaler0, dst0);
+                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, index, scaler0, dst0);
                     }
                     index_h_offset += block_w;
                 }
@@ -483,12 +485,12 @@ void MAIN {
                 tile_regs_release();
                 cb_push_back(cb_ex2_partial, 1);
                 cb_pop_front(cb_xmm, out_block_hw_normal);
-                reduce_uninit();
+                reduce_uninit<FP32_DEST_ACC>();
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init(cb_ex_external, cb_scaler_global, cb_ex2_global);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex2_global);
                 cb_reserve_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex2, 1);
@@ -497,14 +499,15 @@ void MAIN {
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);  // TODO DELETE THIS AND ADD POP
                 for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                        cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
                 }
                 cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_global);
                 tile_regs_release();
-                reduce_uninit();
+                reduce_uninit<FP32_DEST_ACC>();
                 cb_push_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex2, 1);
@@ -522,13 +525,9 @@ void MAIN {
             add_tiles_init(cb_ex2_global, cb_eps);
             add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
-            // sqrt(Var + eps)
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            tile_regs_wait();
             // 1/[sqrt(Var + eps)]
-            recip_tile_init();
-            recip_tile(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);

@@ -36,6 +36,7 @@
 namespace ttsl::detail::llvm {
 
 [[nodiscard]] inline void* safe_malloc(size_t Sz) {
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     void* Result = std::malloc(Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space
@@ -50,6 +51,7 @@ namespace ttsl::detail::llvm {
 }
 
 [[nodiscard]] inline void* safe_calloc(size_t Count, size_t Sz) {
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     void* Result = std::calloc(Count, Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space
@@ -64,6 +66,7 @@ namespace ttsl::detail::llvm {
 }
 
 [[nodiscard]] inline void* safe_realloc(void* Ptr, size_t Sz) {
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     void* Result = std::realloc(Ptr, Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space

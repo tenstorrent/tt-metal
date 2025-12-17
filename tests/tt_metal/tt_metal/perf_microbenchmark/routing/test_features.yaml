@@ -183,9 +183,6 @@ Tests:
   - name: "MulticastHops"
     fabric_setup:
       topology: Mesh
-      # You can explicitly set the routing type. Options are "LowLatency" and "Dynamic".
-      # If not specified, it defaults to "LowLatency".
-      routing_type: "LowLatency"
 
     defaults:
       ntype: unicast_write
@@ -226,14 +223,12 @@ Tests:
       - type: all_to_all_multicast
 
   # ======================================================================================
-  # Test 9: Dynamic Routing and Custom Atomic Operations
-  # This shows how to enable dynamic routing for 2D mesh topologies and how to
-  # customize the behavior of atomic increment operations.
+  # Test 9: Custom Atomic Operations
+  # This shows how to customize the behavior of atomic increment operations.
   # ======================================================================================
-  - name: "DynamicRouting_CustomAtomics"
+  - name: "CustomAtomics"
     fabric_setup:
       topology: Mesh
-      routing_type: "Dynamic"
 
     senders:
       - device: 0
@@ -244,8 +239,6 @@ Tests:
               device: 1
             # Specify the value to increment by for each atomic operation.
             atomic_inc_val: 5
-            # Specify the value at which the remote atomic counter will wrap around.
-            atomic_inc_wrap: 100
 
   # ======================================================================================
   # Test 10: Advanced Destination and Test Control
@@ -275,3 +268,81 @@ Tests:
               # Manually specify the target L1 address on the destination core.
               # The allocator will respect this address.
               target_address: 0x40000 # Example L1 address
+
+  # ======================================================================================
+  # Test 11: Latency Test Mode
+  # This demonstrates the latency testing feature, which measures round-trip latency
+  # between devices. Latency mode is mutually exclusive with benchmark_mode.
+  # Latency tests use specialized kernels that measure:
+  #   - Raw latency: Total round-trip time from sender's perspective
+  #   - Responder time: Time spent processing the request on the responder device
+  #   - Net latency: Raw latency minus responder processing time
+  # Results are reported with min/max/avg/p99 statistics and compared against golden values.
+  # ======================================================================================
+  - name: "BasicLatencyTest"
+    # Enable latency test mode (mutually exclusive with benchmark_mode)
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Linear
+
+    # Parametrize across different payload sizes
+    parametrization_params:
+      size: [16, 1024, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            # In latency mode, num_packets represents the number of latency samples to collect
+            # Each sample is a complete round-trip measurement
+            num_packets: 256  # number of independent latency samples to collect
+            destination:
+              device: [0, 1]
+
+  # ======================================================================================
+  # Test 12: Multi-Hop Latency Testing
+  # Latency tests can measure round-trip times across multiple hops in the network.
+  # This is useful for characterizing latency scaling with distance.
+  # ======================================================================================
+  - name: "MultiHopLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      size: [16, 64, 256, 1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - num_packets: 256  # collect 256 independent latency samples
+            destination:
+              device: [0, 3]  # Destination 3 hops away in ring topology
+
+  # ======================================================================================
+    # Test 13: Skip packet validation during testing
+    # This demonstrates the ability to skip packet validation during test execution.
+    # This is useful for testing focused on pure volume and traffic throughput
+  # ======================================================================================
+  - name: "SkipPacketValidation"
+    skip_packet_validation: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0 # Source is physical chip 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: 1 # Destination is physical chip 1

@@ -11,22 +11,16 @@ from transformers import BertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_wormhole_b0,
-    skip_for_grayskull,
-)
 
 
 def get_expected_times(bert_tiny):
     return (38.5, 1.6)
 
 
-@skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.skip(reason="#26288: Seems to have changed in perf")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -39,7 +33,6 @@ def test_perf_bert_tiny(
     model_location_generator,
     reset_seeds,
 ):
-    disable_persistent_kernel_cache()
     model_name = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     config = hugging_face_reference_model.config
@@ -93,7 +86,6 @@ def test_perf_bert_tiny(
 
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
@@ -118,7 +110,6 @@ def test_perf_bert_tiny(
     logger.info("Exit Bert-Tiny perf test")
 
 
-@skip_for_grayskull()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.skip(reason="#26288: Seems to have changed in perf")
 @pytest.mark.parametrize(

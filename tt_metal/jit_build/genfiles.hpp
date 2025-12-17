@@ -5,15 +5,12 @@
 #pragma once
 
 #include <core_coord.hpp>
-#include <kernel.hpp>
 #include <string>
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 struct KernelSource;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

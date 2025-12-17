@@ -15,7 +15,10 @@ template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
 struct unique_any final {
     using storage_t = std::array<std::byte, MAX_STORAGE_SIZE>;
 
-    template <typename Type, typename BaseType = std::decay_t<Type>>
+    template <
+        typename Type,
+        typename BaseType = std::decay_t<Type>,
+        std::enable_if_t<!std::is_same_v<BaseType, unique_any>, int> = 0>
     unique_any(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
@@ -40,12 +43,12 @@ struct unique_any final {
     unique_any(const unique_any& other) = delete;
     unique_any& operator=(const unique_any& other) = delete;
 
-    unique_any(unique_any&& other) :
+    unique_any(unique_any&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         move_storage{other.move_storage} {}
 
-    unique_any& operator=(unique_any&& other) {
+    unique_any& operator=(unique_any&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;

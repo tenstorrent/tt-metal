@@ -22,9 +22,8 @@ void bind_example_operation(py::module& module) {
 
         // Add pybind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
-        // The overload with `queue_id` argument will be added automatically for primitive operations
         // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or
-        // `ttnn.prim.example(input_tensor, queue_id=queue_id)`
+        // `ttnn.prim.example(input_tensor)`
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::prim::example)& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
                 return self(input_tensor);

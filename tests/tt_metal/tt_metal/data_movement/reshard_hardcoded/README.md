@@ -4,7 +4,7 @@ This test suite implements tests that measure the performance (i.e. bandwidth) o
 They are based on kernel runtime arguments of existing metal tests.
 
 ## Slow Dispatch Support
-This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `DeviceFixture` and are designed to work with the slow dispatch API.
+This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `MeshDeviceFixture` and are designed to work with TT-Mesh APIs.
 
 **Note**: These tests require slow dispatch mode for proper operation. They use `tt::tt_metal::detail::LaunchProgram()` for direct program execution without command queues.
 
@@ -22,7 +22,7 @@ The tests use slow dispatch mode. Run with the slow dispatch environment variabl
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
 ```
 
-Or run normally (the DeviceFixture will automatically enforce slow dispatch mode):
+Or run normally (the MeshDeviceFixture will automatically enforce slow dispatch mode):
 ```
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
 ```

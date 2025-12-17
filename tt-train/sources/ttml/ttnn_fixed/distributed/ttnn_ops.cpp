@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,23 +9,23 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 
 tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
-    auto* current_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = current_device->num_devices();
+    auto* mesh_device = &ttml::autograd::ctx().get_device();
+    auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
         throw std::logic_error("All gather should not be called for a single device case");
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
+        *mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::all_gather_async(
         tensor,
         dim,
         ccl_resources.get_all_gather_semaphore(),
-        /* num_links */ 1,
+        num_links,
         /* memory_config */ std::nullopt,
         ttnn::ccl::Topology::Linear,
         /* subdevice_id */ std::nullopt,
@@ -34,8 +34,8 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
-    auto* current_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = current_device->num_devices();
+    auto* mesh_device = &ttml::autograd::ctx().get_device();
+    auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
         throw std::logic_error("All reduce should not be called for a single device case");
     }
@@ -45,28 +45,37 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
         throw std::logic_error("All reduce supports only 4D tensors");
     }
 
-    auto reshaped_tensor = ttnn::reshape(tensor, ttnn::Shape({1, shape[0] * shape[1], shape[2], shape[3]}));
-    auto gathered_tensor = all_gather(reshaped_tensor, 0);
-    auto reduced_tensor = ttnn::moreh_sum(
-        gathered_tensor,
-        0,
-        /* keep_dim */ true,
-        /* output */ std::nullopt,
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
+    auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
+    auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
+
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
+        *mesh_device, /* cluster_axis */ std::nullopt);
+    return ttnn::experimental::all_reduce_async(
+        tensor,
+        num_devices,
+        all_reduce_barrier_semaphores,
+        reduce_scatter_semaphores,
+        all_gather_semaphores,
+        ttnn::operations::reduction::ReduceType::Sum,
         /* memory_config */ std::nullopt,
-        core::ComputeKernelConfig::precise());
-    reduced_tensor = ttnn::reshape(reduced_tensor, shape);
-    return reduced_tensor;
+        /* topology */ ttnn::ccl::Topology::Linear,
+        /* num_preferred_links */ num_links);
 }
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto& mesh_device = ttml::autograd::ctx().get_device();
+    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
+        mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
         dim,
         ccl_resources.get_reduce_scatter_semaphores(),
         ccl_resources.get_barrier_semaphore(),
-        /* num_links */ 1U,
+        num_links,
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
         ttnn::ccl::Topology::Linear);

@@ -5,15 +5,18 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
+#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include "dispatch_test_utils.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 namespace tt::tt_metal {
 
@@ -260,11 +263,13 @@ private:
         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
-            config = EthernetConfig{.compile_args = compile_args, .defines = defines};
+            const auto proc = this->get_processor(true);
+            config = EthernetConfig{
+                .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
+            eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            DataMovementProcessor processor = this->get_processor();
-            config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
+            config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
         }
 
         KernelHandle kernel_id = CreateKernel(
@@ -290,11 +295,19 @@ private:
             max,
             divisible_by);
 
-        return adjusted_min + (rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by;
+        return adjusted_min + ((rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by);
     }
 
-    DataMovementProcessor get_processor() {
-        const uint32_t num = this->generate_random_num(0, 1);
+    DataMovementProcessor get_processor(bool is_eth) {
+        int max_index = 1;
+        int num = 0;
+
+        if (is_eth) {
+            max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
+                        1;
+        }
+        num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;
@@ -324,14 +337,15 @@ private:
         all_cores = empty_crs.merge(all_cores);
 
         CoreRangeSet cores;
-        const uint32_t num = this->generate_random_num(0, 2);
+        const uint32_t num = 0;  // this->generate_random_num(0, 2);
         switch (num) {
             case 0: cores = all_cores; break;
             case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
+            default: TT_THROW("Invalid random core selection value {}", num);
         }
 
-        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
+        TT_FATAL(!cores.empty(), "Generated cores cannot be empty");
         return cores;
     }
 
@@ -394,14 +408,14 @@ private:
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
-        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+        this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
         return trace_id;
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
         auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
     }
 };

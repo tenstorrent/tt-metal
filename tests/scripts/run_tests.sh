@@ -171,13 +171,18 @@ model_perf_t3000_device() {
 
 ##########################TG##########################
 # Run tg unit tests
+# DEPRECATED: Galaxy unit tests now call pytest directly from GitHub Actions workflow
+# See: .github/workflows/galaxy-unit-tests-impl.yaml
 unit_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
     local model=$4
 
-    ./tests/scripts/tg/run_tg_unit_tests.sh --model "$model"
+    echo "ERROR: unit_tg_device is deprecated."
+    echo "Galaxy unit tests now run directly from GitHub Actions workflow."
+    echo "See: .github/workflows/galaxy-unit-tests-impl.yaml"
+    exit 1
 }
 
 # Run tg frequent tests
@@ -191,62 +196,34 @@ frequent_tg_device() {
 }
 
 # Run tg demo tests
+# DEPRECATED: Galaxy demo tests now call pytest directly from GitHub Actions workflow
+# See: .github/workflows/galaxy-demo-tests-impl.yaml
 demos_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
     local model=$4
 
-    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
+    echo "ERROR: demos_tg_device is deprecated."
+    echo "Galaxy demo tests now run directly from GitHub Actions workflow."
+    echo "See: .github/workflows/galaxy-demo-tests-impl.yaml"
+    exit 1
 }
 
 # Run tg model perf tests
+# DEPRECATED: Galaxy model perf tests now call pytest directly from GitHub Actions workflow
+# See: .github/workflows/galaxy-model-perf-tests-impl.yaml
 model_perf_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    ./tests/scripts/tg/run_tg_model_perf_tests.sh --pipeline-type "$pipeline_type"
+    echo "ERROR: model_perf_tg_device is deprecated."
+    echo "Galaxy model perf tests now run directly from GitHub Actions workflow."
+    echo "See: .github/workflows/galaxy-model-perf-tests-impl.yaml"
+    exit 1
 }
 ##########################TG##########################
-
-##########################TGG##########################
-# Run tgg unit tests
-unit_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_unit_tests.sh
-}
-
-# Run tgg frequent tests
-frequent_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_frequent_tests.sh
-}
-
-# Run tgg demo tests
-demos_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_demo_tests.sh
-}
-
-# Run tgg model perf tests
-model_perf_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_model_perf_tests.sh --pipeline-type "$pipeline_type"
-}
-##########################TGG##########################
 
 run_pipeline_tests() {
     local tt_arch=$1
@@ -283,18 +260,6 @@ run_pipeline_tests() {
         demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
         model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
-    elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
-    # TGG pipelines
-    elif [[ $pipeline_type == "unit_tgg_device" ]]; then
-        unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_tgg_device" ]]; then
-        frequent_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "demos_tgg_device" ]]; then
-        demos_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == *"model_perf_tgg_device" ]]; then
-        model_perf_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

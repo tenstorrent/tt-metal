@@ -4,20 +4,12 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct NLPKVCacheLoadSliceOperation {
-    static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        uint32_t seq_len_start,
-        uint32_t seq_len_end,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         uint32_t seq_len_start,

@@ -29,7 +29,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = output_grad.device();
+    auto* device = output_grad.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -104,7 +104,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     uint32_t im7_t{1};
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +
                            im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
@@ -148,7 +148,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
               "reader_moreh_group_norm_backward_input_grad_large.cpp"
@@ -179,11 +179,11 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
-    const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                           "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                           "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
+    const auto* const compute_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
+                            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -280,12 +280,12 @@ void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFa
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto input_buffer = tensor_args.input.buffer();
-    auto mean_buffer = tensor_args.mean.buffer();
-    auto rstd_buffer = tensor_args.rstd.buffer();
-    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
-    auto input_grad_buffer = outputs.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* mean_buffer = tensor_args.mean.buffer();
+    auto* rstd_buffer = tensor_args.rstd.buffer();
+    auto* gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
+    auto* input_grad_buffer = outputs.buffer();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

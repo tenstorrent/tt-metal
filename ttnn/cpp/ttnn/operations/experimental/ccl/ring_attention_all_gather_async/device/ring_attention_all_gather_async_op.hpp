@@ -9,7 +9,6 @@
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -19,6 +18,7 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -50,9 +50,9 @@ struct RingAttentionAllGatherAsync {
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis) {}
 
@@ -118,9 +118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<Tensor> ring_attention_all_gather_async(
     const std::vector<Tensor>& input_tensors,
@@ -134,8 +132,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

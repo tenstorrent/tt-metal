@@ -10,7 +10,6 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -23,18 +22,23 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
     tt::tt_metal::Program program{};
 
-    CoreRange core({0, 0}, {0, 0});
+    CoreRange default_core({0, 0}, {0, 0});
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
@@ -67,7 +71,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size =
-        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
@@ -88,7 +92,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     uint32_t block_row_size = block_width * output.element_size();
     uint32_t num_blocks_w_output = unpadded_stick_size / block_row_size;
     uint32_t num_blocks_w_input = padded_stick_size / block_row_size;
-    uint32_t block_row_leftover_size = unpadded_stick_size - num_blocks_w_output * block_row_size;
+    uint32_t block_row_leftover_size = unpadded_stick_size - (num_blocks_w_output * block_row_size);
 
     // Number of blocks that differ between input and output
     const uint32_t num_blocks_w_diff = num_blocks_w_input - num_blocks_w_output - (block_row_leftover_size > 0 ? 1 : 0);
@@ -96,7 +100,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const uint32_t padded_Y_diff_blocks = (input_y - output_y) / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t padded_Z_diff_blocks = (input_z - output_z) * input_y / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t padded_W_diff_blocks = (input_w - output_w) * input_z * input_y / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t num_leftover_Y = output_y - output_y / TILE_HEIGHT * TILE_HEIGHT;
+    const uint32_t num_leftover_Y = output_y - (output_y / TILE_HEIGHT * TILE_HEIGHT);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -161,8 +165,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         uint32_t(output_cb_index)};
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -170,6 +179,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -179,53 +190,61 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         compute_kernel,
         core,
         tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
-    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, core = core](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto* src_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
+            CoreCoord core_0 = corerange_to_cores(core).at(0);
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_0);
+                runtime_args[0] = src_buffer->address();
+            }
 
-        CoreCoord core = {0, 0};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    };
+            {
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core_0);
+                runtime_args[0] = dst_buffer->address();
+            }
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
@@ -247,9 +266,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
@@ -263,7 +283,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -361,12 +381,23 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         WriterDataMovementConfig(writer_ct_args));
 
     // compute
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
     bool use_pack_kernel = true;
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         use_pack_kernel = false;
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             use_pack_kernel
@@ -375,7 +406,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
@@ -386,7 +419,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_row) {
         CreateKernel(
@@ -397,7 +432,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     if (has_cliff_col) {
@@ -409,11 +446,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     // RUNTIME ARGS
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -462,7 +501,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * el_size;
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;
         if (end_column_id % padded_row_size_bytes == 0 && end_column_id != 0) {
             start_row_id += single_block_size_col_arg * TILE_HEIGHT;
@@ -476,57 +515,67 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         }
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           ncores = ncores](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
 
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const auto& core = cores[i];
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_blocks = input_shape[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
 
-    bool has_cliff = core_range_cliff.size() > 0;
+    bool has_cliff = !core_range_cliff.empty();
 
     uint32_t unpadded_row_size_bytes;
 
@@ -581,7 +630,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             compute_kernel,
@@ -601,7 +650,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     }
 
     // RUNTIME ARGS
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto cores = corerange_to_cores(available_grid);
     uint32_t number_blocks_per_core;
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
@@ -628,48 +677,58 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           ncores = ncores](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
 
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const CoreCoord& core = cores[i];
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
@@ -677,7 +736,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(available_grid, num_blocks);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -699,15 +758,16 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
                  has_cliff_col,
                  full_cores_per_row,
                  full_cores_per_col] =
-                    ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
                 return untilize_with_unpadding_multi_core_block_interleaved(
-                    a, output, use_pack_untilize, fp32_dest_acc_en);
+                    a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids);
             }
         }
     }
 
-    bool has_cliff = core_range_cliff.size() > 0;
+    bool has_cliff = !core_range_cliff.empty();
 
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
@@ -756,23 +816,31 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** compute
      */
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             compute_kernel,
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
@@ -783,6 +851,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = {nblocks_per_core_cliff, num_tiles_per_row, tt::CBIndex::c_0, tt::CBIndex::c_16},
                 .defines = compute_kernel_defines});
     }
@@ -794,7 +863,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
 
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
@@ -845,30 +914,33 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         tile_start_id += num_tiles_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           ncores = ncores](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
 
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const CoreCoord& core = cores[i];
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -885,9 +957,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     // and skip face1 and face3.
     bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
@@ -899,11 +971,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     auto out_shard_spec = output.shard_spec().has_value() ? output.shard_spec().value() : shard_spec;
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    auto grid = *shard_spec.grid.ranges().begin();
-    uint32_t ncores_x = grid.end_coord.x + 1;
-    uint32_t ncores_y = grid.end_coord.y + 1;
     auto all_cores = shard_spec.grid;
-    uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
@@ -1008,8 +1076,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -1022,6 +1095,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -1031,7 +1106,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         compute_kernel,
         all_cores,
         ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_args,
+            .defines = compute_kernel_defines});
 
     // reader runtime args
     const std::array reader_rt_args = {
@@ -1055,7 +1133,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
     } else {
-        cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
+        cores = corerange_to_cores(all_cores, std::nullopt, row_major);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             CoreCoord& core = cores[i];
 
@@ -1140,8 +1218,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 

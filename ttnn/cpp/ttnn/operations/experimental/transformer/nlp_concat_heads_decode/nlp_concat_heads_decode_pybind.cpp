@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail {
 
 namespace py = pybind11;
 
@@ -24,15 +24,15 @@ void bind_nlp_concat_heads_decode(py::module& module) {
                const uint32_t num_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, num_heads, memory_config, optional_output_tensor);
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor, num_heads, memory_config, optional_output_tensor, sub_core_grids);
             },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("num_heads").noconvert(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail

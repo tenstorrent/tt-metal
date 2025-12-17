@@ -4,10 +4,10 @@
 
 from transformers.configuration_utils import PretrainedConfig
 
-from models.demos.deepseek_v3.tt.mlp.mlp_1d_dequant import MLP1DDequant
+from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 
 
-class SharedExpert(MLP1DDequant):  # The only difference with the regular Dequantized MLP is the intermediate layer size
+class SharedExpert(MLPDequant):  # The only difference with the regular Dequantized MLP is the intermediate layer size
     """Shared Expert layer for Mixture-of-Experts (MoE) models."""
 
     @classmethod

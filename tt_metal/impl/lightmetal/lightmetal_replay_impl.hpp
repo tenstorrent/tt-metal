@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,18 +8,21 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
-class TraceDescriptor;
+struct TraceDescriptor;
 }
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct Command;
+class Command;
 struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;
@@ -48,9 +51,7 @@ using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::experimental::lightmetal::detail {
 class LightMetalReplayImpl {
 public:
     // Constructor
@@ -77,7 +78,6 @@ public:
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 
@@ -121,7 +121,7 @@ public:
 private:
     // Workload related members
     LightMetalBinary binary_;
-    const flatbuffer::LightMetalBinary* fb_binary_;
+    const flatbuffer::LightMetalBinary* fb_binary_{nullptr};
     bool show_reads_ = false;
     bool disable_checking_ = false;
 
@@ -135,5 +135,4 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
 };
 
-}  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal::detail

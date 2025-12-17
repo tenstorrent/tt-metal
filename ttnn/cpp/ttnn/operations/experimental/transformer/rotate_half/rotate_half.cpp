@@ -1,35 +1,34 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotate_half.hpp"
 
 #include "device/rotate_half_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    using namespace tt::constants;
+    using tt::tt_metal::PadValue;
+
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Input tensor must be on device. Current storage type: {}.",
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
+        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be divisible by {} for tiling.",
         input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * 2);
+        TILE_WIDTH * 2);
 
-    ttnn::Shape pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return tt::tt_metal::operation::run_with_autoformat(
-               RotateHalf{memory_config.value_or(input_tensor.memory_config())},
-               {input_tensor},
-               {input_format_params},
-               {Layout::TILE})
-        .at(0);
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    Tensor formatted_input =
+        ttnn::tilize_with_val_padding(input_tensor, padded_shape, PadValue(0.0f), input_tensor.memory_config());
+    return ttnn::prim::rotate_half(formatted_input, memory_config.value_or(input_tensor.memory_config()));
 }
 
 }  // namespace ttnn::operations::experimental::transformer

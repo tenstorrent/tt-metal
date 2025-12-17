@@ -3,15 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <umd/device/types/arch.h>  // tt::ARCH
+#include <umd/device/types/arch.hpp>  // tt::ARCH
 #include <vector>
 
 #include "core_coord.hpp"
 
-namespace tt {
-enum class ARCH;
-
-namespace tt_metal {
+namespace tt::tt_metal {
 // Returns an ordered list of DRAM Bank ID to optimally placed worker cores. Placing DRAM reader or writer
 // kernels on these worker cores will minimize NOC congestion and the number of NOC hops required to complete
 // a DRAM read or write.
@@ -24,5 +21,4 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     std::vector<uint32_t> worker_phy_x,
     std::vector<uint32_t> worker_phy_y);
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

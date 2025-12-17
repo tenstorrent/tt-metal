@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 #include "tt_metal/common/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

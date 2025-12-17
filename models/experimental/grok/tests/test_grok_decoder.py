@@ -17,7 +17,7 @@ from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.reference.model import DecoderLayer
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose
 from ttnn import ConcatMeshToTensor
 
 

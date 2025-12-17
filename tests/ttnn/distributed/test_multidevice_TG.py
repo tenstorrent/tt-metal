@@ -19,7 +19,7 @@ from ttnn import (
     ConcatMesh2dToTensor,
     MeshToTensor,
 )
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 
 @pytest.mark.skip("1D device mesh not supported")
@@ -1472,9 +1472,6 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     #     num_links=1,
     #     topology=ttnn.Topology.Linear,
     # )
-
-
-# TODO #11406 - Add unit tests for visualize_tensor API
 
 
 def rms_norm(x, gamma, eps):

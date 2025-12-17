@@ -8,9 +8,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
@@ -33,7 +33,13 @@ def test_wrapped_vision_model_inference(
     reset_seeds,
     ensure_gc,
     num_layers,
+    is_ci_env,
+    request,
 ):
+    test_id = request.node.callspec.id
+    if is_ci_env and "two_layers" not in test_id:
+        pytest.skip("CI only runs the two_layers test")
+
     dtype = ttnn.bfloat8_b
     pcc = (
         0.99 if num_layers and num_layers <= 3 else 0.91

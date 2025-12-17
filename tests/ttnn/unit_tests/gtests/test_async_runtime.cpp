@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/move/utility_core.hpp>
+#include <cstring>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
@@ -14,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -28,7 +30,6 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -46,7 +47,7 @@ namespace {
 using MultiCommandQueueSingleDeviceFixture = ::ttnn::MultiCommandQueueSingleDeviceFixture;
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
-    auto device = this->device_;
+    auto* device = this->device_;
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     uint32_t input_buf_size_datums = 1024 * 1024;
@@ -96,9 +97,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     input_tensor.deallocate();
     output_tensor.deallocate();
     ttnn::queue_synchronize(device_->mesh_command_queue(*io_cq));
-    for (int i = 0; i < output_buf_size_datums; i++) {
-        EXPECT_EQ(readback_data[i], golden_output[i]);
-    }
+    EXPECT_EQ(std::memcmp(readback_data.get(), golden_output.data(), output_buf_size_datums * datum_size_bytes), 0);
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
@@ -113,11 +112,17 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
 
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto expected_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     for (int loop = 0; loop < 10; loop++) {
         log_info(LogTest, "Running outer loop {}", loop);
         for (auto input_val : inputs) {
-            for (int i = 0; i < buf_size_datums; i++) {
+            for (uint32_t i = 0; i < buf_size_datums; i++) {
                 host_data[i] = bfloat16(static_cast<float>(input_val));
+            }
+            // Pre-compute expected output: neg(sqrt(input_val)) = -sqrt(input_val)
+            float expected_val = static_cast<float>(-1 * sqrt(input_val));
+            for (uint32_t i = 0; i < buf_size_datums; i++) {
+                expected_data[i] = bfloat16(expected_val);
             }
 
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
@@ -129,10 +134,14 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
-            Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
+            Tensor output_tensor;
+            ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
+
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
-            output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
+
+            ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::neg(output_tensor); });
+
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
@@ -142,11 +151,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
-            for (int i = 0; i < buf_size_datums; i++) {
-                EXPECT_EQ(
-                    static_cast<int>(std::floor(bfloat16(readback_data[i]).to_float())),
-                    static_cast<int>(-1 * sqrt(input_val)));
-            }
+            EXPECT_EQ(std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes), 0)
+                << "Data mismatch at loop " << loop << " input_val " << input_val;
         }
     }
 }

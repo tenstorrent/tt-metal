@@ -6,12 +6,22 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+endif()
+
+############################################################################################################################
+# hwloc
+############################################################################################################################
+find_library(HWLOC_LIBRARY NAMES hwloc)
+if(NOT HWLOC_LIBRARY)
+    message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
 
 ############################################################################################################################
@@ -48,6 +58,59 @@ ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
+
+############################################################################################################################
+# protobuf
+############################################################################################################################
+
+CPMAddPackage(
+    NAME protobuf
+    GITHUB_REPOSITORY protocolbuffers/protobuf
+    GIT_TAG
+        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "protobuf_BUILD_TESTS OFF"
+        "protobuf_INSTALL OFF"
+        "BUILD_TESTING OFF"
+        "protobuf_BUILD_EXAMPLES OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+    PATCHES
+        protobuf_noreturn.patch
+)
+
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
+    # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
+    get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    set_target_properties(
+        libprotobuf
+        PROPERTIES
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                "${PROTOBUF_INCLUDES}"
+    )
+endif()
+
+# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
+# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
+target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
+target_compile_options(
+    libprotobuf
+    PRIVATE
+        -fno-semantic-interposition
+        -Wno-deprecated-declarations
+)
 
 ############################################################################################################################
 # yaml-cpp
@@ -142,6 +205,20 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+
+############################################################################################################################
+# nanobind : https://github.com/wjakob/nanobind
+############################################################################################################################
+
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
@@ -297,8 +374,25 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.5
+    VERSION 1.1.6
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+)
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_CXX_EXTENSIONS ON"
+    PATCHES
+        capnproto_capture_this.patch
 )

@@ -11,7 +11,6 @@ namespace ttnn::operations::experimental::cnn {
 
 struct ExecuteConvertToHWC {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& a,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<DataType>& dtype = std::nullopt);

@@ -6,13 +6,13 @@ import torch
 from torch import nn
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.model_utils import (
     get_default_hifi2_kernel_config,
     get_falcon_default_core_grid,
     get_weights_cached,
 )
-from models.utility_functions import is_grayskull, is_wormhole_b0
 from ttnn import ReplicateTensorToMesh
 
 
@@ -23,12 +23,7 @@ def falcon_dense_4h_to_h_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -68,12 +63,7 @@ def falcon_dense_h_to_4h_matmul(
             compute_kernel_config=get_default_hifi2_kernel_config(),
         )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -257,7 +247,7 @@ class TtFalconMLPPrefill(nn.Module):
                 dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
                 core_grid=get_falcon_default_core_grid(x.device()),
                 compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
-                activation="gelu",
+                activation="gelu_approx",
             )
             x.deallocate()
 
@@ -358,7 +348,7 @@ class TtFalconMLPDecode(nn.Module):
         hidden_states = falcon_dense_h_to_4h_matmul(
             x,
             self.dense_h_to_4h_weights,
-            fused_activation="gelu",
+            fused_activation="gelu_approx",
             output_mem_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
             core_grid=get_falcon_default_core_grid(x.device()),

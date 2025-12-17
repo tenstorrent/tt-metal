@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include <cstddef>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -14,8 +14,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::debug {
 
@@ -76,7 +74,7 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_mesh_workl
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        shared_variables.emplace(coord, cached_program.shared_variables);
     }
     log_info(tt::LogAlways, "Created delay mesh workload");
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
@@ -89,7 +87,6 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
-    const auto& mesh_device = *operation_attributes.mesh_device;
     tt::tt_metal::Program program{};
     auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
     auto kernel_id = CreateKernel(
@@ -118,19 +115,8 @@ ApplyDeviceDelayDeviceOperation::invoke(
     operation_attributes_t operation_attributes{
         .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
 
-    auto input_tensor = create_device_tensor(
-        ttnn::TensorSpec(
-            ttnn::Shape({1}),
-            tt::tt_metal::TensorLayout(
-                ttnn::DataType::BFLOAT16, tt::tt_metal::PageConfig(ttnn::Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG)),
-        std::addressof(mesh_device));
-
-    tensor_args_t tensor_args{
-        .input_tensor = input_tensor,
-    };
-
     log_info(tt::LogAlways, "Returning delay op structs");
-    return {operation_attributes, tensor_args};
+    return {operation_attributes, tensor_args_t{}};
 }
 
 }  // namespace ttnn::operations::debug

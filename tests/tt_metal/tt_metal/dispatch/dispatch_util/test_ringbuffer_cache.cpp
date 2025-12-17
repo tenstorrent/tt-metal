@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,14 @@ struct CacheTestParams {
     std::pair<int, int> pgm_ids;
     std::pair<int, int> pgm_sizes;
 };
+// NOLINTBEGIN(cppcoreguidelines-virtual-class-destructor)
 class RingbufferCacheRandomizedTestsFixture : public ::testing::TestWithParam<CacheTestParams> {
+public:
+    RingbufferCacheRandomizedTestsFixture(const RingbufferCacheRandomizedTestsFixture&) = delete;
+    RingbufferCacheRandomizedTestsFixture& operator=(const RingbufferCacheRandomizedTestsFixture&) = delete;
+    RingbufferCacheRandomizedTestsFixture(RingbufferCacheRandomizedTestsFixture&&) = delete;
+    RingbufferCacheRandomizedTestsFixture& operator=(RingbufferCacheRandomizedTestsFixture&&) = delete;
+
 protected:
     RingbufferCacheRandomizedTestsFixture() = default;
     ~RingbufferCacheRandomizedTestsFixture() override = default;
@@ -44,6 +51,7 @@ protected:
     auto get_valid_entry(size_t idx) const { return rb_cache_->valid_[idx]; }
     constexpr static auto invalid_entry_ = RingbufferCacheManager::invalid_cache_entry_;
 };
+// NOLINTEND(cppcoreguidelines-virtual-class-destructor)
 
 INSTANTIATE_TEST_SUITE_P(
     RingbufferCacheRandomSuite,

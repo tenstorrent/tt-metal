@@ -133,8 +133,9 @@ def run_all_to_all_impl(
     layout,
     topology,
     num_iters=1,
+    input_mem_config=None,
+    output_mem_config=None,
     trace_mode=False,
-    mem_config=None,
     do_check=True,
     reuse_inputs=False,
 ):
@@ -162,8 +163,6 @@ def run_all_to_all_impl(
     logger.info(f"in_dim: {in_dim}")
     logger.info(f"out_dim: {out_dim}")
 
-    input_mem_config = mem_config
-    output_mem_config = mem_config
     ###
 
     ### Create persistent output buffers
@@ -268,72 +267,89 @@ def run_all_to_all_impl(
                 else:
                     eq, output = comp_pcc(tt_output_tensor, output_tensor)
                 if not eq:
-                    logger.error(f"output mismatch for tensor {i}")
+                    logger.error(f"output mismatch for tensor {i}: {output}")
                     passed = False
 
-    assert (
-        mesh_device.num_program_cache_entries() == 1
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+    # native implementation uses 1 program cache entry, but
+    # composite implementation uses 7 program cache entries
+    # assert (
+    #    mesh_device.num_program_cache_entries() == 1
+    # ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-    if do_check and not passed:
-        assert eq, f"{i} FAILED: {output}"
+    if do_check:
+        assert passed, f"FAILED: output mismatch"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, num_links, logical_shape, in_dim, out_dim, layout",
+    "num_links, logical_shape, in_dim, out_dim, layout, input_dtype, mem_config, num_iters, do_check, reuse_inputs, enable_trace",
     [
-        (8, 1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
-        (8, 1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+        (
+            1,
+            [3, 8, 384, 128],
+            1,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+            False,
+        ),  # Padded, check, no_trace
+        (
+            1,
+            [1, 1, 44544, 3072 * 3],
+            2,
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+            True,
+        ),  # Pre-attn, check, use_trace
+        (
+            1,
+            [1, 1, 44544, 3072],
+            3,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            20,
+            False,
+            True,
+            False,
+        ),  # Post-attn, stress, no_trace
     ],
-    ids=["pre-attn", "post-attn"],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters, do_check, reuse_inputs",
-    [(2, True, False), (6, False, True), (20, False, True)],
-    ids=["check", "perf", "stress"],
-)
-@pytest.mark.parametrize(
-    "enable_trace",
-    [True, False],
-    ids=["use_trace", "no_trace"],
+    ids=["padded", "pre-attn-check-use_trace", "post-attn-stress-no_trace"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
 def test_all_to_all(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
+    num_links,
     logical_shape,
     in_dim,
     out_dim,
-    num_links,
-    input_dtype,
     layout,
+    input_dtype,
     mem_config,
     num_iters,
-    function_level_defaults,
     do_check,
     reuse_inputs,
     enable_trace,
+    function_level_defaults,
     is_ci_env,
 ):
     run_all_to_all_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         logical_shape,
         in_dim,
         out_dim,
@@ -342,8 +358,173 @@ def test_all_to_all(
         layout,
         topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        mem_config=mem_config,
+        input_mem_config=mem_config,
+        output_mem_config=mem_config,
         do_check=do_check,
         trace_mode=enable_trace,
         reuse_inputs=reuse_inputs,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "num_links, logical_shape, in_dim, out_dim, layout, input_dtype, mem_config, num_iters, do_check, reuse_inputs",
+    [
+        (
+            1,
+            [1, 1, 256 + 32, 128 * 3],
+            2,
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+        ),  # pad_dim2, check
+        (
+            1,
+            [1, 1, 256, 128 + 32],
+            3,
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            20,
+            False,
+            True,
+        ),  # pad_dim3, stress (using DRAM to avoid skip)
+    ],
+    ids=["pad_dim2-check-TILE-bf16-DRAM", "pad_dim3-stress-RM-bf16-DRAM"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
+)
+def test_all_to_all_unaligned(
+    mesh_device,
+    num_links,
+    logical_shape,
+    in_dim,
+    out_dim,
+    layout,
+    input_dtype,
+    mem_config,
+    num_iters,
+    do_check,
+    reuse_inputs,
+):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape,
+        in_dim,
+        out_dim,
+        num_links,
+        input_dtype,
+        layout,
+        topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        input_mem_config=mem_config,
+        output_mem_config=mem_config,
+        do_check=do_check,
+        trace_mode=False,
+        reuse_inputs=reuse_inputs,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "num_links, input_dtype, layout",
+    [
+        (1, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "logical_shape, in_dim, out_dim, input_shard_shape, input_shard_grid, input_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout",
+    [
+        (
+            [1, 1, 256, 1536],
+            3,
+            2,
+            (256, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (32, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            [1, 1, 1536, 1024],
+            3,
+            2,
+            (256, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (32, 1024),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            [1, 1, 768, 3072],
+            3,
+            2,
+            (128, 384),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (96, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
+)
+def test_all_to_all_sharded_to_sharded(
+    mesh_device,
+    num_links,
+    input_dtype,
+    layout,
+    logical_shape,
+    in_dim,
+    out_dim,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    input_mem_layout,
+    output_mem_layout,
+):
+    input_shard_spec = ttnn.ShardSpec(
+        input_shard_grid,
+        input_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_shard_spec = ttnn.ShardSpec(
+        output_shard_grid,
+        output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    input_mem_config = ttnn.MemoryConfig(input_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(
+        output_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+    )
+
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape,
+        in_dim,
+        out_dim,
+        num_links,
+        input_dtype,
+        layout,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
     )

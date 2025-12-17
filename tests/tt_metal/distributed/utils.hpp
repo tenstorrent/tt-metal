@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,14 +15,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program.hpp>
 
-namespace tt {
-namespace tt_metal {
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshBuffer;
 class MeshDevice;
-}  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::distributed::test::utils {
 

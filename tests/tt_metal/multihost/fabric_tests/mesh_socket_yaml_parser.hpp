@@ -12,9 +12,9 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric::mesh_socket_tests {
@@ -22,11 +22,6 @@ namespace tt::tt_fabric::mesh_socket_tests {
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
-
-enum class RoutingType : uint32_t {
-    LowLatency = 0,
-    Dynamic = 1,
-};
 
 /*  TODO: Add support for other patterns.
     Patterns need to split into three layers:
@@ -38,17 +33,17 @@ enum class RoutingType : uint32_t {
 enum class PatternType : uint32_t {
     AllToAllDevices = 0,
     AllHostsRandomSockets = 1,
+    AllDeviceBroadcast = 2,
 };
 
 // Data structures for parsed YAML configuration
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+    std::vector<std::vector<EthCoord>> eth_coord_mapping;
 };
 
 struct FabricConfig {
     tt::tt_fabric::Topology topology;
-    RoutingType routing_type;
 };
 
 struct MemoryConfig {
@@ -85,7 +80,7 @@ struct TestSocketConfig {
 };
 
 struct PatternExpansionConfig {
-    PatternType type{};    // "all_to_all_devices" or "all_hosts_random_sockets"
+    PatternType type{};
     CoreCoord core_coord;  // Core coordinate to use for connections
     std::optional<uint32_t> num_sockets;  // Optional number of random sockets to generate
 };
@@ -163,6 +158,8 @@ private:
         const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
     static std::vector<TestSocketConfig> expand_all_hosts_random_sockets_pattern(
         const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
+    static std::vector<TestSocketConfig> expand_all_device_broadcast_pattern(
+        const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
 
     // Memory config expansion methods
     static std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
@@ -171,7 +168,7 @@ private:
     static MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
     static CoreCoord parse_core_coordinate(const YAML::Node& node);
     static PatternType parse_pattern_type(const std::string& pattern_string);
-    static std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
+    static std::vector<std::vector<EthCoord>> parse_eth_coord_mapping(const YAML::Node& node);
 
     // Validation helper methods
     static void validate_memory_config(const MemoryConfig& memory);

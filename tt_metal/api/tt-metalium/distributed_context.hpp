@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -148,6 +148,8 @@ using RequestPtr = std::shared_ptr<Request>;
 using ContextPtr = std::shared_ptr<DistributedContext>;
 class DistributedContext {
 public:
+    constexpr static const int SPLIT_COLOR_UNDEFINED = -1;
+
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
     static void set_current_world(const ContextPtr& ctx);

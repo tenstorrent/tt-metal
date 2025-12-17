@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "silu_bw_device_operation.hpp"
 
-#include "silu_bw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
 
+#include "silu_bw_program_factory.hpp"
 
 namespace ttml::metal::ops::silu_bw::device {
 
@@ -25,16 +24,10 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "SiLUBackward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            enchantum::to_string(tensor.device()->arch()),
-            name);
-
-        TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "SiLUBackward operation requires {} to be on Device. Input storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
             tensor.buffer() != nullptr,
@@ -45,20 +38,20 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "SiLUBackward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "SiLUBackward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "SiLUBackward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,5 +7,8 @@
 #include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::reduction::detail {
-void bind_reduction_sampling_operation(pybind11::module& module);
+namespace py = pybind11;
+
+void bind_reduction_sampling_operation(py::module& module);
+
 }  // namespace ttnn::operations::reduction::detail

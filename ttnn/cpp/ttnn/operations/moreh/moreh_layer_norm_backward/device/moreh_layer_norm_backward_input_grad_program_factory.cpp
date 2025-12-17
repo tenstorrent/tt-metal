@@ -17,10 +17,10 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& input_grad) {
-    auto& output_grad = tensor_args.output_grad;
-    auto& input = tensor_args.input;
-    auto& mean = tensor_args.mean;
-    auto& rstd = tensor_args.rstd;
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input = tensor_args.input;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
 
     auto normalized_dims = operation_attributes.normalized_dims;
 
@@ -113,13 +113,13 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     uint32_t im7_t = 1;
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
-    const auto intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_format);
+    const auto intermed_single_tile_size = tt::tile_size(intermed_cb_format);
 
     const uint32_t cb_usage =
-        (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size +
-        (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
+        ((in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size) +
+        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size);
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -183,13 +183,13 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_file = use_large_algorithm
-                                        ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                          "reader_moreh_layer_norm_backward_input_grad_large.cpp"
-                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                          "reader_moreh_layer_norm_backward_input_grad_small.cpp";
+    const auto* const reader_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "reader_moreh_layer_norm_backward_input_grad_large.cpp"
+                            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "reader_moreh_layer_norm_backward_input_grad_small.cpp";
 
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_input_grad.cpp";
 
@@ -206,11 +206,11 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(is_lastdim_layer_norm),
         static_cast<uint32_t>(is_groupnorm)};
 
-    const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                           "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-                                           "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
+    const auto* const compute_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
+                            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                              "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
     CreateComputeKernel(
         program,
@@ -301,13 +301,13 @@ void MorehLayerNormBackwardInputGradOperation::ProgramFactory::override_runtime_
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto input_buffer = tensor_args.input.buffer();
-    auto mean_buffer = tensor_args.mean.buffer();
-    auto rstd_buffer = tensor_args.rstd.buffer();
-    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* mean_buffer = tensor_args.mean.buffer();
+    auto* rstd_buffer = tensor_args.rstd.buffer();
+    auto* gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
 
-    auto input_grad_buffer = input_grad.buffer();
+    auto* input_grad_buffer = input_grad.buffer();
 
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;

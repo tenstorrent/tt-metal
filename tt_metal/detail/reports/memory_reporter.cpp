@@ -10,15 +10,15 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include <enchantum/enchantum.hpp>
 
 #include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace fs = std::filesystem;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::detail {
 
 using bank_to_statistics = std::map<uint32_t, Statistics>;
 
@@ -45,7 +45,7 @@ void write_headers(
     }
     l1_usage_summary_report << ", Largest Contiguous Free Block (B), Total Free L1 Space (B)\n";
     memory_usage_summary_report
-        << ", Total Allocatable Size (B), Total Allocated (B), Total Free (KB), Largest Free Block (KB)\n";
+        << ", Total Allocatable Size (B), Total Allocated (B), Total Free (B), Largest Free Block (B)\n";
 }
 
 void write_detailed_report_info(
@@ -66,7 +66,7 @@ void write_detailed_report_info(
                                      << ",,Total free (B): " << stats.total_free_bytes << "\n"
                                      << ",,Total allocated (B): " << stats.total_allocated_bytes << "\n"
                                      << ",,Largest free block (B): " << stats.largest_free_block_bytes << "\n";
-        device->allocator()->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
+        device->allocator_impl()->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
     }
 }
 
@@ -81,12 +81,12 @@ void write_memory_usage(
     memory_usage_summary_report << "," << stats.total_allocatable_size_bytes << "," << stats.total_allocated_bytes
                                 << "," << stats.total_free_bytes << "," << stats.largest_free_block_bytes << "\n";
 
-    detailed_memory_usage_report << "," << (buffer_type == BufferType::DRAM ? "DRAM\n" : "L1\n");
-    detailed_memory_usage_report << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
+    detailed_memory_usage_report << "," << reflect::enum_name(buffer_type) << "\n"
+                                 << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
                                  << "\n"
                                  << ",Total allocated (B):," << (stats.total_allocated_bytes * num_banks) << "\n"
                                  << ",Total free (B):," << (stats.total_free_bytes * num_banks) << "\n";
-    device->allocator()->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
+    device->allocator_impl()->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
 
     if (buffer_type == BufferType::L1) {
         l1_usage_summary_report << "," << stats.largest_free_block_bytes << ","
@@ -104,6 +104,13 @@ void populate_reports(
 
     write_memory_usage(
         device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
+
+    write_memory_usage(
+        device,
+        BufferType::L1_SMALL,
+        memory_usage_summary_report,
+        detailed_memory_usage_report,
+        l1_usage_summary_report);
 }
 
 void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevice* device) {
@@ -147,7 +154,7 @@ void MemoryReporter::init_reports() {
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
 void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
-    MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
+    MemoryReporter::inst().dump_memory_usage_state(device, prefix);
 }
 
 MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {
@@ -160,7 +167,7 @@ MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferTy
         .total_bytes_allocated_per_bank = stats.total_allocated_bytes,
         .total_bytes_free_per_bank = stats.total_free_bytes,
         .largest_contiguous_bytes_free_per_bank = stats.largest_free_block_bytes,
-        .block_table = device->allocator()->get_memory_block_table(buffer_type)};
+        .block_table = device->allocator_impl()->get_memory_block_table(buffer_type)};
 }
 
 MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type) {
@@ -179,6 +186,4 @@ MemoryReporter& MemoryReporter::inst() {
 void EnableMemoryReports() { MemoryReporter::toggle(true); }
 void DisableMemoryReports() { MemoryReporter::toggle(false); }
 
-}  // namespace detail
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::detail

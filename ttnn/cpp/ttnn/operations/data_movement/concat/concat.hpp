@@ -10,13 +10,12 @@
 #include <ranges>
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct ConcatOperation {
     // Wrapper for TTDNN
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const std::vector<ttnn::Tensor>& input_tensors,
         int dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -24,8 +23,7 @@ struct ConcatOperation {
         unsigned int groups = 1);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto concat = ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
 

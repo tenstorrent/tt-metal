@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -109,7 +109,7 @@ def multimodal_rope_from_hf(
     Unlike the reference model, we will precompute cos and sin for the entire sequence length including the generated tokens
     """
 
-    max_seq_len = model_args.max_seq_len
+    max_seq_len = min(model_args.max_seq_len, max(2 ** math.ceil(math.log(inputs.input_ids.shape[-1], 2)), 128))
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
     )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
@@ -129,6 +129,7 @@ def multimodal_rope_from_hf(
         second_per_grid_ts=None,
         attention_mask=padded_attention_mask,
     )
+
     # Qwen2_5_VLModel.forward:
     cos, sin = reference_model.model.language_model.rotary_emb(input_embeds, position_ids)
     # apply_multimodal_rotary_pos_emb:
@@ -139,7 +140,7 @@ def multimodal_rope_from_hf(
     # convert to meta-style interleaved format:
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
     # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas
-    return cos, sin
+    return cos, sin, rope_deltas
 
 
 def check_tensor(ttnn_tensor, name, mesh_device):

@@ -10,7 +10,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_expert_token_remap.hpp"
 #include "moe_expert_token_remap_pybind.hpp"
@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_expert_token_remap(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE CCL Metadata from global experts to local device experts
 
@@ -29,7 +29,6 @@ Args:
 
 Keyword Args:
     memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-    queue_id (int, optional): command queue id. Defaults to `0`.
     output_mapping_tensor (ttnn.Tensor, optional): Preallocated output mapping tensor. Defaults to `None`.
     output_reduced_tensor (ttnn.Tensor, optional): Preallocated output reduced tensor. Defaults to `None`.
     reduction_size (int, optional): reduction chunk size
@@ -54,10 +53,8 @@ Returns:
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
                const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
-               const uint32_t reduction_size,
-               QueueId queue_id) {
+               const uint32_t reduction_size) {
                 return self(
-                    queue_id,
                     topk_tensor,
                     expert_mapping_tensor,
                     expert_metadata_tensor,
@@ -74,7 +71,6 @@ Returns:
             py::arg("optional_output_mapping_tensor") = std::nullopt,
             py::arg("optional_output_reduced_tensor") = std::nullopt,
             py::arg("reduction_size") = ExecuteMoeExpertTokenRemap::REDUCTION_SIZE,
-            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

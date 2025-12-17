@@ -19,9 +19,6 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(7);
     uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     // DPRINT << "batch=" << batch << ENDL();
@@ -31,18 +28,16 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat src0_data_format = get_dataformat(cb_id_in0);
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat src1_data_format = get_dataformat(cb_id_in1);
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     uint32_t itileA_batch = 0;
     uint32_t itileB_batch = 0;
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
 
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format};
+    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         uint32_t itileA = itileA_batch;

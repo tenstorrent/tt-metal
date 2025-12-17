@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,17 +12,15 @@
 
 #include "context.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
-namespace tools {
-namespace mem_bench {
+
+namespace tools::mem_bench {
 struct Context;
-}  // namespace mem_bench
-}  // namespace tools
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tools::mem_bench
+
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tools::mem_bench {
 

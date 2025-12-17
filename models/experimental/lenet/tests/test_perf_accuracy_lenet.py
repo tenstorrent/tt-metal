@@ -10,10 +10,8 @@ import pytest
 import ttnn
 import evaluate
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
@@ -38,7 +36,6 @@ def run_perf_inference(device, pcc, iterations, model_location_generator, reset_
     g_cpu.manual_seed(213)
     dataloader = DataLoader(test_dataset, batch_size=1, generator=g_cpu, shuffle=True)
 
-    disable_persistent_kernel_cache()
     num_classes = 10
 
     with torch.no_grad():
@@ -64,8 +61,6 @@ def run_perf_inference(device, pcc, iterations, model_location_generator, reset_
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_lenet(tt_image)

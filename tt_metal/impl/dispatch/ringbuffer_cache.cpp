@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 // #include "tt_metal/hw/inc/dataflow_api.h"
 
 namespace tt::tt_metal {
@@ -12,7 +12,7 @@ RingbufferCacheManager::RingbufferCacheManager(
     int cache_block_sizeB, int cache_size_blocks, int manager_entry_initial_size) :
     cache_block_sizeB_(cache_block_sizeB),
     cache_size_blocks_(cache_size_blocks),
-    cache_manager_initial_entry_size_{manager_entry_initial_size} {
+    cache_manager_initial_entry_size_{static_cast<uint32_t>(manager_entry_initial_size)} {
     TT_ASSERT(cache_size_blocks > 0, "Ringbuffer cache size must be greater than 0");
     TT_ASSERT(cache_block_sizeB > 0, "Ringbuffer cache block size must be greater than 0");
     TT_ASSERT(
@@ -36,7 +36,7 @@ void RingbufferCacheManager::add_manager_entry_no_evict(uint64_t pgm_id, uint32_
         offset + length <= cache_size_blocks_, "RingbufferCacheManager new allocation: offset + length > cache size");
 
     auto idx = manager_.next_idx;
-    manager_.entry[idx] = {offset, length, pgm_id};
+    manager_.entry[idx] = {offset, length, static_cast<uint32_t>(pgm_id)};
 
     TT_ASSERT(pgm_id <= UINT32_MAX, "RingbufferCacheManager new allocation: pgm_id > UINT32_MAX");
     valid_[pgm_id] = idx;
@@ -114,7 +114,7 @@ std::optional<typename RingbufferCacheManager::CacheOffset> RingbufferCacheManag
     const int required_space = (lengthB + cache_block_sizeB_ - 1) / cache_block_sizeB_;
     if (required_space > cache_size_blocks_) [[unlikely]] {
         return std::nullopt;  // cannot fit in cache
-    } else if (manager_.entry.size() == 0) [[unlikely]] {
+    } else if (manager_.entry.empty()) [[unlikely]] {
         // first entry, so we can just add it
         valid_.resize(pgm_id + 1, RingbufferCacheManager::invalid_cache_entry_);
         manager_.entry.resize(std::min(cache_manager_initial_entry_size_, cache_size_blocks_));
@@ -198,7 +198,7 @@ void RingbufferCacheManager::reset() {
     this->valid_.swap(temp_valid);
 }
 
-void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) {
+void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) noexcept {
     TT_ASSERT(
         a.cache_block_sizeB_ == b.cache_block_sizeB_,
         "Ringbuffer cache block size mismatch: {} != {}",

@@ -27,6 +27,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t num_cores_y = get_compile_time_arg_val(3);
+    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(4) == 1;
     bool is_merge_core = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t onetile = 1;
@@ -74,7 +75,7 @@ void MAIN {
 
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init(cb_x2, cb_reduce, cb_out);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
 
         cb_wait_front(cb_x2, Wt);
 
@@ -82,7 +83,7 @@ void MAIN {
         ACQ();
 
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile(cb_x2, cb_reduce, wtr, 0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
         }
         pack_tile(dst0, cb_out, 0);
         REL();

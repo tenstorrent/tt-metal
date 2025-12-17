@@ -1,0 +1,38 @@
+<!--
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+-->
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cluster Telemetry Dashboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            min-height: 100vh;
+        }
+
+        h1 {
+            text-align: center;
+            color: #fff;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Cluster Telemetry Dashboard</h1>
+    <telemetry-dashboard></telemetry-dashboard>
+
+    <script type="module">
+        // Import the main dashboard component
+        import './js/telemetry-dashboard.js';
+    </script>
+</body>
+</html>

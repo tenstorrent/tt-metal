@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,9 +90,21 @@ inline bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector
 }
 
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
+// If no tensors are found, returns zero coordinate.
 template <typename TensorArgs>
-std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& tensor_args) {
-    Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
+    const TensorArgs& tensor_args, ttnn::MeshDevice* mesh_device = nullptr) {
+    auto first_tensor_opt = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+
+    // If no tensor is found, return zero coordinate
+    if (!first_tensor_opt.has_value()) {
+        if (mesh_device == nullptr) {
+            TT_THROW("No tensors found in tensor_args and no mesh_device provided to extract_tensor_coordinates");
+        }
+        return {MeshCoordinate::zero_coordinate(mesh_device->shape().dims())};
+    }
+
+    const Tensor& first_tensor = first_tensor_opt.value();
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
     std::transform(
         first_tensor.device_storage().coords.begin(),
@@ -130,8 +142,9 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
 
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
+    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+        program.set_runtime_id(op_id);
     }
 }
 

@@ -6,21 +6,18 @@
 #include <cstdint>
 #include <vector>
 
-#include "upsample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::upsample {
+namespace ttnn::operations::pool::upsample::program {
 using namespace tt;
 
 struct StickInterval {
@@ -202,8 +199,15 @@ static Tensor create_config_tensor(
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
-operation::ProgramWithCallbacks upsample_multi_core_sharded(
-    const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
+UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreShardedProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input = tensor_args.input_tensor;
+    auto& output = output_tensor;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+
     Program program = CreateProgram();
     distributed::MeshDevice* device = input.device();
 
@@ -300,7 +304,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     const auto& config_storage = config_tensor_device.device_storage();
-    auto config_buffer = config_storage.get_buffer();
+    auto* config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
 
     auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
@@ -332,21 +336,29 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
     CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Capture config_buffer to cache this with the program
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_storage, config_buffer](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .writer_kernel = writer_kernel,
+            .cb_src0 = cb_src0,
+            .out_cb = out_cb,
+            .config_cb = config_cb,
+            .config_storage = config_storage,
+            .config_buffer = config_buffer,
+        }};
 }
 
-}  // namespace ttnn::operations::upsample
+void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
+
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.out_cb, *dst_buffer);
+}
+
+}  // namespace ttnn::operations::pool::upsample::program

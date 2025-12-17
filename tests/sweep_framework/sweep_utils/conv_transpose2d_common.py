@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -56,7 +56,6 @@ def run_full(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -125,7 +124,6 @@ def run_full(
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
     )
 
     if override_sharding_config:
@@ -257,4 +255,5 @@ def run_short(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+    pcc_passed, pcc_message = check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998)
+    return [pcc_passed, pcc_message, e2e_perf, torch_output_tensor, torch_out_golden_tensor]

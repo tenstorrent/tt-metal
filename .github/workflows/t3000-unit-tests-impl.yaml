@@ -12,37 +12,192 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
         default: "in-service"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          ALWAYS_RUN=$(jq -n '[
+            {
+              "name": "t3k ttmetal tests",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_ttmetal_tests",
+              "timeout": 40,
+              "owner_id": "ULMEPM2MA" # Sean Nijjar
+            },
+            {
+              "name": "t3k ttnn tests",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_ttnn_tests",
+              "timeout": 45,
+              "owner_id": "UBHPP2NDP" # Joseph Chu
+            },
+            {
+              "name": "t3k tt_metal multiprocess tests",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_tt_metal_multiprocess_tests",
+              "timeout": 15,
+              "owner_id": "U03NG0A5ND7" # Aditya Saigal
+            }
+            ]')
+
+          MODEL_TESTS=$(jq -n '[
+            {
+              "name": "t3k falcon7b tests",
+              "model": "falcon7b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon7b_tests",
+              "timeout": 30,
+              "owner_id": "UBHPP2NDP" # Joseph Chu
+            },
+            {
+              "name": "t3k falcon40b tests",
+              "model": "falcon40b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon40b_tests",
+              "timeout": 30,
+              "owner_id": "U053W15B6JF" # Djordje Ivanovic
+            },
+            {
+              "name": "t3k llama3-small tests",
+              "model": "llama3-small",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3-small_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k llama3.2-11b tests",
+              "model": "llama3.2-11b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-11b_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k llama3.2-11b-vision tests",
+              "model": "llama3.2-11b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-11b-vision_unit_tests",
+              "timeout": 30,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k n300 mesh llama3.2-11b-vision tests",
+              "model": "n300 mesh llama3.2-11b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
+              "timeout": 30,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k llama3.2-90b-vision tests",
+              "model": "llama3.2-90b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-90b-vision_unit_tests",
+              "timeout": 30,
+              "label": "pipeline-functional",
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            # {
+            #   "name": "t3k llama3.1-70b tests",
+            #   "model": "llama3.1-70b",
+            #   "arch": "wormhole_b0",
+            #   "cmd": "run_t3000_llama3.1-70b_tests",
+            #   "timeout": 30,
+            #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            # },
+            {
+              "name": "t3k llama3.2-90b tests",
+              "model": "llama3.2-90b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-90b_tests",
+              "timeout": 30,
+              "label": "pipeline-functional",
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k mistral tests",
+              "model": "mistral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mistral_tests",
+              "timeout": 30,
+              "owner_id": "U0896VBAKFC" # Praktikkumar Prajapati
+            },
+            {
+              "name": "t3k mixtral tests",
+              "model": "mixtral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mixtral_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Harry Zhou
+            },
+            {
+              "name": "t3k grok tests",
+              "model": "grok",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_grok_tests",
+              "timeout": 30,
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
+            },
+            {
+              "name": "t3k unet shallow tests",
+              "model": "unet shallow",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_unet_shallow_tests",
+              "timeout": 30,
+              "owner_id": "U06ECNVR0EN" # Evan Smal
+            },
+            {
+              "name": "t3k qwen25_vl tests",
+              "model": "qwen25_vl",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen25_vl_unit_tests",
+              "timeout": 20,
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k gemma3-small tests",
+              "model": "gemma3-small",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gemma3-small_tests",
+              "timeout": 30,
+              "owner_id": "U08E1JCDVNX" # Pavle Petrovic
+            }
+          ]')
+
+          echo "[INFO] Selected model: ${{ inputs.model }}"
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+              MATRIX=$(jq -n -c --argjson MT "$MODEL_TESTS" --argjson AR "$ALWAYS_RUN" '$MT + $AR')
+            else
+              CHOSEN_MODEL=$(echo "$MODEL_TESTS" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]')
+              MATRIX=$(jq -n -c --argjson CM "$CHOSEN_MODEL" --argjson AR "$ALWAYS_RUN" '$CM + $AR')
+          fi
+
+          echo "[INFO] Tests to be run:"
+          echo $MATRIX | jq '.[].name'
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
   t3000-unit-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 35, owner_id: ULMEPM2MA}, #Sean Nijjar
-          { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 45, owner_id: UBHPP2NDP}, #Joseph Chu
-          { name: "t3k tt_metal multiprocess tests", arch: wormhole_b0, cmd: run_t3000_tt_metal_multiprocess_tests, timeout: 25, owner_id: U03NG0A5ND7}, #Aditya Saigal
-          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 15, owner_id: U013121KDH9}, #Austin Ho
-          { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, owner_id: UBHPP2NDP}, #Joseph Chu
-          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, owner_id: U053W15B6JF}, #Djordje Ivanovic
-          { name: "t3k llama3-small tests", arch: wormhole_b0, cmd: run_t3000_llama3-small_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          { name: "t3k llama3.2-11b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          { name: "t3k llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          { name: "t3k n300 mesh llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          { name: "t3k llama3.2-90b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_unit_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          #{ name: "t3k llama3.1-70b tests", arch: wormhole_b0, cmd: run_t3000_llama3.1-70b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          { name: "t3k llama3.2-90b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          #{ name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
-          { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
-          { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal
-          { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 30, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-          { name: "t3k qwen25_vl tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_unit_tests, timeout: 40, owner_id: U07RY6B5FLJ}, #Gongyu Wang
-          { name: "t3k gemma3-small tests", arch: wormhole_b0, cmd: run_t3000_gemma3-small_tests, timeout: 30, owner_id: U08E1JCDVNX},  #Pavle Petrovic
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -70,8 +225,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -87,7 +247,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

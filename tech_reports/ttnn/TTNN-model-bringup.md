@@ -87,17 +87,16 @@ The diagram below illustrates the corresponding Downsample1 module:
 
   - STAGE 2 of optimization:
   - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.
-  - When you build metal use:
+  - Build the project:
     ```
-    build_metal.sh -p
+    build_metal.sh
     ```
-. This will enable the profiler.
-  - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the ResNet model replacing the path to the test_perf_resnet.py with the path to your implementation:
+  - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the bert_tiny model replacing the path to the demo.py file with the path to your implementation:
 
     ```
-    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"'
+    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/wormhole/bert_tiny/demo/demo.py::test_demo"
     ```
-  - Once you execute such command, a .csv perf sheet will apear in your execution path. You may open the file via excel for better utilities.
+  - Once you execute such command, a .csv perf sheet will appear in your execution path. You may open the file via excel for better utilities.
   - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it.
   - [Perf Report Headers](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet.
   - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond to. Here are some examples:

@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 // #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "ttnn/device_operation.hpp"
@@ -77,9 +76,9 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t input1_tile_size = tt::tile_size(b_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
     uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();
@@ -137,8 +136,8 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             .set_page_size(src1_cb_index, input1_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    auto src1_buffer = b->buffer();
-    auto dst_buffer = output.buffer();
+    auto* src1_buffer = b->buffer();
+    auto* dst_buffer = output.buffer();
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -250,8 +249,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     auto&& [binary_reader_kernel_id, bcast_kernel_id, cb_src0, out_cb, ncores_x] = cached_program.shared_variables;
 
     auto& program = cached_program.program;
-    auto src_buffer = input_tensor_a.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor_a.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     auto a = input_tensor_a;

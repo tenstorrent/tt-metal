@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -17,8 +19,7 @@
 
 namespace ttnn {
 
-namespace operations {
-namespace core {
+namespace operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
@@ -28,16 +29,16 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<QueueId> queue_id = std::nullopt);
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+ttnn::Tensor from_device(
+    const ttnn::Tensor& tensor, bool blocking = true, std::optional<QueueId> queue_id = std::nullopt);
 
 void deallocate(Tensor& tensor, bool force = true);
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 
-}  // namespace core
-}  // namespace operations
+}  // namespace operations::core
 
 using operations::core::deallocate;
 using operations::core::from_device;

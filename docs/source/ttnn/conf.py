@@ -55,6 +55,7 @@ extensions = [
     "breathe",
     "myst_parser",
     "op_documenter",
+    "doc_modifier",
 ]
 
 # For markdown and RST files
@@ -105,6 +106,7 @@ html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_con
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+html_js_files = ["posthog.js"]
 
 html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
 

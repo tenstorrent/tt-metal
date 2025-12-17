@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,7 +81,6 @@ void py_bind_reduce_scatter_minimal_async(pybind11::module& module) {
         module,
         ttnn::experimental::reduce_scatter_minimal_async,
         R"doc(
-
         Performs an reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:

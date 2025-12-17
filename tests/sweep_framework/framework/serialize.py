@@ -2,13 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ttnn import *
+import ttnn
 import json
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from framework.statuses import VectorValidity, VectorStatus
+import torch
+
+TTNN_NAME = ttnn.__name__
+
+TTNN_NAME = ttnn.__name__
 
 
 def convert_enum_values_to_strings(data):
-    """Convert enum integer values to human-readable strings for PostgreSQL storage."""
+    """Convert enum integer values to human-readable strings"""
     if not isinstance(data, dict):
         return data
 
@@ -65,22 +71,52 @@ def serialize(object, warnings=[]):
         return str(object)
 
 
+def _ttnn_type_from_name(type_name):
+    uq_type_name = type_name.split(".")[-1]
+    the_type = None
+    try:
+        the_type = getattr(ttnn, uq_type_name)
+    except AttributeError as e:
+        logger.debug(f"Hopefully not an enum {e}")
+
+    return the_type
+
+
+def _deserialize_ttnn_enum(obj_name: str):
+    uq_obj_name_parts = list(filter(lambda p: p != TTNN_NAME, obj_name.split(".")))
+    enum_type = _ttnn_type_from_name(uq_obj_name_parts[0])
+
+    if enum_type is None:
+        return None
+
+    return eval(f"enum_type.{uq_obj_name_parts[1]}")
+
+
 def deserialize(object):
-    if isinstance(object, dict):
-        type = eval(object["type"])
-        return type.from_json(object["data"])
-    else:
+    try:
+        if isinstance(object, dict):
+            type = _ttnn_type_from_name(object["type"])
+            return type.from_json(object["data"])
+
+        elif isinstance(object, str) and "." in object:
+            maybe_enum = _deserialize_ttnn_enum(object)
+            if maybe_enum is not None:
+                return maybe_enum
         try:
             return eval(object)
-        except:
+        except (SyntaxError, NameError) as e:
             return str(object)
+
+    except Exception as e:
+        logger.exception(f"deserialize failed {e}")
+        raise
 
 
 def serialize_structured(object, warnings=[]):
     if "to_json" in dir(object):
         json_str = object.to_json()
         try:
-            # Parse the JSON string to make it queryable in PostgreSQL JSONB
+            # Parse the JSON string
             parsed_data = json.loads(json_str)
             # Convert enum integers to human-readable strings
             parsed_data = convert_enum_values_to_strings(parsed_data)
@@ -99,20 +135,31 @@ def serialize_structured(object, warnings=[]):
 
 
 def deserialize_structured(object):
-    if isinstance(object, dict):
-        type = eval(object["type"])
-        data = object["data"]
-        # If data is a dict/object, convert it back to JSON string for from_json method
-        if isinstance(data, (dict, list)):
-            # Convert string enum values back to integers for from_json
-            data = convert_enum_strings_to_values(data)
-            data = json.dumps(data)
-        return type.from_json(data)
-    else:
+    try:
+        if isinstance(object, dict):
+            type = eval(object["type"])
+            data = object["data"]
+            # If data is a dict/object, convert it back to JSON string for from_json method
+            if isinstance(data, (dict, list)):
+                # Convert string enum values back to integers for from_json
+                data = convert_enum_strings_to_values(data)
+                data = json.dumps(data)
+            return type.from_json(data)
+
+        elif isinstance(object, str):
+            if "." in object:
+                maybe_enum = _deserialize_ttnn_enum(object)
+                if maybe_enum is not None:
+                    return maybe_enum
+            elif object in ["sum", "mean", "max", "min", "std", "var"]:
+                return object
         try:
             return eval(object)
-        except:
+        except (SyntaxError, NameError):
             return str(object)
+    except Exception as e:
+        logger.exception(f"Deserialize structured failed {e}")
+        raise
 
 
 def convert_enum_strings_to_values(data):
@@ -164,7 +211,7 @@ def convert_enum_strings_to_values(data):
 
 def deserialize_vector_structured(test_vector):
     """
-    Deserialize a test vector that was serialized for PostgreSQL storage.
+    Deserialize a test vector from a human-readable JSON to TTNN enums
     """
     param_names = test_vector.keys()
     test_vector = [deserialize_structured(test_vector[elem]) for elem in test_vector]

@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -12,7 +10,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-using namespace tt::constants;
 using namespace tt;
 
 namespace reuse_optimized_helpers {
@@ -31,6 +28,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
@@ -41,6 +40,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     const Tensor& in0,
     const Tensor& in1,
     const Tensor& output,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
@@ -64,13 +65,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    auto in0_tile = in0.tensor_spec().tile();
-    auto in1_tile = in1.tensor_spec().tile();
     // currently only support transpose of the full tile
+    bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
+
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile_shape[1]});
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
 
-    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * K;
+    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t num_tiles_per_block_in1 = K * per_core_N;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
@@ -148,26 +148,57 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     // TODO: This contains same information as above; refactor this?
     uint32_t num_evenly_divided_output_blocks = num_output_blocks_total / num_cores;
 
     // Assume all of core_range is used (ie. num_evenly_divided_output_blocks > 0)
     TT_FATAL(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-    uint32_t num_cores_c = core_range.x;
-    uint32_t num_cores_r = core_range.y;
+
+    const auto in0_tensor_stride_w = transpose_a ? M : 1;
+    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
+
+    const auto in1_tensor_stride_w = transpose_b ? K : 1;
+    const auto in1_tensor_stride_h = transpose_b ? 1 : N;
+    const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
 
     // Compile time args
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)in0_tensor_stride_w,
+        (std::uint32_t)in0_tensor_stride_h,
+        (std::uint32_t)in0_tensor_next_block_stride,
+        (std::uint32_t)in0_block_w,
+        (std::uint32_t)per_core_M_per_batch,  // in0_block_h
+        (std::uint32_t)in0_block_num_tiles,
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)num_blocks,
+        (std::uint32_t)bcast_batch,
+        (std::uint32_t)M * K,  // MtKt
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> reader_writer_compile_time_args = {};
+
+    std::vector<uint32_t> reader_writer_compile_time_args = {
+        (std::uint32_t)in1_tensor_stride_w,
+        (std::uint32_t)in1_tensor_stride_h,
+        (std::uint32_t)in1_tensor_next_block_stride,
+        (std::uint32_t)per_core_N,           // in1_block_w
+        (std::uint32_t)in0_block_w,          // in1_block_h
+        (std::uint32_t)in1_block_num_tiles,  // in1_block_num_tiles
+        (std::uint32_t)num_blocks,
+        (std::uint32_t)bcast_batch,
+        (std::uint32_t)K * N,  // KtNt
+
+        (std::uint32_t)1,                                  // out_tensor_stride_w
+        (std::uint32_t)N,                                  // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,                     // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * N,                 // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_subblock_w,                     // out_subblock_w
+        (std::uint32_t)out_subblock_h,                     // out_subblock_h
+        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblock_tile_count
+        (std::uint32_t)out_num_subblocks_w,                // out_num_subblocks_w
+        (std::uint32_t)out_num_subblocks_h,                // out_num_subblocks_h
+        (std::uint32_t)M * N,                              // MtNt
+    };
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(reader_writer_compile_time_args);
     std::map<std::string, std::string> mm_kernel_in0_reader_defines;
@@ -180,6 +211,36 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     if (output_is_sharded) {
         mm_kernel_in1_reader_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // Intermediate CB read
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
+    bool in0_needs_intermediate_cb_read = false;
+    bool in1_needs_intermediate_cb_read = false;
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_reader_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
+        if (in1_needs_intermediate_cb_read) {
+            mm_kernel_in1_reader_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
@@ -214,7 +275,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         num_blocks_per_core_group_1,  // batch
         out_block_tiles,
 
-        untilize_out};
+        untilize_out,  // untilize_out
+        false,         // get_batch_from_reader
+        in0_transpose_tile,
+    };
 
     std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
@@ -233,7 +297,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Create compute kernel
-    auto mm_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         core_group_1,
@@ -264,8 +328,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             num_blocks_per_core_group_2,  // batch
             out_block_tiles,
 
-            untilize_out};
-        auto mm_kernel_group_2_id = tt_metal::CreateKernel(
+            untilize_out,  // untilize_out
+            false,         // get_batch_from_reader
+            in0_transpose_tile,
+        };
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
             core_group_2,
@@ -321,7 +388,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
     } else {
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
@@ -344,54 +411,46 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
 
+    // Intermediate CB read
+    if (in1_needs_intermediate_cb_read) {
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
+    }
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
+    }
+
+    if (in0_transpose_tile) {
+        const uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
+        auto in0_transpose_cb_config =
+            tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
+                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_transpose_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
+    }
+
     // Write runtime args to device
     std::vector<uint32_t> mm_reader_args = {
-        (std::uint32_t)num_blocks,  // num_blocks
-
-        (std::uint32_t)0,            // batch placeholder
-        (std::uint32_t)bcast_batch,  // bcast_B
-        (std::uint32_t)M * K,        // MtKt
-
         (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
         (std::uint32_t)0,                      // in0_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // in0_tensor_stride_w
-        (std::uint32_t)K,                      // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,            // in0_tensor_next_block_stride
-
-        (std::uint32_t)in0_block_w,           // in0_block_w
-        (std::uint32_t)per_core_M_per_batch,  // in0_block_h
-        (std::uint32_t)in0_block_num_tiles,   // in0_block_num_tiles
+        (std::uint32_t)0,                      // batch placeholder
     };
 
     std::vector<uint32_t> mm_writer_args = {
-        (std::uint32_t)num_blocks,   // num_blocks
-        (std::uint32_t)0,            // batch placeholder
-        (std::uint32_t)bcast_batch,  // bcast_B
-        (std::uint32_t)M * N,        // MtNt
-        (std::uint32_t)K * N,        // KtNt
-
         (std::uint32_t)in1_buffer->address(),  // in1_tensor_addr
         (std::uint32_t)0,                      // in1_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // in1_tensor_stride_w
-        (std::uint32_t)N,                      // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,        // in1_tensor_next_block_stride
-
-        (std::uint32_t)per_core_N,           // in1_block_w
-        (std::uint32_t)in0_block_w,          // in1_block_h
-        (std::uint32_t)in1_block_num_tiles,  // in1_block_num_tiles
-
+        (std::uint32_t)0,                      // batch placeholder
         (std::uint32_t)out_buffer->address(),  // out_tensor_addr
         (std::uint32_t)0,                      // out_tensor_start_tile_id placeholder
-        (std::uint32_t)1,                      // out_tensor_stride_w
-        (std::uint32_t)N,                      // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,         // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,     // out_tensor_next_subblock_stride_h
-
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        (std::uint32_t)out_num_subblocks_w,                // out_num_subblocks_w
-        (std::uint32_t)out_num_subblocks_h,                // out_num_subblocks_h
     };
     bool row_major = false;
     if (shard_spec.has_value()) {
@@ -401,19 +460,17 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        uint32_t core_idx_x = core.x;
-        uint32_t core_idx_y = core.y;
         uint32_t num_output_blocks_per_core =
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
         // Write runtime args to device
-        mm_reader_args[1] = num_output_blocks_per_core;
-        mm_reader_args[5] = num_blocks_written * num_tiles_per_block_in0;
+        mm_reader_args[1] = num_blocks_written * num_tiles_per_block_in0;          // in0_tensor_start_tile_id
+        mm_reader_args[2] = num_output_blocks_per_core;                            // batch
 
-        mm_writer_args[1] = num_output_blocks_per_core;
-        mm_writer_args[6] =
+        mm_writer_args[1] =
             (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1;  // in1_tensor_start_tile_id
-        mm_writer_args[14] = num_blocks_written * num_tiles_per_block_out;              // out_tensor_start_tile_id
+        mm_writer_args[2] = num_output_blocks_per_core;                    // batch
+        mm_writer_args[4] = num_blocks_written * num_tiles_per_block_out;  // out_tensor_start_tile_id
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_id, core, mm_writer_args);
@@ -428,10 +485,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
             const bool src1_sharded = input_tensors[1].memory_config().is_sharded();
@@ -449,13 +506,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
                 for (const auto& core : cores) {
                     if (update_reader_args) {
                         auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                        runtime_args[4] = src_buffer_a->address();
+                        runtime_args[0] = src_buffer_a->address();  // in0_tensor_addr
                     }
 
                     if (update_writer_args) {
                         auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                        runtime_args[5] = src_buffer_b->address();
-                        runtime_args[13] = dst_buffer->address();
+                        runtime_args[0] = src_buffer_b->address();  // in1_tensor_addr
+                        runtime_args[3] = dst_buffer->address();    // out_tensor_addr
                     }
                 }
             }
@@ -477,17 +534,15 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
 }  // namespace reuse_optimized_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     const Tensor& a,
     const Tensor& b,
     Tensor& output,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -498,10 +553,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    auto in0_tile_shape = a.tensor_spec().tile().get_tile_shape();
-    auto in1_tile_shape = b.tensor_spec().tile().get_tile_shape();
+    const auto& ashape = get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& bshape = get_matmul_tensor_padded_shape(b, transpose_b);
+    auto in0_tile = get_matmul_tile(a, transpose_a);
+    auto in1_tile = get_matmul_tile(b, transpose_b);
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
@@ -513,9 +568,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);  // output
 
     tt_metal::IDevice* device = a.device();
-
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -532,21 +584,18 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    uint32_t Mt = get_M_dim(ashape, in0_tile, fuse_batch);
+    uint32_t Kt = get_K_dim(ashape, in0_tile);
+    uint32_t Nt = get_N_dim(bshape, in1_tile);
 
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile_shape[1];
+    const auto ashape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
     // Get large matmul params
 
-    uint32_t num_blocks_total = (B * Mt / per_core_M) * (Nt / per_core_N);
     CoreCoord core_range = compute_with_storage_grid_size;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -571,6 +620,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         Nt,
         Kt,
         bcast_batch,
+        transpose_a,
+        transpose_b,
         ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
@@ -581,6 +632,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         a,
         b,
         output,
+        in0_tile,
+        in1_tile,
         in0_data_format,
         in1_data_format,
         output_data_format,
@@ -594,6 +647,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& b,
     Tensor& output,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -616,6 +671,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         b,
         output,
         bcast_batch,
+        transpose_a,
+        transpose_b,
         compute_with_storage_grid_size,
         output_dtype,
         compute_kernel_config,
@@ -628,8 +685,4 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         untilize_out);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

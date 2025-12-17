@@ -11,6 +11,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstring>
@@ -21,15 +23,13 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         // Initial Runtime Args Parse
         std::vector<std::string> input_args(argv, argv + argc);
 
-        std::string size_string = "";
+        std::string size_string;
         uint32_t iter;
         try {
             std::tie(size_string, input_args) = test_args::get_command_option_and_remaining_args(input_args, "--size");
@@ -59,10 +59,10 @@ int main(int argc, char** argv) {
 
         // Device Setup
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Application Setup
-        srand(time(0));
+        srand(time(nullptr));
         uint32_t dram_addr =
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;
@@ -80,7 +80,8 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, src_vec);
+                pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, src_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -98,7 +99,8 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_channel, dram_addr, buffer_size, result_vec);
+                tt_metal::detail::ReadFromDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -110,7 +112,7 @@ int main(int argc, char** argv) {
 
         // Validation & Teardown
         pass &= (src_vec == result_vec);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
@@ -123,6 +125,6 @@ int main(int argc, char** argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass, "Error");
+    TT_FATAL(pass, "PCIe DRAM read/write test failed");
     return 0;
 }

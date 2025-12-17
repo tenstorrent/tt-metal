@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,16 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
 struct MeshCoreCoord {
-    MeshCoordinate device_coord;
-    CoreCoord core_coord;
+    MeshCoordinate device_coord = MeshCoordinate(0);
+    CoreCoord core_coord = CoreCoord(0, 0);
+
     bool operator==(const MeshCoreCoord& other) const {
         return device_coord == other.device_coord && core_coord == other.core_coord;
     }
@@ -24,8 +26,12 @@ struct MeshCoreCoord {
 // Used to determine which cores the socket config must be written to and the sender to receiver mapping.
 // Cannot reuse senders and receivers in a single socket context. Each socket connection is 1:1.
 struct SocketConnection {
-    MeshCoreCoord sender_core;
-    MeshCoreCoord receiver_core;
+    MeshCoreCoord sender_core = {};
+    MeshCoreCoord receiver_core = {};
+
+    bool operator==(const SocketConnection& other) const {
+        return sender_core == other.sender_core && receiver_core == other.receiver_core;
+    }
 };
 
 // Specifies how memory is allocated for this socket.
@@ -91,11 +97,11 @@ private:
         std::shared_ptr<MeshBuffer> config_buffer,
         const SocketConfig& config,
         SocketEndpoint socket_endpoint_type) :
-        data_buffer_(data_buffer),
-        config_buffer_(config_buffer),
+        data_buffer_(std::move(data_buffer)),
+        config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void connect_with_peer(std::shared_ptr<multihost::DistributedContext> context);
+    void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
@@ -110,7 +116,14 @@ private:
 }  // namespace tt::tt_metal::distributed
 
 namespace std {
-
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::SocketConnection> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept;
+};
 template <>
 struct hash<tt::tt_metal::distributed::SocketConfig> {
     size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,15 +23,10 @@ class VaeDecoder:
         output_width,
         midblock_in_channels,
         midblock_norm_blocks,
-        midblock_conv_channel_split_factors,
         upblock_out_channels,
         upblock_out_dimensions,
         upblock_norm_blocks,
-        upblock_resnet_conv_channel_split_factors,
-        upblock_upsample_conv_channel_split_factors,
         norm_num_blocks=16,
-        conv_in_channel_split_factors=(1, 1),
-        conv_out_channel_split_factors=(2, 1),
     ):
         self.device = device
 
@@ -43,8 +38,6 @@ class VaeDecoder:
             input_height,
             input_width,
             midblock_in_channels,
-            conv_in_channel_split_factors[0],
-            conv_in_channel_split_factors[1],
         )
 
         # 1 midblock
@@ -55,7 +48,6 @@ class VaeDecoder:
             input_height,
             input_width,
             midblock_norm_blocks,
-            midblock_conv_channel_split_factors,
         )
         midblock_out_channels = midblock_in_channels
 
@@ -75,14 +67,12 @@ class VaeDecoder:
                     upblock_out_dimensions[i + 1],
                     upblock_out_dimensions[i + 1],
                     upblock_norm_blocks[i],
-                    upblock_resnet_conv_channel_split_factors[i],
-                    upblock_upsample_conv_channel_split_factors[i],
                 )
             )
 
         # groupnorm
         self.norm_num_blocks = norm_num_blocks
-        self.norm_grid_core = ttnn.CoreGrid(y=4, x=4)
+        self.norm_grid_core = ttnn.CoreGrid(y=4, x=8)
         (
             self.norm_input_mask,
             self.norm_weights,
@@ -103,17 +93,18 @@ class VaeDecoder:
             output_height,
             output_width,
             out_channels,
-            conv_out_channel_split_factors[0],
-            conv_out_channel_split_factors[1],
         )
 
     def __call__(self, hidden_states):
         hidden_states = self.conv_in(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         hidden_states = self.midblock(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         for upblock in self.upblocks:
             hidden_states = upblock(hidden_states)
+            ttnn.ReadDeviceProfiler(self.device)
 
         hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
 
@@ -130,9 +121,12 @@ class VaeDecoder:
             epsilon=GROUPNORM_EPSILON,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.ReadDeviceProfiler(self.device)
 
-        hidden_states = ttnn.silu(hidden_states)
-
+        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
+        self.conv_out.conv_config.enable_weights_double_buffer = False
+        self.conv_out.conv_config.enable_act_double_buffer = False
         hidden_states = self.conv_out(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         return hidden_states

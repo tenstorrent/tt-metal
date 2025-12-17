@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -24,7 +24,6 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
     const uint32_t tile_bytes = get_tile_size(cb_dataflow_idx);
-    const DataFormat data_format = get_dataformat(cb_dataflow_idx);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         for (uint32_t j = 0; j < Wt; j += block_size) {

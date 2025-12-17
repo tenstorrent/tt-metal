@@ -31,6 +31,7 @@ void kernel_main() {
     constexpr uint32_t index_stick_size = get_compile_time_arg_val(11);
     constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(12);
     constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(13);
+    constexpr auto index_args = TensorAccessorArgs<14>();
 
     // runtime args
     size_t arg_idx = 0;
@@ -60,8 +61,7 @@ void kernel_main() {
 
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
-        const InterleavedAddrGen<true> addrg = {
-            .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr, index_stick_size);
         cb_reserve_back(cb_batch_offset_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
         // Read the batch offset 1 page to read

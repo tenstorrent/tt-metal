@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,8 +82,6 @@ void MAIN {
                 uint32_t alias_mm2_prev_out = cb_out_im_A;
                 uint32_t alias_mm2_cur_out = cb_out_im_B;
 
-                cb_wait_front(cb_q_in, q_chunk_tiles);
-
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                     /* QK = Q_CHUNK @ K_CHUNK */
                     pack_reconfig_data_format(cb_qk_im);
@@ -146,7 +144,6 @@ void MAIN {
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
                         alias_cur_max, alias_cur_sum);
 
-                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(
                         cb_qk_im,

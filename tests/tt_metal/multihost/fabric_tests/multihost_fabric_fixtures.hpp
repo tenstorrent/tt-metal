@@ -12,8 +12,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
@@ -22,18 +21,23 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
+    bool custom_mesh_graph_path_set =
+        tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
+    std::string custom_mesh_graph_path =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
+        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
+        chip_to_eth_coord_mapping);
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),
+        !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
         "Multi-Host Routing tests require multiple hosts in the system");
 }
 
-inline const std::vector<eth_coord_t>& get_eth_coords_for_2x4_t3k() {
-    static const std::vector<eth_coord_t> t3k_2x4_eth_coords = {
+inline const std::vector<EthCoord>& get_eth_coords_for_2x4_t3k() {
+    static const std::vector<EthCoord> t3k_2x4_eth_coords = {
         {0, 0, 0, 0, 0},
         {0, 1, 0, 0, 0},
         {0, 2, 0, 0, 0},
@@ -46,8 +50,8 @@ inline const std::vector<eth_coord_t>& get_eth_coords_for_2x4_t3k() {
     return t3k_2x4_eth_coords;
 }
 
-inline const std::vector<eth_coord_t>& get_eth_coords_for_1x8_t3k() {
-    static const std::vector<eth_coord_t> t3k_1x8_eth_coords = {
+inline const std::vector<EthCoord>& get_eth_coords_for_1x8_t3k() {
+    static const std::vector<EthCoord> t3k_1x8_eth_coords = {
         {0, 0, 0, 0, 0},
         {0, 1, 0, 0, 0},
         {0, 2, 0, 0, 0},
@@ -60,16 +64,16 @@ inline const std::vector<eth_coord_t>& get_eth_coords_for_1x8_t3k() {
     return t3k_1x8_eth_coords;
 }
 
-inline const std::vector<std::vector<eth_coord_t>>& get_eth_coords_for_split_2x2_t3k() {
-    static const std::vector<std::vector<eth_coord_t>> t3k_2x2_eth_coords = {
+inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_split_2x2_t3k() {
+    static const std::vector<std::vector<EthCoord>> t3k_2x2_eth_coords = {
         {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
         {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}};
 
     return t3k_2x2_eth_coords;
 }
 
-inline const std::vector<std::vector<eth_coord_t>>& get_eth_coords_for_split_1x2_t3k() {
-    static const std::vector<std::vector<eth_coord_t>> t3k_1x2_eth_coords = {
+inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_split_1x2_t3k() {
+    static const std::vector<std::vector<EthCoord>> t3k_1x2_eth_coords = {
         {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}},
         {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
         {{0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
@@ -78,8 +82,8 @@ inline const std::vector<std::vector<eth_coord_t>>& get_eth_coords_for_split_1x2
     return t3k_1x2_eth_coords;
 }
 
-inline const std::vector<std::vector<eth_coord_t>>& get_eth_coords_for_dual_2x2_t3k() {
-    static const std::vector<std::vector<eth_coord_t>> t3k_2x2_eth_coords = {
+inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_dual_2x2_t3k() {
+    static const std::vector<std::vector<EthCoord>> t3k_2x2_eth_coords = {
         {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
         {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}}};
 
@@ -98,18 +102,20 @@ public:
         }
 
         validate_and_setup_control_plane_config(this);
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {
         if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
 
     // Derived Classes (Fixtures specialized for topology/system) must define this
     virtual std::string get_path_to_mesh_graph_desc() = 0;
-    virtual std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() = 0;
+    virtual std::vector<std::vector<EthCoord>> get_eth_coord_mapping() = 0;
     // The derived fixture must infer if the current system is suitable for the requested
     // topology in the Mesh Graph, when implementing this function.
     bool system_supported() {
@@ -134,13 +140,15 @@ public:
 
     void TearDown() override {
         if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
             tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }
 
     // Derived Classes (Fixtures specialized for topology/system) must define this
     virtual std::string get_path_to_mesh_graph_desc() = 0;
-    virtual std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() = 0;
+    virtual std::vector<std::vector<EthCoord>> get_eth_coord_mapping() = 0;
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
@@ -155,24 +163,20 @@ template <typename Fixture>
 class Split2x2FabricFixture : public Fixture {
 public:
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
-        return get_eth_coords_for_split_2x2_t3k();
-    }
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override { return get_eth_coords_for_split_2x2_t3k(); }
 };
 
 // Generic Fixture for Split 1x2 T3K systems using Fabric
 template <typename Fixture>
 class Split1x2FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
-        return get_eth_coords_for_split_1x2_t3k();
-    }
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override { return get_eth_coords_for_split_1x2_t3k(); }
 };
 
 // Generic Fixture for Dual 2x2 T3K systems using Fabric
@@ -180,20 +184,20 @@ template <typename Fixture>
 class Dual2x2FabricFixture : public Fixture {
 public:
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override { return get_eth_coords_for_dual_2x2_t3k(); }
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override { return get_eth_coords_for_dual_2x2_t3k(); }
 };
 
 // Generic Fixture for Dual T3K systems using Fabric
 template <typename Fixture>
 class Dual2x4FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
         return {get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k()};
     }
 };
@@ -202,10 +206,10 @@ class Dual2x4FabricFixture : public Fixture {
 template <typename Fixture>
 class NanoExabox2x4FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
         return {
             get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
@@ -219,10 +223,10 @@ class NanoExabox2x4FabricFixture : public Fixture {
 template <typename Fixture>
 class NanoExabox1x8FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.textproto";
     }
 
-    std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
         return {
             get_eth_coords_for_1x8_t3k(),
             get_eth_coords_for_1x8_t3k(),
@@ -251,5 +255,60 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+// Fixture for Exabox systems using Fabric
+class IntermeshExaboxFabricFixture : public BaseFabricFixture {
+public:
+    // This test fixture closes/opens devices on each test
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+
+    // The derived fixture must infer if the current system is suitable for the requested
+    // topology in the Mesh Graph, when implementing this function.
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   mesh_graph.get_mesh_ids().size() &&
+               cluster.get_board_type(0) == BoardType::UBB;
+    }
+};
+
+// Base fixture for Multi-Host MeshDevice tests relying on Inter-Mesh Routing.
+class MeshDeviceExaboxFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   mesh_graph.get_mesh_ids().size() &&
+               cluster.is_ubb_galaxy();
+    }
+};
+
+}  // namespace tt::tt_fabric::fabric_router_tests

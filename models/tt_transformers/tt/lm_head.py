@@ -32,7 +32,12 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
 
-        size_per_device = self.vocab_size // self.num_devices
+        # Pad vocab_size to be divisible by 32
+        padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
+
+        size_per_device = padded_vocab_size // self.num_devices
+
+        self.model_config = args.get_model_config()
 
         if args.is_galaxy:
             size_per_device = self.padded_vocab_size // self.num_devices
@@ -43,6 +48,17 @@ class LMHead(LightweightModule):
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+        # Pad the output weights to the padded vocab size with zeros
+        if self.vocab_size < padded_vocab_size:
+            padding_size = padded_vocab_size - self.vocab_size
+            torch_output_weights = torch.cat(
+                [
+                    torch_output_weights,
+                    torch.zeros(torch_output_weights.shape[0], padding_size, dtype=torch_output_weights.dtype),
+                ],
+                dim=-1,
+            )
 
         self.output_weights = []
         if args.is_galaxy:
@@ -140,12 +156,18 @@ class LMHead(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
             )
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+            outputs.append(
+                ttnn.sharded_to_interleaved(
+                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+                )
+            )
 
         # Concatenate the outputs
-        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.concat(
+            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+        )
 
         output = tt_all_reduce(
             output,

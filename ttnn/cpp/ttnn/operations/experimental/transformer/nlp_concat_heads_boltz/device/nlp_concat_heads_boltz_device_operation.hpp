@@ -6,21 +6,40 @@
 
 #include <optional>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "nlp_concat_heads_boltz_device_operation_types.hpp"
+#include "nlp_concat_heads_boltz_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
-
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
-    const Tensor& input_tensor_a, Tensor& output, CoreCoord compute_with_storage_grid_size);
+namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
 
 struct NLPConcatHeadsBoltzDeviceOperation {
-    tt::tt_metal::MemoryConfig output_mem_config;
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    using operation_attributes_t = nlp_concat_heads_boltz::operation_attributes_t;
+    using tensor_args_t = nlp_concat_heads_boltz::tensor_args_t;
+    using spec_return_value_t = nlp_concat_heads_boltz::spec_return_value_t;
+    using tensor_return_value_t = nlp_concat_heads_boltz::tensor_return_value_t;
+    using program_factory_t = std::variant<NLPConcatHeadsBoltzProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const tt::tt_metal::MemoryConfig& memory_config,
+        std::optional<Tensor> optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz
+
+namespace ttnn::prim {
+constexpr auto nlp_concat_heads_boltz = ttnn::register_operation<
+    "ttnn::prim::nlp_concat_heads_boltz",
+    ttnn::operations::experimental::nlp_concat_heads_boltz::NLPConcatHeadsBoltzDeviceOperation>();
+}  // namespace ttnn::prim

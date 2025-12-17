@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,15 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::transformer::detail {
 
 struct RingSDPAFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {};  // [dir0, dir1]
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
         ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
 

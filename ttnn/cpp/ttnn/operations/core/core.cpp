@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -47,13 +46,13 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    QueueId cq_id) {
+    std::optional<QueueId> queue_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    return tensor.to_device(mesh_device, mem_config, cq_id);
+    return tensor.to_device(mesh_device, mem_config, queue_id);
 }
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {
-    return tensor.cpu(blocking, cq_id);
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, std::optional<QueueId> queue_id) {
+    return tensor.cpu(blocking, queue_id);
 }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }

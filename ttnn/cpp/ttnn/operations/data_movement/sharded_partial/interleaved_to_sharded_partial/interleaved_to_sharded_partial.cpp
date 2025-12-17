@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
@@ -13,7 +12,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2>& shard_shape,
@@ -54,16 +52,14 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
 
     tt::tt_metal::ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
     tt::tt_metal::MemoryConfig sharded_mem_config = tt::tt_metal::MemoryConfig{shard_scheme, BufferType::L1};
-    return operation::run(
-               InterleavedToShardedPartialDeviceOperation{
-                   .grid_size = grid_size,
-                   .shard_spec = shard_spec,
-                   .num_slices = num_slices,
-                   .slice_index = slice_index,
-                   .output_mem_config = sharded_mem_config,
-                   .output_dtype = data_type_arg.value_or(input_tensor.dtype())},
-               {input_tensor})
-        .at(0);
+    return ttnn::prim::interleaved_to_sharded_partial(
+        input_tensor,
+        grid_size,
+        shard_spec,
+        static_cast<uint32_t>(num_slices),
+        static_cast<uint32_t>(slice_index),
+        sharded_mem_config,
+        data_type_arg.value_or(input_tensor.dtype()));
 }
 
 }  // namespace ttnn::operations::data_movement

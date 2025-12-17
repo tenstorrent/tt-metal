@@ -5,13 +5,14 @@
 from typing import List, Optional, Tuple, Union
 import ttnn
 import torch
-import torch.nn as nn
 import numpy as np
 from loguru import logger
 import ttnn.device
 
+from models.common.lightweightmodule import LightweightModule
 
-class TtEulerDiscreteScheduler(nn.Module):
+
+class TtEulerDiscreteScheduler(LightweightModule):
     def __init__(
         self,
         device: ttnn.device.Device,
@@ -35,6 +36,7 @@ class TtEulerDiscreteScheduler(nn.Module):
     ):
         # implements the Euler Discrete Scheduler with default params as in
         # https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/scheduler/scheduler_config.json
+        self.order = 1
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -76,6 +78,11 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.create_ttnn_timesteps(timesteps)
         self.create_ttnn_sigmas("sigmas")
 
+    def set_begin_index(self, begin_index: int):
+        self.begin_index = begin_index
+        if self.begin_index < len(self.sigmas) - 1:
+            self.set_step_index(self.begin_index)
+
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)
 
@@ -86,6 +93,33 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.update_device_sigmas()
         self.update_device_timestep()
         self.update_device_norm_factor()
+
+    def _sigma_to_t(self, sigma, log_sigmas):
+        """
+        Convert sigma to timestep using interpolation.
+        Based on diffusers reference implementation.
+        """
+        # get log sigma
+        log_sigma = np.log(np.maximum(sigma, 1e-10))
+
+        # get distribution
+        dists = log_sigma - log_sigmas[:, np.newaxis]
+
+        # get sigmas range
+        low_idx = np.cumsum((dists >= 0), axis=0).argmax(axis=0).clip(max=log_sigmas.shape[0] - 2)
+        high_idx = low_idx + 1
+
+        low = log_sigmas[low_idx]
+        high = log_sigmas[high_idx]
+
+        # interpolate sigmas
+        w = (low - log_sigma) / (low - high)
+        w = np.clip(w, 0, 1)
+
+        # transform interpolation to time range
+        t = (1 - w) * low_idx + w * high_idx
+        t = t.reshape(sigma.shape)
+        return t
 
     def create_ttnn_sigmas(self, tensor_name):
         array = getattr(self, tensor_name)
@@ -100,28 +134,33 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        sigma_step = self.tt_sigmas[0]
-        self.tt_sigma_step = ttnn.allocate_tensor_on_device(
-            sigma_step.shape,
-            sigma_step.dtype,
-            sigma_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sigma_next_step = self.tt_sigmas[1]
-        self.tt_sigma_next_step = ttnn.allocate_tensor_on_device(
-            sigma_next_step.shape,
-            sigma_next_step.dtype,
-            sigma_next_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if not hasattr(self, "tt_sigma_step"):
+            sigma_step = self.tt_sigmas[0]
+
+            self.tt_sigma_step = ttnn.allocate_tensor_on_device(
+                sigma_step.shape,
+                sigma_step.dtype,
+                sigma_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if not hasattr(self, "tt_sigma_next_step"):
+            sigma_next_step = self.tt_sigmas[1]
+
+            self.tt_sigma_next_step = ttnn.allocate_tensor_on_device(
+                sigma_next_step.shape,
+                sigma_next_step.dtype,
+                sigma_next_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_sigmas(self):
         ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index], self.tt_sigma_step)
         ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index + 1], self.tt_sigma_next_step)
 
     def create_ttnn_timesteps(self, timesteps):
+        self.torch_timesteps = timesteps
         self.timesteps = []
         for t in timesteps:
             self.timesteps.append(
@@ -131,14 +170,17 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        tt_timestep_step = self.timesteps[0]
-        self.tt_timestep = ttnn.allocate_tensor_on_device(
-            tt_timestep_step.shape,
-            tt_timestep_step.dtype,
-            tt_timestep_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        if not hasattr(self, "tt_timestep"):
+            tt_timestep_step = self.timesteps[0]
+
+            self.tt_timestep = ttnn.allocate_tensor_on_device(
+                tt_timestep_step.shape,
+                tt_timestep_step.dtype,
+                tt_timestep_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_timestep(self):
         ttnn.copy_host_to_device_tensor(self.timesteps[self.step_index], self.tt_timestep)
@@ -153,14 +195,17 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        tt_val_step = self.variance_normalization_factor[0]
-        self.tt_norm_factor = ttnn.allocate_tensor_on_device(
-            tt_val_step.shape,
-            tt_val_step.dtype,
-            tt_val_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        if not hasattr(self, "tt_norm_factor"):
+            tt_val_step = self.variance_normalization_factor[0]
+
+            self.tt_norm_factor = ttnn.allocate_tensor_on_device(
+                tt_val_step.shape,
+                tt_val_step.dtype,
+                tt_val_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_norm_factor(self):
         ttnn.copy_host_to_device_tensor(self.variance_normalization_factor[self.step_index], self.tt_norm_factor)
@@ -175,10 +220,61 @@ class TtEulerDiscreteScheduler(nn.Module):
     ):
         """
         Sets the discrete timesteps used for the diffusion chain (to be run before inference).
+        Supports custom timesteps or sigmas, or generates from num_inference_steps.
         """
-        assert timesteps == None, "timesteps is not supported in this version"
-        assert sigmas == None, "sigmas is not supported in this version"
-        assert num_inference_steps != None, "num_inference_steps cannot be None in this version"
+        assert not (
+            timesteps is not None and sigmas is not None
+        ), "Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values"
+
+        if timesteps is not None:
+            # Use custom timesteps
+            timesteps = np.array(timesteps, dtype=np.float32)
+            sigmas = np.array(((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5)
+            log_sigmas = np.log(sigmas)
+
+            assert self.interpolation_type == "linear"
+            sigmas = np.interp(timesteps, np.arange(0, len(sigmas)), sigmas)
+
+            assert self.final_sigmas_type == "zero"
+            sigma_last = 0
+            sigmas = np.concatenate([sigmas, [sigma_last]]).astype(np.float32)
+
+            timesteps = torch.from_numpy(timesteps).to(device=device)
+            sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+
+            self.num_inference_steps = len(timesteps)
+            self.create_ttnn_timesteps(timesteps)
+            self.begin_index = 0
+            self.sigmas = sigmas
+            variance_normalization_factor = (sigmas**2 + 1) ** 0.5
+            self.create_ttnn_norm_factor(variance_normalization_factor)
+            self.create_ttnn_sigmas("sigmas")
+            self.set_step_index(self.begin_index)
+            return
+
+        if sigmas is not None:
+            # Use custom sigmas - matches reference implementation
+            log_sigmas = np.log(np.array(((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5))
+            sigmas = np.array(sigmas).astype(np.float32)
+            timesteps = np.array([self._sigma_to_t(sigma, log_sigmas) for sigma in sigmas[:-1]])
+
+            sigmas_torch = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+            timesteps = torch.from_numpy(timesteps.astype(np.float32)).to(device=device)
+
+            self.num_inference_steps = len(timesteps)
+            self.create_ttnn_timesteps(timesteps)
+            self.begin_index = 0
+            self.sigmas = sigmas_torch
+            variance_normalization_factor = (sigmas_torch**2 + 1) ** 0.5
+            self.create_ttnn_norm_factor(variance_normalization_factor)
+            self.create_ttnn_sigmas("sigmas")
+            self.set_step_index(self.begin_index)
+            return
+
+        # Default: generate from num_inference_steps
+        assert (
+            num_inference_steps is not None
+        ), "num_inference_steps cannot be None when timesteps and sigmas are not provided"
 
         self.num_inference_steps = num_inference_steps
 
@@ -292,8 +388,17 @@ class TtEulerDiscreteScheduler(nn.Module):
         model_output = ttnn.mul_(model_output, dt)
 
         prev_sample = ttnn.add_(sample, model_output)
+        ttnn.deallocate(model_output)
 
         # Note: Step index inc moved out of step func as it is done on host
 
         # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)
+
+    def add_noise(
+        self,
+        original_samples: ttnn._ttnn.tensor.Tensor,
+        noise: ttnn._ttnn.tensor.Tensor,
+    ) -> ttnn._ttnn.tensor.Tensor:
+        noisy_samples = original_samples + noise * self.tt_sigma_step
+        return noisy_samples

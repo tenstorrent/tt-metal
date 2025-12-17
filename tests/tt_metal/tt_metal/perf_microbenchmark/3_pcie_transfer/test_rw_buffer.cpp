@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -37,8 +37,8 @@ using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of host-to-device data transfer and
-// device-to-host data transfer. It uses EnqueueReadBuffer and
-// EnqueueWriteBuffer APIs to transfer the data. The device memory object
+// device-to-host data transfer. It uses EnqueueReadMeshBuffer and
+// EnqueueWriteMeshBuffer APIs to transfer the data. The device memory object
 // (buffer) can be resident in DRAM or L1.
 //
 // Usage example:
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         device_is_mmio = device->get_devices()[0]->is_mmio_capable();
 
-        if (!device->using_fast_dispatch()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
             return 1;
         }
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
                 best_write_bw = std::fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
-                    "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
+                    "EnqueueWriteMeshBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
                     elapsed_us / 1000.0,
                     h2d_bandwidth[i]);
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
                 best_read_bw = std::fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
-                    "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
+                    "EnqueueReadMeshBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
                     elapsed_us / 1000.0,
                     d2h_bandwidth[i]);

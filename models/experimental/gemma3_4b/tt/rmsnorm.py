@@ -86,8 +86,6 @@ class RMSNorm(LightweightModule):
         if add_unit_offset:
             torch_weight = torch_weight + 1.0
 
-        cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
-
         # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
@@ -97,7 +95,7 @@ class RMSNorm(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
-            cache_file_name=cache_name,
+            cache_file_name=None if weight_cache_path is None else weight_cache_path / weight_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
@@ -108,10 +106,14 @@ class RMSNorm(LightweightModule):
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=weight_memory_config,
-                cache_file_name=cache_name,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
-                if is_mesh_device
-                else None,
+                cache_file_name=(
+                    None if weight_cache_path is None else weight_cache_path / (weight_name + "_distributed")
+                ),
+                mesh_mapper=(
+                    ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                    if is_mesh_device
+                    else None
+                ),
             )
 
         self.sharded_output_config = sharded_output_config

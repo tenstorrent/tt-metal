@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -38,12 +38,11 @@
 #include <tt_stl/span.hpp>
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -87,7 +86,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 // Tests reduce_h kernel in H dimension (NCHW->NC1W)
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
@@ -181,7 +180,7 @@ int main(int argc, char** argv) {
                 vector<uint16_t> tiled_bcast_values;
                 vector<uint16_t> ref_bcast_values;
                 float bcast_1value = 10.0f;
-                uint16_t bcast_1value16 = bfloat16(bcast_1value).to_uint16();
+                uint16_t bcast_1value16 = std::bit_cast<uint16_t>(bfloat16(bcast_1value));
                 unsigned num_bcast_tiles = 0;
                 // build the constant tiles to be broadcast
                 if (bcast_dim == BcastDim::HW) {
@@ -191,7 +190,7 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
                     for (int j = 0; j < NC; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
                         ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
                     }
@@ -218,9 +217,9 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
                     for (int j = 0; j < NC * W; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
+                        ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,
@@ -237,7 +236,7 @@ int main(int argc, char** argv) {
                     ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
                     for (int j = 0; j < NC * H; j++) {
                         // add something not too large but different between tiles
-                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
                         ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
                     }
@@ -266,9 +265,9 @@ int main(int argc, char** argv) {
                 uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
                 tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
-                bool src0_is_dram = true;
-                bool src1_is_dram = true;
-                std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+                std::vector<uint32_t> reader_compile_time_args;
+                tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
+                tt::tt_metal::TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
 
                 const char* reader_name = get_reader_name(multibank, bcast_dim);
                 auto binary_reader_kernel = tt_metal::CreateKernel(
@@ -280,13 +279,17 @@ int main(int argc, char** argv) {
                         .noc = tt_metal::NOC::RISCV_1_default,
                         .compile_args = reader_compile_time_args});
 
+                std::vector<uint32_t> writer_compile_time_args;
+                tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
                 auto unary_writer_kernel = tt_metal::CreateKernel(
                     program,
                     multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                               : "tt_metal/kernels/dataflow/writer_unary.cpp",
                     core,
                     tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = writer_compile_time_args});
 
                 uint32_t nc1 = 0;
                 tt_metal::SetRuntimeArgs(

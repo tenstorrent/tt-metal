@@ -9,28 +9,51 @@ This test suite includes tests using both fast dispatch (Mesh Device API) and sl
 Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `GenericMeshDeviceFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
 
 ### Slow Dispatch
-Some test suites use slow dispatch mode for reliable program execution. These tests use `DeviceFixture` and execute programs directly using `tt::tt_metal::detail::LaunchProgram()`. Tests requiring slow dispatch include:
+Some test suites use slow dispatch mode for reliable program execution. These tests use `MeshDeviceFixture`. With TT-Mesh, APIs for executing programs in slow dispatch are the same as in fast dispatch, using `tt::tt_metal::distributed::EnqueueMeshWorkload`. Tests requiring slow dispatch include:
 - **Deinterleave Hardcoded** (IDs 200-201)
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
 
+## Device 2.0 API Support
+This test suite now includes tests using the new device 2.0 experimental NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Test Suites:
+- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using experimental write API
+- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using experimental read API
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new experimental API.
+
 ## Tests in the Test Suite
 
-| Name                        | ID(s)        | Description                                                                             |
-| --------------------------- | ------------ | --------------------------------------------------------------------------------------- |
-| DRAM Unary                  | 0-3          | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50        | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51        | Read transactions between two Tensix cores.                                             |
-| One to all                  | 6-8          | Writes transaction from one core to all cores.                                          |
-| One to all Multicast        | 9-14, 52     | Writes transaction from one core to all cores using multicast.                          |
-| One From All                | 15, 30       | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16           | Does a loopback operation where one cores writes to itself.                             |
-| Reshard Hardcoded           | 17-20        | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
-| Conv Hardcoded              | 21-23        | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
-| All to all                  | 60           | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 70           | Read transactions from multiple cores to multiple cores.                                |
-| Interleaved Page Read/Write | 61-69, 71-75 | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| Deinterleave                | 200-201      | Tests deinterleaving **(Slow Dispatch)**                                                |
+| Name                        | ID(s)                           | Description                                                                             |
+| ----------                  | -----                           | ----------------------------------------------------                                    |
+| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
+| One to all Multicast        | 9-14, 53-54, 100-102, 173-180   | Writes transaction from one core to all cores using multicast.                          |
+| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
+| Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
+| Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
+| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
+| Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
+| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.  |
+| I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
+| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+
 
 ## Running Tests
 ### C++ Gtests
@@ -52,7 +75,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --g
 ```
 
 ### Pytest
-Before running any tests, build the repo with profiler and tests: ```./build_metal.sh --enable-profiler --build-tests```
+Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
 Then, for performance checks and more extensive testing, our Python test can be run as follows:
 ```
 pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py <options>
@@ -66,7 +89,7 @@ Follow these steps to add new tests to this test suite.
 
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
     - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
-    - **Slow Dispatch**: Use `DeviceFixture` only if fast dispatch APIs don't work for your specific test case
+    - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".
@@ -76,7 +99,7 @@ Follow these steps to add new tests to this test suite.
 5. Assign your test a unique test id to make sure your test results are grouped together and are plotted separately from other tests.
     - Refer to the "Tests in the Test Suite" section for already taken test ids.
     - Preferably use the next integer available.
-    - Update the `test_id_to_name` and `test_bounds` objects with the test id, test name and test bounds.
+    - Add the test id and test name to this README and to `/python/test_mappings/test_information.yaml`. If test bounds are relevant, add these to `/python/test_mappings/test_bounds.yaml`
 6. Create a README file within the test directory that describes:
     1. What your test does,
     2. What the test parameters are,
@@ -86,3 +109,32 @@ Follow these steps to add new tests to this test suite.
     - **Example:** `${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp`
 
 **Note:** Make sure the tests pass by building and running as above.
+
+## Heatmap Plotting
+
+Perf results for tests which run on multiple cores can be visualized through the custom heatmap script which analyzes the CSV generated by the profiler to plot per-core bandwidth. Use by running the following:
+```
+python tests/tt_metal/tt_metal/data_movement/python/heatmap.py <options>
+```
+
+Options for the heatmap are found in `heatmap.py` and can be used to specify the CSV log file path or test case parameters to plot. In cases where these options may be ambiguous, they must be specified. For example, when using a CSV generated from running more than one data movement test, you must specify the corresponding test ID you want to plot. Tests that perform reads on one NOC and writes on another, or that sweep over number of transactions/transaction size must also have these parameters specified.
+### Usage Examples
+
+**Basic usage with specific CSV:**
+```bash
+python tests/tt_metal/tt_metal/data_movement/python/heatmap.py --log_csv generated/profiler/.logs/saved/test.csv
+```
+
+**Filter by RISC-V processor (for tests using both NOCs):**
+```bash
+python tests/tt_metal/tt_metal/data_movement/python/heatmap.py -r riscv_1
+```
+
+**Filter by test parameters (for parameter sweep tests):**
+```bash
+python tests/tt_metal/tt_metal/data_movement/python/heatmap.py -n 16 -s 4096
+```
+### Output
+The script generates:
+- A heatmap PNG file showing per-core bandwidth
+- Console output with numerical bandwidth values per core

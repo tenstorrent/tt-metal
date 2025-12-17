@@ -122,22 +122,51 @@ class AllGatherAsyncConfig(OpConfigBase):
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
-    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
-class ReduceScatterAsyncConfig(OpConfigBase):
-    """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
+class AllToAllAsyncGenericConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_to_all_async_generic op"""
 
-    mesh_device: ConfigDevice | None = None
+    in_dim: int | None = None
+    out_dim: int | None = None
     cluster_axis: int | None = None
-    dim: int | None = None
-    from_remote_multi_device_global_semaphore: object | None = None
-    to_remote_multi_device_global_semaphore: object | None = None
-    math_op: ttnn.ReduceType | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig | None = None
-    topology: ttnn.Topology | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+
+
+@dataclass
+class ReduceScatterAsyncMinimalConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
+
+    dim: int
+    multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_links: int | None = None
+    persistent_output_buffers: ttnn.Tensor | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    cluster_axis: int | None = None
+    chunks_per_sync: int | None = None
+    num_workers_per_link: int | None = None
+    num_buffers_per_channel: int | None = None
+
+
+@dataclass
+class PointToPointConfig(OpConfigBase):
+    """Common parameters for a ttnn.point_to_point op"""
+
+    receiver_coord: ttnn.MeshCoordinate | None = None
+    sender_coord: ttnn.MeshCoordinate | None = None
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    output_tensor: ttnn.Tensor | None = None
 
 
 @dataclass
@@ -183,7 +212,7 @@ class RMSNormConfig(OpConfigBase):
     residual_input_tensor: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
 
 
 @dataclass
@@ -192,7 +221,7 @@ class RMSNormPreAllGatherConfig(OpConfigBase):
 
     dtype: ttnn.DataType = ttnn.bfloat16
     residual_input_tensor: ConfigWeight | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     memory_config: ttnn.MemoryConfig | None = None
 
@@ -206,7 +235,7 @@ class RMSNormPostAllGatherConfig(OpConfigBase):
     bias: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     dtype: ttnn.DataType | None = None
 
 
@@ -253,8 +282,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -263,11 +290,9 @@ class AllToAllDispatchConfig(OpConfigBase):
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
-    axis: int
+    cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 
@@ -303,3 +328,18 @@ class TypecastConfig(OpConfigBase):
     dtype: ttnn.DataType
     memory_config: ttnn.MemoryConfig | None = None
     sub_core_grids: ttnn.CoreRangeSet | None = None
+
+
+@dataclass
+class SparseMatmulConfig(OpConfigBase):
+    """Common parameters for a ttnn.sparse_matmul op"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
+    program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None = None
+    is_input_a_sparse: bool | None = None
+    is_input_b_sparse: bool | None = None
+    output_tile: ttnn.Tile | None = None
+    sparsity: ttnn.Tensor | None = None
+    nnz: int | None = None

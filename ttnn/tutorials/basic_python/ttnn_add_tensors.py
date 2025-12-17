@@ -7,7 +7,7 @@ from loguru import logger
 
 
 def main():
-    # Open Tenstorrent device
+    # Open the Device
     device = ttnn.open_device(device_id=0)
 
     # Create two TT-NN tensors with TILE_LAYOUT

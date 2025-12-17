@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 # descriptor will be used. Both the ethernet mapping and yaml path are required
 # ======================================================================================
 physical_mesh:
-   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml"
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.textproto"
    eth_coord_mapping: [
       [
         [0, 0, 0, 0, 0],
@@ -67,12 +67,12 @@ Tests:
   # ======================================================================================
   # Test 1: A simple, fully specified unicast test for multi-host.
   # This demonstrates the most basic configuration using ChipIds.
-  # Fabric must be 2D Dynamic.
+  # Fabric must be 2D.
   # ======================================================================================
   - name: MultiMeshRandomPairing
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     parametrization_params:
       size: [512, 1024, 2048]
       num_packets: [50, 100]
@@ -86,7 +86,7 @@ Tests:
   - name: MultiMeshSingleHopUnicast
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     defaults:
       ftype: unicast
       ntype: unicast_write
@@ -118,7 +118,7 @@ Tests:
   - name: MultiMeshMultiHopUnicast
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+
     parametrization_params:
       size: [256, 512, 1024, 2048]
       num_packets: [50, 100]

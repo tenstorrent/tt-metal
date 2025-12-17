@@ -15,10 +15,10 @@ import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.gemma_image_mlp import TtGemmaImageFeedForward
-from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
+from models.experimental.gemma3_4b.tests.references import reference_vision_mlp
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
@@ -40,14 +40,16 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0, is_vision=True)
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
+
+    # Add "encoder." after "visual." in first_layer_prefix
+    if first_layer_prefix.startswith("visual."):
+        first_layer_prefix = "visual.encoder." + first_layer_prefix[len("visual.") :]
+
     model_args.WEIGHTS_DTYPE = dtype
 
     dim = model_args.vision_dim
     seq_len = nearest_32(model_args.image_size) * num_chunks
-    reference_model = model_args.reference_vision_mlp()
+    reference_model = reference_vision_mlp(model_args)
     # reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)

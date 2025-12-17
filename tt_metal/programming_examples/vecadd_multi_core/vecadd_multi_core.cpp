@@ -11,6 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -24,13 +25,12 @@ using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
-    InterleavedBufferConfig config{
-        .device = device,
-        .size = size,
-        .page_size = page_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
-    return CreateBuffer(config);
+std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = page_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
+    distributed::ReplicatedBufferConfig buffer_config{.size = size};
+    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 }
 
 // Allocate a buffer on DRAM or SRAM. Assuming the buffer holds BFP16 data.
@@ -40,11 +40,12 @@ std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on
 // DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<distributed::MeshBuffer> MakeMeshBufferBFP16(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
-    return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
+    return MakeMeshBuffer(mesh_device, tile_size * n_tiles, page_tiles * tile_size, sram);
 }
 
 CBHandle MakeCircularBuffer(
@@ -106,19 +107,22 @@ int main(int argc, char** argv) {
     // n_tiles is number of tiles of data for this programming example to add two vectors
     const uint32_t n_tiles = 640;
 
-    auto* device = CreateDevice(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     std::map<CoreCoord, uint32_t> core_tile_idx;
 
     // Create 3 buffers on DRAM. These will hold the input and output data. A
     // and B are the input buffers, C is the output buffer.
-    auto a = MakeBufferBFP16(device, n_tiles, false);
-    auto b = MakeBufferBFP16(device, n_tiles, false);
-    auto c = MakeBufferBFP16(device, n_tiles, false);
+    auto a = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
+    auto b = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
+    auto c = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
 
     std::mt19937 rng(seed);
     std::uniform_real_distribution<float> dist(0, 10.0f);
@@ -129,7 +133,7 @@ int main(int argc, char** argv) {
         b_data[i] = bfloat16(dist(rng));
     }
 
-    auto core_grid = device->compute_with_storage_grid_size();
+    auto core_grid = mesh_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = core_grid.x;
     uint32_t num_cores_y = core_grid.y;
     // CoreRnge uses inclusive start and exclusive end coordinates so range is [0, 0] to [num_cores_x - 1, num_cores_y -
@@ -175,12 +179,18 @@ int main(int argc, char** argv) {
     // result into a third circular buffer. `tile_write` reads tiles from the
     // third circular buffer and writes them to the output buffer C.
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0}, {"c_1", (std::uint32_t)tt::CBIndex::c_1}};
     TensorAccessorArgs(*a).append_to(reader_compile_time_args);
     TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
     TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
+    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0},
+        {"c_1", (std::uint32_t)tt::CBIndex::c_1},
+        {"c_2", (std::uint32_t)tt::CBIndex::c_2}};
 
     auto reader = CreateKernel(
         program,
@@ -190,7 +200,8 @@ int main(int argc, char** argv) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .named_compile_args = reader_named_compile_time_args});
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
@@ -205,7 +216,11 @@ int main(int argc, char** argv) {
         "tt_metal/programming_examples/vecadd_multi_core/"
         "kernels/add_multi_core.cpp",
         all_cores,
-        ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
+        ComputeConfig{
+            .math_approx_mode = false,
+            .compile_args = compute_compile_time_args,
+            .defines = {},
+            .named_compile_args = compute_named_compile_time_args});
 
     auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
@@ -226,16 +241,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    EnqueueWriteBuffer(cq, a, a_data, false);
-    EnqueueWriteBuffer(cq, b, b_data, false);
+    EnqueueWriteMeshBuffer(cq, a, a_data, false);
+    EnqueueWriteMeshBuffer(cq, b, b_data, false);
     // Enqueue the program
-    EnqueueProgram(cq, program, true);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    EnqueueReadBuffer(cq, c, c_data, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
@@ -254,9 +270,9 @@ int main(int argc, char** argv) {
             fmt::print(
                 "Index {}: {} + {} = {}\n",
                 start_idx + i,
-                a_data[start_idx + i].to_float(),
-                b_data[start_idx + i].to_float(),
-                c_data[start_idx + i].to_float());
+                static_cast<float>(a_data[start_idx + i]),
+                static_cast<float>(b_data[start_idx + i]),
+                static_cast<float>(c_data[start_idx + i]));
         }
         fmt::print("\n");
     }
@@ -264,14 +280,14 @@ int main(int argc, char** argv) {
     // Check if the results match the expected values.
     bool pass = true;
     for (size_t i = 0; i < c_data.size(); i++) {
-        float expected = a_data[i].to_float() + b_data[i].to_float();
-        if (std::abs(c_data[i].to_float() - expected) > 0.3f) {  // Allow some tolerance due to BFP16 precision
+        float expected = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+        if (std::abs(static_cast<float>(c_data[i]) - expected) > 0.3f) {  // Allow some tolerance due to BFP16 precision
             fmt::print(
                 "Mismatch at index {}: {} + {} = {}, expected {}\n",
                 i,
-                a_data[i].to_float(),
-                b_data[i].to_float(),
-                c_data[i].to_float(),
+                static_cast<float>(a_data[i]),
+                static_cast<float>(b_data[i]),
+                static_cast<float>(c_data[i]),
                 expected);
             pass = false;
         }
@@ -283,6 +299,6 @@ int main(int argc, char** argv) {
     }
 
     // Finally, we close the device.
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }

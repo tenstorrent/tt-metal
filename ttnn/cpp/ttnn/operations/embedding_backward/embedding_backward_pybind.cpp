@@ -14,9 +14,8 @@ namespace ttnn::operations::embedding_backward {
 namespace py = pybind11;
 
 void py_bind_embedding_backward(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
-
         Returns the input gradients of the output gradients tensor with respect to the input indices.
 
 
@@ -29,7 +28,6 @@ void py_bind_embedding_backward(py::module& module) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
 
 
@@ -38,25 +36,7 @@ void py_bind_embedding_backward(py::module& module) {
 
         Note:
             The input and the output gradient tensors must have the same datatype.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> batch_size, seq_len, embedding_dim, num_embeddings = 2, 1024, 4096, 3200
-
-            >>> input_shape = (batch_size, seq_len)
-            >>> input_index = torch.randint(0, num_embeddings, input_shape)
-            >>> input_tensor = ttnn.from_torch(input_index, dtype=ttnn.uint32, device=device)
-
-            >>> weights_shape = (num_embeddings, embedding_dim)
-            >>> weights = torch.randn(weights_shape, requires_grad=True)
-            >>> weights_ttnn = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-            >>> grad_shape = (1, 1, batch_size * seq_len, embedding_dim)
-            >>> grad_data = torch.randn(grad_shape, requires_grad=True)
-            >>> grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-            >>> output = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=ttnn.bfloat16))doc";
+        )doc";
 
     using OperationType = decltype(ttnn::embedding_bw);
     bind_registered_operation(
@@ -70,16 +50,9 @@ void py_bind_embedding_backward(py::module& module) {
                const ttnn::Tensor& output_gradient_tensor,
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    output_gradient_tensor,
-                    dtype,
-                    memory_config,
-                    optional_output_tensor);
+                    input_tensor, weight_tensor, output_gradient_tensor, dtype, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight_tensor").noconvert(),
@@ -87,8 +60,7 @@ void py_bind_embedding_backward(py::module& module) {
             py::kw_only(),
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::embedding_backward

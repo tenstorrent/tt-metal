@@ -25,19 +25,19 @@ void MAIN {
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_wait_front(cb_grad, max_tiles_per_core);
 
-        // Get chunk_count from reader
-        volatile uint32_t* chunk_addr_ptr;
-        cb_get_tile(cb_chunk_count_scratch, 0, &chunk_addr_ptr);
-        uint32_t chunk_count = chunk_addr_ptr[4];  // Need to shift because read ptr is off by 1 << 4 in BBE
-        cb_release_tile(cb_chunk_count_scratch);
+        // Get chunk_count from CB using mailbox-based synchronization (issue #27979)
+        uint32_t chunk_count = read_tile_value(cb_chunk_count_scratch, 0, 0);
 
-        for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {  // chunk_count
+        for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
             cb_wait_front(cb_mask, 1);
-            // get cb_index pointer from unpack to math thread
-            volatile uint* idx_addr_ptr;
-            uint32_t tile_to_get = 0;
-            cb_get_tile(cb_mask, tile_to_get, &idx_addr_ptr);
-            uint32_t idx_addr = reinterpret_cast<uint32_t>(idx_addr_ptr);
+
+            // Get idx_addr from CB using mailbox-based synchronization (issue #27979)
+            uint32_t idx_addr = get_tile_address(cb_mask, 0);
+#if defined(ARCH_BLACKHOLE)
+            // Workaround for tt-metal issue #11816:
+            // Flush the cache, forces going to L1 to access data
+            asm volatile("fence");
+#endif
 
             cb_wait_front(cb_out_intermed, max_tiles_per_core);
 
@@ -52,7 +52,11 @@ void MAIN {
                 copy_tile(cb_out_intermed, hidden_dim, 1);
 
                 reshuffle_rows_tile_init();
-                reshuffle_rows_tile(0, idx_addr);
+                // reshuffle_rows_tile expects that tiles have a header of 16 bytes.
+                // This isn't true, so we have to substract 16 bytes from the address.
+                // Check implementation of reshuffle_rows_tile in LLK for more details.
+                // tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
+                reshuffle_rows_tile(0, idx_addr - 16);
 
                 pack_tile(1, cb_out, hidden_dim);  // reshuffle puts output into Tile 1 in DEST
 
@@ -63,7 +67,6 @@ void MAIN {
             cb_push_back(cb_out, max_tiles_per_core);
             cb_pop_front(cb_out_intermed, max_tiles_per_core);
 
-            cb_release_tile(cb_mask);
             cb_pop_front(cb_mask, 1);
         }
 

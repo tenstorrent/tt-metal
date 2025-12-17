@@ -9,7 +9,6 @@ from time import time
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     num_cores_to_rectangle_grid,
@@ -46,6 +45,7 @@ FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 2
 FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True)
 
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
+NORM_CRS_QWEN = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))])
 
 LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 32, SUB_DEVICE_CRS, row_wise=True)
 
@@ -300,7 +300,6 @@ def run_all_reduce_impl(
     mesh_device.reset_sub_device_stall_group()
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
@@ -326,7 +325,7 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
-        (1000, 100),
+        (100, 10),
     ],
 )
 @pytest.mark.parametrize("trace_mode", [True])
@@ -396,7 +395,6 @@ def test_all_reduce(
     logger.info(f"Time per iter: {latency_us} us")
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",

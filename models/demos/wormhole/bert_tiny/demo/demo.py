@@ -12,9 +12,9 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
-from models.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0, profiler, skip_for_grayskull
 
 
 def load_inputs(input_path, batch):
@@ -47,7 +47,6 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     input_path,
 ):
-    disable_persistent_kernel_cache()
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
     pytorch_model = hugging_face_reference_model.eval()
@@ -164,8 +163,6 @@ def run_bert_question_and_answering_inference_squad_v2(
     model_location_generator,
     n_iterations,
 ):
-    disable_persistent_kernel_cache()
-
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
     pytorch_model = hugging_face_reference_model.eval()
@@ -251,7 +248,6 @@ def run_bert_question_and_answering_inference_squad_v2(
         logger.info(f"CPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
@@ -263,8 +259,6 @@ def test_demo(
     model_location_generator,
     mesh_device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_bert_question_and_answering_inference(
         mesh_device=mesh_device,
         model_name=model_name,
@@ -274,7 +268,6 @@ def test_demo(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
@@ -289,8 +282,6 @@ def test_demo_squadv2(
     model_location_generator,
     mesh_device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_bert_question_and_answering_inference_squad_v2(
         mesh_device=mesh_device,
         model_name=model_name,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,20 +21,21 @@
 #include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+// Access to internal API: ProgramImpl::get_kernels
+#include "impl/program/program_impl.hpp"
 
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
+TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
         detail::EnablePersistentKernelCache();
 
@@ -53,8 +54,8 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
 
         const std::string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
@@ -68,7 +69,14 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
 
         program = CreateProgram();
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
-        detail::CompileProgram(device, program);
+        // Note:  Force JIT compile for this test.  Otherwise it may reuse the binary and not update the timestamp.
+        {
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            bool saved = rtoptions.get_force_jit_compile();
+            rtoptions.set_force_jit_compile(true);
+            detail::CompileProgram(device, program);
+            rtoptions.set_force_jit_compile(saved);
+        }
 
         const auto t1 = std::filesystem::last_write_time(elf_file_path);
 
@@ -79,10 +87,11 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     }
 }
 
-TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
+TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
@@ -103,11 +112,9 @@ TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProces
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name_riscv_0 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
-        const std::string full_kernel_name_riscv_1 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_1)).get_full_kernel_name();
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();
+        const std::string full_kernel_name_riscv_1 = kernels.at(kernel_handle_riscv_1)->get_full_kernel_name();
 
         const std::string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
         const std::string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);

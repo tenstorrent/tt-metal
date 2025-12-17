@@ -13,30 +13,31 @@ void kernel_main() {
     const uint32_t page_table_tensor_addr = get_arg_val<uint32_t>(4);
     const bool wait_to_start_signal = get_arg_val<uint32_t>(5) == 1;
 
-    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(2);
-    constexpr bool use_index_tensor = get_compile_time_arg_val(3) == 1;
-    constexpr bool index_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(5);
-    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(8);
-    const uint32_t index_stick_size_B = get_compile_time_arg_val(9);
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
+    constexpr bool use_index_tensor = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(3);
+    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt = get_compile_time_arg_val(5);
+    const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(6);
+    const uint32_t index_stick_size_B = get_compile_time_arg_val(7);
 
     // paged_cache args
-    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
-    constexpr uint32_t block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
-    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
-    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(15);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(16);
-    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(18);
+    constexpr bool is_paged_cache = get_compile_time_arg_val(8) == 1;
+    constexpr uint32_t num_heads = get_compile_time_arg_val(9);
+    constexpr uint32_t block_size = get_compile_time_arg_val(10);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(11);
+    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(12);
+    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(13);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(14);
+    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
-    const uint32_t St = get_compile_time_arg_val(19);
-    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
+    const uint32_t St = get_compile_time_arg_val(16);
+    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+
+    constexpr auto s0_args = TensorAccessorArgs<18>();
+    constexpr auto index_tensor_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    constexpr auto page_table_args = TensorAccessorArgs<index_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -51,19 +52,17 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
 
-    const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
+    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
 
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
-        const InterleavedAddrGen<index_is_dram> addrg = {
-            .bank_base_address = index_tensor_addr, .page_size = index_stick_size_B};
+        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr, index_stick_size_B);
 
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
         // index_tensor has one page to read
-        uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+        uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
         noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
         noc_async_read_barrier();
         cb_push_back(cb_index_id, 1);
@@ -75,11 +74,11 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
-                const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
-                    .bank_base_address = page_table_tensor_addr, .page_size = page_table_stick_size};
+                const auto page_table_gen =
+                    TensorAccessor(page_table_args, page_table_tensor_addr, page_table_stick_size);
                 cb_reserve_back(page_table_cb_id, 1);
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
-                uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
+                uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(my_batch_idx);
                 noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
                 noc_async_read_barrier();
                 cb_push_back(page_table_cb_id, 1);

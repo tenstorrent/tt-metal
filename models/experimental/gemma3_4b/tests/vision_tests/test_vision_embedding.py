@@ -15,11 +15,11 @@ import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 from models.experimental.gemma3_4b.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.experimental.gemma3_4b.tests.references import reference_vision_embedding
+from models.common.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -45,7 +45,7 @@ def test_vision_embedding_integration(
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     patch_size = model_args.vision_patch_size
     hidden_dim = model_args.vision_dim
     dim = model_args.vision_dim
@@ -53,7 +53,7 @@ def test_vision_embedding_integration(
 
     input_tensor = torch.randn((bsz, in_channels, image_size, image_size))
 
-    reference_model = model_args.reference_vision_embedding()
+    reference_model = reference_vision_embedding(model_args)
     # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
 

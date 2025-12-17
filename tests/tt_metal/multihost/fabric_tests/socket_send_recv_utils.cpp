@@ -11,22 +11,21 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
+#include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
     switch (system_config) {
         case SystemConfig::SPLIT_T3K: return "SplitT3K";
         case SystemConfig::DUAL_T3K: return "DualT3K";
         case SystemConfig::NANO_EXABOX: return "NanoExabox";
+        case SystemConfig::EXABOX: return "Exabox";
         default: return "Unknown";
     }
 }
@@ -117,9 +116,14 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = sender_core_range_set.num_cores() * data_size};
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
-            auto sender_mesh_workload = CreateMeshWorkload();
+            auto sender_mesh_workload = MeshWorkload();
+            std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                    continue;
+                }
+                mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
@@ -159,10 +163,8 @@ bool test_socket_send_recv(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
-                AddProgramToMeshWorkload(
-                    sender_mesh_workload,
-                    std::move(sender_program),
-                    MeshCoordinateRange(connection.sender_core.device_coord));
+                sender_mesh_workload.add_program(
+                    MeshCoordinateRange(connection.sender_core.device_coord), std::move(sender_program));
             }
             // Run workload performing Data Movement over the socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
@@ -180,7 +182,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = recv_core_range_set.num_cores() * data_size};
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
-            auto recv_mesh_workload = CreateMeshWorkload();
+            auto recv_mesh_workload = MeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
@@ -210,14 +212,13 @@ bool test_socket_send_recv(
                 tt_fabric::append_fabric_connection_rt_args(
                     recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
-                AddProgramToMeshWorkload(
-                    recv_mesh_workload,
-                    std::move(recv_program),
-                    MeshCoordinateRange(connection.receiver_core.device_coord));
+                recv_mesh_workload.add_program(
+                    MeshCoordinateRange(connection.receiver_core.device_coord), std::move(recv_program));
             }
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
-            auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+            const auto& core_to_core_id =
+                recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
@@ -230,7 +231,7 @@ bool test_socket_send_recv(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
                     recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
                 is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
-                EXPECT_TRUE(is_data_match);
+                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
             }
         }
         // Increment the source vector for the next iteration
@@ -248,8 +249,8 @@ bool test_socket_send_recv(
 std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
     std::vector<uint32_t> recv_ranks;
 
-    if (system_config == SystemConfig::NANO_EXABOX) {
-        // Nano-Exabox has 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+    if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
         recv_ranks = {0, 2, 3, 4};
     } else if (system_config == SystemConfig::SPLIT_T3K || system_config == SystemConfig::DUAL_T3K) {
         // Only a single recv node is needed for the dual host configurations.
@@ -261,7 +262,7 @@ std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
 }
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -321,7 +322,7 @@ void test_multi_mesh_single_conn_bwd(
 }
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -378,7 +379,7 @@ void test_multi_mesh_single_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -438,7 +439,7 @@ void test_multi_mesh_multi_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -533,7 +534,4 @@ void test_multi_mesh_multi_conn_bidirectional(
     distributed_context->barrier();
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

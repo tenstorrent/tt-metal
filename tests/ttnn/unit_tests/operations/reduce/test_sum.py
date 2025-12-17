@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -35,13 +35,14 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
-def test_sum_global(device, batch_size, h, w):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+def test_sum_global(device, batch_size, h, w, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -99,3 +100,37 @@ def test_sum_nd_shard(device, shapes, keepdim):
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63), (16, 41, 63, 63)])
+def test_sum_subcores(device, sub_core_grids, dtype, shape):
+    torch.manual_seed(0)
+
+    # Prepare Torch input/output
+    torch_input_tensor = torch_random(shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor)
+
+    # Prepare TTNN input/output
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    output_tensor = ttnn.sum(input_tensor, sub_core_grids=sub_core_grids)
+
+    # Compare
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

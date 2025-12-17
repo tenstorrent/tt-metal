@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y
 
 import ttnn
 from loguru import logger

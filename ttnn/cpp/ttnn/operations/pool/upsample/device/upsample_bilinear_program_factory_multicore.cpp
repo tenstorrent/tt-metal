@@ -4,15 +4,12 @@
 
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
-// #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 #include <tt_stl/reflection.hpp>
@@ -22,10 +19,11 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 
 using namespace tt::constants;
 
-namespace ttnn::operations::upsample {
+namespace ttnn::operations::pool::upsample::program {
 using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
@@ -54,18 +52,22 @@ Tensor HaloTensorCreation(const Tensor& input) {
     Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(
-        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
+    auto halo_output =
+        ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
 
     return halo_output;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
-    const Tensor& input,
-    Tensor& output,
-    const uint32_t scale_factor_h,
-    const uint32_t scale_factor_w,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input = tensor_args.input_tensor;
+    auto& output = output_tensor;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+
     Program program = tt::tt_metal::CreateProgram();
     IDevice* device = input.device();
 
@@ -136,7 +138,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         "Output sticks per shard {} should be same as output sticks per core {}",
         out_nsticks_per_core,
         output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
+    TT_FATAL(
+        input_nsticks_per_core % in_w == 0,
+        "Input sticks per core ({}) must be divisible by input width ({})",
+        input_nsticks_per_core,
+        in_w);
 
     // creating halo input tensor
     auto halo_in = HaloTensorCreation(input);
@@ -213,8 +219,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     // computation needed for the bilinear kernel. Passing them as an argument.
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
-    float y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
-    float x_index_compute = (float)(0.5f) * (float)scale_w_inv - 0.5f;
+    float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
+    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
     uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
     uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);
@@ -322,21 +328,33 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         TT_FATAL(false, "Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel, cb_src0, out_cb](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto halo_in = HaloTensorCreation(input_tensors.at(0));
-        auto src_buffer = halo_in.buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel = reader_kernel,
+            .writer_kernel = writer_kernel,
+            .cb_src0 = cb_src0,
+            .out_cb = out_cb,
+        }};
 }
 
-}  // namespace ttnn::operations::upsample
+void UpsampleBilinearProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    auto& out_cb = cached_program.shared_variables.out_cb;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    auto halo_in = HaloTensorCreation(input_tensor);
+    auto* src_buffer = halo_in.buffer();
+    auto* dst_buffer = output_tensor.buffer();
+
+    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+}
+
+}  // namespace ttnn::operations::pool::upsample::program

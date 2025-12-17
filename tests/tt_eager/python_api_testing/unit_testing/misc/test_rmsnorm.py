@@ -16,7 +16,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 
 def rmsnorm(x, gamma, beta, eps):

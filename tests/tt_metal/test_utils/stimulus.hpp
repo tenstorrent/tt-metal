@@ -9,8 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
-namespace tt {
-namespace test_utils {
+namespace tt::test_utils {
 
 //! Generic Library of templated stimulus generation + packing/unpacking functions.
 //! Custom type is supported as long as the custom type supports the following custom functions
@@ -76,7 +75,7 @@ std::vector<ValueType> generate_uniform_random_vector(
         std::uniform_real_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
-        std::uniform_real_distribution<float> dis(min.to_float(), max.to_float());
+        std::uniform_real_distribution<float> dis(static_cast<float>(min), static_cast<float>(max));
         std::generate(results.begin(), results.end(), [&]() { return ValueType(dis(gen)); });
     }
     return results;
@@ -91,7 +90,7 @@ std::vector<ValueType> generate_normal_random_vector(
         std::normal_distribution<ValueType> dis(mean, stdev);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
-        std::normal_distribution<float> dis(mean.to_float(), stdev.to_float());
+        std::normal_distribution<float> dis(static_cast<float>(mean), static_cast<float>(stdev));
         std::generate(results.begin(), results.end(), [&]() { return ValueType(dis(gen)); });
     }
     return results;
@@ -101,7 +100,7 @@ std::vector<ValueType> generate_normal_random_vector(
 template <typename ValueType>
 std::vector<ValueType> generate_random_vector_from_vector(
     std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
-    TT_FATAL(possible_values.size(), "possible_values.size()={} > 0", possible_values.size());
+    TT_FATAL(!possible_values.empty(), "possible_values.size()={} > 0", possible_values.size());
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     std::uniform_int_distribution<unsigned int> dis(0, possible_values.size() - 1);
@@ -149,5 +148,4 @@ std::vector<PackType> generate_packed_increment_vector(
     return pack_vector<PackType, ValueType>(generate_increment_vector(init, numel, increment, start, count, slide));
 }
 
-}  // namespace test_utils
-}  // namespace tt
+}  // namespace tt::test_utils

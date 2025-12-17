@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
@@ -27,8 +27,7 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 4); }
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 3); }
 
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto shape = tensor.logical_shape();
     auto rank = shape.rank();
     TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
@@ -47,9 +46,16 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
         if (rank <= 4) {
             return squeezed;
         }
-        return ttnn::reshape(squeezed, squeeze_shape_to_4D(shape));
+        return ttnn::reshape(
+            squeezed,
+            squeeze_shape_to_4D(shape),
+            std::nullopt,
+            std::nullopt,
+            TileReshapeMapMode::CACHE,
+            sub_core_grids);
     }
-    return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
+    return ttnn::reshape(
+        tensor, squeeze_shape_to_4D(shape), std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
 }
 
 ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
@@ -108,32 +114,28 @@ uint32_t get_effective_l1_cores(
     uint32_t transaction_size,
     int index,
     bool is_write,
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
     uint32_t num_nocs,
     uint32_t num_cores) {
     float max_bw = index == WormholeIndex ? 32.0f : 50.0f;
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
 uint32_t get_effective_dram_cores(
     uint32_t transaction_size,
     int index,
-    std::map<uint32_t, std::array<float, 2>> dram_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw,
     bool single_noc,
     uint32_t num_cores) {
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
     float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
@@ -145,10 +147,10 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     uint32_t num_cores,
     int index,
     bool is_read,
-    std::map<uint32_t, std::array<float, 2>> l1_local_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
-    std::map<uint32_t, std::array<float, 2>> dram_bw) {
+    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw) {
     auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_bw : l1_write_bw);
     if (is_dram) {
         transaction_type = dram_bw;
@@ -454,9 +456,7 @@ int common_tm_bw_model(
             output_only ? total_write_cycles_not_local
                         : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        if (ideal_dev_clock_cycles_not_local < ideal_dev_clock_cycles) {
-            ideal_dev_clock_cycles = ideal_dev_clock_cycles_not_local;
-        }
+        ideal_dev_clock_cycles = std::min<unsigned int>(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
@@ -477,7 +477,7 @@ uint32_t get_estimated_size_of_cbs(
 }
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -496,7 +496,6 @@ bool is_enough_space(
 }
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -515,7 +514,7 @@ ttnn::Tensor pad_to_tile_vol(
         padding_vec.emplace_back(0, padded_height - padded_shape[-2]);
         padding_vec.emplace_back(0, padded_width - padded_shape[-1]);
 
-        auto padded_output = ttnn::pad(queue_id, tensor, padding_vec, value, use_multicore, memory_config);
+        auto padded_output = ttnn::pad(tensor, padding_vec, value, use_multicore, memory_config);
         TT_FATAL(
             padded_output.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0 &&
                 padded_output.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
@@ -526,10 +525,45 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
-ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+// not unit tested, use with caution
+uint16_t float_to_uint16(float f) {
+    // For positive infinity, return the maximum uint16_t value
+    // For negative infinity, return the minimum uint16_t value
+    if (std::isinf(f)) {
+        return (f > 0) ? std::numeric_limits<uint16_t>::max() : std::numeric_limits<uint16_t>::min();
+    }
+
+    // For Not-a-Number (NaN), return 0
+    if (std::isnan(f)) {
+        return 0;
+    }
+
+    // Handle overflow and underflow
+    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
+    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
+    if (f >= max_uint16) {
+        return std::numeric_limits<uint16_t>::max();
+    }
+    if (f <= min_uint16) {
+        return std::numeric_limits<uint16_t>::min();
+    }
+
+    // For all other finite values, safely cast after rounding
+    return static_cast<uint16_t>(std::round(f));
+}
+
+// based off pack_two_bfloat16_into_uint32
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
+    // first -> lower 16
+    // second -> upper 16
+    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
+
+ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
+    // Special case: if input tensor is 1D row-major, after tiling output tensor will have
+    // 1D logical shape but 2D padded shape
     if (logical_shape.rank() == 1) {
-        return ttnn::Shape{tile_height, tile_width};
+        logical_shape = ttnn::Shape({1, logical_shape[0]});
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
@@ -543,6 +577,26 @@ ttnn::Shape compute_padded_shape(
     });
 
     return ttnn::Shape(output_shape_vec);
+}
+
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
+    using namespace tt::constants;
+    auto rank = unpadded_shape.rank();
+    TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
+    SmallVector<uint32_t> padded_shape_vec(rank);
+
+    for (auto i = 0; i < rank; ++i) {
+        padded_shape_vec[i] = unpadded_shape[i];
+    }
+    if (rank >= 1) {
+        auto w = tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
+        padded_shape_vec[rank - 1] = w;
+    }
+    if (rank >= 2) {
+        auto h = tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
+        padded_shape_vec[rank - 2] = h;
+    }
+    return Shape(padded_shape_vec);
 }
 
 std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
@@ -698,6 +752,4 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     }
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

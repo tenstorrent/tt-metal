@@ -6,66 +6,47 @@
 
 #include <string>
 #include <tuple>
+#include "ttnn/operations/core/core.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/device_operation.hpp"
+
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 
-namespace ttnn::operations::sliding_window {
-namespace halo {
+namespace ttnn::operations::sliding_window::halo {
 
 struct HaloDeviceOperation {
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
-    SlidingWindowConfig config_;
-    ParallelConfig parallel_config_;
-    uint32_t pad_val_;
-    bool remote_read_;
-    bool transpose_mcast_;
-    uint32_t max_out_nsticks_per_core_;
-    uint32_t in_nsticks_per_core_;
-    tt::tt_metal::MemoryConfig output_memory_config_;
-    bool is_out_tiled_;
-    bool in_place_;
+    using operation_attributes_t = halo::operation_attributes_t;
+    using tensor_args_t = halo::tensor_args_t;
+    using spec_return_value_t = halo::spec_return_value_t;
+    using tensor_return_value_t = halo::tensor_return_value_t;
+    using program_factory_t = std::variant<data_movement::program::UntilizeWithHaloProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    // const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "config_",
-        "parallel_config_",
-        "pad_val_",
-        "remote_read_",
-        "transpose_mcast_",
-        "max_out_nsticks_per_core_",
-        "output_memory_config_",
-        "is_out_tiled_",
-        "in_place_");
-    auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(config_),
-            std::cref(parallel_config_),
-            std::cref(pad_val_),
-            std::cref(remote_read_),
-            std::cref(transpose_mcast_),
-            std::cref(max_out_nsticks_per_core_),
-            std::cref(output_memory_config_),
-            std::cref(is_out_tiled_),
-            std::cref(in_place_));
-    }
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const SlidingWindowConfig& config,
+        uint32_t pad_val,
+        bool remote_read,
+        bool transpose_mcast,
+        const MemoryConfig& output_memory_config,
+        bool is_out_tiled,
+        bool config_tensors_in_dram);
 };
 
-Tensor halo_op(
-    const Tensor& input_tensor,
-    const SlidingWindowConfig& config,
-    uint32_t pad_val = 0x0,
-    bool remote_read = false,
-    bool transpose_mcast = true,
-    const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    bool is_out_tiled = true,
-    bool in_place = false);
+}  // namespace ttnn::operations::sliding_window::halo
 
-}  // namespace halo
-
-}  // namespace ttnn::operations::sliding_window
+namespace ttnn::prim {
+constexpr auto halo =
+    ttnn::register_operation<"ttnn::prim::halo", ttnn::operations::sliding_window::halo::HaloDeviceOperation>();
+}  // namespace ttnn::prim

@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "device.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -83,7 +83,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
-            [mesh_device](const ShardedBufferConfig& config) {
+            [](const ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},
@@ -184,7 +184,7 @@ Buffer* MeshBuffer::get_reference_buffer() const {
 }
 
 Buffer* MeshBuffer::get_backing_buffer() const {
-    if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {
+    if (const auto* owned_state = std::get_if<OwnedBufferState>(&state_)) {
         return owned_state->backing_buffer.get();
     }
     return nullptr;
@@ -205,7 +205,8 @@ MeshBufferLayout MeshBuffer::global_layout() const {
 
 const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
     TT_FATAL(
-        global_layout() == MeshBufferLayout::SHARDED, "Can only query the global shard spec for a sharded MeshBuffer");
+        (global_layout() == MeshBufferLayout::SHARDED),
+        "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
 }
 
@@ -238,7 +239,7 @@ AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
             return AnyBuffer{CreateBuffer(config, *address)};
@@ -258,7 +259,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
+    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
             return AnyBuffer{CreateBuffer(config, *address)};
@@ -280,7 +281,7 @@ Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
 
 std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
-    if (auto mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
+    if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
         auto mesh_buffer = *mesh_buffer_ptr;
         if (mesh_buffer->is_allocated()) {
             return mesh_buffer;

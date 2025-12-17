@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,13 +47,19 @@ void kernel_main() {
     );
 #endif
 
+    experimental::Noc noc;
+    experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_buffer_addr);
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
+    experimental::AllocatorBank<bank_type> src_dram;
+    experimental::AllocatorBank<bank_type> dst_dram;
+
     // DRAM NOC src address
-    std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
-    noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
-    noc_async_read_barrier();
+    noc.async_read(
+        src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_buffer_src_addr}, {});
+    noc.async_read_barrier();
 
     // DRAM NOC dst address
-    std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
-    noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
-    noc_async_write_barrier();
+    noc.async_write(
+        l1_buffer, dst_dram, dram_buffer_size, {}, {.bank_id = dram_dst_bank_id, .addr = dram_buffer_dst_addr});
+    noc.async_write_barrier();
 }

@@ -14,7 +14,7 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -33,7 +33,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -232,7 +231,7 @@ void test_bert() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
@@ -324,11 +323,8 @@ void test_bert() {
             .to_device(device, dram_memory_config));
     parameters.emplace(
         "qa_head_bias",
-        ttnn::reshape(
-            ttnn::random::uniform(
-                bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), Layout::TILE)
-                .to_device(device, dram_memory_config),
-            ttnn::Shape({1, 1, 1, TILE_WIDTH})));
+        ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({1, 1, 1, TILE_WIDTH}), Layout::TILE)
+            .to_device(device, dram_memory_config));
 
     auto run_bert = [&]() {
         log_debug(tt::LogTest, "run_bert started");

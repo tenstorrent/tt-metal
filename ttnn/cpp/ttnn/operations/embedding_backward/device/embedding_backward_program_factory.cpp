@@ -3,32 +3,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
+
+#include "ttnn/operations/embedding_backward/device/embedding_backward_program_factory.hpp"
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::embedding_backward::detail {
+namespace ttnn::operations::embedding_backward::program {
 
-operation::ProgramWithCallbacks embedding_backward_multi_core(
-    const Tensor& index_tensor, const Tensor& grad_tensor, Tensor& output, const uint32_t num_embeddings) {
+EmbeddingBackwardProgramFactory::cached_program_t EmbeddingBackwardProgramFactory::create(
+    const embedding_backward::operation_attributes_t& operation_attributes,
+    const embedding_backward::tensor_args_t& tensor_args,
+    embedding_backward::tensor_return_value_t& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* index_tensor_buffer = index_tensor.buffer();
-    tt_metal::Buffer* grad_tensor_buffer = grad_tensor.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
+    tt_metal::Buffer* index_tensor_buffer = tensor_args.index_tensor.buffer();
+    tt_metal::Buffer* grad_tensor_buffer = tensor_args.grad_tensor.buffer();
+    tt_metal::Buffer* out_buffer = tensor_return_value.buffer();
 
-    IDevice* device = grad_tensor.device();
+    auto* device = tensor_args.grad_tensor.device();
 
+    const auto& index_tensor = tensor_args.index_tensor;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -38,10 +41,10 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t index_element_size_bytes = index_tensor.element_size();
     constexpr uint32_t INPUT_SIZE = 32;
 
-    tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(grad_tensor.dtype());
-    uint32_t grad_single_tile_size = tt::tt_metal::detail::TileSize(grad_cb_data_format);
+    tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(tensor_args.grad_tensor.dtype());
+    uint32_t grad_single_tile_size = tt::tile_size(grad_cb_data_format);
 
-    tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
+    tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(tensor_args.index_tensor.dtype());
     uint32_t index_single_page_size =
         INPUT_SIZE * index_element_size_bytes;  // Only need 32 at most at a time, which is less than full page size
     uint32_t index_page_size = index_tensor.padded_shape()[-1] * index_element_size_bytes;
@@ -49,17 +52,17 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     tt::DataFormat mask_cb_data_format = tt::DataFormat::UInt8;
     uint32_t mask_single_page_size = INPUT_SIZE * 1;  // UInt8 is 1 byte per element
 
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    uint32_t embedding_dim = grad_tensor.padded_shape()[-1];
+    uint32_t embedding_dim = tensor_args.grad_tensor.padded_shape()[-1];
     uint32_t embedding_tiles = embedding_dim / TILE_WIDTH;
 
-    uint32_t batch_size = index_tensor.padded_shape()[0];
-    uint32_t seq_len_tiles = index_tensor.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t batch_size = tensor_args.index_tensor.padded_shape()[0];
+    uint32_t seq_len_tiles = tensor_args.index_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t input_height_tiles = batch_size * seq_len_tiles;
 
-    uint32_t num_embeddings_tiles = num_embeddings / TILE_HEIGHT;
+    uint32_t num_embeddings_tiles = operation_attributes.num_embeddings / TILE_HEIGHT;
 
     // We split work based on the number of tiles in the embedding dimension
     auto grid_size = device->compute_with_storage_grid_size();
@@ -106,8 +109,8 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
         (uint32_t)seq_len_tiles,
         (uint32_t)num_embeddings_tiles,
         (uint32_t)index_page_size,
-        (uint32_t)(index_tensor.dtype() == DataType::BFLOAT16),
-        (uint32_t)(output.dtype() == DataType::BFLOAT16)};
+        (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
+        (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
     TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
@@ -151,29 +154,29 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
         offset += reader_runtime_args[5];
     }
-
-    auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto index_dram_buffer = input_tensors.at(0).buffer();
-        auto grad_dram_buffer = input_tensors.at(1).buffer();
-        auto output_dram_buffer = output_tensors.at(0).buffer();
-
-        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const auto& core : cores) {
-            {
-                auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = grad_dram_buffer->address();
-                runtime_args[1] = index_dram_buffer->address();
-                runtime_args[2] = output_dram_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program), {.reader_kernel_id = reader_kernel_id, .cores = cores, .device = device}};
 }
 
-}  // namespace ttnn::operations::embedding_backward::detail
+void EmbeddingBackwardProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const embedding_backward::operation_attributes_t&,
+    const embedding_backward::tensor_args_t& tensor_args,
+    embedding_backward::tensor_return_value_t& tensor_return_value) {
+    auto* index_dram_buffer = tensor_args.index_tensor.buffer();
+    auto* grad_dram_buffer = tensor_args.grad_tensor.buffer();
+    auto* output_dram_buffer = tensor_return_value.buffer();
+
+    auto& program = cached_program.program;
+    const auto& shared_variables = cached_program.shared_variables;
+
+    auto& runtime_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
+    for (const auto& core : shared_variables.cores) {
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args[0] = grad_dram_buffer->address();
+        runtime_args[1] = index_dram_buffer->address();
+        runtime_args[2] = output_dram_buffer->address();
+    }
+}
+
+}  // namespace ttnn::operations::embedding_backward::program

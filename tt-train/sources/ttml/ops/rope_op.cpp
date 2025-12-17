@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,37 +68,46 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
 }
 
 template <typename E>
-E apply_rope_scaling(const E& freqs, const RopeScalingParams& scaling_params) {
-    // Typical values for low_freq_factor and high_freq_factor are 1 and 4, respectively.
-    assert(scaling_params.low_freq_factor != scaling_params.high_freq_factor);
-    assert(scaling_params.low_freq_factor < scaling_params.high_freq_factor);
+E apply_rope_scaling(const E& freqs, const RopeScalingParams& p) {
+    using T = typename std::decay_t<E>::value_type;
 
-    // These wavelengths are used as thresholds to determine whether to scale the frequency.
-    // For example, if the low_freq_factor is 1, then every frequency after the
-    auto low_freq_wavelength = scaling_params.original_context_length / scaling_params.low_freq_factor;
-    auto high_freq_wavelength = scaling_params.original_context_length / scaling_params.high_freq_factor;
-    if (low_freq_wavelength == high_freq_wavelength) {
-        throw std::invalid_argument("RoPE scaling requires low and high frequency wavelengths to be different.");
+    // Typical: low=1, high=4, factor>=1
+    assert(p.low_freq_factor != p.high_freq_factor);
+    assert(p.low_freq_factor < p.high_freq_factor);
+    assert(p.scaling_factor > T(0));
+
+    // Period (wavelength) in tokens for each channel: 2π / ω
+    const E wavelengths = T(2) * T(M_PI) / freqs;
+
+    // Threshold wavelengths (tokens). Cast to T to avoid integer division.
+    const T low_wl = T(p.original_context_length) / T(p.low_freq_factor);    // e.g., N / 1 = N
+    const T high_wl = T(p.original_context_length) / T(p.high_freq_factor);  // e.g., N / 4
+
+    if (low_wl == high_wl) {
+        throw std::invalid_argument("RoPE scaling requires distinct low/high wavelengths.");
     }
 
-    auto wavelengths = 2 * std::numbers::pi / freqs;
+    // Unscaled (high-frequency / short-range) and fully-scaled (low-frequency / long-range)
+    const E high_freqs = freqs;
+    const E low_freqs = freqs / T(p.scaling_factor);
 
-    // for high frequencies, we're capturing short-range dependencies and needn't scale.
-    auto high_freqs = freqs;
-    // for low frequencies, we're capturing long-range dependencies and need to scale by the full scaling factor.
-    auto low_freqs = freqs / scaling_params.scaling_factor;
+    // Mid-band linear blend between fully-scaled and unscaled.
+    // Using cycles across the original context: c = original_ctx / period
+    // period == wavelengths, so c = N / wavelength.
+    E cycles = T(p.original_context_length) / wavelengths;  // dimensionless
+    E smooths = (cycles - T(p.low_freq_factor)) / (T(p.high_freq_factor) - T(p.low_freq_factor));
 
-    // for frequencies in between, we smoothly interpolate.
-    auto smooths = (scaling_params.original_context_length / wavelengths - scaling_params.low_freq_factor) /
-                   (scaling_params.high_freq_factor - scaling_params.low_freq_factor);
-    auto mid_freqs = (1.0F - smooths) * freqs / scaling_params.scaling_factor + smooths * freqs;
+    // (Optional) clamp for numerical safety
+    smooths = xt::clip(smooths, T(0), T(1));
 
-    // if we're between the low and high freqs, use the smoothly interpolated mid-freqs,
-    // otherwise use low_freqs for the low freq wavelengths and high_freqs otherwise.
-    return xt::where(
-        (wavelengths < low_freq_wavelength) && (wavelengths > high_freq_wavelength),
-        mid_freqs,
-        xt::where(wavelengths > low_freq_wavelength, low_freqs, high_freqs));
+    const E mid_freqs = (T(1) - smooths) * (freqs / T(p.scaling_factor)) + smooths * freqs;
+
+    // Masks
+    const auto in_mid = (wavelengths < low_wl) & (wavelengths > high_wl);
+    const auto is_low = (wavelengths > low_wl);  // very long periods → fully scaled
+    // else: high band (wavelengths <= high_wl) → unscaled
+
+    return xt::where(in_mid, mid_freqs, xt::where(is_low, low_freqs, high_freqs));
 }
 
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
@@ -112,7 +121,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     auto seq_len = input_logical_shape[2];
     auto head_dim = input_logical_shape[3];
 
-    auto squish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
+    auto squish_batch = [num_batch, num_heads](const ttnn::Tensor& input) {
         auto shape = input.logical_shape();
         auto seq_len = shape[2];
         auto head_dim = shape[3];
@@ -162,33 +171,40 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& scaling_params) {
-    // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
-    xt::xarray<uint32_t> expt_data = xt::arange(0, static_cast<int>(head_dim)) / 2;
-    xt::xarray<float> expt_xt = xt::cast<float>(expt_data);
+    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& p) {
+    // pair indices: 0,0,1,1,2,2,... size=head_dim
+    xt::xarray<uint32_t> pair_idx_u = xt::arange<uint32_t>(head_dim) / 2u;  // integer divide
+    xt::xarray<float> pair_idx = xt::cast<float>(pair_idx_u);
 
-    expt_xt *= 2.0F / static_cast<float>(head_dim);
-    xt::xarray<float> theta_pow = xt::pow(theta, expt_xt);
+    // exponent = 2 * floor(i/2) / head_dim
+    pair_idx *= 2.0F / static_cast<float>(head_dim);
 
-    auto freqs = xt::ones_like(theta_pow) / theta_pow;
+    // inv_freq[i] = 1 / (theta ** exponent[i])
+    xt::xarray<float> inv_freq = 1.0f / xt::pow(theta, pair_idx);  // [D]
 
-    xt::xarray<float> seq_pos = xt::arange<float>(sequence_length);
-    xt::xarray<float> seq_pos_repeated_to_head = xt::repeat(seq_pos, head_dim, seq_pos.dimension() - 1U);
-    xt::xarray<float> scales = seq_pos_repeated_to_head.reshape({sequence_length, head_dim});
-
-    xt::xarray<float> scaled_freqs = scales * freqs;
-
-    if (scaling_params.scaling_factor != 0.0F) {
-        scaled_freqs = apply_rope_scaling(scaled_freqs, scaling_params);
+    // Apply NTK scaling to base frequencies (recommended)
+    if (p.scaling_factor != 1.0f) {
+        inv_freq = apply_rope_scaling(inv_freq, p);  // [D]
     }
 
-    // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
-    auto pi = static_cast<float>(std::numbers::pi);
-    scaled_freqs = xt::fmod(scaled_freqs, 2.0F * pi);
-    scaled_freqs = scaled_freqs.reshape({1, 1, sequence_length, head_dim});
+    // positions column vector [L,1]
+    // positions column vector [L,1]
+    xt::xarray<float> pos = xt::arange<float>(static_cast<float>(sequence_length));
+    pos.reshape({sequence_length, 1u});  // member reshape
 
-    xt::xarray<float> sin_freqs = xt::sin(scaled_freqs);
-    xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
+    // θ = pos * inv_freq  -> broadcast to [L,D]
+    xt::xarray<float> theta_mat = pos * inv_freq;  // [L,D]
+
+    // keep in principal range
+    theta_mat = xt::fmod(theta_mat, 2.0F * std::numbers::pi_v<float>);
+
+    // expand to [1,1,L,D]
+    xt::xarray<float> theta_4d = theta_mat;                 // copy shape metadata from theta_mat
+    theta_4d.reshape({1u, 1u, sequence_length, head_dim});  // member reshape
+
+    // trig caches
+    xt::xarray<float> sin_freqs = xt::sin(theta_4d);
+    xt::xarray<float> cos_freqs = xt::cos(theta_4d);
 
     auto* device = &autograd::ctx().get_device();
     return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};

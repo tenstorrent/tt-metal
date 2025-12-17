@@ -1,15 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/reduction/topk/topk.hpp"
+
 #include <cstdint>
 
-#include "topk.hpp"
-#include "device/topk_op.hpp"
-#include "device/topk_constants.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -17,8 +14,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::topk {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -102,7 +101,6 @@ std::vector<Tensor> post_topk_transform_tensor(
 }  // namespace
 
 std::vector<Tensor> ExecuteTopK::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const uint32_t k,
     const int8_t dim,
@@ -111,12 +109,15 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     auto rank = input_tensor.padded_shape().rank();
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
     const bool is_rank_le_4d = rank <= 4;
+
+    const auto adjusted_dim = dim < 0 ? dim + rank : dim;
+    TT_FATAL(input_tensor.logical_shape()[adjusted_dim] >= k, "K cannot be larger than the dimension size!");
 
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto used_sub_core_grids = sub_core_grids.value_or(ttnn::CoreRangeSet(
@@ -145,14 +146,21 @@ std::vector<Tensor> ExecuteTopK::invoke(
     // fill implicit padding, if any
     padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
-    auto output_tensor_vec = tt::tt_metal::operation::run(
-        TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
-        {padded_tensor},
-        {indices_tensor},
-        optional_output_tensors.has_value()
-            ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt},
-        queue_id);
+    auto [output_value_tensor, output_index_tensor] = ttnn::prim::topk(
+        padded_tensor,
+        adjusted_k,
+        -1,
+        largest,
+        sorted,
+        input_memory_config,
+        used_sub_core_grids,
+        indices_tensor,
+        preallocated_output_tensors);
+
+    std::vector<Tensor> output_tensor_vec;
+    output_tensor_vec.reserve(2);
+    output_tensor_vec.push_back(std::move(output_value_tensor));
+    output_tensor_vec.push_back(std::move(output_index_tensor));
 
     return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
         transposed_tensor,
@@ -167,4 +175,4 @@ std::vector<Tensor> ExecuteTopK::invoke(
         indices_tensor);
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::topk

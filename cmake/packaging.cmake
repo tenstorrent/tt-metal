@@ -44,6 +44,12 @@ set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
+# ttml uses internal libraries from metalium/nn packages; dependencies are declared explicitly
+set(CPACK_DEBIAN_TTML_PACKAGE_SHLIBDEPS FALSE)
+
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
+set(CPACK_DEBIAN_TTML_PACKAGE_DEPENDS "python3 (>= 3.8)")
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
@@ -92,6 +98,8 @@ list(
     msgpack-cxx
     Headers
     Library
+    json-dev
+    ttml
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -108,7 +116,6 @@ cpack_add_component(tracy GROUP metalium)
 cpack_add_component_group(metalium-dev)
 cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
 cpack_add_component(fmt-core GROUP metalium-dev)
-cpack_add_component(json-dev GROUP metalium-dev)
 cpack_add_component(enchantum GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component(spdlog-dev GROUP metalium-dev)
@@ -156,5 +163,16 @@ cpack_add_component(
     DESCRIPTION "TT-NN validation tools"
 )
 cpack_add_component(ttnn-validation GROUP nn-validation)
+
+cpack_add_component_group(ml)
+cpack_add_component(
+    ml
+    DEPENDS
+        nn
+        metalium
+    GROUP ml
+    DESCRIPTION "TT-Train runtime library"
+)
+cpack_add_component(ttml GROUP ml)
 
 include(CPack)

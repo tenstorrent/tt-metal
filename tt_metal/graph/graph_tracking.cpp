@@ -4,16 +4,19 @@
 
 #include <graph_tracking.hpp>
 
-#include "assert.hpp"
-
-namespace tt {
-namespace tt_metal {
-class Buffer;
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
+class Buffer;
+class IDevice;
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal {
+
+GraphTracker& GraphTracker::instance() {
+    static GraphTracker tracker;
+    return tracker;
+}
 
 bool GraphTracker::is_enabled() const { return (not processors.empty()); }
 

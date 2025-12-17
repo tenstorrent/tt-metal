@@ -11,8 +11,8 @@
 namespace ttnn::operations::moreh::moreh_sgd {
 void MorehSgdOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& params_in = tensor_args.param_in;
-    auto& grad = tensor_args.grad;
+    const auto& params_in = tensor_args.param_in;
+    const auto& grad = tensor_args.grad;
 
     check_tensor(params_in, "moreh_sgd", "params_in", {DataType::BFLOAT16});
     check_tensor(grad, "moreh_sgd", "grad", {DataType::BFLOAT16});
@@ -76,18 +76,18 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
 MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.param_in.device();
+    auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out.value());
+        ret.push_back(tensor_args.param_out);
     } else {
         ret.push_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out.value());
+        ret.push_back(tensor_args.momentum_buffer_out);
     } else if (output_specs[1].has_value()) {
         ret.push_back(create_device_tensor(*output_specs[1], device));
     } else {

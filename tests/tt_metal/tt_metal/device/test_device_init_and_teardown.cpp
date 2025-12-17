@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -20,14 +19,14 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -45,7 +44,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @brief load_blank_kernels into all cores and will launch
 /// @param device
 /// @return
-bool load_all_blank_kernels(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto mesh_workload = distributed::MeshWorkload();
@@ -67,8 +66,7 @@ bool load_all_blank_kernels(std::shared_ptr<distributed::MeshDevice> mesh_device
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
     return pass;
 }
@@ -83,8 +81,8 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     }
 
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -102,8 +100,8 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();

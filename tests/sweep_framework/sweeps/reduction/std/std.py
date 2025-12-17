@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from functools import partial
 import numpy as np
 
+import pytest
 import torch
 import random
 import ttnn
@@ -13,7 +14,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
@@ -82,11 +83,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+def run_std(
+    device,
     input_shape,
     dim,
     keepdim,
@@ -94,8 +92,6 @@ def run(
     input_layout,
     input_a_memory_config,
     output_memory_config,
-    *,
-    device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
@@ -119,9 +115,49 @@ def run(
     )
 
     start_time = start_measuring_time()
-    op_output_tensor = ttnn.std(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    op_output_tensor = ttnn.std(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
+
+
+@pytest.mark.parametrize("input_shape", parameters["xfail"]["input_shape"])
+@pytest.mark.parametrize("dim", parameters["xfail"]["dim"])
+@pytest.mark.parametrize("keepdim", parameters["xfail"]["keepdim"])
+@pytest.mark.parametrize("input_a_dtype", parameters["xfail"]["input_a_dtype"])
+@pytest.mark.parametrize("input_layout", parameters["xfail"]["input_layout"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["xfail"]["input_a_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["xfail"]["output_memory_config"])
+def test_std(
+    device, input_shape, dim, keepdim, input_a_dtype, input_layout, input_a_memory_config, output_memory_config
+):
+    run_std(device, input_shape, dim, keepdim, input_a_dtype, input_layout, input_a_memory_config, output_memory_config)
+
+
+# This is the run instructions for the test, defined by the developer.
+# The run function must take the above-defined parameters as inputs.
+# The runner will call this run function with each test vector, and the returned results from this function will be stored.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+def run(
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_std(
+        device,
+        input_shape,
+        dim,
+        keepdim,
+        input_a_dtype,
+        input_layout,
+        input_a_memory_config,
+        output_memory_config,
+    )

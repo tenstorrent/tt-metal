@@ -1,24 +1,25 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using namespace ttml;
 
 auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
 }
 
 class N300UtilsTest : public ::testing::Test {
@@ -28,7 +29,7 @@ protected:
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
 
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }

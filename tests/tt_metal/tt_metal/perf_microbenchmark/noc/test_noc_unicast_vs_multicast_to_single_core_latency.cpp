@@ -12,14 +12,15 @@
 #include <string>
 #include <variant>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/utils.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 

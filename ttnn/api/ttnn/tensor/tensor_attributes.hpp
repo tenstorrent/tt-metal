@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,23 +14,23 @@ namespace tt::tt_metal {
 
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
-    TensorAttributes(
-        Storage storage,
-        TensorSpec tensor_spec,
-        DistributedTensorConfig distributed_tensor_config,
-        TensorTopology tensor_topology);
+    TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    TensorAttributes(const TensorAttributes&) = default;
+    TensorAttributes(TensorAttributes&&) = default;
+    TensorAttributes& operator=(const TensorAttributes&) = default;
+    TensorAttributes& operator=(TensorAttributes&&) = default;
 
     // Getters and setters.
     const Storage& get_storage() const;
     Storage& get_storage();
     const TensorSpec& get_tensor_spec() const;
-    const DistributedTensorConfig& get_distributed_tensor_config() const;
     const TensorTopology& get_tensor_topology() const;
+
+    TensorAttributes with_tensor_topology(TensorTopology tensor_topology) const;
 
 private:
     Storage storage_;
     TensorSpec tensor_spec_;
-    DistributedTensorConfig distributed_tensor_config_;
     TensorTopology tensor_topology_;
 };
 

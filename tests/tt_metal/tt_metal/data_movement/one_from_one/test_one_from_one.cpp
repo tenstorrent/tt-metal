@@ -28,10 +28,7 @@ struct OneFromOneConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::RISCV_1_default;
     uint32_t num_virtual_channels = 1;
-
-    // TODO: Add the following parameters
-    //  1. Virtual Channel
-    //  2. Which NOC to use
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
@@ -39,7 +36,7 @@ struct OneFromOneConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromOneConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
@@ -78,9 +75,16 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
         (uint32_t)test_config.num_virtual_channels};
 
     // Kernels
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/";
+    std::string requestor_kernel_filename = "requestor";
+    if (test_config.use_2_0_api) {
+        requestor_kernel_filename += "_2_0";
+    }
+    std::string requestor_kernel_path = kernels_dir + requestor_kernel_filename + ".cpp";
+
     auto requestor_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor.cpp",
+        requestor_kernel_path,
         master_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -100,7 +104,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        transaction_size_bytes / bfloat16::SIZEOF,
+        transaction_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
@@ -110,10 +114,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -138,12 +142,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneCon
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
     NOC noc_id = NOC::RISCV_1_default) {
-    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -170,10 +173,11 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
+    bool use_2_0_api = false,
     NOC noc_id = NOC::RISCV_1_default) {
     IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
@@ -202,6 +206,7 @@ void packet_sizes_test(
                 .page_size_bytes = page_size_bytes,
                 .l1_data_format = DataFormat::Float16_b,
                 .noc_id = noc_id,
+                .use_2_0_api = use_2_0_api,
             };
 
             // Run
@@ -211,7 +216,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
@@ -257,7 +262,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -293,7 +298,8 @@ void custom_test(
 
 }  // namespace unit_tests::dm::core_from_core
 
-/* ========== Test case for one from one data movement; Test id = 5 ========== */
+/* ========== TEST CASES ========== */
+
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     uint32_t test_id = 5;
     CoreCoord master_core_coord = {0, 0};
@@ -316,7 +322,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
-    uint32_t test_id = 151;
+    uint32_t test_id = 152;
 
     unit_tests::dm::core_from_core::virtual_channels_test(
         get_mesh_device(),
@@ -328,7 +334,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_id = 160;
+    uint32_t test_id = 153;
 
     // Parameters
     uint32_t num_of_transactions = 256;
@@ -343,6 +349,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
         num_of_transactions,
         pages_per_transaction,
         num_virtual_channels);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes2_0) {
+    uint32_t test_id = 159;
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {1, 1};
+    bool use_2_0_api = true;
+
+    unit_tests::dm::core_from_core::packet_sizes_test(
+        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, use_2_0_api);
 }
 
 }  // namespace tt::tt_metal

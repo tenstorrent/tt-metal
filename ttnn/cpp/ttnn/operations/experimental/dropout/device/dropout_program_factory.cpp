@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -37,7 +36,7 @@ constexpr uint32_t kNumOutputTiles = 2;
 operation_attributes_t override_per_device_seed(
     const operation_attributes_t& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
     operation_attributes_t args_with_per_device_seed = args;
-    args_with_per_device_seed.seed += input_tensor.mesh_device()->get_device(mesh_coord)->id();
+    args_with_per_device_seed.seed += input_tensor.device()->get_device(mesh_coord)->id();
     return args_with_per_device_seed;
 }
 
@@ -187,8 +186,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     tt::DataFormat data_fmt_in = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat data_fmt_out = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t single_tile_size_in = tt::tt_metal::detail::TileSize(data_fmt_in);
-    uint32_t single_tile_size_out = tt::tt_metal::detail::TileSize(data_fmt_out);
+    uint32_t single_tile_size_in = tt::tile_size(data_fmt_in);
+    uint32_t single_tile_size_out = tt::tile_size(data_fmt_out);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
@@ -209,11 +208,11 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto src_buffer = input.buffer();
+    auto* src_buffer = input.buffer();
     std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
 
-    auto dst_buffer = output.buffer();
+    auto* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_args);
 
@@ -307,8 +306,8 @@ void DropoutProgramFactory::override_runtime_arguments(
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Only seed/address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, dropout_reader_kernel);

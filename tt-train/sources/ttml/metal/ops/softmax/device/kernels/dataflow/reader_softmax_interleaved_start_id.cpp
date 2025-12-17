@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,27 +6,7 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
-
-void read_block_tiles(
-    const uint32_t cb_input_idx,
-    const InterleavedAddrGenFast<true>& input_address_generator,
-    const uint32_t Wt,
-    const uint32_t block_size,
-    const uint32_t tile_bytes,
-    const uint32_t idx) {
-    for (uint32_t j = 0; j < Wt; j += block_size) {
-        cb_reserve_back(cb_input_idx, block_size);
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-            l1_write_addr += tile_bytes;
-        }
-
-        noc_async_read_barrier();
-        cb_push_back(cb_input_idx, block_size);
-    }
-}
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -67,10 +47,8 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto input_args = TensorAccessorArgs<3>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row
@@ -78,14 +56,14 @@ void kernel_main() {
         uint32_t idx = (start_row + i) * Wt;  // (take already processed rows + current row)*Wt(number of tiles in row)
 
         // read input buffer by blocks
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
 #ifndef EVERYTHING_FITS_IN_L1
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
         // read input buffer by blocks to calculate softmax in row
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 #endif
     }
 }

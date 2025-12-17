@@ -1,15 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
-class TtFeedForward(nn.Module):
+class TtFeedForward(LightweightModule):
     def __init__(
         self,
         device,
@@ -25,9 +25,10 @@ class TtFeedForward(nn.Module):
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]
 
-        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, model_config.ff_weights_dtype)
+        ff_weights_dtype = model_config.ff_weights_dtype
+        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ff_weights_dtype)
+
         self.ff2_model_config = model_config.get_matmul_config(f"{module_path}.net.2")
-        assert self.ff2_model_config is not None, "ff2_model_config should not be None"
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
 
     def forward(self, hidden_states):
@@ -38,9 +39,8 @@ class TtFeedForward(nn.Module):
             self.tt_weights,
             bias=self.tt_bias,
             program_config=self.ff2_model_config,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.ff2_model_config is not None else None,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states

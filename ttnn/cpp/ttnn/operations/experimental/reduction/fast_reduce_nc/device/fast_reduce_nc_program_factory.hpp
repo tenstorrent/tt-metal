@@ -2,18 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#pragma once
 
-namespace ttnn::operations::experimental::reduction::detail {
+#include "fast_reduce_nc_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 
-tt::tt_metal::operation::ProgramWithCallbacks reduce_nc_factory(
-    const ttnn::Tensor& input,
-    const ttnn::Tensor& output,
-    int64_t dim,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
+namespace ttnn::operations::experimental::reduction::detail::program {
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+struct FastReduceNCProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle reader_kernel_id;
+        tt::tt_metal::KernelHandle writer_kernel_id;
+        uint32_t num_cores_to_be_used;
+        uint32_t num_cores_x;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::experimental::reduction::detail::program

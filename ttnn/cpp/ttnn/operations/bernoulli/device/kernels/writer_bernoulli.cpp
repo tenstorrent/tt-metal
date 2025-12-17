@@ -51,7 +51,7 @@ void kernel_main() {
                 in_cb_addr += 2;
 #endif
                 float output = 0;
-                if (rand_float <= input) {
+                if (rand_float < input) {
                     output = 1;
                 }
 

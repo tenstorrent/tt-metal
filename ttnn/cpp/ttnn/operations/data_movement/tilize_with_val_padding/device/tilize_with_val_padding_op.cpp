@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
 
 namespace ttnn::operations::data_movement {
 
@@ -21,19 +22,32 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::FLOAT32,
-        "Can only tilize bfloat16/float32 or int32/uint32 tensors");
+            input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::FLOAT32 or
+            input_tensor_a.dtype() == DataType::UINT16,
+        "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
 
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
-    for (auto i = 0; i < input_shape.rank(); i++) {
+    if (input_shape.rank() == 1) {
+        // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
+        // but 2D padded shape
         TT_FATAL(
-            input_shape[i] <= this->output_padded_shape[i],
-            "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is smaller "
-            "in dimension {}",
+            input_shape[0] <= this->output_padded_shape[-1],
+            "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
+            "smaller in dimension {}",
             this->output_padded_shape,
             input_shape,
-            i);
+            0);
+    } else {
+        for (auto i = 0; i < input_shape.rank(); i++) {
+            TT_FATAL(
+                input_shape[i] <= this->output_padded_shape[i],
+                "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
+                "smaller in dimension {}",
+                this->output_padded_shape,
+                input_shape,
+                i);
+        }
     }
 
     uint32_t num_rows = this->output_padded_shape[-1];
@@ -54,7 +68,13 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
             "Output tensor must have the same memory layout as input tensor");
         for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
             if (i != input_shape.rank() - 2) {
-                TT_FATAL(input_shape[i] == this->output_padded_shape[i], "Error");
+                TT_FATAL(
+                    input_shape[i] == this->output_padded_shape[i],
+                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                    i,
+                    input_shape[i],
+                    i,
+                    this->output_padded_shape[i]);
             }
         }
     }
@@ -108,17 +128,20 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor_a.memory_config().is_sharded()) {
+        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification");
         return detail::tilize_with_val_padding_multi_core_sharded(input_tensor_a, output_tensor, this->pad_value);
     }
     if (!this->enough_space_height) {
         return detail::tilize_with_val_padding_multi_core_block_interleaved(
-            input_tensor_a, output_tensor, this->pad_value);
+            input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
     }
     if (!this->use_multicore) {
-        return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
+        return detail::tilize_with_val_padding_single_core(
+            input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
     }
 
-    return detail::tilize_with_val_padding_multi_core_interleaved(input_tensor_a, output_tensor, this->pad_value);
+    return detail::tilize_with_val_padding_multi_core_interleaved(
+        input_tensor_a, output_tensor, this->pad_value, this->sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement

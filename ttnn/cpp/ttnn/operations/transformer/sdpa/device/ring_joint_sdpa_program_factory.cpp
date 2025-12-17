@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,6 +25,8 @@ namespace ttnn::operations::transformer::detail {
 operation::ProgramWithCallbacks ring_joint_sdpa(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const Tensor& input_tensor_v,
     const Tensor& gathered_input_tensor_k,
     const Tensor& gathered_input_tensor_v,
     const Tensor& joint_tensor_q,
@@ -280,6 +282,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -289,6 +299,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -321,6 +333,15 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         global_logical_NK_chunks,
         global_padded_NK_chunks,
         q_num_chunks};
+
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -359,6 +380,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         global_logical_NK_chunks,
         global_padded_NK_chunks,
         q_num_chunks};
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -399,6 +424,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -436,14 +463,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
-    uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
-    uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
-    uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
-    uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
-    uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
-    uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
+    uint32_t q_tile_size = tt::tile_size(q_df);
+    uint32_t k_tile_size = tt::tile_size(k_df);
+    uint32_t v_tile_size = tt::tile_size(v_df);
+    uint32_t mask_tile_size = tt::tile_size(mask_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
+    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
+    uint32_t im_tile_size = tt::tile_size(im_df);
+    uint32_t stats_tile_size = tt::tile_size(stats_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -487,13 +514,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // lse input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_6, stats_df}})
-                            .set_page_size(tt::CBIndex::c_6, stats_tile_size);
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
-                            .set_page_size(tt::CBIndex::c_7, im_tile_size);
+    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // column identity input
@@ -547,13 +574,15 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // lse output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * out_tile_size, {{tt::CBIndex::c_17, out_df}})
-                             .set_page_size(tt::CBIndex::c_17, out_tile_size);
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = gathered_input_tensor_k.buffer()->address();
-    uint32_t v_addr = gathered_input_tensor_v.buffer()->address();
+    uint32_t k_addr = input_tensor_k.buffer()->address();
+    uint32_t v_addr = input_tensor_v.buffer()->address();
+    uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
+    uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
     uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
     uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
     uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
@@ -582,6 +611,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             q_addr,
             k_addr,
             v_addr,
+            gathered_k_addr,
+            gathered_v_addr,
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
@@ -621,21 +652,25 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Get addresses for regular tensors
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto joint_q_buffer = input_tensors.at(3).buffer();
-            auto joint_k_buffer = input_tensors.at(4).buffer();
-            auto joint_v_buffer = input_tensors.at(5).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
+            auto* gathered_k_buffer = input_tensors.at(3).buffer();
+            auto* gathered_v_buffer = input_tensors.at(4).buffer();
+            auto* joint_q_buffer = input_tensors.at(5).buffer();
+            auto* joint_k_buffer = input_tensors.at(6).buffer();
+            auto* joint_v_buffer = input_tensors.at(7).buffer();
 
             // Get addresses for output tensors
-            auto out_buffer = output_tensors.at(0).buffer();
-            auto joint_out_buffer = output_tensors.at(1).buffer();
-            auto lse_buffer = output_tensors.at(2).buffer();
+            auto* out_buffer = output_tensors.at(0).buffer();
+            auto* joint_out_buffer = output_tensors.at(1).buffer();
+            auto* lse_buffer = output_tensors.at(2).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();
+            uint32_t gathered_k_addr = gathered_k_buffer->address();
+            uint32_t gathered_v_addr = gathered_v_buffer->address();
             uint32_t joint_q_addr = joint_q_buffer->address();
             uint32_t joint_k_addr = joint_k_buffer->address();
             uint32_t joint_v_addr = joint_v_buffer->address();
@@ -656,9 +691,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
                 reader_args[0] = q_addr;
                 reader_args[1] = k_addr;
                 reader_args[2] = v_addr;
-                reader_args[3] = joint_q_addr;
-                reader_args[4] = joint_k_addr;
-                reader_args[5] = joint_v_addr;
+                reader_args[3] = gathered_k_addr;
+                reader_args[4] = gathered_v_addr;
+                reader_args[5] = joint_q_addr;
+                reader_args[6] = joint_k_addr;
+                reader_args[7] = joint_v_addr;
 
                 // Update writer args
                 writer_args[0] = out_addr;

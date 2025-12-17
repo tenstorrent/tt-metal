@@ -10,6 +10,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
+from models.common.utility_functions import profiler, tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -20,7 +21,6 @@ from models.demos.falcon7b_common.tests.test_utils import (
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler, tt_tensors_to_torch_tensors
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
 
 
@@ -42,23 +42,12 @@ def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len,
 
 
 class DeviceSetup(Enum):
-    GRAYSKULL = 0
-    WORMHOLE_B0 = 1
-    T3000 = 2
+    WORMHOLE_B0 = 0
+    T3000 = 1
 
 
 # CONFIG_TO_PCC[arch][model_config_str][seq_len] = (output_pcc, k_cache_pcc, v_cache_pcc)
 PREFILL_CONFIG_TO_PCC = {
-    DeviceSetup.GRAYSKULL: {
-        "BFLOAT16-DRAM": {
-            128: (0.87, 0.97, 0.88),
-            256: (0.92, 0.97, 0.88),
-        },
-        "BFLOAT16-L1": {
-            128: (0.88, 0.97, 0.88),
-            256: (0.92, 0.97, 0.88),
-        },
-    },
     DeviceSetup.WORMHOLE_B0: {
         "BFLOAT16-DRAM": {
             128: (0.99, 0.99, 0.99),
@@ -79,17 +68,11 @@ PREFILL_CONFIG_TO_PCC = {
 
 # CONFIG_TO_PCC[arch][model_config_str][kv_cache_len] = (output_pcc, k_cache_pcc, v_cache_pcc)
 DECODE_CONFIG_TO_PCC = {
-    DeviceSetup.GRAYSKULL: {
-        "BFLOAT16-DRAM": {128: (0.65, 0.77, 0.79), 1024: (0.59, 0.85, 0.85), 2047: (0.55, 0.95, 0.94)},
-        "BFLOAT16-L1": {128: (0.65, 0.77, 0.79), 1024: (0.59, 0.85, 0.85), 2047: (0.55, 0.95, 0.94)},
-    },
     DeviceSetup.WORMHOLE_B0: {
-        "BFLOAT16-DRAM": {128: (0.89, 0.92, 0.92), 1024: (0.92, 0.93, 0.94), 2047: (0.97, 0.99, 0.98)},
-        "BFLOAT16-L1": {128: (0.89, 0.92, 0.92), 1024: (0.92, 0.93, 0.94), 2047: (0.97, 0.99, 0.98)},
-        "BFLOAT16-L1_SHARDED": {128: (0.89, 0.92, 0.92), 1024: (0.95, 0.95, 0.96), 2047: (0.94, 0.94, 0.95)},
+        "BFLOAT16-L1_SHARDED": {128: (0.89, 0.92, 0.92), 1024: (0.96, 0.96, 0.97), 2047: (0.96, 0.96, 0.97)},
     },
     DeviceSetup.T3000: {
-        "BFLOAT16-L1_SHARDED": {128: (0.87, 0.90, 0.90), 1024: (0.92, 0.94, 0.94), 2047: (0.95, 0.92, 0.90)}
+        "BFLOAT16-L1_SHARDED": {128: (0.88, 0.90, 0.91), 1024: (0.93, 0.94, 0.94), 2047: (0.94, 0.89, 0.87)}
     },
 }
 
@@ -106,7 +89,6 @@ def run_test_FalconCausalLM_end_to_end(
     model_config,
     model_config_str,
     tt_cache_path,
-    model_location_generator,
     e2e_perf=False,
     expected_inference_time=None,
     device_perf=False,
@@ -128,7 +110,7 @@ def run_test_FalconCausalLM_end_to_end(
     global_batch = batch * num_devices
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
     pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")

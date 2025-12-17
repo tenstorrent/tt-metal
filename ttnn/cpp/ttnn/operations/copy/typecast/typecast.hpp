@@ -7,12 +7,11 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace copy {
+
+namespace operations::copy {
 
 struct Typecast {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -20,7 +19,6 @@ struct Typecast {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,
@@ -28,8 +26,7 @@ struct Typecast {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
-}  // namespace copy
-}  // namespace operations
+}  // namespace operations::copy
 
 constexpr auto typecast = ttnn::register_operation<"ttnn::typecast", ttnn::operations::copy::Typecast>();
 

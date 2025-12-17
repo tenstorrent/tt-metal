@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::copy::detail {
 namespace py = pybind11;
 
 void py_bind_typecast(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
@@ -41,13 +41,13 @@ void py_bind_typecast(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::DataType dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, dtype, memory_config, optional_output_tensor); },
+               const std::optional<ttnn::Tensor>& optional_output_tensor) {
+                return self(input_tensor, dtype, memory_config, optional_output_tensor);
+            },
             py::arg("input_tensor").noconvert(),
             py::arg("dtype").noconvert(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("optional_output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::copy::detail

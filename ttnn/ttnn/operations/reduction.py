@@ -12,8 +12,14 @@ def _create_golden_function(torch_function_name):
         import torch
 
         torch_function = getattr(torch, torch_function_name)
-        if dim == None:
-            return torch_function(input_tensor, keepdim=keepdim)
+        if dim is None:
+            # When dim is None, PyTorch reduces over all dimensions
+            # For keepdim to work, we need to specify all dimensions explicitly
+            if keepdim:
+                all_dims = tuple(range(len(input_tensor.shape)))
+                return torch_function(input_tensor, dim=all_dims, keepdim=keepdim)
+            else:
+                return torch_function(input_tensor)
         else:
             return torch_function(input_tensor, dim=dim, keepdim=keepdim)
 

@@ -27,6 +27,7 @@ struct DramConfig {
     CoreCoord core_coord = {0, 0};
     uint32_t dram_channel = 0;
     uint32_t virtual_channel = 0;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -34,7 +35,7 @@ struct DramConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // SETUP
 
@@ -84,9 +85,19 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
         (uint32_t)test_config.virtual_channel};
 
     // Kernels
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/";
+    std::string reader_kernel_filename = "reader_unary";
+    std::string writer_kernel_filename = "writer_unary";
+    if (test_config.use_2_0_api) {
+        reader_kernel_filename += "_2_0";
+        writer_kernel_filename += "_2_0";
+    }
+    std::string reader_kernel_path = kernels_dir + reader_kernel_filename + ".cpp";
+    std::string writer_kernel_path = kernels_dir + writer_kernel_filename + ".cpp";
+
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
+        reader_kernel_path,
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -95,7 +106,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
+        writer_kernel_path,
         test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -110,7 +121,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 
     // Setup Input and Golden Output
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
@@ -120,10 +131,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     // LAUNCH PROGRAM - Use mesh workload approach
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -154,7 +165,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DramConfig& t
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0,
@@ -183,10 +194,11 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord core_coord = {0, 0},
-    uint32_t dram_channel = 0) {
+    uint32_t dram_channel = 0,
+    bool use_2_0_api = false) {
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
 
@@ -209,7 +221,9 @@ void packet_sizes_test(
                 .bytes_per_page = bytes_per_page,
                 .l1_data_format = DataFormat::Float16_b,
                 .core_coord = core_coord,
-                .dram_channel = dram_channel};
+                .dram_channel = dram_channel,
+                .virtual_channel = 0,
+                .use_2_0_api = use_2_0_api};
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -233,7 +247,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord core_coord;
     uint32_t dram_channel = 0;
@@ -258,7 +272,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord core_coord = {0, 0};
 
@@ -275,6 +289,17 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
     uint32_t test_id = 3;
 
     unit_tests::dm::dram::directed_ideal_test(get_mesh_device(), test_id);
+}
+
+/* ========== Test case for varying transaction numbers and sizes with 2.0 API; Test id = 40 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
+    unit_tests::dm::dram::packet_sizes_test(
+        get_mesh_device(),
+        40,      // Test case ID
+        {0, 0},  // Core coordinates (default)
+        0,       // DRAM channel (default)
+        true     // Use 2.0 API
+    );
 }
 
 }  // namespace tt::tt_metal

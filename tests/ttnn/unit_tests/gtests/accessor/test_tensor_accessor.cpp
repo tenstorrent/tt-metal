@@ -16,6 +16,8 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
+
 // Defines to include tt_metal/hw/inc/accessor/tensor_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
@@ -27,8 +29,8 @@ namespace tensor_accessor {
 uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
 }
 
-static uint32_t my_x[1] = {0};
-static uint32_t my_y[1] = {0};
+[[maybe_unused]] static uint32_t my_x[1] = {0};
+[[maybe_unused]] static uint32_t my_y[1] = {0};
 
 #define noc_index 0
 #define ASSERT(condition, ...)
@@ -91,6 +93,7 @@ constexpr auto make_struct_from_array_wrapper(F, std::index_sequence<Is...>) -> 
     };                                                      \
     using name =                                            \
         decltype(make_struct_from_array_wrapper<Wrapper>(name##_fn{}, std::make_index_sequence<(arr).size()>{}))
+// NOLINTEND(bugprone-macro-parentheses)
 
 namespace sharded_accessor_tests {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,7 +38,7 @@ private:
 // ---------------------------------------------------------------------
 class MPIRequest : public Request {
 public:
-    explicit MPIRequest(MPI_Request req) : req_(req), done_(false) {}
+    explicit MPIRequest(MPI_Request req) : req_(req) {}
 
     Status wait() override;
     std::optional<Status> test() override;

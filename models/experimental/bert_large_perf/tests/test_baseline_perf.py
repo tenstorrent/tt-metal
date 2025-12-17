@@ -11,11 +11,10 @@ from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
     profiler,
-    disable_persistent_kernel_cache,
 )
 
 
@@ -274,8 +273,6 @@ def test_bert_large_baseline_perf(device, model_location_generator):
     token_type_ids = True
     pcc = 0.98
     PERF_CNT = 1
-
-    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(
         device,

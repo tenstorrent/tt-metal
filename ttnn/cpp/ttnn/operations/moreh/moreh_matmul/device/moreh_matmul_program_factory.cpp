@@ -197,11 +197,11 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     uint32_t other_mask_h = other_shape_wo_padding[-2] % tt::constants::TILE_HEIGHT;
     uint32_t other_mask_w = other_shape_wo_padding[-1] % tt::constants::TILE_WIDTH;
 
-    bool need_input_mask_h = (input_mask_h) ? (true) : (false);
-    bool need_input_mask_w = (input_mask_w) ? (true) : (false);
+    [[maybe_unused]] bool need_input_mask_h = (input_mask_h) ? (true) : (false);
+    [[maybe_unused]] bool need_input_mask_w = (input_mask_w) ? (true) : (false);
 
-    bool need_other_mask_h = (other_mask_h) ? (true) : (false);
-    bool need_other_mask_w = (other_mask_w) ? (true) : (false);
+    [[maybe_unused]] bool need_other_mask_h = (other_mask_h) ? (true) : (false);
+    [[maybe_unused]] bool need_other_mask_w = (other_mask_w) ? (true) : (false);
 
     if (input_mask_h == 0) {
         input_mask_h = tt::constants::TILE_HEIGHT;
@@ -323,9 +323,9 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
 
     const auto reader_kernel_id =
@@ -345,7 +345,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> compute_defines;
 
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
+    const auto* const compute_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
     std::vector<uint32_t> compute_args_group_1 = {
         num_output_tiles_per_core_group_1,  // num_output_tiles
         Mt,

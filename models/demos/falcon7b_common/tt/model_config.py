@@ -8,8 +8,8 @@ from pathlib import Path
 from transformers import FalconConfig
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.tt.model_utils import get_default_hifi2_kernel_config
-from models.utility_functions import is_grayskull, is_wormhole_b0
 
 OP_KEYS = (
     # Inputs
@@ -132,11 +132,6 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
         )
-    else:
-        ln_block_sharded_compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-        )
 
     max_tiles_in_dest = 8
     if fp32_dest_acc_en and is_wormhole_b0():
@@ -148,6 +143,8 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
         inplace=True,
+        legacy_reduction=True,
+        legacy_rsqrt=True,
     )
 
     return ln_block_sharded_mem_config, ln_block_sharded_prog_config, ln_block_sharded_compute_kernel_config
@@ -282,13 +279,6 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
-        else:
-            gs_compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-            )
-            model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
-            model_config["POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
 
     if is_wormhole_b0():
         default_lofi_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -296,11 +286,6 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-        )
-    else:
-        default_lofi_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
         )
     model_config["DEFAULT_LoFi_KERNEL_CONFIG"] = default_lofi_kernel_config
 
@@ -314,7 +299,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
 
 
 def set_prefill_config(model_config, seq_len, dram_memcfg):
-    model_config["PREFILL_OPTIMIZED_MODE"] = not is_grayskull()
+    model_config["PREFILL_OPTIMIZED_MODE"] = is_wormhole_b0()
     model_config["MLP_SEQ_LEN"] = seq_len
     model_config["MLP_PADDING_VALUE"] = 4608
     model_config["MLP_GRID_SIZE"] = (8, 8)
@@ -325,11 +310,6 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
-        )
-    else:
-        default_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
         )
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 

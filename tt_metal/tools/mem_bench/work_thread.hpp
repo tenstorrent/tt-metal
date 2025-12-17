@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,9 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
     std::vector<double> thread_end_times(num_threads);
     std::vector<std::thread> threads(total_threads);
 
+    auto&& callable = std::forward<F>(work_fn);
+    auto saved_args = std::make_tuple(std::forward<Args>(args)...);
+
     for (int i = 0; i < num_threads; ++i) {
         threads[i] = std::thread([i,
                                   &m,
@@ -33,8 +36,8 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
                                   &thread_start_times,
                                   &thread_end_times,
                                   total_threads,
-                                  work_fn = std::forward<F>(work_fn),
-                                  ... args = std::forward<Args>(args)]() mutable {
+                                  callable,
+                                  saved_args]() mutable {
             {
                 std::unique_lock lk{m};
                 threads_ready++;
@@ -45,12 +48,18 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
             }
 
             thread_start_times[i] = get_current_time_seconds();
-            work_fn(i, std::forward<Args>(args)...);
+            std::apply(
+                [&](auto&&... unpacked_args) { callable(i, std::forward<decltype(unpacked_args)>(unpacked_args)...); },
+                saved_args);
             thread_end_times[i] = get_current_time_seconds();
         });
     }
 
-    threads[num_threads] = std::thread([&]() mutable {
+    threads[num_threads] = std::thread([&m,
+                                        &go_cv,
+                                        &threads_ready,
+                                        total_threads,
+                                        intermediate_fn = std::forward<IntermediateF>(intermediate_fn)]() mutable {
         std::unique_lock lk{m};
         threads_ready++;
         if (threads_ready == total_threads) {

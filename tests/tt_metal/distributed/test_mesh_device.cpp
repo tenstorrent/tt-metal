@@ -7,10 +7,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <memory>
 #include <optional>
-#include <string>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -24,13 +22,14 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
-using ::tt::tt_metal::distributed::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
@@ -136,6 +135,60 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     }
 }
 
+TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto harvest_axis = tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis();
+    for (auto& [device_id, dev] : devs) {
+        bool unharvested = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id) == 0;
+        if (unharvested || harvest_axis == HalTensixHarvestAxis::COL) {  // Only Y hop distance is consistent
+            auto noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_0);
+            auto noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, 1);
+            EXPECT_EQ(noc_1_hop_distance, dev->grid_size().y - 1);
+            noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_0);
+            noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, dev->grid_size().y - 1);
+            EXPECT_EQ(noc_1_hop_distance, 1);
+        } else if (unharvested || harvest_axis == HalTensixHarvestAxis::ROW) {  // Only X hop distance is consistent
+            auto noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_0);
+            auto noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, 1);
+            EXPECT_EQ(noc_1_hop_distance, dev->grid_size().x - 1);
+            noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_0);
+            noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, dev->grid_size().x - 1);
+            EXPECT_EQ(noc_1_hop_distance, 1);
+        }
+    }
+}
+
+TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, unit_mesh] : unit_meshes) {
+        EXPECT_EQ(unit_mesh->is_initialized(), true);
+        EXPECT_ANY_THROW(unit_mesh->initialize(
+            /*num_hw_cqs=*/1,
+            /*l1_small_size=*/DEFAULT_L1_SMALL_SIZE,
+            /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
+            /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
+            /*l1_bank_remap=*/{},
+            /*minimal=*/false)
+        );
+    }
+}
+
 TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     // Check that the fabric node IDs are correctly assigned to the devices in the mesh. Only works for 2D meshes
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -147,5 +200,6 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             fabric_node_id);
     }
 }
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

@@ -5,7 +5,6 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -20,17 +19,24 @@ using BaseTilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
+MassagedTilizeVal build_ndiml_tilize_val(
+    BaseTilizeValType base_tilize, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
             *original_shape = input_tensor.logical_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
+            auto unsqueezed_tensor = ttnn::reshape(
+                output,
+                *original_shape,
+                std::nullopt /*Memory Config*/,
+                std::nullopt /*pad value*/,
+                TileReshapeMapMode::CACHE,
+                sub_core_grids);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
@@ -53,18 +59,34 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore) {
+    bool use_multicore,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (input_tensor.layout() == Layout::TILE) {
+        return input_tensor;
+    }
+
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            output_padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value()
-            ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
@@ -84,62 +106,52 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 use_multicore,
                 enough_space_width,
-                enough_space_height},
+                enough_space_height,
+                sub_core_grids},
             {input_tensor},
             {},
-            {},
-            queue_id)[0];
+            {})[0];
     };
 
-    return build_ndiml_tilize_val(base_tilize)(input_tensor);
+    return build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& output_padded_shape,
-    const PadValue pad_value,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(
-        DefaultQueueId, input_tensor, output_padded_shape, pad_value, memory_config, output_dtype, use_multicore);
-}
-
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore) {
+    bool use_multicore,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            ttnn::Shape{output_padded_shape},
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     return invoke(
-        queue_id,
         input_tensor,
         ttnn::Shape{output_padded_shape},
         pad_value,
         memory_config,
         output_dtype,
-        use_multicore);
-}
-
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_padded_shape,
-    const PadValue pad_value,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(
-        DefaultQueueId, input_tensor, output_padded_shape, pad_value, memory_config, output_dtype, use_multicore);
+        use_multicore,
+        sub_core_grids);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
-    bool use_multicore) {
+    bool use_multicore,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
 
@@ -149,6 +161,18 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
 
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
@@ -156,15 +180,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        queue_id, input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
-}
-
-ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
+        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement

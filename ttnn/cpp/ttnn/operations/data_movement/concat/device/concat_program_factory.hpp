@@ -1,36 +1,35 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include "concat_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
-#include "ttnn/operation.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::concat::program {
 
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
+// Shared variables for interleaved concat
+struct ConcatSharedVariables {
+    tt::tt_metal::KernelHandle reader_kernel_id = 0;
+    tt::tt_metal::KernelHandle writer_kernel_id = 0;
+    std::vector<CoreCoord> cores;
 };
 
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range{};
+struct ConcatProgramFactory {
+    using shared_variables_t = ConcatSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
-
-tt::tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output);
-
-tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
-
-tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor>& input_tensors, uint32_t dim, const Tensor& output);
-
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::concat::program

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,17 +10,13 @@ namespace tt::tt_metal {
 
 using DeviceAddr = std::uint64_t;
 
+enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
+
 enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, COUNT = 3 };
 
 static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 
-enum class HalProcessorClassType : uint8_t {
-    DM = 0,
-    // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
-    // TODO: Uplift view of Tensix processor classes to be 1 DM class with 2 processor types
-    COMPUTE = 2
-};
-
+// TODO: Move to llrt/hal.hpp after device function cleanup
 enum class HalL1MemAddrType : uint8_t {
     BASE,
     BARRIER,
@@ -38,6 +34,7 @@ enum class HalL1MemAddrType : uint8_t {
     GO_MSG_INDEX,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
+    LOGICAL_TO_VIRTUAL_SCRATCH,
     APP_SYNC_INFO,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
@@ -45,20 +42,14 @@ enum class HalL1MemAddrType : uint8_t {
     CRC_ERR,    // Link status - CRC error count
     CORR_CW,    // Link status - Corrected Codewords count
     UNCORR_CW,  // Link status - Uncorrected Codewords count
-    FABRIC_ROUTER_CONFIG,
+    LINK_UP,    // Link status - Link up status
+    FABRIC_TELEMETRY,
+    ROUTING_TABLE,
     ETH_FW_MAILBOX,
-    ETH_LINK_REMOTE_INFO,
-    INTERMESH_ETH_LINK_CONFIG,
-    INTERMESH_ETH_LINK_STATUS,
-    TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
-enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
-
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
-
-enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 }  // namespace tt::tt_metal

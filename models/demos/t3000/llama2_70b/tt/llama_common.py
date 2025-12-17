@@ -13,12 +13,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
@@ -136,20 +136,6 @@ def extract_pcc_from_log(log):
     extracted_pcc = re.search(pattern, log)
     extracted_pcc = float(extracted_pcc.group(1))
     return extracted_pcc
-
-
-def get_weight_cache_path(base_cache_path, tensor_str, device_idx, num_devices, cache_id=None):
-    return base_cache_path / f"{tensor_str}{'' if cache_id is None else cache_id}_{device_idx}_{num_devices}.bin"
-
-
-def get_weight_cache_path_ttnn(
-    base_cache_path, tensor_str, device_idx, num_devices, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
-):
-    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}_dtype_{dtype.name}_layout_{layout.name}.bin"
-
-
-def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_devices, x, y):
-    return base_cache_path / f"{tensor_str}_{device_idx}_{num_devices}_{x}_{y}.bin"
 
 
 def rms_decomp(x, norm_weight, eps):

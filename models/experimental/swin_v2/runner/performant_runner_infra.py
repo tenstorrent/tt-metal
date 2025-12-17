@@ -14,7 +14,7 @@ from models.experimental.swin_v2.tt.model_preprocessing import (
 from models.experimental.swin_v2.reference.swin_transformer import SwinTransformer
 
 from models.experimental.swin_v2.tt.tt_swin_transformer import TtSwinTransformer
-from models.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.common import load_torch_model
 

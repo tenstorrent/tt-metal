@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {

@@ -4,27 +4,24 @@
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     GROUPNORM_DECODER_NUM_BLOCKS,
-    MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_decoder import VaeDecoder
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     """input_channels, input_height, input_width, out_channels, output_height, output_width,
-    midblock_in_channels, midblock_resnet_norm_blocks, midblock_conv_channel_split_factors,
-    upblock_out_channels, upblock_out_dimensions, upblock_resnet_norm_blocks,
-    upblock_resnet_conv_in_channel_split_factors, upblock_upsample_conv_channel_split_factors, norm_num_blocks""",
+    midblock_in_channels, midblock_resnet_norm_blocks,
+    upblock_out_channels, upblock_out_dimensions, upblock_resnet_norm_blocks, norm_num_blocks""",
     [
         (
             4,  # input_channels
@@ -35,12 +32,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             512,  # output_width
             512,  # midblock_in_channels
             MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-            MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
             [512, 512, 256, 128],  # upblock_out_channels
             [128, 256, 512, 512],  # upblock_out_dimensions
             UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
-            UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
             GROUPNORM_DECODER_NUM_BLOCKS,
         ),
     ],
@@ -55,17 +49,17 @@ def test_decoder(
     output_width,
     midblock_in_channels,
     midblock_resnet_norm_blocks,
-    midblock_conv_channel_split_factors,
     upblock_out_channels,
     upblock_out_dimensions,
     upblock_resnet_norm_blocks,
-    upblock_resnet_conv_in_channel_split_factors,
-    upblock_upsample_conv_channel_split_factors,
     norm_num_blocks,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
 
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_decoder = vae.decoder
 
     # Run pytorch model
@@ -84,12 +78,9 @@ def test_decoder(
         output_width,
         midblock_in_channels,
         midblock_resnet_norm_blocks,
-        midblock_conv_channel_split_factors,
         upblock_out_channels,
         upblock_out_dimensions,
         upblock_resnet_norm_blocks,
-        upblock_resnet_conv_in_channel_split_factors,
-        upblock_upsample_conv_channel_split_factors,
         norm_num_blocks,
     )
 
@@ -109,5 +100,4 @@ def test_decoder(
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    # TODO: Improve PCC (issue #21131)
-    assert_with_pcc(torch_output, ttnn_output, 0.958)
+    assert_with_pcc(torch_output, ttnn_output, 0.97)

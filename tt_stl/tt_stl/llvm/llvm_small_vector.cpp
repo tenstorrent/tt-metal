@@ -61,10 +61,10 @@ static_assert(
     sizeof(SmallVector<char, 0>) == sizeof(void*) * 2 + sizeof(void*),
     "1 byte elements have word-sized type for size and capacity");
 
+namespace {
 /// Report that MinSize doesn't fit into this vector's size type. Throws
 /// std::length_error or calls report_fatal_error.
-[[noreturn]] static void report_size_overflow(size_t MinSize, size_t MaxSize);
-static void report_size_overflow(size_t MinSize, size_t MaxSize) {
+[[noreturn]] void report_size_overflow(size_t MinSize, size_t MaxSize) {
     std::string Reason = "SmallVector unable to grow. Requested capacity (" + std::to_string(MinSize) +
                          ") is larger than maximum value for size type (" + std::to_string(MaxSize) + ")";
 
@@ -73,15 +73,14 @@ static void report_size_overflow(size_t MinSize, size_t MaxSize) {
 
 /// Report that this vector is already at maximum capacity. Throws
 /// std::length_error or calls report_fatal_error.
-[[noreturn]] static void report_at_maximum_capacity(size_t MaxSize);
-static void report_at_maximum_capacity(size_t MaxSize) {
+[[noreturn]] void report_at_maximum_capacity(size_t MaxSize) {
     std::string Reason = "SmallVector capacity unable to grow. Already at maximum size " + std::to_string(MaxSize);
     throw std::length_error(Reason);
 }
 
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
-static size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
+size_t getNewCapacity(size_t MinSize, size_t OldCapacity) {
     constexpr size_t MaxSize = std::numeric_limits<Size_T>::max();
 
     // Ensure we can fit the new capacity.
@@ -100,7 +99,7 @@ static size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
 
     // In theory 2*capacity can overflow if the capacity is 64 bit, but the
     // original capacity would never be large enough for this to be a problem.
-    size_t NewCapacity = 2 * OldCapacity + 1;  // Always grow.
+    size_t NewCapacity = (2 * OldCapacity) + 1;  // Always grow.
     return std::clamp(NewCapacity, MinSize, MaxSize);
 }
 
@@ -114,19 +113,21 @@ static size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
 /// space, and happens to allocate precisely at BeginX.
 /// This is unlikely to be called often, but resolves a memory leak when the
 /// situation does occur.
-static void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, size_t VSize = 0) {
+void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, size_t VSize = 0) {
     void* NewEltsReplace = safe_malloc(NewCapacity * TSize);
     if (VSize) {
         memcpy(NewEltsReplace, NewElts, VSize * TSize);
     }
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     free(NewElts);
     return NewEltsReplace;
 }
+}  // namespace
 
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
 void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size_t TSize, size_t& NewCapacity) {
-    NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
+    NewCapacity = getNewCapacity<Size_T>(MinSize, this->capacity());
     // Even if capacity is not 0 now, if the vector was originally created with
     // capacity 0, it's possible for the malloc to return FirstEl.
     void* NewElts = safe_malloc(NewCapacity * TSize);
@@ -139,7 +140,7 @@ void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size
 // Note: Moving this function into the header may cause performance regression.
 template <class Size_T>
 void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSize) {
-    size_t NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
+    size_t NewCapacity = getNewCapacity<Size_T>(MinSize, this->capacity());
     void* NewElts;
     if (BeginX == FirstEl) {
         NewElts = safe_malloc(NewCapacity * TSize);

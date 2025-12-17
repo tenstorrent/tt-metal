@@ -1,11 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
-#include <tt_metal/api/tt-metalium/assert.hpp>
+#include <tt_metal/impl/buffers/semaphore.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,7 +21,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -74,8 +76,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    const auto src_buffer = device_input_tensor.buffer();
-    const auto dst_buffer = device_output_tensor.buffer();
+    auto* const src_buffer = device_input_tensor.buffer();
+    auto* const dst_buffer = device_output_tensor.buffer();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
@@ -157,8 +159,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     log_info(tt::LogTest, "Running generic_op unary relu sharded");
     auto act_df = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
     auto out_df = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.dtype());
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
     TT_FATAL(input_tile_size == output_tile_size, "input and output tile size should be the same");
 
     uint32_t num_tile_per_core = 0;
@@ -277,30 +279,30 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     CBFormatDescriptor in0_cb_format_descriptor = {
         .buffer_index = src0_cb_index,
         .data_format = input_a_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+        .page_size = tt::tile_size(input_a_cb_data_format),
     };
     CBFormatDescriptor in1_cb_format_descriptor = {
         .buffer_index = src1_cb_index,
         .data_format = input_b_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+        .page_size = tt::tile_size(input_b_cb_data_format),
     };
     CBFormatDescriptor out_cb_format_descriptor = {
         .buffer_index = dst_cb_index,
         .data_format = output_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(output_cb_data_format),
+        .page_size = tt::tile_size(output_cb_data_format),
     };
     CBDescriptor in0_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_a_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {in0_cb_format_descriptor},
     };
     CBDescriptor in1_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_b_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {in1_cb_format_descriptor},
     };
     CBDescriptor output_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(output_cb_data_format),
+        .total_size = 2 * tt::tile_size(output_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {out_cb_format_descriptor},
     };
@@ -413,7 +415,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::BoardType::P150) {
         GTEST_SKIP();
     }
     log_info(tt::LogTest, "Running ttnn matmul");
@@ -501,9 +503,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     auto all_device_cores_set = CoreRangeSet({all_cores});
 
@@ -696,20 +698,20 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     CBFormatDescriptor input_cb_format_descriptor = {
         .buffer_index = cb_in_id,
         .data_format = input_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tile_size(input_cb_data_format),
     };
     CBFormatDescriptor output_cb_format_descriptor = {
         .buffer_index = cb_out_id,
         .data_format = input_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tile_size(input_cb_data_format),
     };
     CBDescriptor input_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
         .core_ranges = device_cores,
         .format_descriptors = {input_cb_format_descriptor},
     };
     CBDescriptor output_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
         .core_ranges = device_cores,
         .format_descriptors = {output_cb_format_descriptor},
     };
@@ -770,6 +772,232 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());
 
     ASSERT_TRUE(allclose);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
+        {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
+
+    ttnn::Shape shape{1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    // Setup initial tensors
+    Tensor input_tensor_1 = ttnn::random::random(shape, DataType::BFLOAT16);
+    Tensor device_input_tensor_1 = input_tensor_1.to_layout(Layout::TILE).to_device(this->device_);
+    Tensor device_output_tensor_1 =
+        tt::tt_metal::create_device_tensor(device_input_tensor_1.tensor_spec(), this->device_);
+
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_1.dtype());
+    uint32_t num_tiles = device_input_tensor_1.physical_volume() / tt::constants::TILE_HW;
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+    tt::CBIndex cb_in_id = tt::CBIndex::c_0;
+    tt::CBIndex cb_out_id = tt::CBIndex::c_16;
+
+    CBDescriptor input_cb_descriptor = {
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {{cb_in_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {{cb_out_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
+    };
+
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
+    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
+    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+
+    ProgramDescriptor program_descriptor = {
+        .kernels =
+            {{
+                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                  "reader_unary_interleaved_start_id.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = reader_ct_args,
+                 .runtime_args = {{{device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .config = tt::tt_metal::ReaderConfigDescriptor{},
+             },
+             {
+                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                  "writer_unary_interleaved_start_id.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = writer_ct_args,
+                 .runtime_args = {{{device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .config = tt::tt_metal::WriterConfigDescriptor{},
+             },
+             {
+                 .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                 .core_ranges = device_cores,
+                 .compile_time_args = {num_tiles, 1},
+                 .defines = sfpu_defines,
+                 .runtime_args = {{{}}},
+                 .config = tt::tt_metal::ComputeConfigDescriptor{},
+             }},
+        .semaphores = {},
+        .cbs = {input_cb_descriptor, output_cb_descriptor},
+    };
+
+    // Test 1: Program Cache Miss - first run
+    log_info(tt::LogTest, "Test 1: Program Cache Miss");
+    ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
+    Tensor golden_1 = ttnn::exp(device_input_tensor_1);
+    TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "First run correctness failed");
+    TT_FATAL(
+        this->device_->num_program_cache_entries() == 2,
+        "Expected 2 cache entries, got {}",
+        this->device_->num_program_cache_entries());
+
+    // Test 2: Program Cache Hit - same tensors
+    log_info(tt::LogTest, "Test 2: Program Cache Hit - same tensors");
+    ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
+    TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "Second run correctness failed");
+    TT_FATAL(
+        this->device_->num_program_cache_entries() == 2,
+        "Expected 2 cache entries after cache hit, got {}",
+        this->device_->num_program_cache_entries());
+
+    // Test 3: Program Cache Hit with different tensors (different addresses)
+    log_info(tt::LogTest, "Test 3: Program Cache Hit - different tensor addresses");
+    auto dummy_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
+                            .to_layout(Layout::TILE)
+                            .to_device(this->device_);
+
+    Tensor input_tensor_2 = ttnn::random::random(shape, DataType::BFLOAT16);
+    Tensor device_input_tensor_2 = input_tensor_2.to_layout(Layout::TILE).to_device(this->device_);
+    Tensor device_output_tensor_2 =
+        tt::tt_metal::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
+
+    program_descriptor.kernels[0].runtime_args[0][0] = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0][0] = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+
+    ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
+    Tensor golden_2 = ttnn::exp(device_input_tensor_2);
+    TT_FATAL(
+        ttnn::allclose<bfloat16>(golden_2.cpu(), device_output_tensor_2.cpu()),
+        "Third run with different addresses failed - override_runtime_arguments not working correctly!");
+    TT_FATAL(
+        this->device_->num_program_cache_entries() == 2,
+        "Expected 2 cache entries after cache hit with new addresses, got {}",
+        this->device_->num_program_cache_entries());
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
+    // Test that valid semaphore IDs work correctly
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 1,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
+    // Test that semaphore ID exceeding NUM_SEMAPHORES (16) throws an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor invalid_sem_descriptor = {
+        .id = NUM_SEMAPHORES,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {invalid_sem_descriptor},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
+    // Test that duplicate semaphore IDs on overlapping cores throw an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    // Overlap on core (0, 0)
+    CoreRange core_range_1 = {CoreCoord(0, 0), CoreCoord(0, 1)};
+    CoreRange core_range_2 = {CoreCoord(0, 0), CoreCoord(1, 0)};
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_1),
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_2),
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
+    // Test that same semaphore ID on non-overlapping cores is allowed
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreRangeSet cores_0 = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    CoreRangeSet cores_1 = CoreRangeSet(CoreRange({1, 0}, {1, 0}));
+
+    SemaphoreDescriptor sem_on_core_0 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_0,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_on_core_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_1,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_on_core_0, sem_on_core_1},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
 }  // namespace ttnn::operations::generic::test

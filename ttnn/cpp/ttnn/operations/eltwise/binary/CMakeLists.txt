@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
 set_target_properties(
     ttnn_op_eltwise_binary
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -18,7 +18,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES binary.hpp common/binary_op_types.hpp
+        FILES
+            binary.hpp
+            binary_composite.hpp
+            common/binary_op_types.hpp
+            common/binary_op_utils.hpp
+            device/binary_composite_op.hpp
+            device/binary_device_operation.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -38,12 +44,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_binary
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_binary PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

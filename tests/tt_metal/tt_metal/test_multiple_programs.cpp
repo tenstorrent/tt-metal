@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -38,11 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
@@ -71,8 +69,8 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
             break;
         default: TT_THROW("Undefined op type");
     }
-    defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
+    defines["ELTWISE_OP"] = op_name;
+    defines["ELTWISE_OP_TYPE"] = op_binary_type;
     return defines;
 }
 
@@ -213,7 +211,7 @@ void write_program_runtime_args_to_device(
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

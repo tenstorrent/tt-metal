@@ -32,8 +32,9 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto src_args = TensorAccessorArgs<0, 0>();
+    constexpr auto src_b_args =
+        TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 #if !SRC_SHARDED
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
@@ -91,7 +92,7 @@ void kernel_main() {
                         cb_reserve_back(cb_id_src, onetile);
 #if !SRC_SHARDED
                         uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                        noc_async_read_tile(tile_offset + th, src, l1_write_addr_src);
+                        noc_async_read_page(tile_offset + th, src, l1_write_addr_src);
                         noc_async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
@@ -101,7 +102,7 @@ void kernel_main() {
                         cb_reserve_back(cb_id_src_b, onetile);
 #if !SRC_SHARDED_B
                         uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
-                        noc_async_read_tile(tile_offset_b + th, src_b, l1_write_addr_src_b);
+                        noc_async_read_page(tile_offset_b + th, src_b, l1_write_addr_src_b);
                         noc_async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
@@ -113,7 +114,7 @@ void kernel_main() {
                             cb_reserve_back(cb_id_src, onetile);
 #if !SRC_SHARDED
                             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
+                            noc_async_read_page(tile_offset + tw, src, l1_write_addr);
                             noc_async_read_barrier();
 #endif
                             cb_push_back(cb_id_src, onetile);
@@ -122,7 +123,7 @@ void kernel_main() {
                             cb_reserve_back(cb_id_src_b, onetile);
 #if !SRC_SHARDED_B
                             uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
+                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
                             noc_async_read_barrier();
 #endif
 #if !SRC_SHARDED_B

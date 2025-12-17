@@ -1,17 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cross_entropy_fw_program_factory.hpp"
 
-#include <enchantum/enchantum.hpp>
-
 #include <bit>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "cross_entropy_fw_device_operation_types.hpp"
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -94,7 +94,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -141,8 +141,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -310,16 +310,15 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     CrossEntropyForwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
-        defines,
-        kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{
+        block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_fw
@@ -408,7 +407,7 @@ void CrossEntropyForwardProgramFactory::override_runtime_arguments(
                                                       : GetRuntimeArgs(program, cross_entropy_fw_kernel_group_2_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

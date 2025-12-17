@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/hlk_desc.hpp>
+#include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
 
 enum class MathFidelity : uint8_t;
@@ -30,7 +30,7 @@ public:
     std::string path;
 
     // HLK config
-    tt::tt_hlk_desc hlk_desc{};
+    tt::tt_hlk_desc hlk_desc;
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en{};

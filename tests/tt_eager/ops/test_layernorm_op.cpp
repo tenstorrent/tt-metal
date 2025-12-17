@@ -9,21 +9,18 @@
 #include <cstring>
 #include <exception>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt::tt_metal;

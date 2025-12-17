@@ -7,10 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_binop.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
+#include "llk_math_eltwise_binary_sfpu_binary_pow.h"
 #endif
 
 namespace ckernel {
@@ -18,7 +15,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs an elementwise binop operation with the two floating point inputs: y = binop(x0,x1)
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -31,30 +28,31 @@ namespace ckernel {
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::ADD>(idst0, idst1)));
+ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::ADD>(idst0, idst1, odst)));
 }
 
-ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::SUB>(idst0, idst1)));
+ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::SUB>(idst0, idst1, odst)));
 }
 
-ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::MUL>(idst0, idst1)));
+ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::MUL>(idst0, idst1, odst)));
 }
 
-ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::DIV>(idst0, idst1)));
+ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::DIV>(idst0, idst1, odst)));
 }
 
-ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::RSUB>(idst0, idst1)));
+ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::RSUB>(idst0, idst1, odst)));
 }
 
-ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::POW, DST_ACCUM_MODE>(idst0, idst1)));
+ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binary_pow<APPROX, DST_ACCUM_MODE>(idst0, idst1, odst)));
 }
 
 /**
@@ -72,8 +70,6 @@ ALWI void rsub_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::RSUB>()));
 }
 
-ALWI void power_binary_tile_init() {
-    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::POW>()));
-}
+ALWI void power_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_pow_init<APPROX>())); }
 
 }  // namespace ckernel

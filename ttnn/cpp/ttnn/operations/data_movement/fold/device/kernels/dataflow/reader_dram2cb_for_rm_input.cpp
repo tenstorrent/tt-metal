@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
     constexpr uint32_t work_per_core = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr auto src_args = TensorAccessorArgs<9>();
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const auto s_in = TensorAccessor(src_args, src_addr, stick_nbytes);

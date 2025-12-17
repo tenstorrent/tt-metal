@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "dataflow_api.h"
-#include "fabric_edm_packet_header.hpp"
-#include "edm_fabric_worker_adapters.hpp"
-#include "fabric_edm_types.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 #include <cstdint>
+
+#include "dataflow_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (atleast one of) the intended destination(s)
@@ -132,6 +133,8 @@ FORCE_INLINE
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
+    constexpr bool update_counter = false;
+
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -139,7 +142,7 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -176,7 +179,7 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -198,24 +201,54 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            const auto& scatter = header.command_fields.unicast_scatter_write;
+            const uint8_t chunk_count = scatter.chunk_count;
+
+            // NOTE: when chunk_count < 4, chunk_size[n-2] can be used without calculating final_chunk_size.
+            //       However the perf (n == 2) is much worse than implementation below.
+            //       Need to check perf with 2 <= n <= 4
             size_t offset = 0;
-            size_t chunk_size;
-            for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
-                if (i == NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                    chunk_size = payload_size_bytes - offset;
-                } else {
-                    chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
-                }
-                const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
-                noc_async_write_one_packet_with_trid<false, false>(
+            const uint8_t last_chunk_index = chunk_count - 1;
+            uint16_t chunk_size = scatter.chunk_size[0];
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address + offset,
+                scatter.noc_address[0],
+                chunk_size,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
+            offset += chunk_size;
+            if (chunk_count > 2) {
+                chunk_size = scatter.chunk_size[1];
+                noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
-                    dest_address,
+                    scatter.noc_address[1],
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
+                if (chunk_count == 4) [[likely]] {
+                    chunk_size = scatter.chunk_size[2];
+                    noc_async_write_one_packet_with_trid<update_counter, false>(
+                        payload_start_address + offset,
+                        scatter.noc_address[2],
+                        chunk_size,
+                        transaction_id,
+                        tt::tt_fabric::local_chip_data_cmd_buf,
+                        tt::tt_fabric::edm_to_local_chip_noc);
+                    offset += chunk_size;
+                }
             }
+
+            const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address + offset,
+                scatter.noc_address[last_chunk_index],
+                final_chunk_size,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
         } break;
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
@@ -223,6 +256,35 @@ FORCE_INLINE
             ASSERT(false);
         } break;
     };
+}
+
+// Forward packet to local relay in UDM mode
+// Unlike execute_chip_unicast_to_local_chip, this sends the FULL packet (header + payload)
+// to the relay, which will then handle forwarding to local chip workers
+//
+// !!!WARNING!!! * ENSURE RELAY HAS SPACE FOR PACKET BEFORE CALLING
+template <typename LocalRelayInterfaceT>
+__attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
+    LocalRelayInterfaceT& local_relay_interface,
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    uint16_t payload_size_bytes,
+    uint32_t transaction_id,
+    uint8_t rx_channel_id) {
+    // Assert that relay has space (best effort check)
+    ASSERT(local_relay_interface.edm_has_space_for_packet());
+
+    // Send the full packet (header + payload) to relay
+    // The relay will handle the local chip forwarding
+    uint32_t packet_address = reinterpret_cast<size_t>(packet_start);
+    uint32_t total_size_bytes = payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
+
+    // Send to relay using the same mechanism as router-to-router forwarding
+    local_relay_interface.template send_payload_non_blocking_from_address_with_trid<
+        enable_deadlock_avoidance,
+        tt::tt_fabric::edm_to_downstream_noc,
+        false,  // stateful_api
+        true    // increment_pointers
+        >(packet_address, total_size_bytes, transaction_id);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
@@ -239,41 +301,34 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    packet_header->routing_fields.value =
-        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    uint64_t routing_value = cached_routing_fields.value;
+    if ((routing_value >> 32) == 0) [[likely]] {
+        uint32_t lower_bits = static_cast<uint32_t>(routing_value);
+        packet_header->routing_fields.value =
+            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH);
+    } else {
+        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    }
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
-    // This is the hop index. At every ethernet hop, we increment by 1
-    // so that the next receiver indexes into its respecive hop command
-    // in packet_header.route_buffer[]
-    packet_header->routing_fields.value = cached_routing_fields.value + 1;
+    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        packet_header->routing_fields.value = cached_routing_fields.value + 1;
+    }
 }
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
-    // Clear north/south when turning from trunk->branch
-    downstream_edm_interface.template update_edm_buffer_slot_word<false>(
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
-        0,
-        tt::tt_fabric::edm_to_downstream_noc);
-    std::uintptr_t offset =
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::EAST]));
-#else
-    tt::tt_fabric::LowLatencyMeshPacketHeader* packet_base = nullptr;
-    std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
-#endif
-    downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
+    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
+        std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
+        downstream_edm_interface.template update_edm_buffer_slot_word(
+            offset, value, tt::tt_fabric::edm_to_downstream_noc);
+    }
 }
-
-FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
@@ -286,7 +341,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
 template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void
@@ -297,7 +352,7 @@ FORCE_INLINE
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
         uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
-    ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
+    ASSERT(downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());  // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding

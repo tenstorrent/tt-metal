@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "serialization/msgpack_file.hpp"
+#include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 
 class LossAverageMeter {
@@ -44,7 +44,7 @@ void save_training_state(
     Optimizer &optimizer,
     const std::string &model_name,
     const std::string &optimizer_name) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
     ttml::serialization::write_module(serializer, model_name, model.get());
     ttml::serialization::write_optimizer(serializer, optimizer_name, &optimizer);
     serializer.serialize(model_path);
@@ -57,7 +57,7 @@ void load_training_state(
     Optimizer &optimizer,
     const std::string &model_name,
     const std::string &optimizer_name) {
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(model_path);
     ttml::serialization::read_module(deserializer, model_name, model.get());
     ttml::serialization::read_optimizer(deserializer, optimizer_name, &optimizer);

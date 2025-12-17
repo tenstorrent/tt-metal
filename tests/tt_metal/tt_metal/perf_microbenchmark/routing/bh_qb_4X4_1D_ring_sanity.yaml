@@ -1,0 +1,83 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 1
+
+Tests:
+# ================================================
+# 1D Ring (low latency)
+# ================================================
+  - name: "LinearMcastEast"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 500
+      destination:
+        hops:
+          E: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
+
+  - name: "LinearMcastWest"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 500
+      destination:
+        hops:
+          W: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
+
+  - name: "LinearMcastNorth"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 500
+      destination:
+        hops:
+          N: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
+
+  - name: "LinearMcastSouth"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 500
+      destination:
+        hops:
+          S: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3

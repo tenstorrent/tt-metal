@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ import math
 import pytest
 from loguru import logger
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 

@@ -15,31 +15,34 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = page_size};
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
+
+    experimental::Noc noc;
 
     uint32_t page_idx = 0;
     for (uint32_t i = 0; i < num_loops; ++i) {
-        uint32_t l1_read_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         eth_wait_for_bytes(max_buffer_size);
 
         for (uint32_t j = 0; j < pages_per_loop; ++j) {
-            uint64_t dst_noc_addr = get_noc_addr(page_idx, s);
-            noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+            noc.async_write(src_l1, s, page_size, {}, {.page_id = page_idx});
+
             page_idx++;
-            l1_read_addr += page_size;
-            noc_async_write_barrier();
+            src_l1 += elements_per_page;
+            noc.async_write_barrier();
         }
         eth_receiver_done();
     }
     if (remaining_bytes > 0) {
-        uint32_t l1_read_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         eth_wait_for_bytes(remaining_bytes);
         for (uint32_t j = 0; j < remaining_pages; ++j) {
-            uint64_t dst_noc_addr = get_noc_addr(page_idx, s);
-            noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+            noc.async_write(src_l1, s, page_size, {}, {.page_id = page_idx});
             page_idx++;
-            l1_read_addr += page_size;
-            noc_async_write_barrier();
+            src_l1 += elements_per_page;
+            noc.async_write_barrier();
         }
         eth_receiver_done();
     }

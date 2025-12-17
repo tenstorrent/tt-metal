@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "autograd/module_base.hpp"
 #include "modules/distributed/linear.hpp"
+#include "modules/module_base.hpp"
 
-class MNISTTensorParallel : public ttml::autograd::ModuleBase {
+class MNISTTensorParallel : public ttml::modules::ModuleBase {
 public:
     MNISTTensorParallel();
     ttml::autograd::TensorPtr operator()(ttml::autograd::TensorPtr tensor);

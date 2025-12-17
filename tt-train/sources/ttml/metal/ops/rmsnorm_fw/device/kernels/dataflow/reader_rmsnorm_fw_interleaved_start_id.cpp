@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,19 +6,7 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-
-// TODO: improve with a more efficient implementation
-// using noc_async_writes
-void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
-    constexpr uint32_t onetile = 1U;
-    cb_reserve_back(cb, onetile);
-    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb));
-    // 512 = 32x16
-    for (uint32_t i = 0; i < 512U; ++i, ++ptr) {
-        *ptr = packed_value;
-    }
-    cb_push_back(cb, onetile);
-}
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -49,33 +37,20 @@ void kernel_main() {
 
     // generate mask tile
     if constexpr (do_mask_w) {
-        cb_reserve_back(cb_mask_w_idx, onetile);
-        uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_w_idx));
         constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
         constexpr uint16_t zero = 0x0;
-        for (uint32_t face = 0; face < 4; ++face) {
-            uint32_t offset = (face & 1U) << 4U;
-            for (uint32_t h = 0; h < 16; ++h) {
-                for (uint32_t w = 0; w < 16; ++w, ++ptr) {
-                    *ptr = (offset + w < mask_w) ? one : zero;
-                }
-            }
-        }
-        cb_push_back(cb_mask_w_idx, onetile);
+        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
     }
 
     // generate tiles to include scalar and epsilon
-    generate_tile_with_value(cb_scaler_idx, packed_scaler);
-    generate_tile_with_value(cb_eps_idx, packed_eps);
+    generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
+    generate_tile_with_packed_bfloat16_value(cb_eps_idx, packed_eps);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> gamma_address_generator = {
-        .bank_base_address = gamma_address, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto input_args = TensorAccessorArgs<5>();
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
 
     const uint32_t max_block_size = 4;
 
@@ -83,79 +58,24 @@ void kernel_main() {
         uint32_t idx = (start_row + i) * Wt;
 
 #ifdef EVERYTHING_FITS_IN_L1
-        cb_reserve_back(cb_input_idx, Wt);
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc_async_read_tile(idx + j, input_address_generator, l1_write_addr);
-            l1_write_addr += tile_bytes;
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_input_idx, Wt);
+        read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
 
         if (i == 0) {
-            cb_reserve_back(cb_gamma_idx, Wt);
-            uint32_t l1_gamma_write_addr = get_write_ptr(cb_gamma_idx);
-            for (uint32_t j = 0; j < Wt; ++j) {
-                noc_async_read_tile(j, gamma_address_generator, l1_gamma_write_addr);
-                l1_gamma_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma_idx, Wt);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes, Wt);
         }
 
 #elif defined(EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1)
-        cb_reserve_back(cb_input_idx, Wt);
-        uint32_t l1_input_write_addr = get_write_ptr(cb_input_idx);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc_async_read_tile(idx + j, input_address_generator, l1_input_write_addr);
-            l1_input_write_addr += tile_bytes;
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_input_idx, Wt);
+        read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
 
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_gamma_idx, block_size);
-            uint32_t l1_gamma_write_addr = get_write_ptr(cb_gamma_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(j + block_idx, gamma_address_generator, l1_gamma_write_addr);
-                l1_gamma_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma_idx, block_size);
-        }
+        read_full_row_tiles(cb_gamma_idx, gamma_address_generator, Wt, block_size, tile_bytes, 0);
 #else
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
         for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
+            read_tiles_by_row(cb_input_idx, input_address_generator, idx + j, block_size, tile_bytes, block_size);
 
             // reading gamma to L1
-            {
-                cb_reserve_back(cb_gamma_idx, block_size);
-                uint32_t l1_write_addr = get_write_ptr(cb_gamma_idx);
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                    noc_async_read_tile(j + block_idx, gamma_address_generator, l1_write_addr);
-                    l1_write_addr += tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_gamma_idx, block_size);
-            }
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, j, block_size, tile_bytes, block_size);
         }
 #endif
     }

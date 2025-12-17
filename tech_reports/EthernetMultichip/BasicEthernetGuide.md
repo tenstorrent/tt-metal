@@ -29,16 +29,12 @@ This documentation is intended to be used as a guide for a new developer, lookin
   key differences between programming single chip and multichip workloads
 * recommendations and best practices for writing custom multichip workloads
 
-It is recommended to also review the [CCL Developer Guide](CclDeveloperGuide.md) to learn about the CCL op library, what ops are available and how are they implemented.
-
 The document describes the multichip software stack bottom-up in the following sequence:
 
 1. How cores and ethernet are connected to build multi-chip clusters
 2. Sending data between chips and the APIs to accomplish those tasks
 3. How multichip workloads interact with the kernel dispatcher and the new challenges this brings
 4. Writing kernels to send data over ethernet
-5. A library of software components that can be used to build higher level (CCL) operations
-6. Incorporating the above to build CCL operations, such as *all-gather*
 
 Prior to reading this document, it is recommended the reader is familiar with Tenstorrent single chip programming concepts. This foundational information can be found here in the [TT-Metalium developer guide](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/index.html).
 
@@ -451,7 +447,7 @@ std::vector<CoreCoord> logical_eth_core_coords =
 // aggregate, connect to multiple other devices. We can filter for a connection
 // to a specific device, if desired. In this example, we arbitrarily decide we
 // want a link connected to device 1 from local device
-chip_id_t target_remote_device_id = 1;
+ChipId target_remote_device_id = 1;
 
 // Find an ethernet core on the desired target device that connects to our local chip
 auto match_iter = std::find_first_if(
@@ -789,7 +785,7 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(
            if (edge_link_idx[pair_edge] == conn) {
              CoreCoord eth_sender_core = *eth_sender_core_iter;
              CoreCoord eth_receiver_core = receiver_core;
-             chip_id_t receiver_device_id = device_id;
+             ChipId receiver_device_id = device_id;
              sockets.push_back({
                receiver_device_id,
                eth_receiver_core,curr_device->id(),

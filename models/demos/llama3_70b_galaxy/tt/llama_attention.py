@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -80,8 +80,8 @@ class TtLlamaAttention(LightweightModule):
             self.slice_size = 8  # Slice size is 8 since we are consuming 8 users per chip
 
         self.dtype = dtype
+        self.qk_norm = configuration.qk_norm
 
-        self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -136,9 +136,11 @@ class TtLlamaAttention(LightweightModule):
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
         # Ring stuff
-        # 9216, 12288
+        # Llama3: 9216, 12288
+        # Qwen3: 6144, 12288
 
-        # [1, 1, 8192, 10240] -> [2304, 1536]
+        # Llama3: [1, 1, 8192, 10240] -> [2304, 1536]
+        # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -207,6 +209,104 @@ class TtLlamaAttention(LightweightModule):
         self.scale = self.head_dim**-0.5
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
+
+        # If we are using qk_norm, we need to add a layer norm to the q and k
+        q_norm_str = f"{layer_name}.q_norm"
+        k_norm_str = f"{layer_name}.k_norm"
+
+        # Initialize QK norm if weights are present in state_dict
+        if f"{q_norm_str}.weight" in self.state_dict:
+            self.qk_norm = True
+
+            # Memory configurations for QK norm
+            self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
+                ),  # resharding tensor to cores
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
+                ),  # resharding tensor to cores
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            # Program configuration for norm
+            block_w = 128 // 4 // 32
+            # Find largest value <= 4 that evenly divides block_w
+            subblock_w = 1
+            while subblock_w > 0:
+                if block_w % subblock_w == 0:
+                    break
+                subblock_w -= 1
+            self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[2, 2],
+                subblock_w=subblock_w,
+                block_h=2,  # 64 // 32
+                block_w=block_w,
+                inplace=False,
+            )
+
+            # Create Q norm
+            self.q_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=q_norm_str,
+                sharded_program_config=self.norm_program_cfg,
+                sharded_output_config=self.reshape_output_q_mem_cfg,
+            )
+
+            # Create K norm
+            self.k_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=k_norm_str,
+                sharded_program_config=self.norm_program_cfg,
+                sharded_output_config=self.reshape_output_k_mem_cfg,
+            )
+
+            self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
+            self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
+
+        else:
+            self.qk_norm = False
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -286,8 +386,8 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.matmul(
-            x,
+        xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
+            x,  # [1, 1, 32, 1280]
             self.wqkv,
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
@@ -315,16 +415,65 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
+        if self.qk_norm:
+            rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
+            rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
+            )
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
+            )
+
+            # Reshape and prepare tensors for QK norm
+            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 1, 64, 128])  # [1, 8, 8, 128] => [1, 1, 64, 128]
+            k_heads_pre_rot_1BKD = ttnn.view(
+                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
+            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
+
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
+
+            q_heads_intermediate_after_reshape_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
+            k_heads_intermediate_after_reshape_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
+            )
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
+            )
+
+            # Apply QK norm
+            q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
+            k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, memory_config=q_heads_intermediate_after_reshape_mem_cfg
+            )
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, memory_config=k_heads_intermediate_after_reshape_mem_cfg
+            )
+
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+
+            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
+            k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
+
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
+
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
-        )
-
+        )  # [1, 8, 8, 128], [1, 8, 8, 128]
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
-
         # print("done rotary embeddings")
 
         ###
@@ -336,6 +485,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys = self.layer_past[0]
             values = self.layer_past[1]
+
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
@@ -378,7 +528,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
-        attn_output_cat = self.tt_ccl.all_gather_concat(
+        attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
             attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
@@ -390,7 +540,7 @@ class TtLlamaAttention(LightweightModule):
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        dense_out_ttnn = ttnn.matmul(
+        dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
             attn_output_cat,
             self.wo,
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
@@ -401,8 +551,7 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
-        # print("done matmul")
-        dense_out_reduced = self.tt_ccl.line_all_reduce(
+        dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
             dense_out_ttnn,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
@@ -424,7 +573,11 @@ class TtLlamaAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -443,6 +596,14 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+        # Minimal matmul is giving bad outputs for seqlen > 128
+        # xqkv = ttnn.experimental.minimal_matmul(
+        #     input_tensor=x_11SH,
+        #     weight_tensor=self.wqkv_interleaved,
+        #     config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
+        #     compute_kernel_config=self.compute_kernel_config_hifi2,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
 
         ttnn.deallocate(x_11SH)
 
@@ -457,6 +618,9 @@ class TtLlamaAttention(LightweightModule):
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         # split qkv into heads
         (
@@ -482,6 +646,9 @@ class TtLlamaAttention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
+        if self.qk_norm:
+            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -496,6 +663,10 @@ class TtLlamaAttention(LightweightModule):
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
 
+        if self.qk_norm:
+            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+
+        # k_heads_1KSD = k_heads_1KSD_pre_rot
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
             rot_mats[0],
@@ -514,35 +685,22 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(k_heads_1KSD)
 
-        # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            k_fill = k_heads_1KSD_8b
+        k_fill = k_heads_1KSD_8b
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
 
         ttnn.deallocate(v_heads_1VSD)
 
-        # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            v_fill = v_heads_1VSD_8b
+        v_fill = v_heads_1VSD_8b
+
+        if batch_size > 1:
+            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
+            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
 
         if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
-            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-            block_size = keys_BKSD.shape[2]
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
             if isinstance(user_id, int):
                 user_id = ttnn.from_torch(
                     torch.tensor([user_id], dtype=torch.int32),
@@ -551,8 +709,8 @@ class TtLlamaAttention(LightweightModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx_tensor=user_id)
 
         else:
             ttnn.fill_cache(
@@ -566,26 +724,28 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
-
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        if chunk_start_idx is not None:
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+        # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
+        # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        if ring_distributed_sdpa:
+            # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
+            # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
+            # This ensures each device processes two complementary chunks of the attention matrix
+            attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
+                scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
-            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
@@ -600,8 +760,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
-
         ###
         # Output matmul
         ###
@@ -610,18 +768,61 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
+
+        if ring_distributed_sdpa:
+            # Split the attention output into two chunks along the sequence dimension for ring all-gather
+            # 4 = ring_size (number of devices in ring), 2 = number of chunks per device
+            attn_output_11SH_chunks = ttnn.split(attn_output_11SH, seq_len // 4 // 2, dim=2)
+            attn_output_11SH.deallocate(True)
+
+            # Perform ring all-gather on the first chunk (normal order)
+            attn_output_11SH_chunk_0 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[0],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SDPA",
+            )
+            attn_output_11SH_chunks[0].deallocate(True)
+
+            # Perform ring all-gather on the second chunk (reverse order)
+            attn_output_11SH_chunk_1 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[1],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                reverse_order=True,
+                buffer_key="SDPA_REVERSE",
+            )
+            attn_output_11SH_chunks[1].deallocate(True)
+
+            # Concatenate the gathered chunks along the sequence dimension to form the final output
+            attn_output_11SH = ttnn.concat([attn_output_11SH_chunk_0, attn_output_11SH_chunk_1], dim=2)
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo_interleaved,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
-        )
+        ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
+            output_11SH = ttnn.linear(
+                attn_output_11SH,
+                self.wo_interleaved,
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+            )
+        else:
+            output_11SH = ttnn.experimental.minimal_matmul(
+                input_tensor=attn_output_11SH,
+                weight_tensor=self.wo_interleaved,
+                config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
@@ -649,6 +850,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -659,6 +861,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

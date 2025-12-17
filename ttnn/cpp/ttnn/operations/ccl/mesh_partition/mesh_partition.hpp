@@ -7,14 +7,13 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
 namespace operations::ccl {
 
 struct ExecuteMeshPartition {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int32_t dim,
         std::optional<uint32_t> cluster_axis,

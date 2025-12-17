@@ -7,7 +7,6 @@ from torch import nn
 
 import ttnn
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
-from models.utility_functions import is_grayskull
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
@@ -60,7 +59,6 @@ def ttnn_conv1d(
     packer_l1_acc=False,
     groups=4,
     math_approx=True,
-    activation="",
     reallocate_halo=False,
     reshard=False,
 ):
@@ -69,7 +67,6 @@ def ttnn_conv1d(
 
     conv_config = ttnn.Conv1dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        activation=activation,
         deallocate_activation=deallocate_activation,
         reallocate_halo_output=reallocate_halo,
         act_block_h_override=32,
@@ -400,7 +397,7 @@ def squeezebert(
         embeddings,
         weight=parameters.embeddings.LayerNorm.weight,
         bias=parameters.embeddings.LayerNorm.bias,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull() else ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(embeddings)

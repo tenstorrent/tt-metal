@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package tt.tt_fabric.protobuf;
+
+message MeshId {
+  uint32 value = 1;
+}
+
+message MeshHostRankId {
+  uint32 value = 1;
+}
+
+message FabricNodeId {
+  uint32 mesh_id = 1;
+  uint32 chip_id = 2;
+}
+
+message RoutingDirectionEntry {
+  uint32 direction = 1;  // RoutingDirection enum value
+  repeated uint32 channels = 2; // vector of chan_id_t
+}
+
+message FabricNodeDirectionsMap {
+  FabricNodeId fabric_node = 1;
+  repeated RoutingDirectionEntry direction_entries = 2;
+}
+
+message RouterPortDirectionsMap {
+  MeshId local_mesh_id = 1;
+  MeshHostRankId local_host_rank_id = 2;
+  repeated FabricNodeDirectionsMap fabric_node_maps = 3;
+}

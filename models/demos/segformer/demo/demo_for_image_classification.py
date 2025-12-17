@@ -2,61 +2,59 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
-import torch
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
-from models.demos.segformer.demo.classification_demo_utils import get_batch, get_data_loader
 from models.demos.segformer.reference.segformer_for_image_classification import SegformerForImageClassificationReference
 from models.demos.segformer.tests.pcc.test_segformer_for_image_classification import create_custom_mesh_preprocessor
 from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, get_mesh_mappers, load_imagenet_dataset
 
 
 def run_segformer_classification_demo(
-    device, imagenet_label_dict, iterations, device_batch_size, model_location_generator
+    device, imagenet_label_dict, iterations, device_batch_size, model_location_generator, resolution=512
 ):
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     logger.info("ImageNet-1k validation Dataset")
-    input_loc = str(model_location_generator("ImageNet_data"))
+    input_loc = load_imagenet_dataset(model_location_generator)
     correct = 0
     torch_correct = 0
     ttnn_correct = 0
     batch_size = device_batch_size * device.get_num_devices()
+    iterations = iterations // batch_size
     data_loader = get_data_loader(input_loc, batch_size, iterations)
     inputs_mapper, wts_mapper, output_composer = get_mesh_mappers(device)
 
+    config = load_config("configs/segformer_img_classification_config.json")
+    reference_model = SegformerForImageClassificationReference(config)
+    reference_model = load_torch_model(
+        reference_model, f"", module="image_classification", model_location_generator=model_location_generator
+    )
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(wts_mapper),
+        device=None,
+    )
+    parameters = move_to_device(parameters, device)
+    ttnn_model = TtSegformerForImageClassification(config, parameters)
+
     for iter in range(iterations):
-        inputs, labels = get_batch(data_loader)
-        inputs = image_processor(inputs, return_tensors="pt")
-        torch_input_tensor = inputs.pixel_values
-        torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        torch_input_tensor, labels = get_batch(data_loader, resolution)
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor_permuted,
+            torch_input_tensor,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=inputs_mapper,
         )
-        config = load_config("configs/segformer_img_classification_config.json")
-        reference_model = SegformerForImageClassificationReference(config)
-        reference_model = load_torch_model(
-            reference_model, f"", module="image_classification", model_location_generator=model_location_generator
-        )
         torch_output = reference_model(torch_input_tensor)
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: reference_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(wts_mapper),
-            device=None,
-        )
-        parameters = move_to_device(parameters, device)
-        ttnn_model = TtSegformerForImageClassification(config, parameters)
         ttnn_output = ttnn_model(
             ttnn_input_tensor,
             output_attentions=None,

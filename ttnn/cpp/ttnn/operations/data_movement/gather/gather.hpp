@@ -11,13 +11,13 @@
 namespace ttnn::operations::data_movement {
 struct ExecuteGather {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         int8_t dim,
         const Tensor& input_index_tensor,
         bool sparse_grad,
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ttnn::operations::data_movement

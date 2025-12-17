@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ def run_ring_joint_sdpa(
     rp_axis,
     up_axis,
     all_gather_topology,
+    pcc_threshold,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -279,7 +280,7 @@ def run_ring_joint_sdpa(
 
         passing = True
         for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
-            out_pass, out_pcc = comp_pcc(gt, out, 0.994)
+            out_pass, out_pcc = comp_pcc(gt, out, pcc_threshold)
             logger.debug(f"python vs pytorch: {out_pcc}")
             logger.debug(f"mse: {((gt - out) ** 2).mean()}")
             passing = passing and out_pass
@@ -287,16 +288,20 @@ def run_ring_joint_sdpa(
         assert passing
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
-    [
-        (1, 40, 4096, 333, 64, 128, 512),  # SD3.5
-        (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 shape as it is on TG with 4x4 SPxTP
-    ],
-    ids=["sd35_full", "sd35_tg"],
+    "dtype, pcc_threshold",
+    [(ttnn.bfloat16, 0.994), (ttnn.bfloat8_b, 0.994), (ttnn.bfloat4_b, 0.8)],
+    ids=["bf16", "bf8_b", "bf4_b"],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
+@pytest.mark.parametrize(
+    "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, n_iters, trace_enabled",
+    [
+        (1, 40, 4096, 333, 64, 128, 512, 1, False),  # SD3.5, no_trace
+        (1, 10, 4096, 333, 64, 128, 512, 10, True),  # SD3.5 TG, yes_trace
+        (1, 40, 8192, 128, 128, 256, 256, 1, False),
+    ],
+    ids=["sd35_full-no_trace", "sd35_tg-yes_trace", "small_wan_no_trace"],
+)
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -347,6 +352,7 @@ def test_ring_joint_sdpa(
     q_chunk_size,
     k_chunk_size,
     dtype,
+    pcc_threshold,
     n_iters,
     trace_enabled,
     num_links,
@@ -355,6 +361,7 @@ def test_ring_joint_sdpa(
     up_axis,
     up_factor,
     all_gather_topology,
+    reset_seeds,
 ):
     if nh % up_factor != 0:
         pytest.skip("nh must be divisible by up_factor")
@@ -385,10 +392,19 @@ def test_ring_joint_sdpa(
         rp_axis,
         up_axis,
         all_gather_topology,
+        pcc_threshold,
     )
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.944),
+        (ttnn.bfloat4_b, 0.8),
+    ],
+    ids=["bf16", "bf8_b", "bf4_b"],
+)
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
@@ -435,6 +451,7 @@ def test_ring_joint_sdpa_program_cache(
     q_chunk_size,
     k_chunk_size,
     dtype,
+    pcc_threshold,
     n_iters,
     trace_enabled,
     num_links,
@@ -482,6 +499,7 @@ def test_ring_joint_sdpa_program_cache(
             rp_axis,
             up_axis,
             all_gather_topology,
+            pcc_threshold,
         )
 
     assert submesh.num_program_cache_entries() == 1

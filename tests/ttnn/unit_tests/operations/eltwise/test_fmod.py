@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 
 
 @pytest.mark.parametrize(

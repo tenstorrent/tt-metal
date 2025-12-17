@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "utils.hpp"
 
 #include "datasets/in_memory_token_dataset.hpp"
-#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer_trainer.hpp"
 #include "tokenizers/tokenizer_base.hpp"
 
@@ -22,47 +21,14 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(
     return {InMemoryTokenDataset(tokenized_text, seq_length), std::move(tokenizer)};
 }
 
-template <>
-std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::BPETokenizer>(
-    const std::string &text, uint32_t seq_length, const std::string &json_file_path) {
-    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::BPETokenizer>(json_file_path);
 
-    const std::vector<uint32_t> tokenized_text = tokenizer->encode(text);
+InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data) {
 
-    return {InMemoryTokenDataset(tokenized_text, seq_length), std::move(tokenizer)};
-}
 
-template <>
-std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::BPETokenizer>(
-    const std::vector<uint32_t> &tokens, uint32_t seq_length, const std::string &json_file_path) {
-    std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::BPETokenizer>(json_file_path);
+    std::vector<uint32_t> tokens = yaml_data["tokens"].as<std::vector<uint32_t>>();
+        uint32_t seq_length = yaml_data["sequence_length"].as<uint32_t>();
 
-    return {InMemoryTokenDataset(tokens, seq_length), std::move(tokenizer)};
-}
-
-std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + file_path);
-    }
-
-    std::vector<uint32_t> tokens;
-    uint32_t token;
-
-    while (file >> token) {
-        tokens.push_back(token);
-    }
-
-    if (file.bad()) {
-        throw std::runtime_error("I/O error while reading file: " + file_path);
-    } else if (!file.eof()) {
-        throw std::runtime_error("Non-integer data encountered in file: " + file_path);
-    }
-
-    file.close();
-    return tokens;
+    return InMemoryTokenDataset(tokens, seq_length);
 }
 
 }  // namespace ttml::datasets

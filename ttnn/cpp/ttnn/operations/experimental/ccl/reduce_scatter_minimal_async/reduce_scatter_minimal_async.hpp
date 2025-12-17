@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

@@ -22,7 +22,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -30,22 +30,19 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace stl {
-namespace json {
+namespace tt::stl::json {
 template <typename T>
 struct from_json_t;
-}  // namespace json
-}  // namespace stl
-}  // namespace tt
+}  // namespace tt::stl::json
 
 namespace tt::tt_metal {
 
 class Allocator;
+class AllocatorImpl;
 class IDevice;
 
 struct ShardSpec {
@@ -58,39 +55,11 @@ struct ShardSpec {
     /* The sequence order of the grid cores that the shards are layed out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
-    // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
-    ShardMode mode = ShardMode::PHYSICAL;
-    std::optional<std::array<uint32_t, 2>> physical_shard_shape = std::nullopt;
-
     ShardSpec(
         const CoreRangeSet& core_sets_,
         const std::array<uint32_t, 2>& shard_shape_,
-        const ShardOrientation& shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const ShardMode& shard_mode_ = ShardMode::PHYSICAL) :
-        grid(core_sets_),
-        shape(shard_shape_),
-        orientation(shard_orientation_),
-        mode(shard_mode_),
-        physical_shard_shape(std::nullopt) {}
-
-    ShardSpec(
-        const CoreRangeSet& core_sets_,
-        const std::array<uint32_t, 2>& shard_shape_,
-        const std::array<uint32_t, 2>& physical_shard_shape_,
         const ShardOrientation& shard_orientation_ = ShardOrientation::ROW_MAJOR) :
-        grid(core_sets_),
-        shape(shard_shape_),
-        orientation(shard_orientation_),
-        mode(ShardMode::LOGICAL),
-        physical_shard_shape(physical_shard_shape_) {
-        TT_FATAL(
-            physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1],
-            "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!",
-            physical_shard_shape_[0],
-            physical_shard_shape_[1],
-            shard_shape_[0],
-            shard_shape_[1]);
-    }
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_) {}
 
     uint32_t num_cores() const { return this->grid.num_cores(); }
     uint32_t numel() const { return this->shape[0] * this->shape[1]; }
@@ -98,11 +67,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("grid", "shape", "orientation", "mode", "physical_shard_shape");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->grid, this->shape, this->orientation, this->mode, this->physical_shard_shape);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation);
     }
 };
 
@@ -118,18 +85,14 @@ struct ShardSpecBuffer {
         const ShardOrientation& shard_orientation_,
         const std::array<uint32_t, 2>& page_shape,
         const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
-        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
-    }
+        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_),
+        page_shape(page_shape),
+        tensor2d_shape_in_pages(tensor2d_shape_in_pages) {}
     ShardSpecBuffer(
         const ShardSpec& shard_spec,
         const std::array<uint32_t, 2>& page_shape,
         const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
-        tensor_shard_spec(shard_spec) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
-    }
+        tensor_shard_spec(shard_spec), page_shape(page_shape), tensor2d_shape_in_pages(tensor2d_shape_in_pages) {}
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
@@ -247,7 +210,7 @@ public:
     ~Buffer();
 
     IDevice* device() const { return device_; }
-    Allocator* allocator() const { return allocator_; }
+    Allocator* allocator() const;
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -338,7 +301,7 @@ private:
     const bool owns_data_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator* allocator_;
+    AllocatorImpl* allocator_;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;

@@ -8,15 +8,15 @@ from typing import Tuple, Union, Dict, Optional
 import warnings
 import math
 import ttnn
+from ttnn.operations.activations import get_golden_function_for_activation
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
-Conv2dSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceHeight
-Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceWidth
-
-OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
-OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
+Conv2dDRAMSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceHeight
+Conv2dDRAMSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceWidth
+Conv2dL1Full = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.L1Full
+Conv2dL1FullSliceConfig = Conv2dSliceConfig(slice_type=Conv2dL1Full)
 
 
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
@@ -158,28 +158,6 @@ def prepare_conv_bias(*args, **kwargs):
     return ttnn._ttnn.operations.conv.prepare_conv_bias(*args, **kwargs)
 
 
-def get_torch_act_func_from_string(act_string):
-    import torch
-
-    act_func_map = {
-        "relu": torch.nn.functional.relu,
-        "silu": torch.nn.functional.silu,
-        "mish": torch.nn.functional.mish,
-        "sigmoid": torch.nn.functional.sigmoid,
-        "sigmoid_approx": torch.nn.functional.sigmoid,
-        "tanh": torch.nn.functional.tanh,
-        "log": torch.log,
-        "softplus": torch.nn.functional.softplus,
-        "gelu": torch.nn.functional.gelu,
-        "sqrt": torch.sqrt,
-    }
-    if act_string == "":
-        return None
-    if act_string in act_func_map:
-        return act_func_map[act_string]
-    raise RuntimeError(f"Activation function {act_string} not supported")
-
-
 def _golden_function(
     input_tensor,
     weight_tensor,
@@ -245,7 +223,12 @@ def _golden_function(
         groups=groups,
     )
 
-    act_func = get_torch_act_func_from_string(conv_config.activation) if conv_config is not None else None
+    # Get activation from conv_config
+    activation = None
+    if conv_config is not None:
+        activation = conv_config.activation
+
+    act_func = get_golden_function_for_activation(activation)
     output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
 
     N, C, H, W = output_tensor.shape

@@ -346,14 +346,14 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-        noc_async_write_one_packet_set_state<non_posted>(dest_noc_addr, coalesced_page_size, noc);
+        noc_async_write_one_packet_set_state<posted>(dest_noc_addr, coalesced_page_size, noc);
 
         for (uint32_t h = 0; h < num_rows; ++h) {
             uint32_t prev_src_addr = src_addr;
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-                noc_async_write_one_packet_with_state<non_posted>(src_addr, dest_noc_addr, noc);
+                noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc);
 
                 src_addr += coalesced_page_size;
                 dest_addr += coalesced_page_size;
@@ -406,5 +406,193 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
         remote_cb_interface.config_ptr + offsetof(RemoteReceiverCBInterface, fifo_rd_ptr)) =
         remote_cb_interface.fifo_rd_ptr;
 }
+
+#ifndef COMPILE_FOR_TRISC
+
+class Noc;
+class CircularBuffer;
+
+/** @brief Remote circular buffer API
+ * Provides an interface for the Producer and Consumer cores of a Circular Buffer to be on different cores on the same
+ * chip.
+ */
+class RemoteCircularBuffer {
+public:
+    /** @brief Enum class for the type of remote pointer update
+     *
+     * SKIP: Skip updating the remote pointer
+     * UPDATE_OVER_NOC: Update the remote pointer over the NoC. This will cause a NoC transaction.
+     */
+    enum class RemotePointerUpdate { SKIP, UPDATE_OVER_NOC };
+
+    /** @brief Construct a RemoteCircularBuffer
+     *
+     * @param remote_cb_index The index of the remote circular buffer
+     */
+    explicit RemoteCircularBuffer(uint32_t remote_cb_index) : remote_cb_index_(remote_cb_index) {}
+
+    /** @brief Reserves the specified number of pages on the remote circular buffer
+     *
+     * This will block until the specified number of pages are available on the remote circular buffer.
+     *
+     * This is intended to be called by the sender core.
+     *
+     * @param num_pages The number of pages to reserve
+     */
+    void reserve_back(uint32_t num_pages) { remote_cb_reserve_back(remote_cb_index_, num_pages); }
+
+    /** @brief Pushes the specified number of pages to the remote circular buffer
+     *
+     * Must call reserve_back before calling this function.
+     *
+     * This is intended to be called by the sender core.
+     *
+     * @tparam update_remote_pointer The type of remote pointer update
+     *
+     * @param noc The NoC to use for the remote pointer update
+     * @param src The source to push from. Must be local.
+     * @param num_pages The number of pages to push
+     * @param num_rows The number of rows to push
+     * @param coalesced_num_pages_per_row The number of coalesced pages per row
+     * @param coalesced_page_size The size of the coalesced page
+     */
+    template <typename Src, RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
+    void push_back(
+        experimental::Noc& noc,
+        const Src& src,
+        uint32_t num_pages,
+        uint32_t num_rows,
+        uint32_t coalesced_num_pages_per_row,
+        uint32_t coalesced_page_size,
+        const typename experimental::noc_traits_t<Src>::src_args_type& src_args =
+            typename experimental::noc_traits_t<Src>::src_args_type{}) {
+        auto src_addr = experimental::noc_traits_t<Src>::template src_addr<experimental::Noc::AddressType::LOCAL_L1>(
+            src, noc, src_args);
+        remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
+            remote_cb_index_,
+            src_addr,
+            num_pages,
+            num_rows,
+            coalesced_num_pages_per_row,
+            coalesced_page_size,
+            noc.get_noc_id());
+    }
+
+    /** @brief Resizes the sender's circular buffer page size
+     *
+     * Resizes the sender circular buffer's page size. This may result in noc transactions for synchronizing with the
+     * remote receiver core.
+     *
+     * This is intended to be called by the sender core.
+     *
+     * @tparam update_remote_pointer The type of remote pointer update
+     *
+     * @param noc The NoC to use for the remote pointer update
+     * @param page_size The new page size
+     * @param noc_mode The NoC mode to use for the remote pointer update
+     * @param posted Whether to use posted semaphore inc
+     * @param cmd_buf The command buffer to use for the remote pointer update
+     */
+    template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
+    void set_sender_page_size(
+        experimental::Noc& noc,
+        uint32_t page_size,
+        uint8_t noc_mode = detail::default_noc_mode,
+        bool posted = true,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
+        resize_remote_receiver_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
+            remote_cb_index_, page_size, noc.get_noc_id(), noc_mode, posted, cmd_buf);
+    }
+
+    /** @brief Waits for the specified number of pages to be available in the remote circular buffer
+     *
+     * This is intended to be called by the receiver core.
+     *
+     * @param num_pages The number of pages to wait for
+     */
+    void wait_front(uint32_t num_pages) { remote_cb_wait_front(remote_cb_index_, num_pages); }
+
+    /** @brief Pops the specified number of pages from the remote circular buffer
+     *
+     * This function is used by a receiver core to signal it is done with the specified amount of data to its sender
+     * core. It will trigger NoC transactions to notify the remote CB that the data has been consumed. `wait_front`
+     * should be called before calling this function to ensure the data is available.
+     *
+     * This is intended to be called by the receiver core.
+     *
+     * @param noc The NoC to use for the remote pointer update
+     * @param num_pages The number of pages to pop
+     */
+    void pop_front(experimental::Noc& noc, uint32_t num_pages) {
+        remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
+    }
+
+    /** @brief Resizes the receiver's circular buffer page size
+     *
+     * Resizes the receiver's circular buffer page size. This may result in noc transactions for synchronizing with the
+     * remote sender core.
+     *
+     * This is intended to be called by the receiver core.
+     *
+     * @tparam update_remote_pointer The type of remote pointer update
+     *
+     * @param noc The NoC to use for the remote pointer update
+     * @param page_size The new page size
+     * @param noc_mode The NoC mode to use for the remote pointer update
+     * @param posted Whether to use posted semaphore inc
+     * @param cmd_buf The command buffer to use for the remote pointer update
+     */
+    template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
+    void set_receiver_page_size(
+        experimental::Noc& noc,
+        uint32_t page_size,
+        uint8_t noc_mode = detail::default_noc_mode,
+        Noc::ResponseMode response_mode = Noc::ResponseMode::POSTED,
+        uint8_t cmd_buf = detail::default_cmd_buf) {
+        resize_remote_sender_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
+            remote_cb_index_,
+            page_size,
+            noc.get_noc_id(),
+            noc_mode,
+            response_mode == Noc::ResponseMode::POSTED,
+            cmd_buf);
+    }
+
+    /** @brief Waits for all pages to be consumed by the receiver core
+     *
+     */
+    void barrier() { remote_cb_sender_barrier(remote_cb_index_); }
+
+    /** @brief Writes the read/write pointers to L1
+     *
+     * The read/write pointers of the remote circular buffers are stored in L1, so that subsequent programs can resume
+     * where the previous pointers were. During execution, this pointer is cached in a struct for optimal perf to avoid
+     * repeated L1 reads/writes. This requires the user to call this function at the end of their kernel execution in
+     * order to write the final value back to L1. This should only be called by one RISC per core which has the final
+     * updated value.
+     *
+     * This can be called by either the sender or receiver core.
+     *
+     */
+    void commit() { update_remote_cb_config_in_l1(remote_cb_index_); }
+
+    /** @brief Acquire a scoped lock on the RemoteCircularBuffer. In debug mode, reads and writes to this remote
+     * circular buffer are tracked by the debugger while the lock is held.
+     *
+     * @return A scoped lock on the RemoteCircularBuffer
+     */
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
+private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
+    uint32_t remote_cb_index_;
+};
+
+#endif
 
 }  // namespace experimental

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,7 +96,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     input_shard_spec = input_tensor.shard_spec().value();
     uint32_t num_cores = final_width / input_spec.tile().get_tile_shape()[1];
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     bool row_wise = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 

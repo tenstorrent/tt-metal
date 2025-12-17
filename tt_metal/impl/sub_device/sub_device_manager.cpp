@@ -3,43 +3,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
-#include <functional>
 #include <limits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
-#include "buffer_types.hpp"
 #include "core_coord.hpp"
+#include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "trace/trace.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -53,8 +48,8 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
-    device_(device) {
+    device_(device),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -64,10 +59,10 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
-    device_(device),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
+    device_(device),
     local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
 
@@ -124,13 +119,13 @@ const std::vector<std::pair<CoreRangeSet, uint32_t>>& SubDeviceManager::get_core
     return core_go_message_mapping_;
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<AllocatorImpl>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
 }
 
-std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
+std::unique_ptr<AllocatorImpl>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_device_allocators_[sub_device_index];
 }
@@ -260,7 +255,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->allocator()->get_config();
+    const auto& global_allocator_config = device_->allocator_impl()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -288,7 +283,6 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
-             .storage_core_bank_size = std::nullopt,
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
@@ -299,9 +293,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
-            config.l1_small_size < (config.storage_core_bank_size.has_value()
-                                        ? config.storage_core_bank_size.value()
-                                        : config.worker_l1_size - config.l1_unreserved_base),
+            config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
             "Reserved size must be less than bank size");
         TT_FATAL(
             config.l1_small_size % config.l1_alignment == 0,
@@ -314,9 +306,8 @@ void SubDeviceManager::populate_sub_allocators() {
             config.core_type_from_noc_coord_table.insert({noc_coord, AllocCoreType::ComputeAndStore});
         }
 
-        // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+        // L1BankingAllocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
         // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-        TT_ASSERT(device_->allocator_scheme_ == MemoryAllocator::L1_BANKING);
         sub_device_allocators_[i] = std::make_unique<L1BankingAllocator>(config);
     }
 }
@@ -367,7 +358,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
-        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
         core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }

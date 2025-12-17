@@ -21,52 +21,76 @@ The operation returns both the sorted tensor and the indices representing the or
 - memory_config (MemoryConfig, optional): Specifies memory configuration for the output tensor. Defaults to None.
 - out (tuple of Tensors, optional): Preallocated tensors for the sorted values and indices. Defaults to None.
 
-### Usage
-
-#### TTNN
-
-```python
-import ttnn
-
-# Create a TTNN tensor
-input_tensor = ttnn.Tensor([3, 1, 2])
-
-# Sort in ascending order
-sorted_tensor, indices = ttnn.sort(input_tensor)
-
-# Sort in descending order
-sorted_tensor_desc, indices_desc = ttnn.sort(input_tensor, descending=True)
-
-# Sort along a specific dimension
-input_tensor_2d = ttnn.Tensor([[3, 1, 2], [6, 5, 4]])
-sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d, dim=1)
-```
-
-#### Metalium
-
-```cpp
-// Create input tensor
-const ttnn::Tensor input_tensor = ...
-
-// Set sorting dim
-const int8_t dim = -1;
-
-// Set sorting params
-const bool descending = false;
-const bool stable = false;
-
-// Optional params
-std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors;
-const std::optional<ttnn::MemoryConfig> memory_config;
-
-std::vector<Tensor> sorted_tensors = ttnn::sort(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
-```
-
 ### Usage Limitations
 
 - Supported index tensor types: `uint32`, `uint16`,
 - Supported value tensor types: `uint16`, `bfloat16`,
 - `stable=True` is not supported in this implementation.
+
+## Tensor Transformations
+
+Before and after the core sorting operation, the input tensor undergoes several transformations to ensure compatibility with the Bitonic Sort algorithm and hardware requirements. These transformations are transparent to the user and are automatically reversed after sorting.
+
+### Pre-Sort Transformations
+
+The `pre_sort_transform_tensor` function prepares the input tensor for sorting through the following steps:
+
+1. **Dimension Transposition**:
+   - If the sort dimension is not the last dimension, the tensor is transposed to move the sort dimension to the last position.
+   - This ensures that sorting always operates on the innermost dimension, which is required by the hardware implementation.
+
+2. **Rank Normalization to 4D**:
+   - Tensors with rank less than 4 are expanded to 4D by adding dimensions of size 1.
+   - Tensors with rank greater than 4 are reshaped to 4D by combining higher dimensions.
+   - This standardization simplifies the sorting implementation, as all strategies operate on 4D tensors.
+
+3. **Implicit Tile Padding**:
+   - Tiles may have implicit padding to align with hardware tile size (typically 32×32 elements).
+   - This padding is filled with appropriate sentinel values:
+     - `+∞` for ascending sort (ensures padded values sort to the end)
+     - `-∞` for descending sort (ensures padded values sort to the end)
+
+4. **Power-of-Two Padding**:
+   - Bitonic Sort requires the dataset size to be a power of two.
+   - If the last dimension (after implicit tile padding) is not a power of two, additional manual padding is applied.
+   - The minimum size is 2 tiles (64 elements), even if the original dimension is smaller.
+   - Padding values are `+∞` or `-∞` depending on sort order.
+
+### Post-Sort Transformations
+
+The `post_sort_transform_tensor` function reverses the pre-sort transformations to restore the original tensor structure:
+
+1. **Slice to Original Size**:
+   - If manual power-of-two padding was applied, the sorted output is sliced back to the original dimension size.
+   - Both the sorted values and indices tensors are sliced identically.
+
+2. **Rank Restoration**:
+   - Tensors are reshaped back to their original rank:
+     - Tensors originally with rank < 4 are squeezed back.
+     - Tensors originally with rank > 4 are reshaped to their original shape.
+
+3. **Dimension Transpose Back**:
+   - If the sort dimension was transposed to the last position, the tensor is transposed back to restore the original dimension order.
+   - Both sorted values and indices are transposed consistently.
+
+### Example Transformation Flow
+
+For a tensor of shape `[3, 5, 7]` sorted along dimension 0:
+
+**Pre-sort:**
+1. Transpose: `[3, 5, 7]` → `[5, 7, 3]` (move dim 0 to last)
+2. Expand to 4D: `[5, 7, 3]` → `[1, 5, 7, 3]`
+3. Tile padding: `[1, 5, 7, 3]` → `[1, 5, 7, 32]` (implicit padding to tile boundary)
+4. Power-of-two padding: `[1, 5, 7, 32]` → `[1, 5, 7, 64]` (pad to 2 tiles minimum)
+
+**Sort operation** (on transformed tensor)
+
+**Post-sort:**
+1. Slice: `[1, 5, 7, 64]` → `[1, 5, 7, 3]` (remove manual padding)
+2. Squeeze to 3D: `[1, 5, 7, 3]` → `[5, 7, 3]`
+3. Transpose back: `[5, 7, 3]` → `[3, 5, 7]` (restore original dimension order)
+
+These transformations ensure that any tensor shape and sort dimension combination can be efficiently processed by the underlying Bitonic Sort hardware implementation.
 
 ## Strategy Comparison Overview
 

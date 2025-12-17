@@ -7,8 +7,11 @@
 
 namespace tt::tt_metal::unit_tests::dm::core_to_all {
 
+constexpr uint32_t START_ID = 6;
+constexpr uint32_t START_ID_2_0 = 170;
+
 void directed_ideal_test(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -17,7 +20,8 @@ void directed_ideal_test(
     CoreCoord sub_grid_size,
     bool loopback = true,
     NOC noc_id = NOC::NOC_0,
-    uint32_t multicast_scheme_type = 0);
+    uint32_t multicast_scheme_type = 0,
+    bool use_2_0_api = false);
 }
 
 #endif  // TEST_ONE_TO_ALL_HPP

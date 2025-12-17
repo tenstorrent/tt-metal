@@ -208,7 +208,7 @@ def create_vadv2_model_parameters_tramsformer(model: ResNet, device=None):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_vadv2_encoder(
+def test_vadv2_transformer(
     device,
     reset_seeds,
     model_location_generator,

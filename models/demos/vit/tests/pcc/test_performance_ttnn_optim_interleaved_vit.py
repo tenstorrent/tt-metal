@@ -12,16 +12,10 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_interleaved_vit
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    is_wormhole_b0,
-    torch_random,
-)
 
 
 def get_expected_times(functional_vit):
@@ -41,8 +35,6 @@ def get_expected_times(functional_vit):
 def test_performance_vit_encoder(
     device, model_name, batch_size, sequence_size, functional_vit, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator)
     config = model.config
     model = model.vit.encoder
@@ -94,7 +86,6 @@ def test_performance_vit_encoder(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
@@ -127,8 +118,6 @@ def test_performance_vit_encoder(
 def test_performance_vit_e2e(
     device, model_name, batch_size, image_size, sequence_size, functional_vit, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator)
     config = model.config
 
@@ -218,7 +207,6 @@ def test_performance_vit_e2e(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

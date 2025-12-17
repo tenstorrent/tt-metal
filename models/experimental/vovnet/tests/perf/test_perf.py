@@ -4,15 +4,13 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import run_for_wormhole_b0
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 123],
+        [1, 159.00],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

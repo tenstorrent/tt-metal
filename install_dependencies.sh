@@ -15,6 +15,7 @@ usage()
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
     echo "[--sfpi]                    Install only SFPI package (minimal installation)"
+    echo "[--source-only]             Loads functions into shell"
     exit 1
 }
 
@@ -127,13 +128,15 @@ install_packages() {
 }
 
 validate_packages() {
-    echo "[INFO] Validating packages: ${PACKAGES[*]}"
+    echo "[INFO] Validating packages:"
     case "$PKG_MANAGER" in
         apt)
-            dpkg -l "${PACKAGES[@]}"
+            dpkg-query -W -f='  ${Package} ${Status}\n' "${PACKAGES[@]}"
+            echo "[INFO] Validation successful!"
             ;;
         dnf|yum)
-            rpm -q "${PACKAGES[@]}"
+            rpm -q --qf '  %{NAME} %{VERSION}-%{RELEASE}\n' "${PACKAGES[@]}"
+            echo "[INFO] Validation successful!"
             ;;
     esac
 }
@@ -206,6 +209,7 @@ init_packages() {
                 "libc++abi-17-dev"
                 "wget"
                 "curl"
+                "xxd"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -233,6 +237,7 @@ init_packages() {
                 "capstone-devel"
                 "wget"
                 "curl"
+                "vim-common" # Includes xxd
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
@@ -316,70 +321,52 @@ install_llvm() {
 }
 
 install_sfpi() {
-    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
+    local version_file=$(dirname $0)/tt_metal/sfpi-info.sh
     if ! [[ -r $version_file ]] ; then
-	version_file=$(dirname $0)/sfpi-version.sh
+	version_file=$(dirname $0)/sfpi-info.sh
 	if ! [[ -r $version_file ]] ; then
-	    echo "[ERROR] sfpi-version.sh not found" >&2
+	    echo "[ERROR] sfpi-info.sh not found" >&2
 	    exit 1
 	fi
     fi
-    # determine packaging system
-    local pkg
-    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1 ; then
-	pkg=deb
-    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1 ; then
-	pkg=rpm
-    else
-	echo "[ERROR] Unknown packaging system" >&2
-	exit 1
+    eval local $($version_file SHELL)
+    if [[ -z $sfpi_pkg ]] ; then
+        echo "[ERROR] Unknown packaging system for $sfpi_dist" >&2
+        exit 1
     fi
-    local $(grep -v '^#' $version_file)
-    local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
-    if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
-	echo "[ERROR] SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
+    if [[ -z $sfpi_hash ]] ; then
+	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
-	     != "$sfpi_pkg_md5" ] ; then
-	echo "[ERROR] SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
-	rm -rf $TEMP_DIR
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_filename"
+    if [[ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+	     != "$sfpi_hash" ]] ; then
+	echo "[ERROR] SFPI $sfpi_filename ${sfpi_hashtype} mismatch" >&2
+	if [[ -d $TEMP_DIR ]] ; then
+	    rm -rf $TEMP_DIR
+	fi
 	exit 1
     fi
     # we must select exactly this version
-    case "$pkg" in
+    case "$sfpi_pkg" in
 	deb)
-	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    apt-get install -y --allow-downgrades $TEMP_DIR/$sfpi_filename
 	    ;;
 	rpm)
-	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    rpm --upgrade --force $TEMP_DIR/$sfpi_filename
+	    ;;
+	*)
+	    echo "[ERROR] Unknown packaging system $sfpi_pkg" >&2
+	    if [[ -d $TEMP_DIR ]] ; then
+		rm -rf $TEMP_DIR
+	    fi
+	    exit 1
 	    ;;
     esac
-    rm -rf $TEMP_DIR
-}
-
-install_sfpi_only() {
-    echo "[INFO] Installing only SFPI package for $OS_ID..."
-
-    # Check packaging system
-    local pkg
-    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1; then
-        pkg=deb
-    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1; then
-        pkg=rpm
-    else
-        echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
-        exit 1
+    if [[ -d $TEMP_DIR ]] ; then
+	rm -rf $TEMP_DIR
     fi
-    echo "[INFO] Detected packaging system: $pkg"
-
-    # Install SFPI using existing function
-    install_sfpi
-
-    echo "[INFO] SFPI installation completed successfully!"
 }
 
 install_mpi_ulfm() {
@@ -419,15 +406,6 @@ install_mpi_ulfm() {
     echo "[INFO] Installing $DEB_FILE …"
     apt-get update -qq
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
-}
-
-install_rust() {
-    INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 --profile minimal -y"
-    if [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" /bin/bash -c "$INSTALL_CMD"
-    else
-        /bin/bash -c "$INSTALL_CMD"
-    fi
 }
 
 # We don't really want to have hugepages dependency
@@ -470,7 +448,6 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
-    install_rust
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
@@ -484,76 +461,79 @@ cleanup() {
     fi
 }
 
-# Alright, lets run some things!
+main() {
+    # Alright, lets run some things!
 
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please use sudo."
-    usage
-fi
+    if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run as root. Please use sudo."
+        usage
+    fi
 
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+    VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 
-# Initialize OS detection and validation
-detect_os
+    # Initialize OS detection and validation
+    detect_os
 
-if ! is_supported_os; then
-    echo "Error: $OS_ID is not currently supported."
-    echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
-    exit 1
-fi
+    if ! is_supported_os; then
+        echo "Error: $OS_ID is not currently supported."
+        echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
+        exit 1
+    fi
 
-validate=0
-docker=0
-distributed=1
-hugepages=0
-sfpi_only=0
+    validate=0
+    docker=0
+    distributed=1
+    hugepages=0
+    sfpi_only=0
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --help|-h)
-            usage
-            ;;
-        --validate|-v)
-            validate=1
-            shift
-            ;;
-        --docker|-d)
-            docker=1
-            shift
-            ;;
-        --no-distributed)
-            distributed=0
-            shift
-            ;;
-        --hugepages)
-            hugepages=1
-            shift
-            ;;
-        --sfpi)
-            sfpi_only=1
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
-    esac
-done
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                usage
+                ;;
+            --validate|-v)
+                validate=1
+                shift
+                ;;
+            --docker|-d)
+                docker=1
+                shift
+                ;;
+            --no-distributed)
+                distributed=0
+                shift
+                ;;
+            --hugepages)
+                hugepages=1
+                shift
+                ;;
+            --sfpi)
+                sfpi_only=1
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                ;;
+        esac
+    done
 
-init_packages
+    init_packages
 
-if [ "$sfpi_only" -eq 1 ]; then
-    install_sfpi_only
-elif [ "$validate" -eq 1 ]; then
-    validate_packages
-else
-    install
-fi
+    if [ "$sfpi_only" -eq 1 ]; then
+        install_sfpi
+        echo "[INFO] SFPI installation completed successfully!"
+    elif [ "$validate" -eq 1 ]; then
+        validate_packages
+    else
+        install
+        echo "[INFO] TT-Metalium dependencies installed successfully!"
+    fi
 
-cleanup
+    cleanup
 
-if [ "$sfpi_only" -eq 1 ]; then
-    echo "[INFO] SFPI installation completed successfully!"
-else
-    echo "[INFO] TT-Metalium dependencies installed successfully!"
+}
+
+if [ "${1}" != "--source-only" ]; then
+    main "${@}"
 fi

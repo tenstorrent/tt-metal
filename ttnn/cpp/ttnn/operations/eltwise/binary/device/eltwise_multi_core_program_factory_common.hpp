@@ -12,7 +12,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::binary {
@@ -37,9 +36,9 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
-    auto src_buffer_a = a.buffer();
-    auto src_buffer_b = b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer_a = a.buffer();
+    auto* src_buffer_b = b.buffer();
+    auto* dst_buffer = output.buffer();
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
@@ -271,8 +270,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                     unpadded_block_width,
                     output_width,
                     block_size,
-                    (i / num_shards_per_width) * (block_height * block_width * num_shards_per_width) +
-                        (i % num_shards_per_width) * block_width,
+                    ((i / num_shards_per_width) * (block_height * block_width * num_shards_per_width)) +
+                        ((i % num_shards_per_width) * block_width),
                     0};
             } else {
                 auto& writer_args = cached_writer_args.at(core.x).at(core.y);

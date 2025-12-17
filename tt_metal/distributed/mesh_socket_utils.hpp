@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {

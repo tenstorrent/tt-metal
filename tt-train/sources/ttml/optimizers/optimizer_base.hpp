@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@ namespace ttml::optimizers {
 
 class OptimizerBase {
 public:
+    [[nodiscard]] virtual std::string get_name() const = 0;
+
     explicit OptimizerBase(serialization::NamedParameters&& parameters);
     OptimizerBase(const OptimizerBase&) = delete;
     OptimizerBase& operator=(const OptimizerBase&) = delete;

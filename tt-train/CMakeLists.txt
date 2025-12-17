@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18..3.30)
+cmake_minimum_required(VERSION 3.18...3.30)
 include(cmake/compilers.cmake)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
@@ -25,13 +25,14 @@ CHECK_COMPILERS()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 
@@ -51,17 +52,19 @@ endif()
 
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
 
+# Add cmake directory to module path for flatbuffers helper
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
 include(cmake/dependencies.cmake)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 3rd party projects
-if(CMAKE_VERSION VERSION_LESS 3.25)
-    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(3rd_party EXCLUDE_FROM_ALL)
-else()
-    add_subdirectory(3rd_party EXCLUDE_FROM_ALL SYSTEM)
-endif()
+# ttnn header files are not clean against narrowing conversion checks
+# therefore tt-train likely is not clean against them
+# must disable checks to build with tt-metal as super project
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 # ttml projects
 
 add_subdirectory(sources)

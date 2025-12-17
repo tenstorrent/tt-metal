@@ -3,16 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/utils.hpp>
 
-namespace tt {
-namespace test_utils {
+namespace tt::test_utils {
 /// @brief generic vector printer
 /// @tparam T
 /// @param const std::vector<T>& vec
 template <typename T>
 void print_vector(const std::vector<T>& vec) {
-    int idx = 0;
     for (int i = 0; i < vec.size(); i++) {
         std::cout << vec.at(i) << ", ";
     }
@@ -23,7 +20,6 @@ void print_vector(const std::vector<T>& vec) {
 /// @param const std::vector<T>& vec
 template <typename T>
 void print_vector_fixed_numel_per_row(const std::vector<T>& vec, const unsigned int numel_per_row) {
-    int idx = 0;
     for (int i = 0; i < vec.size(); i++) {
         if ((i % numel_per_row) == 0) {
             std::cout << std::endl;
@@ -32,5 +28,4 @@ void print_vector_fixed_numel_per_row(const std::vector<T>& vec, const unsigned 
     }
     std::cout << std::endl;
 }
-}  // namespace test_utils
-}  // namespace tt
+}  // namespace tt::test_utils

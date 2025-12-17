@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -68,7 +68,7 @@ private:
 // Wrapper to abstract const-eval logic out of runtime funcs to keep them
 // cleaner.  Invokes constEvalFunc iff outputs is empty.
 inline void constEvalFuncWrapper(
-    std::function<std::vector<ttnn::Tensor>(std::vector<ttnn::Tensor>)> constEvalFunc,
+    const std::function<std::vector<ttnn::Tensor>(std::vector<ttnn::Tensor>)>& constEvalFunc,
     const std::vector<ttnn::Tensor>& inputs,
     std::vector<ttnn::Tensor>* outputs) {
     if (outputs->empty()) {

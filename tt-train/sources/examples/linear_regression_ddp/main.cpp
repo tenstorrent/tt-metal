@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ int main() {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [&num_features, &num_targets, device](std::vector<DatasetSample>&& samples) {
+        [device](std::vector<DatasetSample>&& samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<float> targets;

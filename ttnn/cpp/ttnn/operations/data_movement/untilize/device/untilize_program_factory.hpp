@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
+#include "untilize_op.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 

@@ -8,11 +8,19 @@
 #include "erisc.h"
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
+#include "debug/eth_link_status.h"
+#include "tt_eth_ss_regs.h"
+#include "tt_eth_api.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
 }
+
+static volatile uint32_t* const fabric_postcode_ptr =
+    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
+
+#define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
@@ -68,6 +76,7 @@ FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 
 template <bool ctx_switch = true>
 FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
         if constexpr (ctx_switch) {
@@ -82,6 +91,7 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
 
 FORCE_INLINE
 void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num));
     volatile uint32_t* ptr = (volatile uint32_t*)(ETH_TXQ0_REGS_START + (q_num * ETH_TXQ_REGS_SIZE));
     ptr[ETH_TXQ_TRANSFER_START_ADDR >> 2] = src_addr;
@@ -92,6 +102,7 @@ void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_
 
 FORCE_INLINE
 void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(!eth_txq_is_busy(q_num));
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
@@ -101,6 +112,7 @@ void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t des
 
 FORCE_INLINE
 void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_addr);
@@ -110,6 +122,7 @@ void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t de
 
 template <bool ctx_switch = true>
 FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num)) {
         if constexpr (ctx_switch) {
             risc_context_switch();
@@ -121,6 +134,7 @@ FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32
 }
 FORCE_INLINE
 void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    WATCHER_CHECK_ETH_LINK_STATUS();
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
@@ -145,7 +159,6 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF));
     }
-    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,

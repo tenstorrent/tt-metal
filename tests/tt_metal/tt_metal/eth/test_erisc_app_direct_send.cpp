@@ -21,18 +21,20 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
+#include "mesh_device.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -40,7 +42,8 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
+#include "eth_test_common.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -61,6 +64,7 @@ struct erisc_info_t {
 
 using namespace tt;
 using namespace tt::test_utils;
+using namespace tt::tt_metal;
 
 namespace unit_tests::erisc::direct_send {
 size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
@@ -72,25 +76,29 @@ size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
 template <typename FIXTURE>
 bool eth_direct_sender_receiver_kernels(
     FIXTURE* fixture,
-    tt_metal::IDevice* sender_device,
-    tt_metal::IDevice* receiver_device,
+    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
+    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
     const size_t& byte_size,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0,
     uint32_t num_bytes_per_send = 16) {
+    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
     bool pass = true;
-    log_debug(
+    log_info(
         tt::LogTest,
-        "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {}",
+        "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {} processor {}",
         byte_size,
         sender_device->id(),
         eth_sender_core.str(),
         src_eth_l1_byte_address,
         receiver_device->id(),
         eth_receiver_core.str(),
-        dst_eth_l1_byte_address);
+        dst_eth_l1_byte_address,
+        processor);
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -110,15 +118,22 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
+
+    auto ethernet_config = tt_metal::EthernetConfig{
+        .noc = tt_metal::NOC::NOC_0,
+        .processor = processor,
+        .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}};
+    eth_test_common::set_arch_specific_eth_config(ethernet_config);
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
+        ethernet_config);
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -133,13 +148,14 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
+    distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
+        ethernet_config);
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
@@ -155,15 +171,19 @@ bool eth_direct_sender_receiver_kernels(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
-        t1 = std::thread([&]() { fixture->RunProgram(sender_device, sender_program); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
+        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
-        fixture->RunProgram(sender_device, sender_program, true);
-        fixture->RunProgram(receiver_device, receiver_program, true);
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
+        fixture->RunProgram(sender_mesh_device, sender_workload, true);
+        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
 
-    fixture->FinishCommands(sender_device);
-    fixture->FinishCommands(receiver_device);
+    fixture->FinishCommands(sender_mesh_device);
+    fixture->FinishCommands(receiver_mesh_device);
 
     if (fixture->IsSlowDispatch()) {
         t1.join();
@@ -185,11 +205,13 @@ bool eth_direct_sender_receiver_kernels(
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
-    tt_metal::IDevice* sender_device,
-    tt_metal::IDevice* receiver_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {
+    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
     log_debug(
         tt::LogTest,
         "Running direct send test with sender chip {} core {}, receiver chip {} core {}, sending {} bytes",
@@ -308,10 +330,12 @@ bool send_over_eth(
 
 namespace tt::tt_metal {
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
+TEST_F(N300MeshDeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     auto send_cores = device_0->get_ethernet_sockets(device_1->id());
     auto receiver_cores = device_1->get_ethernet_sockets(device_0->id());
@@ -330,28 +354,30 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
         WORD_SIZE;
 
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE));
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * 256));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * 256));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
+TEST_F(N300MeshDeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     auto send_cores = device_1->get_ethernet_sockets(device_0->id());
     auto receiver_cores = device_0->get_ethernet_sockets(device_1->id());
@@ -370,28 +396,30 @@ TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip1ToChip0) {
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
         WORD_SIZE;
 
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_1, device_0, sender_core_0, receiver_core_0, WORD_SIZE));
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_0, receiver_core_0, WORD_SIZE * 256));
+        mesh_device_1, mesh_device_0, sender_core_0, receiver_core_0, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * 256));
+        mesh_device_1, mesh_device_0, sender_core_1, receiver_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
+        mesh_device_1, mesh_device_0, sender_core_0, receiver_core_0, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
+        mesh_device_1, mesh_device_0, sender_core_1, receiver_core_1, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_1, mesh_device_0, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_1, mesh_device_0, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_1, mesh_device_0, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_1, mesh_device_0, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
+TEST_F(N300MeshDeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     auto send_cores = device_1->get_ethernet_sockets(device_0->id());
     auto receiver_cores = device_0->get_ethernet_sockets(device_1->id());
@@ -410,41 +438,41 @@ TEST_F(N300DeviceFixture, ActiveEthBidirectionalCoreDirectSend) {
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) /
         WORD_SIZE;
 
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE));
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_1, device_0, receiver_core_0, sender_core_0, WORD_SIZE));
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE));
-    ASSERT_TRUE(
-        unit_tests::erisc::direct_send::send_over_eth(device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * 256));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_0, sender_core_0, WORD_SIZE * 256));
+        mesh_device_1, mesh_device_0, receiver_core_0, sender_core_0, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * 256));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * 256));
+        mesh_device_1, mesh_device_0, receiver_core_1, sender_core_1, WORD_SIZE));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_0, sender_core_0, WORD_SIZE * 1024));
+        mesh_device_1, mesh_device_0, receiver_core_0, sender_core_0, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * 1024));
+        mesh_device_1, mesh_device_0, receiver_core_1, sender_core_1, WORD_SIZE * 256));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * 1024));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_0, sender_core_0, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_1, mesh_device_0, receiver_core_0, sender_core_0, WORD_SIZE * 1024));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_0, device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * 1024));
     ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
-        device_1, device_0, receiver_core_1, sender_core_1, WORD_SIZE * MAX_NUM_WORDS));
+        mesh_device_1, mesh_device_0, receiver_core_1, sender_core_1, WORD_SIZE * 1024));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_0, mesh_device_1, sender_core_0, receiver_core_0, WORD_SIZE * MAX_NUM_WORDS));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_1, mesh_device_0, receiver_core_0, sender_core_0, WORD_SIZE * MAX_NUM_WORDS));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_0, mesh_device_1, sender_core_1, receiver_core_1, WORD_SIZE * MAX_NUM_WORDS));
+    ASSERT_TRUE(unit_tests::erisc::direct_send::send_over_eth(
+        mesh_device_1, mesh_device_0, receiver_core_1, sender_core_1, WORD_SIZE * MAX_NUM_WORDS));
 }
 
-TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
+TEST_F(N300MeshDeviceFixture, ActiveEthRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     srand(0);
@@ -476,10 +504,12 @@ TEST_F(N300DeviceFixture, ActiveEthRandomDirectSendTests) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
+TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -495,36 +525,36 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             4 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             256 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             1000 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -533,10 +563,12 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
+TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -552,36 +584,36 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             4 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             256 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             1000 * WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -590,14 +622,16 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     }
 }
 
-TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
+TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const size_t dst_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    for (const auto& sender_device : devices_) {
-        for (const auto& receiver_device : devices_) {
+    for (const auto& sender_mesh_device : devices_) {
+        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        for (const auto& receiver_mesh_device : devices_) {
+            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
@@ -611,36 +645,36 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     continue;
                 }
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
+                    static_cast<MeshDispatchFixture*>(this),
+                    sender_mesh_device,
+                    receiver_mesh_device,
                     WORD_SIZE,
                     src_eth_l1_byte_address,
                     dst_eth_l1_byte_address,
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
+                    static_cast<MeshDispatchFixture*>(this),
+                    sender_mesh_device,
+                    receiver_mesh_device,
                     4 * WORD_SIZE,
                     src_eth_l1_byte_address,
                     dst_eth_l1_byte_address,
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
+                    static_cast<MeshDispatchFixture*>(this),
+                    sender_mesh_device,
+                    receiver_mesh_device,
                     256 * WORD_SIZE,
                     src_eth_l1_byte_address,
                     dst_eth_l1_byte_address,
                     sender_core,
                     receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
+                    static_cast<MeshDispatchFixture*>(this),
+                    sender_mesh_device,
+                    receiver_mesh_device,
                     1000 * WORD_SIZE,
                     src_eth_l1_byte_address,
                     dst_eth_l1_byte_address,
@@ -651,10 +685,11 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     }
 }
 
-TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
+TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -671,18 +706,18 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             WORD_SIZE,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -695,18 +730,18 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             WORD_SIZE * 256,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             WORD_SIZE * 256,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -719,18 +754,18 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             WORD_SIZE * 1024,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             WORD_SIZE * 1024,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -743,18 +778,18 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_0,
-            device_1,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_0,
+            mesh_device_1,
             WORD_SIZE * MAX_NUM_WORDS,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
-            device_1,
-            device_0,
+            static_cast<MeshDispatchFixture*>(this),
+            mesh_device_1,
+            mesh_device_0,
             WORD_SIZE * MAX_NUM_WORDS,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
@@ -763,10 +798,11 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     }
 }
 
-TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
+TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -780,9 +816,9 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                static_cast<DispatchFixture*>(this),
-                device_0,
-                device_1,
+                static_cast<MeshDispatchFixture*>(this),
+                mesh_device_0,
+                mesh_device_1,
                 WORD_SIZE,
                 src_eth_l1_byte_address + WORD_SIZE * i,
                 dst_eth_l1_byte_address + WORD_SIZE * i,
@@ -791,9 +827,9 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
         }
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                static_cast<DispatchFixture*>(this),
-                device_1,
-                device_0,
+                static_cast<MeshDispatchFixture*>(this),
+                mesh_device_1,
+                mesh_device_0,
                 WORD_SIZE,
                 src_eth_l1_byte_address + WORD_SIZE * i,
                 dst_eth_l1_byte_address + WORD_SIZE * i,
@@ -803,11 +839,13 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     }
 }
 
-TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
+TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     srand(0);
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
@@ -831,8 +869,11 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         const auto& send_chip = devices_.at(std::get<0>(it->first));
         CoreCoord sender_core = std::get<1>(it->first);
 
+        // gotcha: devices_ are mesh devices. Mesh device IDs are not the same as actual device IDs needed in the
+        // cluster
+        auto* send_device = send_chip->get_devices()[0];
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                send_chip->id(), sender_core)) {
+                send_device->id(), sender_core)) {
             continue;
         }
 
@@ -851,10 +892,10 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             erisc_unreserved_base_addr, max_l1_loading_addr);
 
         int max_words = (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / WORD_SIZE;
-        int num_words = rand() % max_words + 1;
+        int num_words = (rand() % max_words) + 1;
 
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-            static_cast<DispatchFixture*>(this),
+            static_cast<MeshDispatchFixture*>(this),
             send_chip,
             receiver_chip,
             WORD_SIZE * num_words,
@@ -864,10 +905,12 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             receiver_core));
     }
 }
-TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
+TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
     srand(0);
-    const auto& device_0 = devices_.at(0);
-    const auto& device_1 = devices_.at(1);
+    const auto& mesh_device_0 = devices_.at(0);
+    const auto& mesh_device_1 = devices_.at(1);
+    auto* const device_0 = mesh_device_0->get_devices()[0];
+    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
@@ -908,30 +951,38 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
 
             int max_words =
                 (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / num_bytes_per_send;
-            int num_words = rand() % max_words + 1;
+            int num_words = (rand() % max_words) + 1;
 
-            ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                static_cast<DispatchFixture*>(this),
-                send_chip,
-                receiver_chip,
-                num_bytes_per_send * num_words,
-                src_eth_l1_byte_address,
-                dst_eth_l1_byte_address,
-                sender_core,
-                receiver_core,
-                num_bytes_per_send));
+            const auto num_eriscs =
+                MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
+                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<MeshDispatchFixture*>(this),
+                    send_chip,
+                    receiver_chip,
+                    num_bytes_per_send * num_words,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core,
+                    static_cast<DataMovementProcessor>(erisc_idx),
+                    num_bytes_per_send));
+            }
         }
     }
 }
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
+TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const size_t dst_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    for (const auto& sender_device : devices_) {
-        for (const auto& receiver_device : devices_) {
+    const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    for (const auto& sender_mesh_device : devices_) {
+        auto* const sender_device = sender_mesh_device->get_devices()[0];
+        for (const auto& receiver_mesh_device : devices_) {
+            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
@@ -944,42 +995,49 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
-                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
-                    WORD_SIZE,
-                    src_eth_l1_byte_address,
-                    dst_eth_l1_byte_address,
-                    sender_core,
-                    receiver_core));
-                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
-                    4 * WORD_SIZE,
-                    src_eth_l1_byte_address,
-                    dst_eth_l1_byte_address,
-                    sender_core,
-                    receiver_core));
-                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
-                    256 * WORD_SIZE,
-                    src_eth_l1_byte_address,
-                    dst_eth_l1_byte_address,
-                    sender_core,
-                    receiver_core));
-                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
-                    1000 * WORD_SIZE,
-                    src_eth_l1_byte_address,
-                    dst_eth_l1_byte_address,
-                    sender_core,
-                    receiver_core));
+                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
+                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
+                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                        static_cast<MeshDispatchFixture*>(this),
+                        sender_mesh_device,
+                        receiver_mesh_device,
+                        WORD_SIZE,
+                        src_eth_l1_byte_address,
+                        dst_eth_l1_byte_address,
+                        sender_core,
+                        receiver_core,
+                        processor));
+                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                        static_cast<MeshDispatchFixture*>(this),
+                        sender_mesh_device,
+                        receiver_mesh_device,
+                        4 * WORD_SIZE,
+                        src_eth_l1_byte_address,
+                        dst_eth_l1_byte_address,
+                        sender_core,
+                        receiver_core,
+                        processor));
+                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                        static_cast<MeshDispatchFixture*>(this),
+                        sender_mesh_device,
+                        receiver_mesh_device,
+                        256 * WORD_SIZE,
+                        src_eth_l1_byte_address,
+                        dst_eth_l1_byte_address,
+                        sender_core,
+                        receiver_core,
+                        processor));
+                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                        static_cast<MeshDispatchFixture*>(this),
+                        sender_mesh_device,
+                        receiver_mesh_device,
+                        1000 * WORD_SIZE,
+                        src_eth_l1_byte_address,
+                        dst_eth_l1_byte_address,
+                        sender_core,
+                        receiver_core,
+                        processor));
+                }
             }
         }
     }

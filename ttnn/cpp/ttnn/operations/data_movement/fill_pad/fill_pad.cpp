@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad.hpp"
-#include "device/fill_pad_op.hpp"
+#include "device/fill_pad_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -14,10 +13,7 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillPadOperation::invoke(
-    QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    float fill_value,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor, float fill_value, const std::optional<ttnn::MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -43,14 +39,10 @@ ttnn::Tensor FillPadOperation::invoke(
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
         auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
 
-        reshaped_tensor =
-            tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
-                .at(0);
+        reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
-    auto output_tensor = tt::tt_metal::operation::run(
-                             FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}, queue_id)
-                             .at(0);
+    auto output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
     }

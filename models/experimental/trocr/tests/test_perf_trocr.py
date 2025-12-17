@@ -9,9 +9,7 @@ from loguru import logger
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
+from models.common.utility_functions import (
     Profiler,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -22,7 +20,6 @@ BATCH_SIZE = 1
 
 def test_perf(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -42,8 +39,6 @@ def test_perf(expected_inference_time, expected_compile_time, device):
         profiler.start(first_key)
         tt_output = tt_model.generate(pixel_values)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model.generate(pixel_values)

@@ -6,6 +6,7 @@ set(SOURCES
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
+    core/random_tests.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -18,28 +19,30 @@ set(SOURCES
     ttnn_fixed/matmuls_test.cpp
     ttnn_fixed/reduce_ops_test.cpp
     ttnn_fixed/dropout_op_test.cpp
+    ttnn_fixed/slice_op_test.cpp
     autograd/autograd_tensor.cpp
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
     schedulers/schedulers_test.cpp
-    tokenizers/bpe_tokenizer_test.cpp
     tokenizers/char_tokenizer_trainer_test.cpp
     tokenizers/char_tokenizer_test.cpp
     3rd_party/xtensor_test.cpp
-    3rd_party/tokenizers_test.cpp
     datasets/in_memory_token_dataset_test.cpp
     datasets/random_split_test.cpp
     datasets/utils_test.cpp
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/sgd_fused_test.cpp
+    optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
-    serialization/msgpack_serializer_test.cpp
+    serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
+    serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layer_norm_op_test.cpp
+    ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -50,6 +53,10 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
+    ops/sdpa_fw_op_test.cpp
+    ops/layernorm_bw_fused_op_test.cpp
+    ops/layernorm_fw_fused_op_test.cpp
+    ops/swiglu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -78,6 +85,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")

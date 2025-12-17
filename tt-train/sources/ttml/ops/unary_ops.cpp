@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,16 +38,13 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::gelu(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
         static const std::string approx_mode = "none";
-        auto res = ttnn::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode, mem_config);
-        assert(res.size() == 1U && "Gelu backward should return only one gradient");
-        tensor->add_grad(res.front().value());
+        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
+        tensor->add_grad(dL_dt);
     };
 
     std::vector<autograd::NodeId> links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
     return out;
 }
 
@@ -111,7 +108,8 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
 
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
     auto shape = ttnn::Shape({1, 1, 1, 1});
-    autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
+    auto out =
+        autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), tensor->get_value().memory_config()));
     ttnn::moreh_mean(
         tensor->get_value(),
         std::nullopt,

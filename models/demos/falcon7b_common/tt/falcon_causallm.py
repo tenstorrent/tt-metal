@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b_common.tt.falcon_model import TtFalconModelShared
@@ -15,7 +16,6 @@ from models.demos.falcon7b_common.tt.model_utils import (
     get_falcon_default_core_grid,
     get_weights_cached,
 )
-from models.utility_functions import is_grayskull, is_wormhole_b0
 from ttnn import ReplicateTensorToMesh
 
 
@@ -37,12 +37,7 @@ def falcon_lm_head_matmul(
             compute_kernel_config=get_default_hifi2_kernel_config(),
         )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,

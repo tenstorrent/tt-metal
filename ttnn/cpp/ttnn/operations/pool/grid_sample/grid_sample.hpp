@@ -1,14 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "grid_sample_prepare_grid.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace grid_sample {
+
+namespace operations::grid_sample {
 
 struct ExecuteGridSample {
     /**
@@ -22,6 +23,7 @@ struct ExecuteGridSample {
      *   grid: Sampling grid of shape (N, H_out, W_out, 2) with coordinates in [-1, 1]
      *   mode: Interpolation mode, currently only "bilinear" is supported
      *   padding_mode: How to handle out-of-bounds coordinates, currently only "zeros" is supported
+     *   align_corners: Whether to align corners when mapping normalized coordinates to pixel indices
      *   use_precomputed_grid: Whether to use precomputed grid coordinates, currently only false is supported
      *   memory_config: Memory configuration for the output tensor
      *
@@ -33,15 +35,19 @@ struct ExecuteGridSample {
         const ttnn::Tensor& grid,
         const std::string& mode = "bilinear",
         const std::string& padding_mode = "zeros",
+        bool align_corners = false,
         bool use_precomputed_grid = false,
+        bool batch_output_channels = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace grid_sample
-}  // namespace operations
+}  // namespace operations::grid_sample
 
 // Register the operation
 constexpr auto grid_sample =
     ttnn::register_operation<"ttnn::grid_sample", ttnn::operations::grid_sample::ExecuteGridSample>();
+
+// Import prepare function to main ttnn namespace
+using ttnn::operations::grid_sample::prepare_grid_sample_grid;
 
 }  // namespace ttnn

@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 35
       docker-image:
         required: true
         type: string
@@ -21,6 +21,14 @@ on:
         type: string
       enable-watcher:
         description: 'Enable watcher'
+        default: false
+        type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
         default: false
         type: boolean
 
@@ -37,14 +45,11 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true
-          || inputs.runner-label == 'N150'
-          || inputs.runner-label == 'N300')
-        && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -58,12 +63,20 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: ${{ !inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
@@ -73,11 +86,10 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
           prefix: "test_reports_"

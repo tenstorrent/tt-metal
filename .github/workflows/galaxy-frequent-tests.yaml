@@ -1,7 +1,23 @@
-name: "Galaxy frequent tests"
+name: "(Galaxy) frequent tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3
+          - resnet50
+          - unit
+          - sd35
+          - wan22
+          - mochi
+          - flux1
+          - motif
   schedule:
     - cron: "0 3 * * *"  # Every day at 3:00 UTC
 
@@ -14,12 +30,13 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  tg-frequent-tests:
+  galaxy-frequent-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-frequent-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
       topology: topology-6u

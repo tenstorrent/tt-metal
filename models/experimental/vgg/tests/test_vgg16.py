@@ -8,10 +8,10 @@ import ttnn
 
 from torchvision import models
 from loguru import logger
-from models.utility_functions import comp_allclose
+from models.common.utility_functions import comp_allclose
 
 from models.experimental.vgg.tt.vgg import vgg16
-from models.utility_functions import comp_pcc, torch_to_tt_tensor, unpad_from_zero
+from models.common.utility_functions import comp_pcc, torch_to_tt_tensor, unpad_from_zero
 
 
 _batch_size = 1

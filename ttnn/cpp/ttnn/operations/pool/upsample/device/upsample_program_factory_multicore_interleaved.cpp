@@ -8,20 +8,26 @@
 
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
-#include "upsample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 
-namespace ttnn::operations::upsample {
+namespace ttnn::operations::pool::upsample::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
-    const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
+UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreInterleavedProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input = tensor_args.input_tensor;
+    auto& output = output_tensor;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+
     tt::tt_metal::Program program{};
 
     const bool is_tiled_layout = (input.layout() == tt::tt_metal::Layout::TILE);
@@ -44,8 +50,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
-        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
         const uint32_t input_tensor_width = input.padded_shape()[-1];
@@ -106,21 +112,15 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         output_cb_index = src0_cb_index;
     }
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
 
-    // Reader compile time arguments
-    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_unit_size);
-    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_unit_size) : 0;
-
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src_is_dram,
         (std::uint32_t)aligned_input_unit_size,
-        (std::uint32_t)src_size_is_power_of_two,
-        (std::uint32_t)src_log2_size};
+    };
+
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     const tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -132,15 +132,10 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     // Writer compile time arguments
 
     const int32_t writer_unit_size = output.padded_shape()[-1] * output.element_size();
-    const bool dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(writer_unit_size);
-    const uint32_t dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(writer_unit_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)writer_unit_size,
-        (std::uint32_t)dst_size_is_power_of_two,
-        (std::uint32_t)dst_log2_size,
         (std::uint32_t)scale_factor_h,
         (std::uint32_t)scale_factor_w,
         (std::uint32_t)output_shape[1],
@@ -164,6 +159,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         writer_compile_time_args.push_back(num_units_per_output_stick);
     }
 
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -172,8 +169,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     // Compute kernel (only for tiled layout)
-    tt::tt_metal::KernelHandle compute_kernel_group1_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_group2_id = 0;
     if (is_tiled_layout) {
         const uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
@@ -187,7 +182,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group1_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_1,
@@ -203,7 +198,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group2_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_2,
@@ -252,29 +247,41 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         blocks_processed += blocks_per_core;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y](
-                                              const void* operation,
-                                              tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto src_buffer = input_tensors.at(0).buffer();
-        const auto dst_buffer = output_tensors.at(0).buffer();
-
-        for (uint32_t i = 0; i < num_cores; i++) {
-            const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-            }
-            {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
+            .num_cores = num_cores,
+            .num_cores_y = num_cores_y,
+        }};
 }
 
-}  // namespace ttnn::operations::upsample
+void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    const auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    const auto& num_cores = cached_program.shared_variables.num_cores;
+    const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+
+    auto* const src_buffer = tensor_args.input_tensor.buffer();
+    auto* const dst_buffer = output_tensor.buffer();
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+        }
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::pool::upsample::program

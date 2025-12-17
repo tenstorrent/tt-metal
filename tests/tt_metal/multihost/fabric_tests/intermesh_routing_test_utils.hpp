@@ -8,13 +8,10 @@
 #include <map>
 
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 
 void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank recv_host_rank);
 
@@ -31,10 +28,7 @@ void InterMeshLineMcast(
     uint32_t sender_rank = 0,
     uint32_t receiver_rank = 1);
 
-std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords, uint32_t local_mesh_id);
+std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords, uint32_t local_mesh_id);
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost_utils

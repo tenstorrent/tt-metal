@@ -9,3 +9,4 @@ Programming Examples
    matmul_single_core
    matmul_multi_core
    matmul_multi_core_optimized
+   custom_sfpi

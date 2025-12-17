@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     auto rms_a = rmsnorm_fw_result[1].value();
     auto out = autograd::create_tensor(rmsnorm_fw_result[0].value());
 
-    autograd::GradFunction grad = [B, S, C, tensor, gamma, out, rms_a, epsilon]() {
+    autograd::GradFunction grad = [tensor, gamma, out, rms_a]() {
         auto dL_dout = out->get_grad();
 
         auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout);
@@ -78,13 +78,13 @@ autograd::TensorPtr rmsnorm_composite(
     // one gain parameter per channel
     assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
 
-    auto device = &autograd::ctx().get_device();
+    [[maybe_unused]] auto device = &autograd::ctx().get_device();
 
     ttnn::Tensor squares = ttnn::square(tensor->get_value());  // [B,1,S,C] -> [B,1,S,C]
 
     ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true);  // [B,1,S,1]
 
-    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
     ttnn::Tensor seq_means_of_squares_plus_epsilon = ttnn::add(
         seq_means_of_squares,
@@ -120,11 +120,12 @@ autograd::TensorPtr rmsnorm_composite(
         none,
         none,
         none,
-        false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+        false,
+        /*fast_and_approximate*/ true);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
 
     auto out = autograd::create_tensor(out_tensor);
 
-    autograd::GradFunction grad = [B, S, C, tensor, gamma, out, rms_a, device]() {
+    autograd::GradFunction grad = [tensor, gamma, out, rms_a]() {
         auto a = tensor->get_value();  // [B,1,S,C]
         auto g = gamma->get_value();   // [1,1,1,C]
 
@@ -134,7 +135,7 @@ autograd::TensorPtr rmsnorm_composite(
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
 
-        constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+        constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
         auto scaled_gain = ttnn::divide(
             g,

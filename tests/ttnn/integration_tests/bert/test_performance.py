@@ -20,10 +20,8 @@ from models.experimental.functional_common.attention_mask_functions import get_e
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -72,8 +70,6 @@ def get_expected_times(bert):
 # Removed ttnn_bert from bert versions, as I'm unsure if we actually care about non-optimized versions.
 @pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_optimized_sharded_bert])
 def test_performance(device, model_name, sequence_size, bert):
-    disable_persistent_kernel_cache()
-
     num_iterations = 10
     if bert == ttnn_bert:
         num_iterations = 2
@@ -129,7 +125,6 @@ def test_performance(device, model_name, sequence_size, bert):
     ttnn.synchronize_device(device)
     end = time.time()
     inference_and_compile_time = end - start
-    enable_persistent_kernel_cache()
 
     start = time.time()
     for _ in range(num_iterations):

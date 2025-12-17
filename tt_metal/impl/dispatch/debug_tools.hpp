@@ -7,14 +7,10 @@
 #include <fstream>
 #include <string>
 
-#include "command_queue_interface.hpp"
-
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 

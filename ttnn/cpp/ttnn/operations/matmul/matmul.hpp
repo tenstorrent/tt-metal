@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <variant>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -17,8 +17,9 @@ namespace ttnn {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace operations {
-namespace matmul {
+using Activation = std::variant<std::string, UnaryWithParam>;
+
+namespace operations::matmul {
 
 namespace detail {
 
@@ -26,14 +27,13 @@ bool is_input_batched(const ttnn::Shape& logical_shape);
 
 }  // namespace detail
 
-std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
+std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation);
 
 ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
-    const uint8_t& queue_id,
+    struct Matmul& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {
@@ -45,7 +45,7 @@ struct MatmulOperation {
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
+        const std::optional<const Activation>& activation = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
@@ -63,7 +63,7 @@ struct MatmulBatchedWeightsOperation {
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
+        const std::optional<const Activation>& activation = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
@@ -82,7 +82,7 @@ struct LinearOperation {
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
+        const std::optional<const Activation>& activation = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
@@ -106,8 +106,7 @@ struct AddmmOperation {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        QueueId queue_id = DefaultQueueId);
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 struct SparseMatmulOperation {
@@ -115,20 +114,22 @@ struct SparseMatmulOperation {
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const Tensor& sparsity,
-        uint32_t nnz,
+        std::optional<uint32_t> nnz,
+        bool is_input_a_sparse = false,
+        bool is_input_b_sparse = true,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
-}  // namespace matmul
-}  // namespace operations
+}  // namespace operations::matmul
+
 constexpr auto matmul = ttnn::register_operation<"ttnn::matmul", operations::matmul::MatmulOperation>();
 constexpr auto linear = ttnn::register_operation<"ttnn::linear", operations::matmul::LinearOperation>();
 constexpr auto matmul_batched_weights =

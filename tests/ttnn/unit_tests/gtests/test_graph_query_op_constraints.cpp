@@ -36,7 +36,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -45,18 +44,14 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 namespace detail {
 static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorMemoryLayout& tensor_memory_layout) {
@@ -202,9 +197,9 @@ class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     // TODO: Enable BH when ready (#25088)
-    if (board_type != BoardType::N300) {
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -218,6 +213,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -226,8 +222,8 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -236,11 +232,16 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sqrt, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            ttnn::sqrt,
+            device,
+            input_spec,
+            /*fast_and_approximate_mode=*/false,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -249,8 +250,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -272,6 +273,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -280,8 +282,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
 
 TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -299,6 +301,7 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -307,8 +310,8 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
 
 TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -322,6 +325,7 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -330,8 +334,8 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sin) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -345,6 +349,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -353,8 +358,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
 
 TEST_P(EltwiseUnaryOpIfTest, Cos) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -368,6 +373,7 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
@@ -407,8 +413,8 @@ class SoftmaxOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(SoftmaxOpIfTest, Softmax) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& dim_arg = std::get<int>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -424,6 +430,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
@@ -461,8 +468,8 @@ class EltwiseBinaryOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -470,7 +477,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -488,6 +495,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -495,8 +503,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
 TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
         GTEST_SKIP();
     }
 
@@ -504,7 +512,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::subtract,
@@ -522,6 +530,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -529,8 +538,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -538,7 +547,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::multiply,
@@ -556,6 +565,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -563,8 +573,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -572,7 +582,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::maximum,
@@ -590,6 +600,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -597,8 +608,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -606,7 +617,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::minimum,
@@ -624,6 +635,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
@@ -688,8 +700,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
     const auto& input_spec_b = std::get<1>(GetParam());
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
         GTEST_SKIP();
     }
 
@@ -734,6 +746,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
@@ -777,14 +790,19 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
-TEST_F(Conv2dOpIfTest, Conv2d) {
+class Conv2dOpIfTest
+    : public ttnn::TTNNFixtureWithDevice,
+      public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
+
+TEST_P(Conv2dOpIfTest, Conv2d) {
+    const auto& conv2d_config = GetParam();
+
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+            ttnn::L1_MEMORY_CONFIG));
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
@@ -808,8 +826,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
 
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-
     // Run the test
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
@@ -831,20 +847,25 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             groups,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
+            conv2d_config,
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
+        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 200000 : 150000;
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
+        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+INSTANTIATE_TEST_SUITE_P(
+    Conv2dConfigVariations,
+    Conv2dOpIfTest,
+    ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+
+}  // namespace ttnn::operations::binary::test

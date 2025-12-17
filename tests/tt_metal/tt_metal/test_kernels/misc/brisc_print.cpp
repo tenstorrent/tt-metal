@@ -4,6 +4,8 @@
 
 #include "dataflow_api.h"
 #include "debug/dprint_test_common.h"
+#include "ckernel.h"
+#include "ckernel_defs.h"
 
 /*
  * Test printing from a kernel running on BRISC.
@@ -18,9 +20,14 @@ void kernel_main() {
     for (uint16_t idx = 0; idx < 32 * 32; idx++) {
         ptr[idx] = BF16(idx + bfloat16_base);
     }
+
+    // Let the other threads (ncrisc) know we're done writing to CB
     cb_push_back(cb_id_in0, 1);
 
-    DPRINT_DATA0(DPRINT << "Test Debug Print: Data0" << ENDL(); print_test_data();
-                 // Let the next core (PACK) know to start printing.
-                 DPRINT << RAISE{1};);
+    // Let the trisc threads know that they can proceed
+    mailbox_write(ckernel::ThreadId::MathThreadId, 1);
+    mailbox_write(ckernel::ThreadId::PackThreadId, 1);
+    mailbox_write(ckernel::ThreadId::UnpackThreadId, 1);
+
+    DPRINT_DATA0(DPRINT << "Test Debug Print: Data0" << ENDL(); print_test_data(););
 }

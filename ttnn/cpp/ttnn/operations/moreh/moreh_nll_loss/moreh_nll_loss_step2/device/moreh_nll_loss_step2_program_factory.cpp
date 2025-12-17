@@ -73,7 +73,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -88,17 +95,17 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(
@@ -247,7 +254,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -262,17 +276,17 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(
@@ -434,7 +448,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                             // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -449,17 +470,17 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(

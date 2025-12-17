@@ -13,9 +13,7 @@ from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_demo_generate_reference_output(
-    max_seq_len, model_location_generator, get_tt_cache_path, t3k_mesh_device, is_ci_env
-):
+def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, t3k_mesh_device, is_ci_env):
     if is_ci_env:
         pytest.skip("Skip generating reference output in CI")
 
@@ -29,7 +27,6 @@ def test_demo_generate_reference_output(
         batch_size=32,
         num_layers=model_config_entries["num_hidden_layers"],
         max_seq_len=max_seq_len,
-        model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
         mesh_device=t3k_mesh_device,
         prefill_on_host=False,
@@ -44,12 +41,8 @@ def test_demo_generate_reference_output(
 
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_demo(
-    max_seq_len,
-    model_location_generator,
-    get_tt_cache_path,
-    t3k_mesh_device,
-):
+@pytest.mark.parametrize("perf_mode", (True, False))
+def test_demo(max_seq_len, get_tt_cache_path, t3k_mesh_device, perf_mode):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
 
     generated_text, measurements = run_falcon_demo_kv(
@@ -60,15 +53,15 @@ def test_demo(
         batch_size=32,
         num_layers=model_config_entries["num_hidden_layers"],
         max_seq_len=max_seq_len,
-        model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
         mesh_device=t3k_mesh_device,
         prefill_on_host=False,
-        perf_mode=False,
+        perf_mode=perf_mode,
         greedy_sampling=True,
     )
 
-    # Validate generated_text against expected output
-    with open("models/demos/t3000/falcon40b/demo/expected_output_data.json", "r") as f:
-        expected_output_data = json.load(f)
-        assert expected_output_data == generated_text
+    if not perf_mode:
+        # Validate generated_text against expected output
+        with open("models/demos/t3000/falcon40b/demo/expected_output_data.json", "r") as f:
+            expected_output_data = json.load(f)
+            assert expected_output_data == generated_text

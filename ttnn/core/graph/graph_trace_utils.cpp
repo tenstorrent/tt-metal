@@ -4,6 +4,7 @@
 
 #include "ttnn/graph/graph_trace_utils.hpp"
 
+#include <cstdint>
 #include <cstdlib>  // std::strtoul
 #include <string>
 
@@ -11,7 +12,8 @@
 
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include <tt-metalium/assert.hpp>
+#include "ttnn/graph/levelized_graph.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::graph {
 
@@ -93,7 +95,6 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
     return peak_memory_usage;
 }
 
-// Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace) {
     bool first_begin_found = false;
     bool last_end_found = false;
@@ -153,6 +154,11 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     return op_calls;
 }
 
+nlohmann::json extract_levelized_graph(const nlohmann::json& trace, size_t max_level) {
+    LevelizedGraph levelized_graph(trace, max_level);
+    return levelized_graph.to_json();
+}
+
 std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
     std::vector<OperationInfo> operations;
     size_t i = 0;
@@ -160,7 +166,7 @@ std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
         const auto& v = trace[i];
         i++;
         OperationInfo info;
-        if (v[kArguments].size() > 0) {
+        if (!v[kArguments].empty()) {
             info.operation_name = v[kParams][kName];
             info.arguments = v[kArguments];
             operations.push_back(info);
@@ -241,7 +247,6 @@ size_t worst_case_per_core_allocation(size_t total_size, size_t page_size, size_
 }
 }  // namespace detail
 
-// This function returns the worst-case memory allocation per core for the output L1 buffer. Throws for DRAM buffers.
 uint32_t extract_l1_output_buffer_allocation_size_per_core(
     const Tensor& output_tensor, size_t interleaved_storage_cores) {
     tt::tt_metal::Buffer* buffer = output_tensor.buffer();
@@ -256,47 +261,41 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(
     return detail::worst_case_per_core_allocation(output_buffer_allocate_total_size, page_size, num_cores);
 }
 
-// This function returns the worst-case memory allocation per core for the peak L1 usage. Ignores DRAM buffers.
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(
     const nlohmann::json& trace, size_t interleaved_storage_cores) {
-    uint32_t current_size_per_core = 0;
-    uint32_t peak_size_per_core = 0;
-
-    for (const auto& node : trace) {
-        // process only buffer allocation and deallocation nodes
-        if (node.at(kNodeType) != kNodeBufferAllocate && node.at(kNodeType) != kNodeBufferDeallocate) {
-            continue;
-        }
-
-        // skip dram buffer allocation/deallocation
-        if (node.at(kParams).at(kType) == "DRAM") {
-            continue;
-        }
-
-        uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
-        uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
-        if (num_of_cores == 0) {
-            num_of_cores = interleaved_storage_cores;
-        }
-
-        if (node.at(kNodeType) == kNodeBufferAllocate) {
-            current_size_per_core += detail::worst_case_per_core_allocation(
-                std::stoi(node.at(kParams).at(kSize).get<std::string>()), page_size, num_of_cores);
-            peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
-        } else  // kNodeBufferDeallocate
-        {
-            current_size_per_core -= detail::worst_case_per_core_allocation(
-                std::stoi(node.at(kParams).at(kSize).get<std::string>()), page_size, num_of_cores);
-        }
-    }
-
-    return peak_size_per_core;
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+    return l1_buffers_peak_per_core;
 }
 
-// returns peak size of circular buffer allocations for a given trace
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace) {
-    uint32_t current_size_per_core = 0;
-    uint32_t peak_size_per_core = 0;
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, 1);
+    return cb_peak_size_per_core;
+}
+
+// calculate the size of buffer allocated/deallocated on each core
+static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
+    uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
+    uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
+    if (num_of_cores == 0) {
+        num_of_cores = interleaved_storage_cores;
+    }
+
+    uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
+    return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
+}
+
+uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores) {
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+    return peak_memory_usage_per_core;
+}
+
+PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores) {
+    size_t current_cb = 0, peak_cb = 0;
+    size_t current_l1 = 0, peak_l1 = 0;
+    size_t current_total = 0, peak_total = 0;
 
     size_t counter_expected = 0;
     for (const auto& node : trace) {
@@ -307,23 +306,35 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
             TT_THROW("Graph trace counter/execution out of order");
         }
 
-        // process only circular buffer allocation and deallocation nodes
-        if (node.at(kNodeType) != kNodeCBAllocate && node.at(kNodeType) != kNodeCBDeallocateAll) {
-            continue;
-        }
-
         if (node.at(kNodeType) == kNodeCBAllocate) {
             bool is_globally_allocated = std::stoi(node.at(kParams).at(kGloballyAllocated).get<std::string>()) == 1;
             if (!is_globally_allocated) {
-                current_size_per_core += std::stoi(node.at(kParams).at(kSize).get<std::string>());
-                peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
+                uint32_t alloc_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
+                current_cb += alloc_size;
+                peak_cb = std::max(peak_cb, current_cb);
+                current_total += alloc_size;
+                peak_total = std::max(peak_total, current_total);
             }
-        } else {  // kNodeCBDeallocateAll
-            current_size_per_core = 0;
+        } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
+            current_total -= current_cb;
+            current_cb = 0;
+        } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
+            if (node.at(kParams).at(kType) == "DRAM") {
+                continue;
+            }
+            size_t alloc_size = calculate_buffer_allocation_size(node, interleaved_storage_cores);
+            if (node.at(kNodeType) == kNodeBufferAllocate) {
+                current_l1 += alloc_size;
+                peak_l1 = std::max(peak_l1, current_l1);
+                current_total += alloc_size;
+                peak_total = std::max(peak_total, current_total);
+            } else {  // kNodeBufferDeallocate
+                current_l1 -= alloc_size;
+                current_total -= alloc_size;
+            }
         }
     }
-
-    return peak_size_per_core;
+    return PeakMemoryUsagePerCore{.peak_cb = peak_cb, .peak_l1 = peak_l1, .peak_total = peak_total};
 }
 
 }  // namespace ttnn::graph

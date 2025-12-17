@@ -155,16 +155,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
-        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
-
-    set_packer_l1_offset(pack_dst_format[output_id]);
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const uint face_dim = face_r_dim * FACE_C_DIM;
-    const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+        pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, true);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -228,16 +219,7 @@ inline void llk_pack_untilize_init(
     const std::uint32_t output_id = get_output_id(output);
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        pack_dst_format[output_id], face_r_dim, num_faces);
-
-    // Pack row by row
-    if constexpr (diagonal) {
-        TT_SETADCXX(p_setadc::PAC, 1 - 1, 0x0);
-    } else if constexpr (narrow_row) {
-        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
-    } else {
-        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    }
+        pack_dst_format[output_id], face_r_dim, num_faces, true);
 }
 
 template <
@@ -245,14 +227,15 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    uint32_t tile_dst_ct_offset = 0>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces = 4,
     const std::uint32_t block_c_index = 0,
-    const std::uint32_t tile_dst_offset = 0) {
+    const std::uint32_t tile_dst_rt_offset = 0) {
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -262,12 +245,12 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,
             num_faces,
-            block_rt * block_ct_dim + tile_dst_offset);
+            block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

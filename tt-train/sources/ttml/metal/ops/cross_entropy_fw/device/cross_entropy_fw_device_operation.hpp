@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,10 @@
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
 struct CrossEntropyForwardDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::cross_entropy_fw::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::cross_entropy_fw::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::cross_entropy_fw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::cross_entropy_fw::device::tensor_return_value_t;
     using program_factory_t = std::variant<CrossEntropyForwardProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

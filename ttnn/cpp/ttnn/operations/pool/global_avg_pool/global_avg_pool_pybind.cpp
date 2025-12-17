@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ void bind_global_avg_pool2d(py::module& module) {
         Applies {0} to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
 
         .. math::
-            {0}(\\mathrm{{input\\_tensor}}_i)
+            global\_avg\_pool(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor. Typically of shape (batch_size, channels, height, width).
@@ -34,13 +34,6 @@ void bind_global_avg_pool2d(py::module& module) {
 
         Returns:
             ttnn.Tensor: the output tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
-
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), device=device)
-            >>> output = {1}(tensor)
-
-
         )doc",
 
         ttnn::global_avg_pool2d.base_name(),

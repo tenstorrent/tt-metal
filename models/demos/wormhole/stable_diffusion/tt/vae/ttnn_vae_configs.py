@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,45 +32,6 @@ UPBLOCK_RESNET_NORM_NUM_BLOCKS = [
     ],
 ]
 
-# each resnet block has two different conv layers
-# each connv layer has in and out channel split factor
-# (conv1_in_ch_split_factor, conv2_in_ch_split_factor), (conv2_in_ch_split_factor, conv2_out_ch_split_factor)
-
-MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS = [
-    ((1, 1), (1, 1)),  # resnet 0
-    ((1, 1), (1, 1)),  # resnet 1
-]
-UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS = [
-    [
-        ((1, 1), (1, 1)),  # upblock 0, resnet 0
-        ((1, 1), (1, 1)),  # upblock 0, resnet 1
-        ((1, 1), (1, 1)),  # upblock 0, resnet 2
-    ],
-    [
-        ((1, 1), (1, 1)),  # upblock 1, resnet 0
-        ((1, 1), (1, 1)),  # upblock 1, resnet 1
-        ((1, 1), (1, 1)),  # upblock 1, resnet 2
-    ],
-    [
-        ((2, 1), (2, 2)),  # upblock 2, resnet 0
-        ((1, 1), (1, 1)),  # upblock 2, resnet 1
-        ((1, 1), (1, 1)),  # upblock 2, resnet 2
-    ],
-    [
-        ((4, 2), (4, 2)),  # upblock 3, resnet 0
-        ((2, 2), (4, 2)),  # upblock 3, resnet 1
-        ((2, 2), (4, 2)),  # upblock 3, resnet 2
-    ],
-]
-
-UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS = [
-    (1, 1),  # upblock 0
-    (2, 2),  # upblock 1
-    (4, 4),  # upblock 2
-    (1, 1),  # upblock 3 (no upsample here)
-]
-
-
 GROUPNORM_EPSILON = 1e-6
 GROUPNORM_GROUPS = 32
 GROUPNORM_DECODER_NUM_BLOCKS = 32
@@ -79,7 +40,6 @@ GROUPNORM_DECODER_NUM_BLOCKS = 32
 def get_default_conv_config():
     return ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        activation="",
         deallocate_activation=True,
     )
 

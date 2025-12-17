@@ -14,15 +14,12 @@
 #include <random>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 // System Types currently supported for testing
-enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX };
+enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
 
 // Socket Test Variants
 enum class TestVariant { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
@@ -50,34 +47,31 @@ struct SocketTestConfig {
 };
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

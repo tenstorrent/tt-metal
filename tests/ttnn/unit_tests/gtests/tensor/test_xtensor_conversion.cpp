@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -33,11 +32,11 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Eq;
-using ::ttnn::experimental::xtensor::from_xtensor;
-using ::ttnn::experimental::xtensor::get_shape_from_xarray;
-using ::ttnn::experimental::xtensor::span_to_xtensor_view;
-using ::ttnn::experimental::xtensor::to_xtensor;
-using ::ttnn::experimental::xtensor::xtensor_to_span;
+using ::tt::tt_metal::experimental::xtensor::from_xtensor;
+using ::tt::tt_metal::experimental::xtensor::get_shape_from_xarray;
+using ::tt::tt_metal::experimental::xtensor::span_to_xtensor_view;
+using ::tt::tt_metal::experimental::xtensor::to_xtensor;
+using ::tt::tt_metal::experimental::xtensor::xtensor_to_span;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
     return TensorSpec(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,10 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks joint_sdpa(
     uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
         // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
         qk_out_subblock_w = qk_out_subblock_w / 2;
         qk_out_subblock_h = 2;
@@ -285,6 +285,14 @@ operation::ProgramWithCallbacks joint_sdpa(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -294,6 +302,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -323,6 +333,12 @@ operation::ProgramWithCallbacks joint_sdpa(
         padded_Lkt,
         num_cores,
     };
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -355,6 +371,8 @@ operation::ProgramWithCallbacks joint_sdpa(
         mask_chunk_0,
         mask_chunk_1,
     };
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -391,6 +409,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -428,14 +448,14 @@ operation::ProgramWithCallbacks joint_sdpa(
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
-    uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
-    uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
-    uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
-    uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
-    uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
-    uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
+    uint32_t q_tile_size = tt::tile_size(q_df);
+    uint32_t k_tile_size = tt::tile_size(k_df);
+    uint32_t v_tile_size = tt::tile_size(v_df);
+    uint32_t mask_tile_size = tt::tile_size(mask_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
+    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
+    uint32_t im_tile_size = tt::tile_size(im_df);
+    uint32_t stats_tile_size = tt::tile_size(stats_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -607,16 +627,16 @@ operation::ProgramWithCallbacks joint_sdpa(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Get addresses for regular tensors
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto joint_q_buffer = input_tensors.at(3).buffer();
-            auto joint_k_buffer = input_tensors.at(4).buffer();
-            auto joint_v_buffer = input_tensors.at(5).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
+            auto* joint_q_buffer = input_tensors.at(3).buffer();
+            auto* joint_k_buffer = input_tensors.at(4).buffer();
+            auto* joint_v_buffer = input_tensors.at(5).buffer();
 
             // Get addresses for output tensors
-            auto out_buffer = output_tensors.at(0).buffer();
-            auto joint_out_buffer = output_tensors.at(1).buffer();
+            auto* out_buffer = output_tensors.at(0).buffer();
+            auto* joint_out_buffer = output_tensors.at(1).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();

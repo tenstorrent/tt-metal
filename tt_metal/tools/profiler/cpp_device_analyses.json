@@ -1,0 +1,202 @@
+[
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRACE FIRMWARE DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "TENSIX_RISC_AGG",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-FW"]
+        },
+        "end_config": {
+            "risc": "TENSIX_RISC_AGG",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["-FW"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRACE KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "TENSIX_RISC_AGG",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-KERNEL"]
+        },
+        "end_config": {
+            "risc": "TENSIX_RISC_AGG",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE KERNEL FIRST TO LAST START [ns]"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-KERNEL"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE FW DURATION [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE FW START CYCLE",
+            "end_timestamp_header": "DEVICE FW END CYCLE"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-FW"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["-FW"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["-KERNEL"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE KERNEL DURATION DM START [ns]"
+        },
+        "start_config": {
+            "risc": ["BRISC", "NCRISC", "ERISC"],
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["BRISC-KERNEL", "NCRISC-KERNEL", "ERISC-KERNEL"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE BRISC KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "BRISC",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["BRISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "BRISC",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["BRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE NCRISC KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "NCRISC",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["NCRISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "NCRISC",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["NCRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRISC0 KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "TRISC_0",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "TRISC_0",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRISC1 KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "TRISC_1",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "TRISC_1",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRISC2 KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "TRISC_2",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "TRISC_2",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE ERISC KERNEL DURATION [ns]"
+        },
+        "start_config": {
+            "risc": "ERISC",
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["ERISC-KERNEL"]
+        },
+        "end_config": {
+            "risc": "ERISC",
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["ERISC-KERNEL"]
+        }
+    }
+]

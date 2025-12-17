@@ -27,7 +27,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -41,11 +41,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
@@ -65,7 +63,7 @@ std::vector<std::uint32_t> transpose_tiles(
     for (int c = 0; c < col_tiles; c += in0_block_w) {
         for (int r = 0; r < row_tiles; r++) {
             for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                int offset = (tile_size * col_tiles * r) + (c * tile_size) + (k * tile_size);
                 for (int i = 0; i < tile_size; i++) {
                     result.push_back(data.at(offset + i));
                 }
@@ -90,7 +88,7 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }
@@ -101,7 +99,7 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

@@ -1,44 +1,51 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_program_factory.hpp"
-#include "sdpa_op.hpp"
-
+#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/math.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <optional>
 #include <string>
 #include <cmath>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa::program {
 
-// implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks sdpa_multi_core(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& output_tensor,
-    const std::optional<const Tensor>& attn_mask,
-    const std::optional<const Tensor>& page_table,
-    const std::optional<int64_t>& chunk_start_idx,
-    std::optional<float> scale,
-    bool is_causal,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config,
-    bool use_mla,
-    uint32_t head_dim_v) {
+SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor_q = tensor_args.q;
+    const auto& input_tensor_k = tensor_args.k;
+    const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
+    const auto& output_tensor = tensor_return_value;
+    const auto& attn_mask = tensor_args.attn_mask;
+    const auto& page_table = tensor_args.page_table;
+    const auto& attention_sink = tensor_args.attention_sink;
+    auto scale = operation_attributes.scale;
+    if (not scale.has_value()) {
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
+    }
+    const bool is_causal = operation_attributes.is_causal;
+    const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    auto program_config = operation_attributes.program_config;
+    const bool use_mla = operation_attributes.use_mla;
+    const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(input_tensor_q.logical_shape()[3]);
+    const auto& sliding_window_size = operation_attributes.sliding_window_size;
+
+    std::size_t q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+    std::size_t k_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
+
     /*
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
@@ -111,14 +118,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
     log_debug(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
     log_debug(tt::LogOp, "NKH: {}", NKH);
+    log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     // In chunked prefill mode, the offset of Q in terms of Q chunks
     uint32_t chunked_q_chunk_offset = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
-    uint32_t max_blocks_per_seq = 0;
+    [[maybe_unused]] uint32_t max_blocks_per_seq = 0;
     uint32_t page_table_stick_size = 0;
-    bool page_table_is_dram = true;
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
@@ -131,7 +138,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         TT_FATAL(
             page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
         TT_FATAL(
             page_table_stick_size % 32 == 0,
@@ -144,7 +150,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         log_debug(tt::LogOp, "block_size_t: {}", block_size_t);
         log_debug(tt::LogOp, "max_blocks_per_seq: {}", max_blocks_per_seq);
         log_debug(tt::LogOp, "page_table_stick_size: {}", page_table_stick_size);
-        log_debug(tt::LogOp, "page_table_is_dram: {}", page_table_is_dram);
         log_debug(tt::LogOp, "page_table_df: {}", page_table_df);
     }
 
@@ -155,12 +160,15 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
-    auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
+    auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
-    auto out0_buffer = output_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
+
+    bool use_attention_sink = attention_sink.has_value();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
@@ -214,6 +222,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
@@ -224,6 +233,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
+    log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -235,7 +245,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
         // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
         qk_out_subblock_w = qk_out_subblock_w / 2;
         qk_out_subblock_h = 2;
@@ -306,6 +316,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -315,6 +333,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -345,9 +365,17 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       (std::uint32_t)use_provided_mask,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
-                                                      (uint32_t)page_table_is_dram,
                                                       block_size_t,
-                                                      page_table_stick_size};
+                                                      page_table_stick_size,
+                                                      (std::uint32_t)use_attention_sink};
+
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -370,7 +398,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_provided_mask,
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
+        sliding_window_size.value_or(0),
     };
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -402,7 +433,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         scale_union.u,
+        sliding_window_size.value_or(0),
+        (std::uint32_t)use_attention_sink,
     };
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -413,6 +448,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
         (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
@@ -464,14 +501,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
-    uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
-    uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
-    uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
-    uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
-    uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
-    uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
+    uint32_t q_tile_size = tt::tile_size(q_df);
+    uint32_t k_tile_size = tt::tile_size(k_df);
+    uint32_t v_tile_size = tt::tile_size(v_df);
+    uint32_t mask_tile_size = tt::tile_size(mask_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
+    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
+    uint32_t im_tile_size = tt::tile_size(im_df);
+    uint32_t stats_tile_size = tt::tile_size(stats_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -517,6 +554,19 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})
                                 .set_page_size(tt::CBIndex::c_6, page_table_stick_size);
         CreateCircularBuffer(program, core_grid, c_in6_config);
+    }
+
+    // Create attention sink buffer if provided
+    if (use_attention_sink) {
+        tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
+        uint32_t sink_tile_size = tt::tile_size(sink_df);
+        // cb_attention_sink (CBIndex::c_4)
+        log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
+        log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
+        log_debug(tt::LogOp, "sink_df: {}", sink_df);
+        auto c_in4_config = CircularBufferConfig(attention_sink_tiles * sink_tile_size, {{tt::CBIndex::c_4, sink_df}})
+                                .set_page_size(tt::CBIndex::c_4, sink_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in4_config);
     }
 
     // cb_qk_im
@@ -569,7 +619,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
     uint32_t mask_addr = attn_mask.has_value() ? mask_buffer->address() : 0;
+    uint32_t attention_sink_addr = attention_sink.has_value() ? attention_sink_buffer->address() : 0;
     uint32_t out_addr = out0_buffer->address();
+
+    uint32_t num_phases = 1;
+    uint32_t read_offset = 0;
+    uint32_t write_offset = 0;
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -605,19 +660,24 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             program,
             reader_kernels_id,
             core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             mask_addr,
-             is_chunked ? page_table.value().buffer()->address() : 0,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             chunked_q_chunk_offset});
+            {
+                q_addr,
+                k_addr,
+                v_addr,
+                mask_addr,
+                is_chunked ? page_table.value().buffer()->address() : 0,
+                attention_sink_addr,
+                i,
+                local_batch_start,
+                local_batch_end,
+                local_nh_start,
+                local_nh_end,
+                local_q_start,
+                local_q_end,
+                num_phases,
+                chunked_q_chunk_offset,
+                read_offset  // read_offset
+            });
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -630,7 +690,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             num_phases,
+             chunked_q_chunk_offset,
+             write_offset});  // write_offset
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -642,69 +704,86 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
+             num_phases,
              chunked_q_chunk_offset});
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores,
-         grid_size,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         is_chunked,
-         q_chunk_size,
-         use_mla](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
-            auto mask_buffer =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-
-            auto out0_buffer = output_tensors.at(0).buffer();
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
-            uint32_t out_addr = out0_buffer->address();
-
-            uint32_t page_table_addr = 0;
-            uint32_t chunked_q_chunk_offset = 0;
-            if (is_chunked) {
-                page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
-                chunked_q_chunk_offset =
-                    static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() / q_chunk_size;
-            }
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-            auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
-            // Set reader rt args
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-                auto& compute_args = compute_args_by_core[core.x][core.y];
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-                reader_args[3] = mask_addr;
-                reader_args[4] = page_table_addr;
-                reader_args[12] = chunked_q_chunk_offset;
-
-                writer_args[0] = out_addr;
-                writer_args[8] = chunked_q_chunk_offset;
-
-                compute_args[7] = chunked_q_chunk_offset;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {
+            .reader_kernels_id = reader_kernels_id,
+            .writer_kernels_id = writer_kernels_id,
+            .compute_kernels_id = compute_kernels_id,
+            .grid_size = grid_size,
+            .num_cores = num_cores,
+            .is_chunked = is_chunked,
+            .q_chunk_size = q_chunk_size,
+            .use_mla = use_mla,
+        }};
 }
 
-}  // namespace ttnn::operations::transformer::detail
+void SDPAProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+
+    const bool is_chunked = operation_attributes.chunk_start_idx.has_value();
+    const bool use_mla = operation_attributes.use_mla;
+    std::size_t q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+
+    auto *q_buffer = tensor_args.q.buffer();
+    auto *k_buffer = tensor_args.k.buffer();
+    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
+    auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
+    auto *attention_sink_buffer =
+        tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
+
+    auto *out0_buffer = tensor_return_value.buffer();
+    uint32_t q_addr = q_buffer->address();
+    uint32_t k_addr = k_buffer->address();
+    uint32_t v_addr = v_buffer->address();
+    uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
+    uint32_t attention_sink_addr = attention_sink_buffer != nullptr ? attention_sink_buffer->address() : 0;
+    uint32_t out_addr = out0_buffer->address();
+
+    uint32_t page_table_addr = 0;
+    uint32_t chunked_q_chunk_offset = 0;
+    if (is_chunked) {
+        page_table_addr = tensor_args.page_table.value().buffer()->address();
+        chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
+    }
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+    auto& compute_args_by_core = GetRuntimeArgs(program, shared_vars.compute_kernels_id);
+
+    const auto& grid_size = shared_vars.grid_size;
+    const auto num_cores = shared_vars.num_cores;
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+        auto& compute_args = compute_args_by_core[core.x][core.y];
+
+        reader_args[0] = q_addr;
+        reader_args[1] = k_addr;
+        reader_args[2] = v_addr;
+        reader_args[3] = mask_addr;
+        reader_args[4] = page_table_addr;
+        reader_args[5] = attention_sink_addr;
+        reader_args[14] = chunked_q_chunk_offset;
+
+        writer_args[0] = out_addr;
+        writer_args[9] = chunked_q_chunk_offset;
+
+        compute_args[8] = chunked_q_chunk_offset;
+    }
+}
+
+}  // namespace ttnn::operations::transformer::sdpa::program

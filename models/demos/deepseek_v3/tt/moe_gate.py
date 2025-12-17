@@ -26,7 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TOPK_MIN_WIDTH,
     even_int_div,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -46,99 +46,68 @@ class MoEGate(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
         prefix: str = "",
     ) -> WeightConfig:
-        tt_gate_proj_weight = ttnn.from_torch(
-            state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        tt_e_score_correction_bias = ttnn.from_torch(
-            state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        eps = 1e-20  # no hf config for this
-        tt_norm_eps = ttnn.from_torch(
-            torch.tensor([eps]).repeat(1, hf_config.num_experts_per_tok).unsqueeze(0).unsqueeze(0),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        tt_expert_scale = ttnn.from_torch(
-            torch.tensor([hf_config.routed_scaling_factor])
-            .repeat(1, hf_config.num_experts_per_tok)
-            .unsqueeze(0)
-            .unsqueeze(0),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        torch_expert_group_mask = torch.full((1, 1, 1, hf_config.n_group), -float("inf"))
-        torch_ones_src_tensor = torch.ones((1, 1, 1, hf_config.topk_group))
-        tt_expert_group_mask = ttnn.from_torch(
-            torch_expert_group_mask,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        tt_ones_src_tensor = ttnn.from_torch(
-            torch_ones_src_tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
+        (state_dict,) = state_dicts
+        assert state_dict is not None
         return {
             "gate_proj": {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    tt_gate_proj_weight,
+                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
                 )
             },
             "add_score_correction_bias": {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    tt_e_score_correction_bias,
-                )
-            },
-            "add_norm_eps": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / f"add_norm_eps.input_tensor_b",
-                    tt_norm_eps,
+                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.float32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             },
             "multiply_expert_scale": {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": shard_and_save(
                     output_path / f"multiply_expert_scale.input_tensor_b",
-                    tt_expert_scale,
+                    torch.tensor([hf_config.routed_scaling_factor])
+                    .repeat(1, hf_config.num_experts_per_tok)
+                    .unsqueeze(0)
+                    .unsqueeze(0),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             },
             "scatter_top_expert_groups": {
-                "input": save_and_get_path(
+                "input": shard_and_save(
                     output_path / f"scatter_top_expert_groups.input",
-                    tt_expert_group_mask,
+                    torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
-                "src": save_and_get_path(
+                "src": shard_and_save(
                     output_path / f"scatter_top_expert_groups.src",
-                    tt_ones_src_tensor,
+                    torch.ones((1, 1, 1, hf_config.topk_group)),
+                    shard_dims=(None, None),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
             },
         }
@@ -149,7 +118,7 @@ class MoEGate(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
@@ -178,11 +147,6 @@ class MoEGate(AbstractModule):
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "add_score_correction_bias": BinaryOpConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            ),
-            "add_norm_eps": BinaryOpConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=memory_config,
                 dtype=ttnn.bfloat16,
@@ -223,17 +187,17 @@ class MoEGate(AbstractModule):
             ),
             "topk_fallback": topk_fallback,
             "topk_fallback_config": TopKFallbackConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 dtype=ttnn.bfloat16,
                 memory_config=memory_config,
                 use_bitonic_sort=use_bitonic_sort,
             ),
             "linear_fallback": False,
             "linear_fallback_config": LinearFallbackConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 dtype=ttnn.bfloat16,
             ),
-            "mesh_device": mesh_device,
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
         }
@@ -243,7 +207,7 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig:
         return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
@@ -253,7 +217,7 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelPrefillConfig:
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
@@ -370,23 +334,10 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(scores)
 
         # normalize scores
-        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True)
+        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
         topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
         ttnn.deallocate(topk_expert_scores_sum)
         ttnn.deallocate(topk_experts_scores)
-
-        # add norm eps
-        norm_eps = cfg["add_norm_eps"]["input_tensor_b"]
-        # expand norm_eps to match topk_experts_scores_normalized shape(dynamic shape)
-        norm_eps = ttnn.repeat(norm_eps, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
-        norm_eps = ttnn.to_layout(norm_eps, ttnn.TILE_LAYOUT)
-        topk_experts_scores_normalized = ttnn.add(
-            topk_experts_scores_normalized,
-            norm_eps,
-            memory_config=cfg["add_norm_eps"]["memory_config"],
-            dtype=cfg["add_norm_eps"]["dtype"],
-        )
-        ttnn.deallocate(norm_eps)
 
         # multiply by expert scale
         expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]

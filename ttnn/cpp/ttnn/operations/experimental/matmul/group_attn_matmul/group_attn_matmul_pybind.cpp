@@ -25,10 +25,8 @@ void bind_group_attn_matmul(pybind11::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> output_dtype,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               std::optional<Tensor> optional_output_tensor) {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     input_tensor_b,
                     compute_with_storage_grid_size,
@@ -44,8 +42,7 @@ void bind_group_attn_matmul(pybind11::module& module) {
             pybind11::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             pybind11::arg("dtype").noconvert() = std::nullopt,
             pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
-            pybind11::arg("optional_output_tensor").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("optional_output_tensor").noconvert() = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::matmul::detail

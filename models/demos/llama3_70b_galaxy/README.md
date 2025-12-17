@@ -63,6 +63,16 @@ To run different input prompt files, try these parametrized demo pre-configs:
 
 We also provide other input prompt files with longer sequence lengths. They can be found at `models/demos/llama3_70b_galaxy/demo/sample_prompts/`.
 
+#### Note regarding precision
+
+This model supports an initial version of batched prefill. Currently this consists of exactly 32 users, for prefill lengths up to 2048 tokens. Above this length there's no benefit since prefill gets compute-bound.
+
+To maximize compute, the processing of a prefill batch relies on concatenating all of the batch prompts into a single tensor, which is fed into the model and later sliced. Due to model precision being bfloat8, the math when processing the concatenated users will be slightly different when compared to processing a user at a time.
+
+This can show up in some users not having the exact same output, when the same prompt is used and no sampling is performed (argmax). We tracked the precision impact down to the QKV matmul in the attention layer. Increasing the OPs precision to bfloat16 makes all users match again.
+
+This is not necessarily a bug, and thus will not be treated as such. For further information please see issue [30601](https://github.com/tenstorrent/tt-metal/issues/30601). If you require further precision you can change the QKV matmul to bfloat16.
+
 ## Testing
 ### Dev-only and debugging
 #### Decode-only Demo
@@ -159,7 +169,7 @@ Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/de
 #### Running the vLLM server
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
 ```
-VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --num_scheduler_steps 30
+VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}' --num_scheduler_steps 30
 ```
 
 After the server is up and running you can interact with it by sending prompt files.

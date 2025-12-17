@@ -25,7 +25,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 

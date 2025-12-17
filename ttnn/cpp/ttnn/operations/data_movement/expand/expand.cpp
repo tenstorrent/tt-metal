@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "expand.hpp"
-#include <tt-metalium/constants.hpp>
 #include <functional>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -34,9 +32,8 @@ ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::
 ttnn::Tensor ExpandOperation::invoke(
     const ttnn::Tensor& tensor,
     const tt::stl::Span<const int32_t> shape_vector,
-    const std::optional<MemoryConfig>& memory_config,
-    const QueueId& queue_id) {
-    return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config, queue_id);
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config);
 }
 
 }  // namespace ttnn::operations::expand

@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d impo
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -29,6 +29,7 @@ def test_crossattnmid(
     query_dim,
     num_attn_heads,
     out_dim,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -53,6 +54,7 @@ def test_crossattnmid(
         query_dim,
         num_attn_heads,
         out_dim,
+        debug_mode=debug_mode,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -67,7 +69,7 @@ def test_crossattnmid(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
@@ -81,6 +83,7 @@ def test_crossattnmid(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_encoder_tensor = ttnn.from_torch(
         torch_encoder_tensor,
         dtype=ttnn.bfloat16,
@@ -99,5 +102,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.989)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     logger.info(f"PCC is: {pcc_message}")

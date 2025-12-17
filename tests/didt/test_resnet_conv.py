@@ -9,7 +9,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
@@ -111,13 +111,6 @@ class ResnetConvTest(OpTestBase):
             mesh_mapper=self.from_torch_mesh_mapper,
         )
 
-    def generate_tt_weights_from_torch(self, torch_tensor):
-        tt_weights = ttnn.Tensor(torch_tensor.flatten().tolist(), self.in1_shape, self.in1_dtype, ttnn.ROW_MAJOR_LAYOUT)
-        tt_weights_tiled_host = ttnn.convert_conv_weight_tensor_to_tiled_layout(
-            tt_weights, self.weights_block_h, self.weights_block_w, self.weights_df_on_device
-        )
-        return tt_weights_tiled_host.to(self.mesh_device, self.in1_mem_config)
-
     def convert_activations_to_memory_config(self, activations):
         return ttnn.to_memory_config(activations, self.in0_mem_config)
 
@@ -141,6 +134,7 @@ class ResnetConvTest(OpTestBase):
             input_height=self.input_height,
             input_width=self.input_width,
             conv_config=self.program_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=self.compute_config,
             groups=self.groups,
             dtype=self.out_dtype,
@@ -206,7 +200,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         shard_layout=shard_layout,
         deallocate_activation=False,
         enable_act_double_buffer=True,
-        enable_split_reader=True,
     )
     # This sets subblocks to [2, 4] in underlying matmul
     conv_config.act_block_h_override = 40 * 32

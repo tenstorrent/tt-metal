@@ -35,10 +35,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 struct AddOpGraphTestParam {
     ttnn::Shape a_Shape;
@@ -69,7 +66,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+            constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
             const auto output_tensor = ttnn::add(
                 input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
             return output_tensor;
@@ -93,14 +90,13 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         // per core buffer allocation size
         {
-            auto cb_peak_size_per_core = graph::extract_circular_buffers_peak_size_per_core(json_trace);
-            EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
-
             auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-            auto l1_peak_per_core =
-                graph::extract_l1_buffer_allocation_peak_size_per_core(json_trace, interleaved_storage_cores);
+            const auto& [cb_peak_size_per_core, l1_peak_per_core, peak_memory_usage_per_core] =
+                graph::extract_resource_usage_per_core(json_trace, interleaved_storage_cores);
+
+            EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
             EXPECT_EQ(l1_peak_per_core, params.expected_l1_peak_per_core);
         }
 
@@ -241,7 +237,4 @@ INSTANTIATE_TEST_SUITE_P(
         return ss.str();
     });
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test

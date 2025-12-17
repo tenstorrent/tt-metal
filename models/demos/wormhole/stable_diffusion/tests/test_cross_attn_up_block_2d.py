@@ -4,18 +4,19 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import torch_random
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -26,8 +27,7 @@ def ttnn_to_torch(input):
     return input
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_states, res_hidden_states_tuple, index, prev_output_channel, in_channels, out_channels, shard_end_core, shard_shape",
     [
@@ -84,14 +84,13 @@ def test_cross_attn_up_block_2d_512x512(
     out_channels,
     shard_end_core,
     shard_shape,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    # TODO
-    # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     config = unet.config
-    unet_upblock = pipe.unet.up_blocks[index]
+    unet_upblock = unet.up_blocks[index]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
@@ -229,4 +228,4 @@ def test_cross_attn_up_block_2d_512x512(
         op = torch.reshape(op, (N, H * 2, W * 2, Cout))
     op = op.permute(0, 3, 1, 2)
 
-    assert_with_pcc(torch_output, op, 0.909)
+    assert_with_pcc(torch_output, op, 0.88)

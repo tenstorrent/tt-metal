@@ -14,15 +14,21 @@ __all__ = []
 def apply_activations(tensor, activations):
     import torch
 
-    string_to_function = {
-        "relu": torch.relu,
-        "gelu": torch.nn.functional.gelu,
-        "silu": torch.nn.functional.silu,
+    act_func_map = {
+        ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
+        ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
+        ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
+        ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,
+        ttnn.UnaryOpType.LOG: torch.log,
+        ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
+        ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.SQRT: torch.sqrt,
     }
 
     if activations is not None:
         for activation in activations:
-            activation_function = string_to_function[activation]
+            activation_function = act_func_map[activation.op_type]
             tensor = activation_function(tensor)
     return tensor
 
@@ -353,12 +359,7 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **
         if input_dtype == torch.bfloat16:
             input_tensor_a = input_tensor_a.float()
 
-    result = torch.nan_to_num(
-        torch.remainder(input_tensor_a, input_tensor_b),
-        nan=device.sfpu_nan(),
-        posinf=device.sfpu_inf(),
-        neginf=-device.sfpu_inf(),
-    )
+    result = torch.remainder(input_tensor_a, input_tensor_b)
 
     if input_dtype == torch.bfloat16:
         result = result.bfloat16()
@@ -375,12 +376,7 @@ def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device, **kwarg
         input_dtype = input_tensor_a.dtype
         if input_dtype == torch.bfloat16:
             input_tensor_a = input_tensor_a.float()
-        result = torch.nan_to_num(
-            torch.fmod(input_tensor_a, input_tensor_b),
-            nan=device.sfpu_nan(),
-            posinf=device.sfpu_inf(),
-            neginf=-device.sfpu_inf(),
-        )
+        result = torch.fmod(input_tensor_a, input_tensor_b)
         if input_dtype == torch.bfloat16:
             result = result.bfloat16()
     else:

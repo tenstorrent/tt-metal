@@ -12,6 +12,7 @@ from operator import contains, eq, getitem
 from pathlib import Path
 import json
 import multiprocess
+from queue import Empty
 import signal
 import time
 import psutil
@@ -20,6 +21,7 @@ from datetime import datetime
 
 from loguru import logger
 
+from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
@@ -236,7 +238,14 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
+    def model_location_generator_(
+        model_version,
+        model_subdir="",
+        download_if_ci_v2=False,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
+    ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -251,7 +260,10 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+                model_version,
+                download_dir_suffix=download_dir_suffix,
+                timeout_in_s=ci_v2_timeout_in_s,
+                endpoint_prefix=endpoint_prefix,
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
@@ -303,47 +315,17 @@ def device(request, device_params):
     if is_tg_cluster() and not device_id:
         device_id = first_available_tg_device()
 
+    original_default_device = ttnn.GetDefaultDevice()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     yield device
 
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
-
-
-@pytest.fixture(scope="function")
-def pcie_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumPCIeDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = device_ids
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
-@pytest.fixture(scope="function")
-def all_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
 
 
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
@@ -359,12 +341,29 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config):
+def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn.set_fabric_config(fabric_config)
+        if reliability_mode is None:
+            reliability_mode = ttnn.FabricReliabilityMode.STRICT_INIT
+
+        # Apply default logic for fabric_tensix_config,
+        # fabric_tensix_config is used for enabling tensix extensions for the fabric router,
+        # some sender channels in the fabric router are moved to the fabric tensix extension
+        # (currently the extension is mux kernel, can have other kernels in future as well).
+        if fabric_tensix_config is None:
+            fabric_tensix_config = get_default_fabric_tensix_config()
+
+        ttnn.set_fabric_config(fabric_config, reliability_mode, None, fabric_tensix_config)  # num_planes
+
+
+def get_default_fabric_tensix_config():
+    import ttnn
+
+    # Default to DISABLED for all architectures
+    return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")
@@ -386,30 +385,36 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    device_ids = ttnn.get_device_ids()
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
         param = request.param
     except (ValueError, AttributeError):
-        param = len(device_ids)  # Default to using all available devices
+        # Get number of devices from the system mesh descriptor.
+        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if not ttnn.using_distributed_env() and num_devices_requested > len(device_ids):
+        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        num_devices_requested = min(param, len(device_ids))
-        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
+        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        mesh_shape = ttnn.MeshShape(1, param)
 
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+    override_trace_region_size = get_supported_trace_region_size(request, param)
+    if override_trace_region_size:
+        device_params["trace_region_size"] = override_trace_region_size
+        logger.info(f"Overriding trace region size to {override_trace_region_size}")
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -468,8 +473,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
@@ -489,44 +495,18 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
 
 @pytest.fixture(scope="function")
-def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
-    import ttnn
-
-    if ttnn.get_num_devices() < 2:
-        pytest.skip()
-
-    updated_device_params = get_updated_device_params(device_params)
-    fabric_config = updated_device_params.pop("fabric_config", None)
-    reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 2),
-        **updated_device_params,
-    )
-
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
-
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
-
-
-@pytest.fixture(scope="function")
 def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
     if ttnn.get_num_devices() < 8:
-        pytest.skip()
+        pytest.skip("Not enough devices to run test")
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
@@ -544,20 +524,60 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
 
 @pytest.fixture(scope="function")
-def p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # Generic blackhole configuration
+    # This configures an [m,n] blackhole mesh device to appear as a [1,m*n] line or ring
+    # Implements wraparound in rackboxes
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+        **updated_device_params,
+    )
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # Generic blackhole configuration
+    # This preserves the 2D mesh configuration in rackbox and galaxy
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    elif ttnn.get_num_devices() == 32:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 8),
             **updated_device_params,
         )
     else:
@@ -593,25 +613,29 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
+    # Skip applying the fixture logic for this test
+    if "no_reset_default_device" in request.keywords:
+        yield
+        return
     device = ttnn.GetDefaultDevice()
+
     yield
-    ttnn.SetDefaultDevice(device)
+
+    if device is not None:
+        ttnn.SetDefaultDevice(device)
+    elif "device" in request.fixturenames:
+        # if the test used a device, but there was no default device, we need to clear the default device
+        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
     if "device" in request.fixturenames:
         devices = [request.getfixturevalue("device")]
-    elif "all_devices" in request.fixturenames:
-        devices = request.getfixturevalue("all_devices")
-    elif "pcie_devices" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
-    elif "n300_mesh_device" in request.fixturenames:
-        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
@@ -897,47 +921,178 @@ def pytest_runtest_teardown(item, nextitem):
             reset_tensix(set(item.pci_ids))
 
 
-# This is overriding the timer setup hook from pytest-timeout
-# If --metal-timeout is passed, we define a new timeout method that spawns a timer process
-# At timeout, the process kills it's parent (the test process) and then itself
+# Session-scoped watchdog IPC keys
+watchdog_cmd_queue_key = pytest.StashKey()
+watchdog_process_key = pytest.StashKey()
+
+
+# Session watchdog process that supervises per-test timeouts from out-of-process
+def _ensure_watchdog_started(config):
+    cmd_queue = config.stash.get(watchdog_cmd_queue_key, None)
+    process = config.stash.get(watchdog_process_key, None)
+
+    # If watchdog process is already running, and the command queue is still valid, return it.
+    if cmd_queue is not None and process is not None and process.is_alive():
+        return cmd_queue
+
+    parent_pid = os.getpid()
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+    # Clean up stale process reference if present
+    if process is not None and not process.is_alive():
+        logger.warning(f"Stale watchdog process found, joining and cleaning up")
+        try:
+            process.join(timeout=1)
+        except Exception as e:
+            logger.warning(f"Exception during watchdog process cleanup: {e}")
+
+    try:
+        cmd_queue = multiprocess.Queue()
+        time.sleep(1)
+        process = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
+        process.start()
+        time.sleep(1)
+        config.stash[watchdog_cmd_queue_key] = cmd_queue
+        config.stash[watchdog_process_key] = process
+        logger.info(f"Watchdog[{worker_id}] started: watchdog_pid={process.pid} parent_pid={parent_pid}")
+        time.sleep(1)
+        return cmd_queue
+    except Exception as e:
+        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
+        return None
+
+
+# This function is the watchdog process.
+# It is started once for every pytest-xdist worker.
+# It listens for commands via a queue and executes them.
+# The commands are:
+# - "start": arm a timeout for a given test
+# - "cancel": cancel a timeout for a given test
+# - "shutdown": shutdown the watchdog process
+#
+# The watchdog process runs in a loop and checks for any expired deadlines.
+# If a deadline is expired, it kills the parent process.
+def _watchdog_main(parent_pid, cmd_queue):
+    """Simple watchdog loop.
+
+    Commands received via cmd_queue (dicts):
+      {"cmd": "start", "test_id": str, "timeout": float}
+      {"cmd": "cancel", "test_id": str}
+      {"cmd": "shutdown"}
+    """
+    logger.debug(f"Watchdog started for parent={parent_pid} pid={os.getpid()}")
+
+    # Dictionary of test_id -> deadline (float)
+    # This is used to track the deadline for each test.
+    # The deadline is the time when the test is expected to complete.
+    # If the test does not complete by the deadline, the watchdog will kill the parent process.
+    deadlines = {}
+
+    while True:
+        # Process incoming command, if any
+        try:
+            msg = cmd_queue.get(timeout=1)
+        except Empty:
+            msg = None  # normal: nothing arrived
+        except Exception as e:
+            logger.error(f"Watchdog {os.getpid()}: fatal while reading queue: {e!r}")
+            break
+
+        now = time.monotonic()
+
+        # Check for any expired deadlines
+        if deadlines:
+            expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
+            if expired:
+                logger.debug(f"Watchdog detected timeout for {expired}")
+                logger.debug(f"Watchdog killing parent process {parent_pid}")
+                os.kill(parent_pid, signal.SIGKILL)
+                break
+
+        # If no command is received, continue to the next iteration of the loop.
+        if not msg:
+            continue
+
+        cmd = msg.get("cmd")
+        if cmd == "start":
+            logger.debug(f"Watchdog received start command: {msg}")
+            try:
+                test_id = str(msg["test_id"])
+                timeout_secs = float(msg["timeout"])
+                deadlines[test_id] = time.monotonic() + timeout_secs
+                logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
+            except Exception as e:
+                logger.error(f"Watchdog failed to arm: {e}")
+        elif cmd == "cancel":
+            logger.debug(f"Watchdog received cancel command: {msg}")
+            try:
+                test_id = str(msg.get("test_id", ""))
+                deadlines.pop(test_id, None)
+            except Exception as e:
+                logger.error(f"Watchdog failed to cancel: {e}")
+        elif cmd == "shutdown":
+            logger.debug(f"Watchdog received shutdown command: {msg}; shutting down")
+            break
+        else:
+            logger.warning(f"Watchdog received unknown command: {cmd}")
+
+    logger.debug(f"Watchdog process {os.getpid()} exiting")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Shutdown watchdog process if running."""
+    cmd_queue = session.config.stash.get(watchdog_cmd_queue_key, None)
+    p = session.config.stash.get(watchdog_process_key, None)
+    if cmd_queue and p:
+        try:
+            cmd_queue.put({"cmd": "shutdown"})
+            p.join(timeout=2.0)
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=1.0)
+        except Exception as e:
+            logger.error(f"Failed to terminate watchdog process cleanly: {e}")
+
+
+# This overrides the timer setup hook from pytest-timeout.
+# If --metal-timeout is passed or when using xdist, we use a watchdog process per worker to supervise the timeout.
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
-    if metal_timeout_enabled is not None or using_xdist:
-        parent_pid = os.getpid()
-        logger.info(f"Metal timeout {settings.timeout} seconds {parent_pid} for {item.nodeid}")
+    needs_watchdog = metal_timeout_enabled is not None or using_xdist
 
-        def get_parent_status():
+    if needs_watchdog:
+        cmd_queue = _ensure_watchdog_started(item.config)
+        process = item.config.stash.get(watchdog_process_key, None)
+
+        if process is not None and not process.is_alive():
+            logger.warning("Watchdog process not alive; restarting")
+            cmd_queue = _ensure_watchdog_started(item.config)
+
+        if cmd_queue is None:
+            logger.warning(f"Watchdog missing command queue; NOT arming timeout for {item.nodeid}")
+        else:
+            secs = float(settings.timeout)
+            worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+            parent_pid = os.getpid()
             try:
-                parent = psutil.Process(parent_pid)
-            except:
-                return "already dead"
-            return parent.status()
+                cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
+                logger.debug(f"Watchdog[{worker_id}] armed {item.nodeid}: timeout={secs}s parent_pid={parent_pid}")
+            except Exception as e:
+                logger.error(f"Failed to arm watchdog timer for {item.nodeid}: {e}")
 
-        def run_timer(settings):
-            logger.info(f"Timer started for {item.nodeid}")
-            dead_status = ["zombie", "dead", "already dead"]
-            timeout = settings.timeout
-            parent_status = "running"
-            while parent_status not in dead_status and timeout > 0:
-                time.sleep(5)
-                timeout -= 5
-                parent_status = get_parent_status()
-            if parent_status != "already dead":
-                logger.warning(f"This test seems to have hung... Timing out test case")
-                os.kill(parent_pid, signal.SIGKILL)
-            logger.info(f"Killing timer")
-            os._exit(1)
+            def cancel():
+                try:
+                    logger.debug("Cancelling watchdog timer")
+                    cmd_queue.put({"cmd": "cancel", "test_id": item.nodeid})
+                except Exception as e:
+                    logger.error(f"Failed to cancel watchdog timer: {e}")
 
-        def cancel():
-            logger.info(f"Cancelling timer")
-            metal_timer.terminate()
+            item.cancel_timeout = cancel
 
-        metal_timer = multiprocess.Process(target=run_timer, args=(settings,), daemon=True)
-        item.cancel_timeout = cancel
-        metal_timer.start()
     return True
 
 

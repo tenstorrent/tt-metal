@@ -21,7 +21,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto device = output_grad.device();
+    auto* device = output_grad.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
@@ -94,7 +94,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
-        compute_defines["LOG"] = 1;
+        compute_defines["LOG"] = "1";
     }
 
     if (fp32_dest_acc_en) {
@@ -119,7 +119,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;

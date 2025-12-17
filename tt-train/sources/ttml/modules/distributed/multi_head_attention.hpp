@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 
 namespace ttml::modules::distributed {
 
-class DistributedMultiHeadAttention : public ttml::autograd::ModuleBase {
+class DistributedMultiHeadAttention : public ttml::modules::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};

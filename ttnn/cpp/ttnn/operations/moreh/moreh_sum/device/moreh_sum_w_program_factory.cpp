@@ -52,17 +52,17 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tt_metal::detail::TileSize(scaler_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat mask_w_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t mask_w_single_tile_size = tt::tt_metal::detail::TileSize(mask_w_cb_data_format);
+    uint32_t mask_w_single_tile_size = tt::tile_size(mask_w_cb_data_format);
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermed1_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
+    uint32_t intermed_single_tile_size = tt::tile_size(intermed_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -238,8 +238,8 @@ void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

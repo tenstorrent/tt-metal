@@ -83,7 +83,13 @@ def is_test_suite_type_that_uses_silicon(test_suite_type: TestSuiteType) -> bool
 
 def run_process_and_get_result(command, extra_env={}, capture_output=True):
     full_env = copy.deepcopy(os.environ)
-    full_env.update(extra_env)
+
+    # Handle None values in extra_env - remove keys with None values
+    for key, value in extra_env.items():
+        if value is None:
+            full_env.pop(key, None)  # Remove the key if it exists
+        else:
+            full_env[key] = value
 
     result = sp.run(command, shell=True, capture_output=capture_output, env=full_env)
 
@@ -272,12 +278,24 @@ def get_updated_device_params(device_params):
 
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
+    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
 
-    if ttnn.device.is_blackhole() and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-        logger.warning("blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead.")
-        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+    if ttnn.device.is_blackhole():
+        # Only when both fabric_config and fabric_tensix_config are set, we can use ROW dispatch, otherwise force to use COL dispatch
+        fabric_config = new_device_params.get("fabric_config", None)
+        if not (fabric_config and fabric_tensix_config):
+            # When not both are set, force COL dispatch
+            if dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+                logger.warning(
+                    "ROW dispatch requires both fabric and tensix config, using DispatchCoreAxis.COL instead."
+                )
+                dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+        elif fabric_config and fabric_tensix_config:
+            logger.warning(
+                f"Blackhole with fabric_config and fabric_tensix_config enabled, using fabric_tensix_config={fabric_tensix_config}"
+            )
 
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
     new_device_params["dispatch_core_config"] = dispatch_core_config
 
     return new_device_params

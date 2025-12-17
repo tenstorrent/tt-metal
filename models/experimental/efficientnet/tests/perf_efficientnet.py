@@ -8,11 +8,9 @@ from loguru import logger
 import torchvision
 import pytest
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 from models.experimental.efficientnet.tt.efficientnet_model import efficientnet_b0
@@ -45,7 +43,6 @@ def test_perf_efficientnet_b0(
     expected_inference_time,
     expected_compile_time,
 ):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -67,8 +64,6 @@ def test_perf_efficientnet_b0(
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)

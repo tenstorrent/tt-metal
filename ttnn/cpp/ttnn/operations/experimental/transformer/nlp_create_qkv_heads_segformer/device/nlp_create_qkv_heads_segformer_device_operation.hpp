@@ -1,30 +1,45 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <optional>
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation_types.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_program_factory.hpp"
 
-#include "ttnn/run_operation.hpp"
-#include <variant>
-
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::transformer {
-
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_segformer(
-    const Tensor& input_tensor_a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
+namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer {
 
 struct NlpCreateHeadsSegformerDeviceOperation {
-    MemoryConfig output_mem_config;
+    using operation_attributes_t = nlp_create_qkv_heads_segformer::operation_attributes_t;
+    using tensor_args_t = nlp_create_qkv_heads_segformer::tensor_args_t;
+    using spec_return_value_t = nlp_create_qkv_heads_segformer::spec_return_value_t;
+    using tensor_return_value_t = nlp_create_qkv_heads_segformer::tensor_return_value_t;
+    using program_factory_t = std::variant<program::NlpCreateQkvHeadsSegformerProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const MemoryConfig& output_mem_config,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {});
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
+
+namespace ttnn::prim {
+constexpr auto nlp_create_qkv_heads_segformer = ttnn::register_operation<
+    "ttnn::prim::nlp_create_qkv_heads_segformer",
+    ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::
+        NlpCreateHeadsSegformerDeviceOperation>();
+}  // namespace ttnn::prim
