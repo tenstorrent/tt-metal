@@ -162,6 +162,27 @@ def run_ttnn_conv2d(
     return output_nchw
 
 
+def make_randn_clamped(min_val, max_val):
+    def randn_clamped(*args, **kwargs):
+        return torch.clamp(torch.randn(*args, **kwargs), min=min_val, max=max_val)
+
+    return randn_clamped
+
+
+def make_randn_clamped_to_dtype_max(dtype=torch.float32):
+    """
+    Generate random normal values clamped to the maximum finite value of the given dtype.
+    This prevents infinity values from appearing in the tensors.
+    """
+
+    def randn_clamped(*args, **kwargs):
+        max_val = torch.finfo(dtype).max
+        min_val = torch.finfo(dtype).min
+        return torch.clamp(torch.randn(*args, **kwargs), min=min_val, max=max_val)
+
+    return randn_clamped
+
+
 def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=False):
     """
     Run convolution with varying inner channels values where:
@@ -215,6 +236,10 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
             gen_fn = torch.rand
         elif input_generator == "randn":
             gen_fn = torch.randn
+        elif input_generator == "randn_clamped_1000":
+            gen_fn = make_randn_clamped(-1000, 1000)
+        elif input_generator == "randn_clamped_fp32_max":
+            gen_fn = make_randn_clamped_to_dtype_max(torch.float32)
         else:
             raise ValueError(f"Unknown input_generator: {input_generator}")
 
@@ -287,8 +312,17 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
 
     # Compute aggregated statistics across all K values
     print("\n" + "=" * 80, flush=True)
+    if input_generator == "rand":
+        values_range = "[0,1)"
+    elif input_generator == "randn_clamped_1000":
+        values_range = "[-1000,1000]"
+    elif input_generator == "randn_clamped_fp32_max":
+        max_fp32 = torch.finfo(torch.float32).max
+        values_range = f"[{torch.finfo(torch.float32).min:.2e},{max_fp32:.2e}]"
+    else:
+        values_range = "(-inf,inf)"
     print(
-        f"AGGREGATED STATISTICS (All K values combined) - values: {'[0,1)' if input_generator == 'rand' else '(-inf,inf)'}",
+        f"AGGREGATED STATISTICS (All K values combined) - values: {values_range}",
         flush=True,
     )
     print("=" * 80, flush=True)
@@ -337,3 +371,8 @@ if __name__ == "__main__":
     print("Testing with RANDN input generator", flush=True)
     print("=" * 80, flush=True)
     results_randn = run_conv_k_sweep(inner_channels_values, input_generator="randn", use_bias=True)
+
+    print("\n" + "=" * 80, flush=True)
+    print("Testing with RANDN input generator", flush=True)
+    print("=" * 80, flush=True)
+    results_randn = run_conv_k_sweep(inner_channels_values, input_generator="randn_clamped_fp32_max", use_bias=True)
