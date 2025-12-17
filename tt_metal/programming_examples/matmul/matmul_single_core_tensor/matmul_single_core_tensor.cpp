@@ -27,17 +27,30 @@ using namespace ttnn;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-// Reference implementation of matrix multiplication.
-// Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
-// The implementation is bare bones and does not include optimizations such as tiling or vectorization.
-// This is intended to be used as a golden reference for testing the Metalium implementation.
+// clang-format off
+/**
+ * Reference implementation of matrix multiplication.
+ * Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
+ * The implementation is bare bones and does not include optimizations such as tiling or vectorization.
+ * This is intended to be used as a golden reference for testing the Metalium implementation.
+ *
+ * | Argument | Description                                                         |
+ * |----------|---------------------------------------------------------------------|
+ * | a        | Input matrix A in row-major format, size MxK                        |
+ * | b        | Input matrix B in row-major format, size KxN                        |
+ * | output   | Output matrix C in row-major format, size MxN (will be overwritten) |
+ * | M        | Number of rows in matrix A and output matrix C                      |
+ * | N        | Number of columns in matrix B and output matrix C                   |
+ * | K        | Number of columns in matrix A and rows in matrix B                  |
+ */
+// clang-format on
 void golden_matmul(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    uint32_t M,
-    uint32_t N,
-    uint32_t K) {
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K) {
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
             // Compute C[i * N + j] += A[i * K + k] * B[k * N + j];
@@ -55,7 +68,20 @@ void golden_matmul(
     }
 }
 
-// Structure to hold program-related state
+// clang-format off
+/**
+ * Structure to hold program-related state including device, program, workload, and execution context.
+ *
+ * | Member        | Description                                               |
+ * |---------------|-----------------------------------------------------------|
+ * | mesh_device   | Shared pointer to the mesh device                         |
+ * | program       | Program object containing kernels, circular buffers, etc. |
+ * | core          | Core coordinate where the program executes                |
+ * | workload      | Workload object that bundles programs for execution       |
+ * | device_range  | Range of devices where the program should execute         |
+ * | cq            | Command queue for ordering operations on the mesh         |
+ */
+// clang-format on
 struct ProgramState {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     Program program;
@@ -79,7 +105,15 @@ struct ProgramState {
         cq(cq) {}
 };
 
-// Initialize program state for single-core execution
+// clang-format off
+/**
+ * Initialize program state for single-core execution.
+ * Creates a unit mesh device, sets up command queue, workload, device range, and program.
+ * This program uses only a single Tensix core at [0, 0].
+ *
+ * Return value: ProgramState
+ */
+// clang-format on
 ProgramState init_program() {
     // Open device
     constexpr int device_id = 0;
@@ -102,7 +136,21 @@ ProgramState init_program() {
         std::move(mesh_device), std::move(program), core, std::move(workload), std::move(device_range), cq);
 }
 
-// Helper function to create a circular buffer with the specified number of tiles and CB index.
+// clang-format off
+/**
+ * Helper function to create a circular buffer with the specified number of tiles and CB index.
+ * Internalizes the calculation of single_tile_size based on bfloat16 tile dimensions.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                               |
+ * |-----------|-----------------------------------------------------------|
+ * | program   | The program to which the circular buffer will be added    |
+ * | core      | Core coordinate where the circular buffer will be created |
+ * | num_tiles | Number of tiles to allocate in the circular buffer        |
+ * | cb_index  | Circular buffer index (c_0 to c_31)                       |
+ */
+// clang-format on
 void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t num_tiles, tt::CBIndex cb_index) {
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
@@ -111,24 +159,36 @@ void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t n
     tt_metal::CreateCircularBuffer(program, core, cb_config);
 }
 
-// Matrix multiplication using the accelerator.
-// Input a and b as well as output are vectors of bfloat16. But in the tiled layout.
-// The input a is of size MxK, input b is of size KxN, and the output c is of size MxN.
-// For this function, M, N and N must be divisible by TILE_HEIGHT and TILE_WIDTH respectively as that is the native unit
-// of computation on the accelerator.
-// This version uses ttnn::Tensor instead of distributed::MeshBuffer.
+// clang-format off
+/**
+ * Matrix multiplication using the Tensix device.
+ * The input a is of size MxK, input b is of size KxN, and the output c is of size MxN.
+ * For this function, M, N and K must be divisible by TILE_HEIGHT and TILE_WIDTH respectively as that is the native unit
+ * of computation on the accelerator.
+ *
+ * | Argument  | Description                                                         |
+ * |-----------|---------------------------------------------------------------------|
+ * | a         | Input matrix A in row-major format, size MxK                        |
+ * | b         | Input matrix B in row-major format, size KxN                        |
+ * | output    | Output matrix C in row-major format, size MxN (will be overwritten) |
+ * | M         | Number of rows in matrix A and output matrix C                      |
+ * | N         | Number of columns in matrix B and output matrix C                   |
+ * | K         | Number of columns in matrix A and rows in matrix B                  |
+ * | prog_state| Program state containing device, program, and execution context     |
+ */
+// clang-format on
 void matmul_single_core_tensor(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    uint32_t M,
-    uint32_t N,
-    uint32_t K,
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K,
     ProgramState& prog_state) {
     // Calculate the number of tiles for each dimension.
-    uint32_t Mt = M / TILE_HEIGHT;
-    uint32_t Kt = K / TILE_WIDTH;
-    uint32_t Nt = N / TILE_WIDTH;
+    const uint32_t Mt = M / TILE_HEIGHT;
+    const uint32_t Kt = K / TILE_WIDTH;
+    const uint32_t Nt = N / TILE_WIDTH;
 
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware expects for matmul operations.
@@ -154,7 +214,7 @@ void matmul_single_core_tensor(
     constexpr uint32_t num_input_tiles = 2;
     // There are 32 circular buffers (c_0 - c_31) on the device. We can use any of them, as long as they are not already
     // in use. Kernel code is responsible for using the correct circular buffer for the input and output data (e.g.
-    // reader kernel readd data into c_0 and c_1, while the compute kernel reads data from these same buffers).
+    // reader kernel reads data into c_0 and c_1, while the compute kernel reads data from these same buffers).
     create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_0);
     create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_1);
 
@@ -169,7 +229,7 @@ void matmul_single_core_tensor(
     auto src1_mesh_buffer = src1_tensor.mesh_buffer();
     auto dst_mesh_buffer = dst_tensor.mesh_buffer();
 
-    // Create a reader kernel to read data from DRAM int circular buffers.
+    // Create a reader kernel to read data from DRAM into circular buffers.
     std::vector<uint32_t> reader_compile_time_args;
     // The TensorAccessor object abstracts away physical details of data distribution across banks.
     // Kernels can use TensorAccessorArgs to access the data in a unified way, regardless of the physical distribution.
@@ -236,6 +296,15 @@ void matmul_single_core_tensor(
 
 ///////////////////////////////////////
 
+// clang-format off
+/**
+ * Main function that demonstrates single-core matrix multiplication using ttnn::Tensor API.
+ * Creates test data, runs golden reference implementation on CPU, executes matmul on Tensix device,
+ * and verifies results using Pearson correlation coefficient.
+ *
+ * Return value: int (0 on success, non-zero on failure)
+ */
+// clang-format on
 int main() {
     bool pass = true;
 
@@ -261,10 +330,10 @@ int main() {
         std::vector<bfloat16> src1_vec(K * N);
 
         for (bfloat16& v : src0_vec) {
-            v = bfloat16(dist(rng));
+            v = static_cast<bfloat16>(dist(rng));
         }
         for (bfloat16& v : src1_vec) {
-            v = bfloat16(dist(rng));
+            v = static_cast<bfloat16>(dist(rng));
         }
 
         // Golden Matmul running on CPU so we can verify Tensix result.
@@ -272,7 +341,7 @@ int main() {
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
         // Invoke the matrix multiplication on the Tensix device
-        std::vector<bfloat16> result_vec(M * N, 0);
+        std::vector<bfloat16> result_vec(M * N);
         matmul_single_core_tensor(src0_vec, src1_vec, result_vec, M, N, K, prog_state);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
