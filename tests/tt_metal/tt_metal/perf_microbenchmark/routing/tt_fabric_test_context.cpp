@@ -101,8 +101,8 @@ void TestContext::wait_for_programs_with_progress() {
 }
 
 void TestContext::read_telemetry() {
-    auto& tm = get_telemetry_manager();
-    tm.read_telemetry();
+    auto& telemetry_manager = get_telemetry_manager();
+    telemetry_manager.read_telemetry();
 }
 
 void TestContext::clear_telemetry() {
@@ -120,8 +120,8 @@ void TestContext::read_code_profiling_results() { get_code_profiler().read_code_
 void TestContext::report_code_profiling_results() { get_code_profiler().report_code_profiling_results(); }
 
 void TestContext::process_telemetry_for_golden() {
-    auto& tm = get_telemetry_manager();
-    tm.process_telemetry_for_golden();
+    auto& telemetry_manager = get_telemetry_manager();
+    telemetry_manager.process_telemetry_for_golden();
 }
 
 void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
@@ -269,9 +269,11 @@ void TestContext::profile_results(const TestConfig& config) {
     bandwidth_profiler_->profile_results(config, test_devices_, sender_memory_map_);
 
     if (telemetry_enabled_) {
-        auto& telemetry = get_telemetry_manager();
+        auto& telemetry_manager = get_telemetry_manager();
         bandwidth_profiler_->set_telemetry_bandwidth(
-            telemetry.get_measured_bw_min(), telemetry.get_measured_bw_avg(), telemetry.get_measured_bw_max());
+            telemetry_manager.get_measured_bw_min(),
+            telemetry_manager.get_measured_bw_avg(),
+            telemetry_manager.get_measured_bw_max());
     }
 
     const auto& latest_results = bandwidth_profiler_->get_latest_results();
