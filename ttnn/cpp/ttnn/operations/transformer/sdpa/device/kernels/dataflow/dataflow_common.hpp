@@ -690,8 +690,9 @@ struct PaddedAddrGenerator {
     PaddedAddrGenerator(const ReaderType& reader, TensorTileShape tensor_shape) :
         reader(reader), tensor_shape(tensor_shape) {}
 
-    uint32_t maybe_read_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t dst_addr) const {
-        if (d2 < tensor_shape.shape[2]) {
+    uint32_t maybe_read_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t dst_addr) const {
+        if (d2 < tensor_shape.shape[2] && d2 < end_seq_tile) {
             uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
             noc_async_read_tile(tile_id, reader, dst_addr);
             return 1;
@@ -702,8 +703,9 @@ struct PaddedAddrGenerator {
         }
     }
 
-    uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
-        if (d2 < tensor_shape.shape[2]) {
+    uint32_t maybe_write_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t src_addr) const {
+        if (d2 < tensor_shape.shape[2] && d2 < end_seq_tile) {
             uint32_t tile_id = tensor_shape.id_of(d0, d1, d2, d3);
             noc_async_write_tile(tile_id, reader, src_addr);
             return 1;
@@ -734,6 +736,7 @@ template <typename CatAddrGeneratorType>
 void read_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
+    const uint32_t end_seq_tile,
     const uint32_t cb_id,
     const uint32_t tile_bytes,
     const bool transpose) {
@@ -750,7 +753,12 @@ void read_block(
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
             uint32_t did_read = cat_addr_generator.maybe_read_tile(
-                src_slice.d0, src_slice.d1, src_slice.d2_start + row, src_slice.d3_start + col, write_ptr);
+                src_slice.d0,
+                src_slice.d1,
+                src_slice.d2_start + row,
+                src_slice.d3_start + col,
+                end_seq_tile,
+                write_ptr);
 
             write_ptr += inner_ptr_stride;
         }
@@ -763,6 +771,7 @@ template <typename CatAddrGeneratorType>
 void write_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
+    const uint32_t end_seq_tile,
     const uint32_t cb_id,
     const uint32_t tile_bytes) {
     const uint32_t dst_rows = dst_slice.get_d2_size();
@@ -779,7 +788,7 @@ void write_block(
         uint32_t read_ptr = base_read_ptr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < dst_cols; ++col) {
             uint32_t did_write = cat_addr_generator.maybe_write_tile(
-                dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, read_ptr);
+                dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, end_seq_tile, read_ptr);
             read_ptr += inner_ptr_stride;
         }
     }
