@@ -42,6 +42,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+      tracy: true
   t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
