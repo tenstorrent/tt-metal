@@ -291,7 +291,14 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        lib_patterns = [
+            "_ttnn.so",
+            "_ttnncpp.so",
+            "libtt_metal.so",
+            "libdevice.so",
+            "libtt_stl.so",
+            "libtt_metalium_fabric_proto.so*",
+        ]
         runtime_patterns = [
             "hw/**/*",
         ]

@@ -102,15 +102,52 @@ set_source_files_properties(
             TRUE
 )
 
-# Add the generated protobuf files to your target
-target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+# =============================================================================
+# Fabric Proto Library (for external consumers like fabric-manager)
+# =============================================================================
+# Create a separate shared library for proto types. This allows external projects
+# to use MeshGraphDescriptor, PhysicalSystemDescriptor, etc. without causing
+# protobuf descriptor double-registration crashes.
+#
+# After install, consumers use: target_link_libraries(app TT::MetaliumFabricProto)
 
+add_library(MetaliumFabricProto SHARED)
+add_library(TT::MetaliumFabricProto ALIAS MetaliumFabricProto)
+
+target_sources(MetaliumFabricProto PRIVATE ${GENERATED_PROTO_SRCS})
+
+target_link_libraries(MetaliumFabricProto PRIVATE protobuf::libprotobuf)
+
+target_include_directories(
+    MetaliumFabricProto
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/tt-metalium>
+)
+
+# Ensure all proto symbols are exported (default visibility)
+set_target_properties(
+    MetaliumFabricProto
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            default
+        VISIBILITY_INLINES_HIDDEN
+            OFF
+        OUTPUT_NAME
+            tt_metalium_fabric_proto
+        SOVERSION
+            1
+)
+
+# =============================================================================
+# Main fabric target dependencies
+# =============================================================================
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
     PRIVATE
+        TT::MetaliumFabricProto
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::device
@@ -136,6 +173,29 @@ install(
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
+)
+
+# Install proto shared library for external consumers
+# Exported as TT::MetaliumFabricProto (namespace defined in tt_metal/CMakeLists.txt)
+install(
+    TARGETS
+        MetaliumFabricProto
+    EXPORT Metalium
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
+)
+
+# Install generated proto headers for external consumers
+install(
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/protobuf/mesh_graph_descriptor.pb.h
+        ${CMAKE_CURRENT_BINARY_DIR}/protobuf/physical_system_descriptor.pb.h
+        ${CMAKE_CURRENT_BINARY_DIR}/protobuf/router_port_directions.pb.h
+        ${CMAKE_CURRENT_BINARY_DIR}/protobuf/port_descriptor_table.pb.h
+        ${CMAKE_CURRENT_BINARY_DIR}/protobuf/intermesh_connection_table.pb.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metalium/protobuf
+    COMPONENT metalium-dev
 )
 
 # Install proto schema files for external use
