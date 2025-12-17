@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file layernorm_utils.h
+ * @file layernorm_compute_utils.h
  * @brief Utility functions for the layernorm compute kernels.
  */
 
@@ -43,7 +43,6 @@ inline void adjust_variance_for_overaccumulation(uint32_t cb_var, uint32_t cb_me
         cb_wait_front(cb_mean, 1);
         cb_reserve_back(cb_var, 1);
         reconfig_data_format_srca(cb_var);
-        copy_tile_init(cb_var);
         tile_regs_acquire();
 
         // Copy variance tile to dst0
@@ -69,7 +68,7 @@ inline void adjust_variance_for_overaccumulation(uint32_t cb_var, uint32_t cb_me
         tile_regs_commit();
         tile_regs_wait();
 
-        // Pack final value in dst0 into cb_ex2
+        // Pack final value in dst0 into cb_var
         pack_tile(dst0, cb_var);
 
         tile_regs_release();

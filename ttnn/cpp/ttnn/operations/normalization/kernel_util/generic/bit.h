@@ -9,7 +9,8 @@
 
 #pragma once
 
-#include <algorithm>
+#include <cstring>
+#include <type_traits>
 
 namespace norm::kernel_util::generic {
 /**
@@ -18,23 +19,15 @@ namespace norm::kernel_util::generic {
  * @tparam From The type to cast from
  * @param from The value to cast from
  * @return The casted value
- *
- * @note This function is technically UB in C++, and
- * should be replaced with a valid solution such as one
- * that uses std::memcpy
  */
-template <typename To, typename From>
-inline To bit_cast(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
+template <
+    typename To,
+    typename From,
+    typename = std::enable_if_t<
+        sizeof(To) == sizeof(From) && std::is_trivially_copyable_v<To> && std::is_trivially_copyable_v<From>>>
+constexpr To bit_cast(const From& from) {
+    To to;
+    std::memcpy(&to, &from, sizeof(To));
+    return to;
 }
 }  // namespace norm::kernel_util::generic
