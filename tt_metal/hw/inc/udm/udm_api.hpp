@@ -9,28 +9,18 @@
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "udm/accessor/mesh_gcore_accessor.h"
+#include "udm/accessor/mesh_tensor_accessor.h"
 #include <type_traits>
 #include "debug/dprint.h"
 
 namespace tt::tt_fabric::experimental::udm {
 
-// ==================== Type Traits for Accessor Detection ====================
-
-/**
- * @brief Type trait to detect if a type is a valid mesh accessor
- *
- * A valid accessor has a get_fabric_node_and_noc_addr method.
- * This is used to disambiguate between accessor-version and coord-only-version overloads.
- */
-template <typename T, typename = void>
-struct is_mesh_accessor : std::false_type {};
-
+// Type trait to detect MeshTensorAccessor (used to exclude it from coord-only overloads)
 template <typename T>
-struct is_mesh_accessor<T, std::void_t<decltype(std::declval<const T&>().get_fabric_node_and_noc_addr(0u, 0u, 0))>>
-    : std::true_type {};
+struct is_mesh_tensor_accessor : std::false_type {};
 
-template <typename T>
-constexpr bool is_mesh_accessor_v = is_mesh_accessor<T>::value;
+template <typename TensorAccessorT>
+struct is_mesh_tensor_accessor<MeshTensorAccessor<TensorAccessorT>> : std::true_type {};
 
 /**
  * @brief Helper to check if destination fabric node is local
@@ -83,26 +73,24 @@ FORCE_INLINE std::pair<MeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
 // ==================== Unified Mesh Accessor APIs ====================
 
 /**
- * @brief Async read from mesh accessor (handles both local and remote)
- *
- * Works with both MeshTensorAccessor (using page_id) and MeshGcoreAccessor (using coord).
+ * @brief Async read from MeshTensorAccessor (handles both local and remote)
  *
  * Usage examples:
  *   async_read(accessor, page_id, l1_addr, size);              // simple read
- *   async_read(accessor, gcore_coord, l1_addr, size, offset);  // with offset
+ *   async_read(accessor, page_id, l1_addr, size, offset);      // with offset
  *
- * @tparam AccessorT MeshTensorAccessor or MeshGcoreAccessor type (auto-deduced)
- * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id, array-like for gcore_coord)
- * @param accessor Accessor instance
- * @param coord Global coordinate (page_id or gcore_coord)
+ * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
+ * @param accessor MeshTensorAccessor instance
+ * @param coord Global page_id
  * @param src_addr Local L1 address to receive the data
  * @param size Size of data to read
- * @param offset Offset within the page/core (default 0)
+ * @param offset Offset within the page (default 0)
  * @param noc NOC index to use
  */
-template <typename AccessorT, typename CoordT, typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
+template <typename TensorAccessorT, typename CoordT>
 inline void async_read(
-    const AccessorT& accessor,
+    const MeshTensorAccessor<TensorAccessorT>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
     uint32_t size,
@@ -121,32 +109,26 @@ inline void async_read(
 }
 
 /**
- * @brief Async write to mesh accessor (handles both local and remote)
- *
- * Works with both MeshTensorAccessor (using page_id) and MeshGcoreAccessor (using coord).
+ * @brief Async write to MeshTensorAccessor (handles both local and remote)
  *
  * Usage examples:
  *   async_write(accessor, page_id, l1_addr, size);              // non-posted (default)
  *   async_write<1>(accessor, page_id, l1_addr, size);           // posted write
- *   async_write(accessor, gcore_coord, l1_addr, size, offset);  // with offset
+ *   async_write(accessor, page_id, l1_addr, size, offset);      // with offset
  *
  * @tparam posted Posted write flag (0 = non-posted, 1 = posted, default 0)
- * @tparam AccessorT MeshTensorAccessor or MeshGcoreAccessor type (auto-deduced)
- * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id, array-like for gcore_coord)
- * @param accessor Accessor instance
- * @param coord Global coordinate (page_id or gcore_coord)
+ * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
+ * @param accessor MeshTensorAccessor instance
+ * @param coord Global page_id
  * @param src_addr Local L1 address to send data
  * @param size Size of data to write
- * @param offset Offset within the page/core (default 0)
+ * @param offset Offset within the page (default 0)
  * @param noc NOC index to use
  */
-template <
-    uint8_t posted = 0,
-    typename AccessorT,
-    typename CoordT,
-    typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
+template <uint8_t posted = 0, typename TensorAccessorT, typename CoordT>
 inline void async_write(
-    const AccessorT& accessor,
+    const MeshTensorAccessor<TensorAccessorT>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
     uint32_t size,
@@ -191,7 +173,9 @@ inline void async_write(
  * @param offset Offset within the gcore's L1 (default 0)
  * @param noc NOC index to use
  */
-template <typename CoordT, typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t>>>
+template <
+    typename CoordT,
+    typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
 inline void async_read(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
@@ -227,7 +211,10 @@ inline void async_read(
  * @param offset Offset within the gcore's L1 (default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename CoordT, typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t>>>
+template <
+    uint8_t posted = 0,
+    typename CoordT,
+    typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
 inline void async_write(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
@@ -254,31 +241,30 @@ inline void async_write(
 // ==================== Semaphore APIs ====================
 
 /**
- * @brief Atomic semaphore increment (handles both local and remote)
+ * @brief Atomic semaphore increment using MeshTensorAccessor (handles both local and remote)
  *
- * Works with MeshGcoreAccessor to increment a semaphore at a specific gcore.
- * For local gcores, uses NOC atomic increment. For remote gcores (across devices),
+ * For local pages, uses NOC atomic increment. For remote pages (across devices),
  * uses fabric atomic increment.
  *
  * Usage example:
- *   semaphore_inc(gcore_accessor, target_gcore_coord, 1, semaphore_offset);
+ *   semaphore_inc(accessor, page_id, 1, semaphore_offset);
  *
  * @tparam posted Posted atomic flag (0 = non-posted, 1 = posted, default 0)
- * @tparam AccessorT MeshGcoreAccessor type (auto-deduced)
- * @tparam CoordT Coordinate type (auto-deduced: array-like for gcore_coord)
- * @param accessor Accessor instance
- * @param coord Global coordinate (gcore_coord)
+ * @tparam TensorAccessorT Underlying TensorAccessor type (auto-deduced)
+ * @tparam CoordT Coordinate type (auto-deduced: uint32_t for page_id)
+ * @param accessor MeshTensorAccessor instance
+ * @param coord Global page_id
  * @param incr_val Value to increment the semaphore by
- * @param offset Offset within the gcore's L1 (semaphore address, default 0)
+ * @param offset Offset within the page (semaphore address, default 0)
  * @param noc NOC index to use
  */
-template <
-    uint8_t posted = 0,
-    typename AccessorT,
-    typename CoordT,
-    typename = std::enable_if_t<is_mesh_accessor_v<AccessorT>>>
+template <uint8_t posted = 0, typename TensorAccessorT, typename CoordT>
 inline void semaphore_inc(
-    const AccessorT& accessor, const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
+    const MeshTensorAccessor<TensorAccessorT>& accessor,
+    const CoordT& coord,
+    uint32_t incr_val,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
 
     if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
@@ -315,7 +301,10 @@ inline void semaphore_inc(
  * @param offset Offset within the gcore's L1 (semaphore address, default 0)
  * @param noc NOC index to use
  */
-template <uint8_t posted = 0, typename CoordT, typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t>>>
+template <
+    uint8_t posted = 0,
+    typename CoordT,
+    typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
 inline void semaphore_inc(const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);

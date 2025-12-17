@@ -16,6 +16,19 @@ MeshKernelHandle CreateMeshKernel(
     const std::vector<Gcore>& gcores,
     const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig>&
         config) {
+    // Get mesh compile-time defines and append to config
+    auto mesh_defines = builder.get_compile_time_defines();
+
+    // Create a modified config with mesh defines appended
+    auto config_with_defines = std::visit(
+        [&mesh_defines](auto cfg)
+            -> std::
+                variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig> {
+                    cfg.defines.insert(mesh_defines.begin(), mesh_defines.end());
+                    return cfg;
+                },
+        config);
+
     // Get grid IDs and local CoreRangeSets from gcores
     auto grid_to_cores = builder.get_grid_core_range_set_from_gcores(gcores);
 
@@ -36,7 +49,7 @@ MeshKernelHandle CreateMeshKernel(
 
         auto& grid_program = program.program_at(grid_ptr->coord);
 
-        auto handle = tt::tt_metal::CreateKernel(grid_program, file_name, core_range_set, config);
+        auto handle = tt::tt_metal::CreateKernel(grid_program, file_name, core_range_set, config_with_defines);
 
         // Store the kernel handle for this grid
         mesh_kernel_handle[grid_id] = handle;
