@@ -201,6 +201,57 @@ The flakiness suggests the issue may be related to:
 
 The test uses `num_iterations = 3` (default), running the same parameters with different random data each iteration. When it passes, all 3 iterations pass; when it fails, 1-3 iterations fail.
 
+## Container Reproduction Results
+
+**Date:** 2025-12-16 17:30-18:00 UTC
+
+Tested across multiple containerized tt-metal builds to verify reproducibility and identify when fix was introduced.
+
+### Container Test Matrix
+
+| Container Image | Commit | Date | Runs | Passed | Failed | Pass Rate |
+|-----------------|--------|------|------|--------|--------|-----------|
+| `ed2c8a1d20` | ed2c8a1d20c5 | 2025-11-21 | - | - | - | Test not present |
+| `9ca166977b` | 9ca166977b52 | 2025-12-10 | 5 | 0 | 5 | **0%** |
+| `b747edd158` | b747edd15867 | 2025-12-12 | 5 | 0 | 5 | **0%** |
+| `b0304ff7a5` | b0304ff7a52d | 2025-12-16 | 10 | 10 | 0 | **100%** |
+
+### Detailed Container Info
+
+**Container `9ca166977b` (6 days old):**
+- Commit: `9ca166977b524a70ec0f8ba75c36a8107c7428fe`
+- Date: 2025-12-10 06:08:20 +0000
+- Result: 5/5 FAILED
+
+**Container `b747edd158` (4 days old):**
+- Commit: `b747edd15867bf345217968d9a1a60d3030eef7d`
+- Date: 2025-12-12 10:15:15 +0000
+- Subject: Inline [] operator in ShapeBase (#34035)
+- Result: 5/5 FAILED
+
+**Container `b0304ff7a5` (fresh main):**
+- Commit: `b0304ff7a52db4f0215cd2c8ff32dad460676de9`
+- Date: 2025-12-16 19:07:32 -0500
+- Subject: Revert "Fix logical const correctness of SDMT::get_*_sub_device_manager (#34446)" (#34574)
+- Result: 10/10 PASSED
+
+### Conclusion
+
+The bug is **reproducible in containers** and was **FIXED** between:
+- **Failing:** `b747edd158` (2025-12-12)
+- **Passing:** `b0304ff7a5` (2025-12-16)
+
+The fix was likely included in one of the commits merged between Dec 12-16.
+
+## Comparison Summary
+
+| Environment | Commit | Date | Pass Rate |
+|-------------|--------|------|-----------|
+| Host (standalone) | `403df4beb0` | ~Dec 14 | 0-20% (flaky) |
+| Container | `9ca166977b` | Dec 10 | 0% |
+| Container | `b747edd158` | Dec 12 | 0% |
+| Container | `b0304ff7a5` | Dec 16 | 100% |
+
 ## Reporter
 
 - **Date:** 2025-12-16
