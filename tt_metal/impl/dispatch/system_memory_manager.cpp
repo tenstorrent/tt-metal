@@ -421,8 +421,16 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
-    const uint32_t prefetch_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+    // Cache singleton lookups - these don't change during execution
+    auto& ctx = MetalContext::instance();
+    auto& cluster = ctx.get_cluster();
+    const auto& dispatch_mem_map = ctx.dispatch_mem_map();
+
+    // Cache timeout duration - it's set at startup and never changes
+    static const auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
+
+    const uint32_t prefetch_q_rd_ptr =
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -434,8 +442,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Body of the operation
         auto fetch_operation_body = [&]() {
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+            cluster.read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
         };
 
@@ -450,18 +457,14 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
-        auto timeout_duration =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
-
         loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
     };
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
-                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
+    uint32_t prefetch_q_base = dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    uint32_t prefetch_q_limit =
+        prefetch_q_base + (dispatch_mem_map.prefetch_q_entries() * sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -470,6 +473,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
+    // Cache timeout duration - it's set at startup and never changes
+    static const auto timeout_duration =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
@@ -504,11 +511,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
-    loop_and_wait_with_timeout(
-        wait_operation_body,
-        wait_condition,
-        on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+    loop_and_wait_with_timeout(wait_operation_body, wait_condition, on_timeout, timeout_duration);
 
     return write_ptr_and_toggle;
 }

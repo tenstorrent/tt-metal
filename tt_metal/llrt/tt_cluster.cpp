@@ -504,13 +504,12 @@ std::set<ChipId> Cluster::user_exposed_chip_ids() const {
 }
 
 const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
-    if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
-        TT_THROW(
-            "Cannot access soc descriptor for {} before device driver is initialized! Call "
-            "initialize_device_driver({}) first",
-            chip,
-            chip);
-    }
+    TT_ASSERT(
+        this->sdesc_per_chip_.find(chip) != this->sdesc_per_chip_.end(),
+        "Cannot access soc descriptor for {} before device driver is initialized! Call "
+        "initialize_device_driver({}) first",
+        chip,
+        chip);
     return this->sdesc_per_chip_.at(chip);
 }
 
@@ -713,21 +712,19 @@ void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_i
 }
 
 bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const {
-    if (this->rtoptions_.get_disable_dma_ops()) {
-        return false;
-    }
-
     // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
     // TODO: Remove this once we have a proper fix for small DMA sizes.
     constexpr uint32_t min_dma_size_bytes = 32;
+    if (sz_in_bytes < min_dma_size_bytes || this->rtoptions_.get_disable_dma_ops()) {
+        return false;
+    }
 
     // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
     // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
-    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
-           sz_in_bytes >= min_dma_size_bytes;
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id);
 }
 
-void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
@@ -754,11 +751,12 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
 }
 
-void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, const tt_cxy_pair& core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    static const bool watcher_enabled = rtoptions_.get_watcher_enabled();
+    if (watcher_enabled) {
         tt::watcher_sanitize_host_noc_read(
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
@@ -778,7 +776,8 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
 }
 
-void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::write_core_immediate(
+    const void* mem_ptr, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
@@ -802,12 +801,13 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 }
 
-void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+void Cluster::read_core(
+    std::vector<uint32_t>& data, uint32_t size_in_bytes, const tt_cxy_pair& core, uint64_t addr) const {
     data.resize(size_in_bytes / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr);
 }
 
-void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
+void Cluster::write_reg(const std::uint32_t* mem_ptr, const tt_cxy_pair& target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
@@ -830,7 +830,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     }
 }
 
-void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
+void Cluster::read_reg(std::uint32_t* mem_ptr, const tt_cxy_pair& target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);

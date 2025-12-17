@@ -149,10 +149,10 @@ public:
     void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
     // Write to core. Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const;
 
     // Access physical noc coordinates. Does write without effects of write combining
-    void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const;
 
     // Write to core without effects of write combining
     template <typename DType>
@@ -180,9 +180,9 @@ public:
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
-    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const;
 
-    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, const tt_cxy_pair& core, uint64_t addr) const;
 
     template <typename DType = uint32_t>
     [[nodiscard]] std::vector<DType> read_core(ChipId chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
@@ -210,8 +210,8 @@ public:
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
-    void write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
-    void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
+    void write_reg(const std::uint32_t* mem_ptr, const tt_cxy_pair& target, uint64_t addr) const;
+    void read_reg(std::uint32_t* mem_ptr, const tt_cxy_pair& target, uint64_t addr) const;
 
     void write_sysmem(
         const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
