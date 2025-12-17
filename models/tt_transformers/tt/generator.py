@@ -183,7 +183,6 @@ class Generator:
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
         )
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
@@ -198,7 +197,6 @@ class Generator:
             kv_cache=kv_cache,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
 
@@ -360,28 +358,21 @@ class Generator:
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
                 logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
-            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
-            # otherwise, we can process the logits after prefill immediately
-            if self.data_parallel > 1:
-                out_list.append(logits)
-            else:
-                output_logits[idx] = self.model[model_id].process_output_prefill(
-                    logits, last_token_idx=(last_token_idx % 32)
-                )
-                del logits
+            # We have to dispatch copy to host to avoid corruption by the next user's prefill
+            out_list.append(logits.cpu(blocking=False))
 
         # Process the logits after all the prefill are done in data parallel mode
-        if self.data_parallel > 1:
-            for idx, out in enumerate(out_list):
-                seq_len = int(prompt_lens[idx])
-                last_token_idx = seq_len - 1
-                user_id = empty_slots[idx]
-                model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+        for idx, out in enumerate(out_list):
+            seq_len = int(prompt_lens[idx])
+            last_token_idx = seq_len - 1
+            user_id = empty_slots[idx]
+            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
-                # Since we give unpadded_seq_len, only the tile containing the last token is returned
-                output_logits[idx] = self.model[model_id].process_output_prefill(
-                    out, last_token_idx=(last_token_idx % 32)
-                )
+            # Ensure all copying is done
+            ttnn.synchronize_device(self.model[model_id].mesh_device)
+
+            # Since we give unpadded_seq_len, only the tile containing the last token is returned
+            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -961,7 +952,7 @@ class Generator:
 
             last_token_idx = prompt_lens[idx] - 1
             output_logits[idx] = self.model[model_id].process_output_prefill(
-                out_list[idx], 1, last_token_idx=(last_token_idx % 32)
+                out_list[idx].cpu(), 1, last_token_idx=(last_token_idx % 32)
             )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -1620,7 +1611,7 @@ class Generator:
         )
 
         last_token_idx = prefill_len - 1
-        logits = self.model[model_id].process_output_prefill(logits, 1, last_token_idx=(last_token_idx % 32))
+        logits = self.model[model_id].process_output_prefill(logits.cpu(), 1, last_token_idx=(last_token_idx % 32))
         logits = logits.view(1, 1, self.model_args[model_id].vocab_size)
 
         prefill_output_xattn_masks = [[] for _ in range(self.data_parallel)]
