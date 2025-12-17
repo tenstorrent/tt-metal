@@ -111,17 +111,14 @@ public:
 
     Iterator begin() const { return Iterator(0, block_size_, total_); }
     Iterator end() const { return Iterator(total_, block_size_, total_); }
-
     SizeT num_blocks() const { return (total_ + block_size_ - 1) / block_size_; }
-
     SizeT block_size() const { return block_size_; }
-
+    Block front() const { return Block(0, std::min(block_size_, total_), block_size_); }
     Block back() const {
         SizeT last_start = (num_blocks() - 1) * block_size_;
         return Block(last_start, total_, block_size_);
     }
-
-    Block front() const { return Block(0, std::min(block_size_, total_), block_size_); }
+    SizeT total_with_remainder() const { return total_ + back().remainder(); }
 
 private:
     SizeT total_;

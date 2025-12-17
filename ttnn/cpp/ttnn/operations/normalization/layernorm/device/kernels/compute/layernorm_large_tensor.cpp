@@ -175,10 +175,12 @@ void MAIN {
             cb_push_back(pack_cb, onetile);
         }
 
+#ifndef RMSNORM
         // Account for any over-accumulation that might
         // have been done if the last tile is only partially-filled
         constexpr uint32_t extra_cols = Wt * tt::constants::TILE_WIDTH - W;
         layernorm_compute_utils::adjust_variance_for_overaccumulation<W, extra_cols>(cb_ex2, cb_ex);
+#endif
 
         // End of
         // Var Calculation
@@ -237,7 +239,6 @@ void MAIN {
         //  √(Var(X)+ε)
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
-            cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_in, block.full_block_size());
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
@@ -246,6 +247,7 @@ void MAIN {
                 copy_tile(cb_in, i, i);
             }
 #else
+            cb_wait_front(cb_ex, 1);
             reconfig_data_format(cb_in, cb_ex);
             sub_bcast_cols_init_short(cb_in, cb_ex);
             // x-E[x]
@@ -360,7 +362,9 @@ void MAIN {
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
+#ifndef RMSNORM
         cb_pop_front(cb_ex, onetile);
+#endif
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }

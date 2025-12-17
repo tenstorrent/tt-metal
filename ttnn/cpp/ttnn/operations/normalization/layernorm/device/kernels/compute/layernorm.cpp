@@ -80,7 +80,7 @@ void MAIN {
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
 #ifdef RMSNORM
-    binary_op_init_common(cb_in, cb_in, cb_xmm2);
+    binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
 #else
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
@@ -90,6 +90,13 @@ void MAIN {
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
 
+#ifndef RMSNORM
+    const auto xmm_buffer_size = Wt;
+#else
+    // RMS streams input directly into cb_xmm, which is
+    // sent in full blocks from the reader
+    const auto xmm_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
+#endif
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 /*
  * X + Y
@@ -108,7 +115,7 @@ void MAIN {
             cb_wait_front(cb_inb, block.full_block_size());
             cb_reserve_back(cb_x, block.full_block_size());
             for (auto i : block.local()) {
-                add_tiles(cb_in, cb_inb, block.to_global(i), block.to_global(i), i);
+                add_tiles(cb_in, cb_inb, i, i, i);
                 pack_tile(i, cb_x);
             }
             REL();
@@ -135,7 +142,7 @@ void MAIN {
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
-        cb_reserve_back(cb_xmm, Wt);
+        cb_reserve_back(cb_xmm, xmm_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             ACQ();
@@ -157,7 +164,11 @@ void MAIN {
          */
         mul_tiles_init(cb_xmm, cb_xmm);
         for (auto block : generic::blocks(Wt, blk)) {
+#ifndef RMSNORM
             cb_wait_front(cb_xmm, block.start() + block.size());
+#else
+            cb_wait_front(cb_xmm, block.start() + block.full_block_size());
+#endif
             cb_reserve_back(cb_xmm2, block.size());
             ACQ();
             for (auto i : block.local()) {
@@ -176,15 +187,15 @@ void MAIN {
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PartialBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
 
+#ifndef RMSNORM
         // Adjust variance for possible overaccumulation in the last tile
         // (if partially-filled)
         constexpr uint32_t extra_cols = Wt * tt::constants::TILE_WIDTH - W;
         norm::layernorm::device::kernels::compute::adjust_variance_for_overaccumulation<W, extra_cols>(cb_ex2, cb_ex);
-
         cb_pop_front(cb_ex, 1);
+#endif
 
         // Var[x] + eps
-        cb_wait_front(cb_ex2, 1);
         reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
@@ -275,8 +286,7 @@ void MAIN {
             }
         }
         cb_pop_front(cb_ex2pe, 1);
-        cb_pop_front(cb_xmm, Wt);
-
+        cb_pop_front(cb_xmm, xmm_buffer_size);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE
