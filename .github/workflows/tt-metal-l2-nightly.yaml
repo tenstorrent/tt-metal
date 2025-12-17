@@ -279,7 +279,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
