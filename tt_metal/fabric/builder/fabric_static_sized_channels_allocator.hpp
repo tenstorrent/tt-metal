@@ -7,6 +7,7 @@
 #include "fabric_channel_allocator.hpp"
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
@@ -29,10 +30,9 @@ namespace tt::tt_fabric {
 class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
     FabricStaticSizedChannelsAllocator(
-        tt::tt_fabric::Topology topology,
+        Topology topology,
+        const MeshChannelSpec& spec,
         const FabricEriscDatamoverOptions& options,
-        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
-        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
         size_t channel_buffer_size_bytes,
         size_t available_channel_buffering_space,
         const std::vector<MemoryRegion>& memory_regions);
@@ -82,6 +82,11 @@ public:
         return num_used_receiver_channels_per_vc[vc_id];
     }
 
+    /**
+     * Get the channel spec for this allocator
+     */
+    const MeshChannelSpec& get_spec() const { return spec_; }
+
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
         return get_sender_channel_number_of_slots(0, channel_id);
@@ -112,7 +117,7 @@ private:
      * Helper function that decides the number of buffer slots for each channel per VC.
      */
     void configure_buffer_slots_helper(
-        tt::tt_fabric::Topology topology,
+        Topology topology,
         const tt::tt_fabric::FabricEriscDatamoverOptions& options,
         std::array<
             std::array<size_t, tt::tt_fabric::builder_config::num_max_sender_channels>,
@@ -128,6 +133,7 @@ private:
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
     // Configuration parameters
+    MeshChannelSpec spec_;
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};
     size_t channel_buffer_size_bytes = 0;

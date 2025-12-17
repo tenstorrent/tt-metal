@@ -11,6 +11,7 @@ MeshChannelSpec MeshChannelSpec::create_for_compute_mesh(Topology topology, cons
     MeshChannelSpec spec;
     const bool is_2d = is_2D_topology(topology);
 
+    // Standard mesh router configuration
     // VC0: always present
     switch (topology) {
         case Topology::NeighborExchange:
@@ -31,9 +32,17 @@ MeshChannelSpec MeshChannelSpec::create_for_compute_mesh(Topology topology, cons
     spec.receiver_channels_per_vc[0] = 1;
     spec.num_vcs = 1;
 
+    // Z router VC0 configuration
+    if (is_2d) {
+        spec.sender_channels_z_router_per_vc[0] = builder_config::num_sender_channels_z_router_vc0;
+        spec.receiver_channels_z_router_per_vc[0] = 1;
+    }
+
     // VC1: only for 2D topologies with intermesh
     if (is_2d && intermesh_config && intermesh_config->requires_vc1) {
         spec.num_vcs = 2;
+
+        // Standard mesh router VC1
         if (intermesh_config->router_type == IntermeshRouterType::Z_INTERMESH) {
             spec.sender_channels_per_vc[1] = 4;  // 3 mesh + Z
             spec.downstream_edms_per_vc[1] = 4;  // 3 mesh directions + Z
@@ -42,6 +51,10 @@ MeshChannelSpec MeshChannelSpec::create_for_compute_mesh(Topology topology, cons
             spec.downstream_edms_per_vc[1] = 3;  // 3 mesh directions
         }
         spec.receiver_channels_per_vc[1] = 1;
+
+        // Z router VC1 configuration
+        spec.sender_channels_z_router_per_vc[1] = builder_config::num_sender_channels_z_router_vc1;
+        spec.receiver_channels_z_router_per_vc[1] = 1;
     }
 
     spec.validate();

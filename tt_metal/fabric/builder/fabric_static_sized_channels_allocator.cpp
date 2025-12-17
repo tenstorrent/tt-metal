@@ -61,18 +61,24 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
 }
 
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
-    tt::tt_fabric::Topology topology,
+    Topology topology,
+    const MeshChannelSpec& spec,
     const FabricEriscDatamoverOptions& options,
-    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
-    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
     size_t channel_buffer_size_bytes,
     size_t available_channel_buffering_space,
     const std::vector<MemoryRegion>& memory_regions) :
     FabricChannelAllocator(topology, options, memory_regions),
-    num_used_sender_channels_per_vc(num_used_sender_channels_per_vc),
-    num_used_receiver_channels_per_vc(num_used_receiver_channels_per_vc),
+    spec_(spec),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
     available_channel_buffering_space(available_channel_buffering_space) {
+    // Extract channel counts from spec
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (vc < spec_.num_vcs) {
+            num_used_sender_channels_per_vc[vc] = spec_.sender_channels_per_vc[vc];
+            num_used_receiver_channels_per_vc[vc] = spec_.receiver_channels_per_vc[vc];
+        }
+    }
+
     // Compute buffer region start from memory regions
     TT_FATAL(!memory_regions.empty(), "Memory regions must not be empty");
     this->buffer_region_start = memory_regions[0].start_address;
@@ -96,7 +102,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
-        topology,
+        spec_.topology,
         options,
         num_sender_buffer_slots_per_vc,
         num_remote_sender_buffer_slots_per_vc,

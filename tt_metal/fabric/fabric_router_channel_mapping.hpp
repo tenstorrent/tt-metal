@@ -8,6 +8,7 @@
 #include <map>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
 
 #include <vector>
 
@@ -81,7 +82,7 @@ struct InternalReceiverChannelMapping {
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
-        Topology topology, bool has_tensix_extension, RouterVariant variant, const IntermeshVCConfig* intermesh_config);
+        Topology topology, const MeshChannelSpec& spec, bool has_tensix_extension, RouterVariant variant);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -98,9 +99,10 @@ public:
      */
     Topology get_topology() const { return topology_; }
 
-    uint32_t get_num_virtual_channels() const;
-
-    uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+    /**
+     * Get the channel spec for this router
+     */
+    const MeshChannelSpec& get_spec() const { return spec_; }
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
@@ -111,9 +113,9 @@ public:
 
 private:
     Topology topology_;
+    MeshChannelSpec spec_;
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
-    const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

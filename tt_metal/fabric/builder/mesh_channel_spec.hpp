@@ -23,12 +23,20 @@ struct IntermeshVCConfig;
  * - Sender channels per VC (for transmitting data)
  * - Receiver channels per VC (for receiving data)
  * - Downstream EDMs per VC (for forwarding/routing)
+ *
+ * For meshes with Z routers, separate arrays track the Z router channel structure.
  */
 struct MeshChannelSpec {
     size_t num_vcs = 0;
+
+    // Standard mesh router channel counts
     std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {};
     std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {};
     std::array<size_t, builder_config::MAX_NUM_VCS> downstream_edms_per_vc = {};  // Forwarding paths per VC
+
+    // Z router channel counts (for meshes with vertical inter-device connectivity)
+    std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels_z_router_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels_z_router_per_vc = {};
 
     // ═══════════════════════════════════════════════════════════
     // Factory Methods
@@ -47,6 +55,13 @@ struct MeshChannelSpec {
     // ═══════════════════════════════════════════════════════════
 
     size_t get_num_vcs() const { return num_vcs; }
+
+    /**
+     * Check if a specific VC is active/present in this spec.
+     * @param vc The VC index to check
+     * @return true if the VC exists (vc < num_vcs), false otherwise
+     */
+    bool has_vc(uint32_t vc) const { return vc < num_vcs; }
 
     size_t get_sender_channel_count_for_vc(uint32_t vc) const {
         TT_ASSERT(vc < num_vcs, "VC {} out of bounds (max {})", vc, num_vcs);
