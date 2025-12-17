@@ -74,6 +74,9 @@ public:
     // Get the number of downstream EDMs connected for a specific VC
     virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
 
+    // Get the connection mask for a specific VC
+    virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -118,6 +121,11 @@ public:
     // Get the number of downstream EDMs connected for a specific VC
     uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const override {
         return downstream_edms_connected_by_vc.at(vc_idx).size();
+    }
+
+    // Get the connection mask for a specific VC
+    uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc_mask.at(vc_idx);
     }
 
     // Get buffer index semaphore address for a specific VC and compact index

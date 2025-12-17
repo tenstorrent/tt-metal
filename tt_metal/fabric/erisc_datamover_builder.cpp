@@ -969,23 +969,43 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const auto [is_intermesh_router_on_edge, is_intramesh_router_on_edge] =
         compute_edge_facing_flags(control_plane, this->local_fabric_node_id, this->my_eth_channel);
 
-    // uint32_t num_vc0_downstream_edms =
-    // this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0); Get the VC0 downstream EDM
-    // count based on 2D routing Use static count from builder_config, not dynamic vector size which can accumulate
-    const bool is_2D_routing = is_2D_topology(topology);
-    uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
+    // Get actual downstream EDM counts from the adapter (actual connections made)
+    uint32_t num_vc0_downstream_edms = this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0);
 
-    // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
-    // VC1 runtime args are passed when VC1 is configured (both inter-mesh and intra-mesh have VC1)
     bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
-
-    // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
+    // Get actual VC1 downstream EDM count from adapter (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
-        (needs_vc1 && is_2D_routing) ? builder_config::get_vc1_downstream_edm_count(is_2D_routing) : 0;
-
-    // Determine if Z routers are enabled
+        needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
+    // unsure which one we should prefer at the moment
+    // bool z_routers_enabled = fabric_context.get_builder_context().get_intermesh_vc_config().router_type ==
+    // IntermeshRouterType::Z_INTERMESH;
     bool z_router_enabled = fabric_context.has_z_router_on_device(local_physical_chip_id);
 
+    // Calculate array sizes for downstream EDMs based on masks
+    // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
+    auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
+        if (mask == 0) {
+            return 0;
+        }
+        // Find position of most significant bit + 1
+        return 32 - __builtin_clz(mask);
+    };
+
+    uint32_t vc0_downstream_edm_size =
+        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0));
+    uint32_t vc1_downstream_edm_size =
+        needs_vc1
+            ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1))
+            : 0;
+
+    // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
+    // Even if mask is 0 (no downstream connections), we need at least 1 element for the array template
+    if (vc0_downstream_edm_size == 0) {
+        vc0_downstream_edm_size = 1;
+    }
+    if (needs_vc1 && vc1_downstream_edm_size == 0) {
+        vc1_downstream_edm_size = 1;
+    }
     const std::vector<uint32_t> main_args_part1 = {
         static_cast<uint32_t>(num_sender_channels),
         static_cast<uint32_t>(num_receiver_channels),
@@ -1005,7 +1025,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->enable_first_level_ack,  // VC0 first level ack (for Ring/Torus)
         false,                         // VC1 first level ack (always false - VC1 doesn't use bubble flow control)
         enable_risc_cpu_data_cache,
-        z_router_enabled};
+        z_router_enabled,
+        vc0_downstream_edm_size,   // VC0_DOWNSTREAM_EDM_SIZE: array size for VC0 downstream EDMs
+        vc1_downstream_edm_size};  // VC1_DOWNSTREAM_EDM_SIZE: array size for VC1 downstream EDMs
 
     const std::vector<uint32_t> main_args_part2 = {
         static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[0]),
