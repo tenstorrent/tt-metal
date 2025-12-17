@@ -6,7 +6,7 @@
 import pytest
 
 import ttnn
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE_BH, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "batch_size",
     [
-        MOBILENETV2_BATCH_SIZE,
+        MOBILENETV2_BATCH_SIZE_BH,
     ],
 )
 def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds, model_location_generator):

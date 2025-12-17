@@ -10,7 +10,8 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_BATCH_SIZE_BH, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.utils.common_demo_utils import get_data_loader, load_imagenet_dataset
 from models.experimental.efficientnetb0.common import EFFICIENTNETB0_L1_SMALL_SIZE
 from models.experimental.swin_s.common import SWIN_S_L1_SMALL_SIZE
@@ -56,7 +57,8 @@ def evaluation(
             if model_type == "tt_model":
                 if model_name == "mobilenetv2":
                     ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
-                    ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+                    pad_channels = 32 if is_blackhole() else 16
+                    ttnn_input = torch.nn.functional.pad(ttnn_input, (0, pad_channels - ttnn_input.shape[-1]), value=0)
                     ttnn_input = ttnn.from_torch(
                         ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
                     )
@@ -370,7 +372,11 @@ def run_mobilenetv2_image_classification_eval(
         ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
         _, host_input_tensor = create_mobilenetv2_input_tensors(
-            batch=batch_size, input_height=res, input_width=res, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+            batch=batch_size,
+            input_height=res,
+            input_width=res,
+            pad_channels=32 if is_blackhole() else 16,
+            mesh_mapper=inputs_mesh_mapper,
         )
         input_dram_mem_config = get_memory_config_for_persistent_dram_tensor(
             host_input_tensor.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
@@ -379,7 +385,7 @@ def run_mobilenetv2_image_classification_eval(
             f"Auto-selected persistent DRAM tensor memory config: shape={host_input_tensor.shape}, shard_shape={input_dram_mem_config.shard_spec.shape}, grid={input_dram_mem_config.shard_spec.grid}"
         )
 
-        input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+        input_l1_core_grid = ttnn.CoreGrid(x=12, y=8) if is_blackhole() else ttnn.CoreGrid(x=8, y=8)
         assert (
             host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0
         ), "Expecting even sharding on L1 input tensor"
@@ -423,19 +429,15 @@ def run_mobilenetv2_image_classification_eval(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    ((MOBILENETV2_BATCH_SIZE),),
-)
-@pytest.mark.parametrize(
     "model_type",
     [
         ("tt_model"),
         ("torch_model"),
     ],
 )
-def test_mobilenetv2_image_classification_eval(
-    device, model_type, batch_size, model_location_generator, reset_seeds, res=224
-):
+def test_mobilenetv2_image_classification_eval(device, model_type, model_location_generator, reset_seeds, res=224):
+    batch_size = MOBILENETV2_BATCH_SIZE_BH if is_blackhole() else MOBILENETV2_BATCH_SIZE
+
     run_mobilenetv2_image_classification_eval(
         device, model_type, batch_size, res, model_location_generator, reset_seeds
     )
@@ -447,10 +449,6 @@ def test_mobilenetv2_image_classification_eval(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    ((MOBILENETV2_BATCH_SIZE),),
-)
-@pytest.mark.parametrize(
     "model_type",
     [
         ("tt_model"),
@@ -458,8 +456,10 @@ def test_mobilenetv2_image_classification_eval(
     ],
 )
 def test_mobilenetv2_image_classification_eval_dp(
-    mesh_device, model_type, batch_size, model_location_generator, reset_seeds, res=224
+    mesh_device, model_type, model_location_generator, reset_seeds, res=224
 ):
+    batch_size = MOBILENETV2_BATCH_SIZE_BH if is_blackhole() else MOBILENETV2_BATCH_SIZE
+
     run_mobilenetv2_image_classification_eval(
         mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
     )

@@ -4,15 +4,15 @@
 
 ## Evaluation Table
 
-| Model        | Resolution | Batch Size | Samples | TTNN Accuracy | Torch Accuracy |
-|--------------|------------|------------|---------|-------------------------------|-------------------------------|
-| ViT          | (224, 224) | 8          | 512     | 81.25%               | 82.23%                 |
-| ResNet50     | (224, 224) | 16         | 512     | 79.10%                 | 76.56%                |
-| MobileNetV2  | (224, 224) | 10          | 512     | 69.40%                 | 71.80%                |
-| VoVNet       | (224, 224) | 1          | 512     | 74.41%                 | 80.08%                 |
-| EfficientNetB0| (224, 224) | 1          | 512     | 75.39%                | 76.76%                 |
-| SwinV2       | (512, 512) | 1          | 512     | 75.59%                 | 81.05%                 |
-| Swin_S       | (512, 512) | 1          | 512     | 81.05%                 | 82.23%                 |
+| Model          | Resolution | Batch Size | Samples | TTNN Accuracy | Torch Accuracy |
+|----------------|------------|------------|---------|---------------|----------------|
+| ViT            | (224, 224) | 8          | 512     | 81.25%        | 82.23%         |
+| ResNet50       | (224, 224) | 16         | 512     | 79.10%        | 76.56%         |
+| MobileNetV2    | (224, 224) | 9, 10      | 512     | 69.40%        | 71.80%         |
+| VoVNet         | (224, 224) | 1          | 512     | 74.41%        | 80.08%         |
+| EfficientNetB0 | (224, 224) | 1          | 512     | 75.39%        | 76.76%         |
+| SwinV2         | (512, 512) | 1          | 512     | 75.59%        | 81.05%         |
+| Swin_S         | (512, 512) | 1          | 512     | 81.05%        | 82.23%         |
 
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.
 
@@ -50,7 +50,7 @@ Where,
 **MobileNetV2:** <br>
 **_For 224x224,_**<br>
 
-**_Single-Device (BS-10):_**<br>
+**_Single-Device (Wormhole: BS-10 | Blackhole: BS-9):_**<br>
  ```sh
  pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[tt_model-10-device_params0]
  ```
