@@ -53,10 +53,53 @@ The original NIGHTLY test uses random uniform[-1,1] data which has mean≈0. Whe
 ### Prerequisites
 
 - Wormhole n150 device
-- tt-metal built with tt-train
-- Proper container configuration (see below)
+- tt-metal with tt-train
 
-### Container Configuration (CRITICAL)
+### Native Build Reproduction (Verified)
+
+**This is the verified reproduction method.** Fresh clone and standalone tt-train build on physical machine:
+
+```bash
+# 1. Fresh clone
+cd ~/tt
+rm -rf tt-metal
+git clone --recurse-submodules git@github.com:tenstorrent/tt-metal.git
+cd tt-metal
+git lfs pull
+git submodule foreach --recursive "git lfs pull"
+
+# 2. Install dependencies (requires sudo)
+sudo ./install_dependencies.sh
+
+# 3. Create Python environment
+./create_venv.sh
+
+# 4. Build tt-metal (required for tt-train dependencies)
+source python_env/bin/activate
+./build_metal.sh --debug --build-all --enable-ccache
+deactivate
+
+# 5. Standalone tt-train build (RECOMMENDED for consistency)
+cd tt-train
+rm -rf build/
+cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -B build -GNinja
+cmake --build build --config Debug --clean-first
+
+# 6. Run bug reproduction tests (all should FAIL with max_diff ~1000)
+./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
+```
+
+**Expected output:**
+```
+[ RUN      ] LayerNormBackwardOpTest.BugRepro_Deterministic_256Tiles
+dx FAILED: max_diff=1000, mean_diff=1004.21
+[  FAILED  ] LayerNormBackwardOpTest.BugRepro_Deterministic_256Tiles
+...
+7 FAILED TESTS
+```
+
+### Container Reproduction (If Using Docker)
 
 When running in Docker containers, **proper device mounts are required**:
 
@@ -77,58 +120,21 @@ docker run --rm \
 
 **Without `-v /dev:/dev -v /sys:/sys`, tests fail due to container misconfiguration, not the kernel bug.**
 
-### Method 1: Run Deterministic Bug Reproduction Tests
-
-These tests definitively expose the bug regardless of random seeds:
-
-```bash
-# Build tt-train
-cd $TT_METAL_HOME
-./build_metal.sh --debug --build-all --enable-ccache
-
-# Run bug reproduction tests (all should FAIL with max_diff ~1000)
-./build_Debug/tt-train/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
-```
-
-**Expected output:**
-```
-[ RUN      ] LayerNormBackwardOpTest.BugRepro_Deterministic_256Tiles
-dx FAILED: max_diff=1000, mean_diff=1004.21
-[  FAILED  ] LayerNormBackwardOpTest.BugRepro_Deterministic_256Tiles
-...
-7 FAILED TESTS
-```
-
-### Method 2: Original NIGHTLY Test (May Pass Due to Random Data)
+### Original NIGHTLY Test (May Pass Due to Random Data)
 
 ```bash
 # This test uses random data and may pass (bug is masked)
-./build_Debug/tt-train/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit"
+./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit"
 ```
 
 **Note:** This test passes on properly configured systems because random mean-zero data masks the accumulation bug.
 
 ## Test Results Summary
 
-### Fresh Main (8321610e95, Dec 17, 2025)
+### Verified on Fresh Main (8321610e95, Dec 17, 2025)
 
-**Verified on fresh clone with standalone tt-train build:**
-
-```bash
-# Fresh clone and build
-rm -rf tt-metal
-git clone --recurse-submodules git@github.com:tenstorrent/tt-metal.git
-cd tt-metal && git lfs pull && git submodule foreach --recursive "git lfs pull"
-
-# Standalone tt-train build (recommended for consistency)
-cd tt-train && rm -rf build/
-cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -B build -GNinja
-cmake --build build --config Debug --clean-first
-
-# Run tests
-./build/tests/ttml_tests --gtest_filter="LayerNormBackwardOpTest.BugRepro_*"
-```
+**Build:** Native (non-containerized), standalone tt-train build (`tt-train/build/`)
+**Machine:** movsianikov-tt (Wormhole n150 L)
 
 | Test | Result | Notes |
 |------|--------|-------|
