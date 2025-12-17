@@ -2,27 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <stdint.h>
 #include "dataflow_api.h"
-// Include for tensor accessor and common utilities
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
-
-#define ALWI inline __attribute__((always_inline))
-// Helper function to check if coordinate is valid (in bounds)
-ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_val) {
-    return coord >= 0 && coord < static_cast<int32_t>(max_val);
-}
+#include "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h"
 
 void kernel_main() {
     // Runtime arguments
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks = get_arg_val<uint32_t>(1);
     uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    uint32_t cos_angle_bits = get_arg_val<uint32_t>(3);
-    uint32_t sin_angle_bits = get_arg_val<uint32_t>(4);
-    uint32_t center_x_bits = get_arg_val<uint32_t>(5);
-    uint32_t center_y_bits = get_arg_val<uint32_t>(6);
+    fixed_point_t cos_angle = static_cast<fixed_point_t>(get_arg_val<uint32_t>(3));
+    fixed_point_t sin_angle = static_cast<fixed_point_t>(get_arg_val<uint32_t>(4));
+    fixed_point_t center_x = static_cast<fixed_point_t>(get_arg_val<uint32_t>(5));
+    fixed_point_t center_y = static_cast<fixed_point_t>(get_arg_val<uint32_t>(6));
     uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
 
     // Compile-time arguments
@@ -33,31 +26,12 @@ void kernel_main() {
     constexpr uint32_t input_width = get_compile_time_arg_val(4);
     constexpr uint32_t input_channels = get_compile_time_arg_val(5);
 
-    // Reinterpret rotation parameter bits as float
-    union {
-        uint32_t u;
-        float f;
-    } cos_conv, sin_conv, cx_conv, cy_conv;
-
-    cos_conv.u = cos_angle_bits;
-    sin_conv.u = sin_angle_bits;
-    cx_conv.u = center_x_bits;
-    cy_conv.u = center_y_bits;
-
-    const float cos_angle = cos_conv.f;
-    const float sin_angle = sin_conv.f;
-    const float center_x = cx_conv.f;
-    const float center_y = cy_conv.f;
-
-    // Tensor accessor for input tensor (starts at compile-time arg index 6)
     constexpr auto src_args = TensorAccessorArgs<6>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
-    // Process each output pixel
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks; local_stick_idx++) {
         const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
 
-        // Reserve CB space for this stick
         cb_reserve_back(output_cb_index, 1);
         uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
@@ -68,17 +42,19 @@ void kernel_main() {
         const uint32_t x_out = spatial_idx % input_width;
 
         // Compute source coordinates using inverse rotation
-        // Translate to center-relative coordinates
-        const float x_centered = static_cast<float>(x_out) - center_x;
-        const float y_centered = static_cast<float>(y_out) - center_y;
+        //  Translate to center-relative coordinates
+        const fixed_point_t x_out_q16 = int_to_q16(x_out);
+        const fixed_point_t y_out_q16 = int_to_q16(y_out);
+        const fixed_point_t x_centered = q16_sub(x_out_q16, center_x);
+        const fixed_point_t y_centered = q16_sub(y_out_q16, center_y);
 
         // Apply inverse rotation
-        const float x_in = x_centered * cos_angle - y_centered * sin_angle + center_x;
-        const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
+        const fixed_point_t x_in = q16_mul_sub_add(x_centered, cos_angle, y_centered, sin_angle, center_x);
+        const fixed_point_t y_in = q16_mul_add_add(x_centered, sin_angle, y_centered, cos_angle, center_y);
 
-        // Round to nearest pixel (nearest interpolation)
-        const int32_t nearest_x = static_cast<int32_t>(round(x_in));
-        const int32_t nearest_y = static_cast<int32_t>(round(y_in));
+        // Round to nearest pixel
+        const int32_t nearest_x = q16_to_int_round(x_in);
+        const int32_t nearest_y = q16_to_int_round(y_in);
 
         // Check if the nearest pixel is in bounds
         const bool x_valid = is_coordinate_valid(nearest_x, input_width);
@@ -99,7 +75,6 @@ void kernel_main() {
             }
         }
 
-        // Publish data to CB
         cb_push_back(output_cb_index, 1);
     }
 }
