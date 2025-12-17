@@ -140,6 +140,8 @@ void kernel_main() {
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+
+        uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
         }
@@ -189,6 +191,7 @@ void kernel_main() {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
+                KV_chunks_processed_in_iter++;
 
                 Slice kv_slice;
                 uint32_t
@@ -281,6 +284,12 @@ void kernel_main() {
                     noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                 }
             }
+        }
+        if (KV_chunks_processed_in_iter % 2 == 0) {
+            cb_reserve_back(cb_k_in, k_chunk_tiles);
+            cb_reserve_back(cb_v_in, k_chunk_tiles);
+            cb_push_back(cb_k_in, k_chunk_tiles);
+            cb_push_back(cb_v_in, k_chunk_tiles);
         }
     }
 }

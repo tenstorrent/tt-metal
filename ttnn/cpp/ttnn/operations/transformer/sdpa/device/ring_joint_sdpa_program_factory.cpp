@@ -772,6 +772,26 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         };
         // Append chain runtime args for store-and-forward
         const auto& chain = core_chain_info.at(i);
+
+        log_debug(
+            tt::LogOp,
+            "core logical=({},{})->phys=({},{}), q=[{},{}), chain={{part:{}, inj:{}, sink:{}, "
+            "b:{}, h:{}, q_start:{}, q_cnt:{}, next_cnt:{}}}",
+            core.x,
+            core.y,
+            core_work.at(i).physical_core.x,
+            core_work.at(i).physical_core.y,
+            global_q_start,
+            global_q_end,
+            chain.participates,
+            chain.is_injector,
+            chain.is_sink,
+            chain.batch,
+            chain.head,
+            chain.q_chunk_start,
+            chain.q_chunk_count,
+            chain.next_core_q_chunks);
+
         reader_args.push_back(static_cast<uint32_t>(chain.participates));
         reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
         reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
