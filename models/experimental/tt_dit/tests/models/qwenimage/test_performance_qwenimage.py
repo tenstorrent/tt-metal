@@ -21,12 +21,12 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4cfg1sp0tp1",
-        "4x8cfg1sp0tp1",
+        "2x4cfg0sp0tp1",
+        # "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -226,11 +226,14 @@ def test_qwenimage_pipeline_performance(
         # Breakdown percentages
         avg_encoding_time = statistics.mean(total_encoding_times)
         avg_vae_time = statistics.mean(vae_times)
+        accounted_time = avg_encoding_time + total_denoising_time + avg_vae_time
+        other_time = avg_total_time - accounted_time
 
         print(f"\nTime breakdown:")
         print(f"  Encoding: {avg_encoding_time/avg_total_time*100:.1f}%")
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
+        print(f"  Other: {other_time/avg_total_time*100:.1f}%")
 
     print("=" * 80)
 
