@@ -727,7 +727,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
         std::uint32_t count_copy = count;
         distributed_context.ssend(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
-            Rank{static_cast<uint32_t>(peer)},
+            Rank{static_cast<int>(peer)},
             Tag{0});
 
         // Send one record at a time using synchronous send
@@ -767,12 +767,12 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
             std::uint32_t record_size = static_cast<std::uint32_t>(record.size());
             distributed_context.ssend(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
-                Rank{static_cast<uint32_t>(peer)},
+                Rank{static_cast<int>(peer)},
                 Tag{1});  // Use Tag{1} for size messages
 
             distributed_context.ssend(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
-                Rank{static_cast<uint32_t>(peer)},
+                Rank{static_cast<int>(peer)},
                 Tag{0});  // Use Tag{0} for data messages
         }
     }
@@ -797,7 +797,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
     {
         auto req = distributed_context.irecv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
-            Rank{static_cast<uint32_t>(rank)},
+            Rank{static_cast<int>(rank)},
             Tag{0});
 
         wait_for_request_with_timeout(req, "topology mapping header", rank);
@@ -830,7 +830,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         {
             auto req = distributed_context.irecv(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
-                Rank{static_cast<uint32_t>(rank)},
+                Rank{static_cast<int>(rank)},
                 Tag{1});  // Use Tag{1} for size messages
 
             wait_for_request_with_timeout(
@@ -849,7 +849,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         std::vector<uint8_t> record(record_size);
         auto req = distributed_context.irecv(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
-            Rank{static_cast<uint32_t>(rank)},
+            Rank{static_cast<int>(rank)},
             Tag{0});  // Use Tag{0} for data messages
 
         wait_for_request_with_timeout(

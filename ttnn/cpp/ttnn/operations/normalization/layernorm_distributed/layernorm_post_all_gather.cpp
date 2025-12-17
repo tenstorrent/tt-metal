@@ -4,7 +4,7 @@
 
 #include "layernorm_post_all_gather.hpp"
 
-#include "device/layernorm_post_all_gather_op.hpp"
+#include "device/layernorm_post_all_gather/layernorm_post_all_gather_device_operation.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
@@ -19,6 +19,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
+    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<const DataType>& dtype) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -39,18 +40,18 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
             DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
     } else {
-        return tt::tt_metal::operation::run(
-                   LayerNormPostAllGather{
-                       .norm_type = LayerNormDistributedType::LAYERNORM,
-                       .eps = epsilon,
-                       .memory_config = memory_config.value_or(input_tensor.memory_config()),
-                       .compute_kernel_config = kernel_config_val,
-                       .dtype = dtype,
-                       .use_2d_core_grid = std::nullopt,  // LayerNorm doesn't expose this parameter
-                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{})},
-                   {input_tensor, stats},
-                   {weight, bias})
-            .at(0);
+        return ttnn::prim::layernorm_post_all_gather(
+            input_tensor,
+            stats,
+            weight,
+            bias,
+            LayerNormDistributedType::LAYERNORM,
+            epsilon,
+            memory_config.value_or(input_tensor.memory_config()),
+            kernel_config_val,
+            dtype,
+            std::nullopt,  // LayerNorm doesn't expose use_2d_core_grid parameter
+            distributed_program_config);
     }
 }
 
