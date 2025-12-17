@@ -501,7 +501,9 @@ jobs:
           python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
-            --num-prompts 32 \
+            --num-prompts 64 \
+            --request-rate 5 \
+            --structured-output-ratio 0.5 \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result_structured.json \
