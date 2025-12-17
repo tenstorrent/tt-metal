@@ -14,6 +14,9 @@ from functools import partial
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
+# Import proper torch reference for rotary embedding
+from models.demos.t3000.llama2_70b.reference.llama.llama.model import apply_rotary_emb, precompute_freqs_cis
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -92,14 +95,35 @@ def run(
         shape_d
     )
 
-    # Use TTNN golden function for reference output if available
+    # Proper torch reference using apply_rotary_emb from Llama reference implementation
+    # (from test_rotary_embedding_llama.py lines 165-173)
     try:
-        torch_output_tensor = ttnn.get_golden_function(ttnn.experimental.rotary_embedding_llama)(
-            torch_input_tensor_a, torch_cos_cache, torch_sin_cache, torch_trans_mat
-        )
-    except Exception:
-        # Fallback: rotary embedding is complex, so use a simple approximation
-        # For now, just use the input as reference (will have lower PCC tolerance)
+        # Determine head_dim from input shape [B, n_heads, seq_len, head_dim]
+        head_dim = shape_a[-1]
+        max_seq_len = max(4096, shape_b[2])  # cos/sin cache seq_len dimension
+
+        # Precompute freqs_cis for the position range
+        freqs_cis = precompute_freqs_cis(head_dim, max_seq_len * 2)
+
+        # For prefill mode (seq_len > 1), use slice; for decode (seq_len == 1), use position indices
+        if shape_a[2] > 1:  # Prefill mode
+            start_pos = 0
+            seq_len = shape_a[2]
+            freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
+        else:  # Decode mode (seq_len == 1)
+            batch = shape_a[0]
+            position_ids = torch.arange(batch)
+            freqs_cis = freqs_cis[position_ids]
+
+        # Apply rotary embedding
+        # Input needs transpose: [B, n_heads, S, D] -> [B, S, n_heads, D]
+        torch_xq = torch_input_tensor_a.transpose(1, 2)
+        torch_xq_rotated = apply_rotary_emb(torch_xq, torch_xq, freqs_cis=freqs_cis)[0]
+        # Transpose back: [B, S, n_heads, D] -> [B, n_heads, S, D]
+        torch_output_tensor = torch_xq_rotated.transpose(1, 2)
+
+    except Exception as e:
+        # Fallback: use input as reference (will have lower PCC)
         torch_output_tensor = torch_input_tensor_a.clone()
 
     # Create TTNN tensors - use the traced memory configs

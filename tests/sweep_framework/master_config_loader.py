@@ -525,6 +525,15 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
+            elif operation_name in [
+                "scaled_dot_product_attention_decode",
+                "transformer::scaled_dot_product_attention_decode",
+                "ttnn::transformer::scaled_dot_product_attention_decode",
+            ]:
+                print(f"🔧 Detected scaled_dot_product_attention_decode operation - using operation-specific extractor")
+                return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
 
             # Detect the number of tensor inputs
             tensor_count = self._count_tensor_inputs(configs)
@@ -2110,6 +2119,43 @@ class MasterConfigLoader:
                                     cfg.get("input_e_layout", ttnn.TILE_LAYOUT),
                                     cfg.get("input_e_memory_config"),
                                     cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For scaled_dot_product_attention_decode (non-paged), extract parameters including scalar params
+                    elif (
+                        clean_op_name == "transformer::scaled_dot_product_attention_decode"
+                        or clean_op_name == "scaled_dot_product_attention_decode"
+                    ):
+                        # Build parameter tuples including scalar parameters
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("input_c_dtype"),
+                                    cfg.get("input_c_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_c_memory_config"),
+                                    cfg.get("input_d_dtype"),
+                                    cfg.get("input_d_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_d_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    cfg.get("scale"),  # Scalar parameter
+                                    cfg.get("k_chunk_size"),  # Scalar parameter
+                                    cfg.get("is_causal"),  # Scalar parameter
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
                                 )

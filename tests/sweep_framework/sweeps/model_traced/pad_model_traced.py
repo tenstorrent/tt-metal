@@ -92,22 +92,31 @@ def run(
         pass
     elif output_padded_shape is not None and input_tensor_start is not None:
         # Calculate padding from output_padded_shape (alternative format)
+        # FIX: Properly calculate end padding
         calculated_padding = []
         for i in range(len(shape)):
             start = input_tensor_start[i] if i < len(input_tensor_start) else 0
+            # End padding = output_size - input_size - start_padding
             end = output_padded_shape[i] - shape[i] - start
-            calculated_padding.append([start, max(0, end)])
-        padding = calculated_padding
+            calculated_padding.append((start, max(0, end)))
+        padding = tuple(calculated_padding)
     else:
         # No padding parameters provided - use default no padding
-        padding = [[0, 0]] * len(shape)
+        padding = tuple((0, 0) for _ in range(len(shape)))
 
     # Calculate PyTorch reference
+    # torch.nn.functional.pad expects padding in reverse dimension order
+    # and flattened: [left_d-1, right_d-1, left_d-2, right_d-2, ...]
     torch_padding = []
     for i in range(len(padding) - 1, -1, -1):
-        for p in padding[i]:
-            torch_padding.append(p)
-    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
+        if isinstance(padding[i], (list, tuple)):
+            torch_padding.extend(padding[i])
+        else:
+            torch_padding.extend([padding[i], padding[i]])
+
+    # Set value to 0 if None
+    pad_value = value if value is not None else 0.0
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=pad_value)
 
     # Convert padding to tuple format for ttnn.pad
     if isinstance(padding, list):
