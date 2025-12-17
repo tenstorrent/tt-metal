@@ -196,6 +196,7 @@ void MAIN {
 #endif
 
         // Var[x] + eps
+        cb_wait_front(cb_ex2, 1);
         reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
