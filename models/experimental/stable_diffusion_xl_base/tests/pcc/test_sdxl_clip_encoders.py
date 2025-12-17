@@ -31,9 +31,29 @@ from models.experimental.tt_dit.utils.check import assert_quality
     indirect=["device_params"],
 )
 def test_clip_encoder(
-    *, mesh_device: ttnn.Device, clip_path: str, tokenizer_path: str, expected_pcc: float, is_ci_env, reset_seeds
+    *,
+    mesh_device: ttnn.Device,
+    clip_path: str,
+    tokenizer_path: str,
+    expected_pcc: float,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
 ) -> None:
-    model_name_checkpoint = f"stabilityai/stable-diffusion-xl-base-1.0"
+    model_name_checkpoint = "stabilityai/stable-diffusion-xl-base-1.0"
+
+    # Download model for CI v2
+    model_location = model_location_generator(
+        f"stable-diffusion-xl-base-1.0/{clip_path}",
+        download_if_ci_v2=True,
+        ci_v2_timeout_in_s=1800,
+    )
+    tokenizer_location = model_location_generator(
+        f"stable-diffusion-xl-base-1.0/{tokenizer_path}",
+        download_if_ci_v2=True,
+        ci_v2_timeout_in_s=1800,
+    )
 
     has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
 
@@ -45,12 +65,20 @@ def test_clip_encoder(
 
     if has_projection:
         hf_model = CLIPTextModelWithProjection.from_pretrained(
-            model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env
+            model_name_checkpoint if not is_ci_v2_env else model_location,
+            subfolder=clip_path if not is_ci_v2_env else None,
+            local_files_only=is_ci_env or is_ci_v2_env,
         )
     else:
-        hf_model = CLIPTextModel.from_pretrained(model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env)
+        hf_model = CLIPTextModel.from_pretrained(
+            model_name_checkpoint if not is_ci_v2_env else model_location,
+            subfolder=clip_path if not is_ci_v2_env else None,
+            local_files_only=is_ci_env or is_ci_v2_env,
+        )
     tokenizer = CLIPTokenizer.from_pretrained(
-        model_name_checkpoint, subfolder=tokenizer_path, local_files_only=is_ci_env
+        model_name_checkpoint if not is_ci_v2_env else tokenizer_location,
+        subfolder=tokenizer_path if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
     )
 
     hf_model.eval()
