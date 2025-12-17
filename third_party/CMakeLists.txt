@@ -13,7 +13,15 @@ add_compile_options(-Wno-unused-variable)
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+endif()
+
+############################################################################################################################
+# hwloc
+############################################################################################################################
+find_library(HWLOC_LIBRARY NAMES hwloc)
+if(NOT HWLOC_LIBRARY)
+    message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
 
 ############################################################################################################################

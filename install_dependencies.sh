@@ -128,13 +128,15 @@ install_packages() {
 }
 
 validate_packages() {
-    echo "[INFO] Validating packages: ${PACKAGES[*]}"
+    echo "[INFO] Validating packages:"
     case "$PKG_MANAGER" in
         apt)
-            dpkg -l "${PACKAGES[@]}"
+            dpkg-query -W -f='  ${Package} ${Status}\n' "${PACKAGES[@]}"
+            echo "[INFO] Validation successful!"
             ;;
         dnf|yum)
-            rpm -q "${PACKAGES[@]}"
+            rpm -q --qf '  %{NAME} %{VERSION}-%{RELEASE}\n' "${PACKAGES[@]}"
+            echo "[INFO] Validation successful!"
             ;;
     esac
 }
@@ -520,19 +522,16 @@ main() {
 
     if [ "$sfpi_only" -eq 1 ]; then
         install_sfpi
+        echo "[INFO] SFPI installation completed successfully!"
     elif [ "$validate" -eq 1 ]; then
         validate_packages
     else
         install
+        echo "[INFO] TT-Metalium dependencies installed successfully!"
     fi
 
     cleanup
 
-    if [ "$sfpi_only" -eq 1 ]; then
-        echo "[INFO] SFPI installation completed successfully!"
-    else
-        echo "[INFO] TT-Metalium dependencies installed successfully!"
-    fi
 }
 
 if [ "${1}" != "--source-only" ]; then
