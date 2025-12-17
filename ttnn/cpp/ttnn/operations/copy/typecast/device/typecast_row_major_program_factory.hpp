@@ -9,10 +9,12 @@
 
 namespace ttnn::operations::copy::program {
 
-struct TypecastShardedProgramFactory {
+struct TypecastRowMajorProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_src0{};
-        tt::tt_metal::CBHandle out_cb{};
+        tt::tt_metal::KernelHandle typecast_reader_kernel_id{};
+        tt::tt_metal::KernelHandle typecast_writer_kernel_id{};
+        uint32_t num_cores{};
+        uint32_t num_cores_y{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
