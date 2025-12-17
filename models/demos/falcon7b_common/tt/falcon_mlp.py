@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 import ttnn
-from models.common.utility_functions import is_grayskull, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.model_utils import (
     get_default_hifi2_kernel_config,
@@ -23,12 +23,7 @@ def falcon_dense_4h_to_h_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -68,12 +63,7 @@ def falcon_dense_h_to_4h_matmul(
             compute_kernel_config=get_default_hifi2_kernel_config(),
         )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
