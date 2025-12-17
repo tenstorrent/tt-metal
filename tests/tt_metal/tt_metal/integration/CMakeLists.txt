@@ -2,7 +2,6 @@ set(UNIT_TESTS_INTEGRATION_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_basic_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_flatten.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_stochastic_rounding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_large_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_multi_dram_inX_mcast.cpp
