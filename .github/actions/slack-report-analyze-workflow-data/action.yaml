@@ -66,19 +66,41 @@ runs:
               " (error owner unclear. original owners: " + (item.original_owner_names_for_generic_exit | join(", ")) + ")"
             else "" end;
 
-          def failingJobsNote(item):
-            # If we have failing job names, include them in parentheses
-            if (item.failing_jobs | type) == "array" and (item.failing_jobs | length) > 0 then
-              " (failed " + (item.failing_jobs | join(", ")) + ")"
+          def formatFailingJobs(jobs):
+            # Format failing jobs with individual links and owner mentions
+            # Jobs can be either strings (legacy) or objects with {name, url, owners}
+            if (jobs | type) == "array" and (jobs | length) > 0 then
+              (jobs | map(
+                if (. | type) == "object" and .name then
+                  (if .url and (.url | length) > 0 then
+                    "    • <" + .url + "|" + .name + ">"
+                  else
+                    "    • " + .name
+                  end) + (if (.owners | type) == "array" and (.owners | length) > 0 then
+                    " " + (.owners | map(
+                      if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
+                      elif (.id // "") != "" then "<@" + .id + ">"
+                      elif (.name // "") != "" then .name
+                      else null end
+                    ) | map(select(. != null)) | join(" "))
+                  else "" end)
+                elif (. | type) == "string" then
+                  "    • " + .
+                else
+                  empty
+                end
+              ) | join("\n"))
             else "" end;
 
           if (type=="array" and length > 0) then
             "❌ *Regressions (Pass → Fail):*\n" + (map(
-              "- " + .name
+              "*" + .name + "*"
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
               + (if .run_url then " — <" + .run_url + "|run>" else "" end)
               + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
-              + " " + mentionOwners(.owners) + origOwnerNote(.) + failingJobsNote(.)
+              + (if (.failing_jobs | type) == "array" and (.failing_jobs | length) > 0 then
+                  "\n" + formatFailingJobs(.failing_jobs)
+                else "" end)
             ) | join("\n"))
           else
             "Malformed regressions payload"
