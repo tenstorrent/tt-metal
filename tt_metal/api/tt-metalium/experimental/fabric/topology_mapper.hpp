@@ -73,6 +73,13 @@ public:
      * @param mesh_graph Reference to the mesh graph object containing fabric topology
      * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
      * @param local_mesh_binding Reference to the local mesh binding object containing mesh binding information
+     * @param fixed_asic_position_pinnings Optional global fixed ASIC-position pinnings (tray, location).
+     *                                     These pins must reference devices on the current host; if infeasible,
+     *                                     construction will throw with details.
+     * @param fixed_asic_position_pinnings_by_mesh Optional mesh-specific fixed ASIC-position pinnings.
+     *                                               These pins must reference devices on the current host;
+     *                                               if infeasible, construction will throw with details.
+     *                                               Both types of pinnings will be combined if both are provided.
      */
     TopologyMapper(
         const MeshGraph& mesh_graph,
