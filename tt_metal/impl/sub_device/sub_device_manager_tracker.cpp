@@ -131,17 +131,11 @@ void SubDeviceManagerTracker::remove_sub_device_manager(SubDeviceManagerId sub_d
     sub_device_managers_.erase(sub_device_manager);
 }
 
-const SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const {
-    return active_sub_device_manager_;
-}
+SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const { return active_sub_device_manager_; }
 
-const SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
+SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
     return default_sub_device_manager_;
 }
-
-SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() { return active_sub_device_manager_; }
-
-SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() { return default_sub_device_manager_; }
 
 SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() const {
     return active_sub_device_manager_->id();
@@ -171,7 +165,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
         sub_device_ids = tt::stl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
     }
     for (const auto& sub_device_id : sub_device_ids) {
-        const auto& allocator = this->get_active_sub_device_manager()->allocator(sub_device_id);
+        const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
         if (allocator) {
             // Having an allocator means there are Tensix cores in this sub-device
             const auto& cores =
