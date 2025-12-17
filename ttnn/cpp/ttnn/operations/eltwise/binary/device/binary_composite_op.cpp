@@ -202,9 +202,9 @@ Tensor ExecuteDiv::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = round_mode.has_value();
     if (not(use_legacy ? *use_legacy
-                       : has_legacy_only_args or
-                             binary::is_legacy_only(
-                                 input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+                       : (has_legacy_only_args ||
+                          binary::is_legacy_only(
+                              input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
         TT_FATAL(
             not has_legacy_only_args,
             "round_mode is not valid when passing use_legacy=false in div (tensor-scalar); binary_ng does not "
@@ -275,26 +275,16 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // Only require legacy mode for round_mode if not INT32
-    const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
+    // Only require legacy mode for round_mode if inputs are not INT32
+    const auto has_legacy_only_args = (round_mode.has_value() && !is_int32);
 
-    // Binary_ng supports: 1) accurate mode for all types, 2) fast mode only for INT32
-    // Force legacy when: fast mode with non-INT32, or round_mode with non-INT32
-    const auto has_legacy_only_args = (fast_and_approximate_mode && !is_int32) || (round_mode.has_value() && !is_int32);
-
-    if (not(use_legacy
-                ? *use_legacy
-                : has_legacy_only_args or
-                      binary::is_legacy_only(
-                          input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+    if (is_int32) {
         TT_FATAL(
-            not has_legacy_only_args,
-            "fast_and_approximate_mode=true with non-INT32 types, or round_mode with non-INT32 types "
-            "are not valid when passing use_legacy=false in div");
-
-        TT_FATAL(
-            (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
-            "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+            ((use_legacy == false || use_legacy == std::nullopt) && !fast_and_approximate_mode),
+            "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
+            use_legacy,
+            fast_and_approximate_mode);
+        // fast_and_approximate_mode is not supported for integer division yet.
 
         if (round_mode == "floor") {
             return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
@@ -326,7 +316,7 @@ Tensor ExecuteDiv::invoke(
                 (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
                 "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
                 "ttnn.float32");
-            return BinaryOperation<BinaryOpType::DIV>::invoke(
+            return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
                 input_a,
                 input_b,
                 std::nullopt,
@@ -336,20 +326,18 @@ Tensor ExecuteDiv::invoke(
                 lhs_activations,
                 rhs_activations,
                 use_legacy,
+                std::nullopt,
                 sub_core_grids);
         }
     }
 
-    if (not(use_legacy
-                ? *use_legacy
-                : has_legacy_only_args or
-                      binary::is_legacy_only(
-                          input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
-        TT_FATAL(
-            not has_legacy_only_args,
-            "accurate_mode, round_mode not valid when passing use_legacy parameter as false in div");
+    if (!(use_legacy ? *use_legacy
+                     : (has_legacy_only_args ||
+                        binary::is_legacy_only(
+                            input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+        TT_FATAL(!has_legacy_only_args, "round_mode is not valid when use_legacy parameter is false");
 
-        return BinaryOperation<BinaryOpType::DIV>::invoke(
+        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input_a,
             input_b,
             std::nullopt,
@@ -359,6 +347,7 @@ Tensor ExecuteDiv::invoke(
             lhs_activations,
             rhs_activations,
             use_legacy,
+            fast_and_approximate_mode,
             sub_core_grids);
     }
 
@@ -379,7 +368,7 @@ Tensor ExecuteDiv::invoke(
             lhs_activations,
             rhs_activations,
             use_legacy,
-            std::nullopt,
+            fast_and_approximate_mode,
             sub_core_grids);
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
@@ -394,7 +383,7 @@ Tensor ExecuteDiv::invoke(
             lhs_activations,
             rhs_activations,
             use_legacy,
-            std::nullopt,
+            fast_and_approximate_mode,
             sub_core_grids);
     }
 
