@@ -15,7 +15,13 @@
 constexpr uint32_t stack_usage_pattern = 0xBABABABA;
 
 static inline void mark_stack_usage() {
+#if defined(ARCH_QUASAR)
+    extern thread_local uint32_t __stack_base_lwm[];
+    extern char __stack_base_offset;
+    uint32_t* __stack_base = &__stack_base_lwm[uintptr_t(&__stack_base_offset)];
+#else
     extern uint32_t __stack_base[];
+#endif
     uint32_t tt_l1_ptr *ptr;
     asm ("mv %0,sp" : "=r"(ptr));
 
@@ -25,13 +31,19 @@ static inline void mark_stack_usage() {
 
 // Returns unused stack + 1. (0 means unknown.)
 static inline uint32_t measure_stack_usage() {
+#if defined(ARCH_QUASAR)
+    extern thread_local uint32_t __stack_base_lwm[];
+    extern char __stack_base_offset;
+    uint32_t* __stack_base = &__stack_base_lwm[uintptr_t(&__stack_base_offset)];
+#else
     extern uint32_t __stack_base[];
+#endif
     uint32_t tt_l1_ptr* stack_ptr = __stack_base;
     // We don't need to check size here, as we know we'll hit a
     // non-dirty value at some point (a set of return addresses).
     while (*stack_ptr == stack_usage_pattern)
         stack_ptr++;
-    uint32_t stack_free = (uint32_t)stack_ptr - (uint32_t)&__stack_base[0];
+    uint32_t stack_free = (uint32_t)((uintptr_t)stack_ptr - (uintptr_t)&__stack_base[0]);
     return stack_free + 1;
 }
 

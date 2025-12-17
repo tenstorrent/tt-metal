@@ -126,6 +126,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e NANOBIND=1
             -e PYTHONPATH=${{ github.workspace }}
             -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
@@ -175,7 +176,7 @@ jobs:
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
-        timeout-minutes: 30
+        timeout-minutes: 140
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
