@@ -460,8 +460,52 @@ invalidate_l1_cache();  // Called ONCE after all reads
 | Container | `9ca166977b` | Dec 10 | 0% |
 | Container | `b747edd158` | Dec 12 | 0% |
 | Container | `b0304ff7a5` | Dec 16 | 100% |
+| **Container** | **`84f83fcf55`** | **Dec 17 (fresh main)** | **0%** |
+
+## ⚠️ UPDATE 2025-12-17: Bug Re-Exposed on Fresh Main
+
+**Critical finding:** The timing mask has stopped working. The NIGHTLY test now **consistently FAILS** on fresh main.
+
+### Fresh Main Container Test Results
+
+**Container:** `ivoitovych-tt-metal-env-built-debug-84f83fcf55`
+**Commit:** `84f83fcf55b9fbfb774393edcdc264b4d08f84dc`
+**Date:** 2025-12-17 12:26:05 +0000
+
+**NIGHTLY Test Results (3 runs):**
+```
+=== Run 1 === [FAILED] (1535 ms)
+=== Run 2 === [FAILED] (472 ms)
+=== Run 3 === [FAILED] (475 ms)
+```
+
+### Bug Reproduction Tests
+
+Added 7 bug reproduction tests to `layernorm_bw_fused_op_test.cpp`:
+- 5 deterministic tests (constant inputs, tight tolerance)
+- 2 tight-tolerance tests (random inputs, atol=0.01)
+
+**All 7 tests FAIL on fresh main:**
+```
+[FAILED] LayerNormBackwardOpTest.BugRepro_Deterministic_256Tiles (1756 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_Deterministic_128Tiles (10 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_Deterministic_DifferentValues (10 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_Deterministic_8462Features (13 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_Deterministic_2048Features (10 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_TightTolerance_8462Features (9 ms)
+[FAILED] LayerNormBackwardOpTest.BugRepro_TightTolerance_8192Features (10 ms)
+```
+
+### Conclusion
+
+The bug is now **fully exposed** on fresh main (Dec 17):
+1. The original NIGHTLY test fails consistently (0% pass rate)
+2. The timing mask from commit `0f57838164` no longer protects the test
+3. The root cause (accumulation bug in `compute_dy_gamma_sum`) remains unfixed
+
+**This is a critical bug** that affects all LayerNorm backward operations with large feature dimensions that don't fit in L1 cache.
 
 ## Reporter
 
-- **Date:** 2025-12-16
+- **Date:** 2025-12-16 (initial), 2025-12-17 (update)
 - **Machine:** movsianikov-tt
