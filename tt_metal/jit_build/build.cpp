@@ -323,7 +323,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, build_config.core_type, build_config.processor_class, build_config.processor_id};
+        this->is_fw_,
+        build_config.core_type,
+        build_config.processor_class,
+        static_cast<uint32_t>(build_config.processor_id)};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -352,6 +355,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto common_flags = jit_build_query.common_flags(params);
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
+        this->lflags_ += jit_build_query.linker_flags(params);
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
