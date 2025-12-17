@@ -470,7 +470,7 @@ private:
         } else {
             // Use full compute grid from mesh device
             auto compute_grid_size = mesh_device_->compute_with_storage_grid_size();
-            grid_dims = {compute_grid_size.y, compute_grid_size.x};
+            grid_dims = {static_cast<uint32_t>(compute_grid_size.y), static_cast<uint32_t>(compute_grid_size.x)};
             log_debug(
                 tt::LogOp, "MeshBuilder::create_grids - using full compute grid: {}x{}", grid_dims[0], grid_dims[1]);
         }
