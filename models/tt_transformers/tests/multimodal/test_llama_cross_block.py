@@ -39,10 +39,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossA
         "batch_2",
     ],
 )
-# @pytest.mark.parametrize(
-#     "batch",
-#     (1,),
-# )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
@@ -169,11 +165,9 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             past_key_value=past_key_values,
             cross_attention_mask=xattn_mask,
             cache_position=[layer_idx],
-            full_text_row_masked_out_mask=full_text_mask.squeeze(1),
+            full_text_row_masked_out_mask=full_text_mask,
             attention_mask=None,
-        )[
-            0
-        ]  # * full_text_mask.squeeze(1)
+        )[0]
 
         if mode == "prefill":
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
