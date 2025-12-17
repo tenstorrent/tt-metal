@@ -210,8 +210,6 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         (uint32_t)coord_dims};
 
     // ===== CREATE READER KERNELS =====
-    auto mesh_defines = mesh_builder.get_compile_time_defines();
-
     auto reader_sender_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
@@ -220,8 +218,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_sender_compile_time_args,
-            .defines = mesh_defines});
+            .compile_args = reader_sender_compile_time_args});
 
     auto reader_receiver_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
@@ -231,8 +228,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_receiver_compile_time_args,
-            .defines = mesh_defines});
+            .compile_args = reader_receiver_compile_time_args});
 
     // ===== COMPUTE COMPILE-TIME ARGS =====
     // Compute kernel args: num_blocks, block_ht, block_wt
@@ -244,8 +240,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         program,
         "tests/tt_metal/udm/kernels/compute_sharded_reduce.cpp",
         all_gcores,
-        tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = true, .compile_args = compute_all_to_all_args, .defines = mesh_defines});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_all_to_all_args});
 
     // ===== SET RUNTIME ARGS =====
     // Set runtime args for each row independently
@@ -320,11 +315,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
  *   - input (2, 32, 128) → output (2, 32, 1) where output[i,j] = sum(input[i,j,:])
  *   - input (3, 4, 5, 100) → output (3, 4, 5, 1) where output[i,j,k] = sum(input[i,j,k,:])
  */
-void validate(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    const tt::tt_metal::Shape& global_input_shape,
-    const tt::tt_metal::Shape& global_output_shape) {
+void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor) {
     auto* mesh_device = input_tensor.device();
 
     // Convert from sharded to interleaved before aggregation
@@ -337,21 +328,21 @@ void validate(
     // Aggregate tensors from distributed format
     // Input is block-sharded, output is height-sharded (replicated on width)
     auto input_composer = create_block_sharded_mesh_composer(mesh_device, input_interleaved.padded_shape().rank());
-    auto input_data = ttnn::distributed::aggregate_tensor(input_interleaved, *input_composer).to_vector<bfloat16>();
+    auto input_aggregated = ttnn::distributed::aggregate_tensor(input_interleaved, *input_composer);
+    auto input_data = input_aggregated.to_vector<bfloat16>();
     auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_interleaved.padded_shape().rank());
-    auto output_data = ttnn::distributed::aggregate_tensor(output_interleaved, *output_composer).to_vector<bfloat16>();
+    auto output_aggregated = ttnn::distributed::aggregate_tensor(output_interleaved, *output_composer);
+    auto output_data = output_aggregated.to_vector<bfloat16>();
 
-    // Use passed global shapes
-    uint32_t rank = global_input_shape.rank();
-    TT_ASSERT(rank >= 1, "Tensor must have at least 1 dimension");
-
-    uint32_t global_height = global_input_shape[-2];
-    uint32_t global_width = global_input_shape[-1];
-    uint32_t output_last_dim = global_output_shape[-1];
+    // Get dimensions from aggregated tensors
+    uint32_t global_height = input_aggregated.padded_shape()[-2];
+    uint32_t global_width = input_aggregated.padded_shape()[-1];
+    // Use aggregated tensor's width (includes replicated copies) for correct indexing
+    uint32_t output_last_dim = output_aggregated.padded_shape()[-1];
 
     // Log shapes
-    log_info(tt::LogTest, "Global input shape: ({}, {})", global_height, global_width);
-    log_info(tt::LogTest, "Global output shape: ({}, {})", global_output_shape[-2], global_output_shape[-1]);
+    log_info(tt::LogTest, "Aggregated input shape: {}", input_aggregated.padded_shape());
+    log_info(tt::LogTest, "Aggregated output shape: {}", output_aggregated.padded_shape());
 
     // Compute number of "rows" to validate
     uint32_t num_rows = global_height;
@@ -630,7 +621,7 @@ void run_width_reduction_test(
     run_program(input_tensor, tensor_mesh_device, program);
 
     // Validate result
-    validate(input_tensor, output_tensor, global_shape, output_global_shape);
+    validate(input_tensor, output_tensor);
 }
 
 /**
