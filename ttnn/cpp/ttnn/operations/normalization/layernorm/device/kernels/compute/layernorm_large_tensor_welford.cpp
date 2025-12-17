@@ -203,9 +203,9 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_commit();
 
-    // Reader is sending full blocks, so we need to stay in sync
-    const auto last_block = generic::blocks(Wt, blk).back();
-    const auto num_to_sync = last_block.full_block_size() - last_block.size();
+    // Reader is sending full blocks, so we need to stay in sync.
+    // Pop the last tile + any remaining in the last block
+    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
     cb_wait_front(cb_in, num_to_sync);
     cb_pop_front(cb_in, num_to_sync);
 }
