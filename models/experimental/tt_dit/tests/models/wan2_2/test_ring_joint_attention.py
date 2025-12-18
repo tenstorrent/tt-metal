@@ -76,7 +76,11 @@ all_parallel_config_ids = [
 @pytest.mark.parametrize("parallel_config", all_parallel_configs, ids=all_parallel_config_ids)
 @pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512], ids=["k64", "k128", "k256", "k512"])
-@pytest.mark.parametrize("n_iters, trace_enabled, skip_check", [(1, False, False)], ids=["no_trace"])
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [(1, False, False), (1, False, True)],
+    ids=["no_trace_check", "no_trace_no_check"],
+)
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -112,6 +116,12 @@ def test_ring_joint_sdpa(
     dtype = ttnn.bfloat16
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
+    import math
+
+    if nh % up_factor != 0:
+        orig_nh = nh
+        nh = math.ceil(nh / up_factor) * up_factor
+        logger.info(f"Rounding up nh from {orig_nh} to {nh} so that it divides evenly by up_factor={up_factor}.")
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
 
@@ -155,7 +165,7 @@ def test_ring_joint_sdpa_perf_table(mesh_device_id):
         parallel_config = parallel_config_map[mesh_device_id][model_input_id]
         rp_axis, rp_factor, up_axis, up_factor = parallel_config
         parallel_name = get_parallel_config_id(rp_factor, up_factor)
-        k_expr = f"{model_input_id} and {parallel_name} and {mesh_device_id} and no_trace"
+        k_expr = f"{model_input_id} and {parallel_name} and {mesh_device_id} and no_trace_no_check"
         command = f"-m 'pytest models/experimental/tt_dit/tests/models/wan2_2/test_ring_joint_attention.py::test_ring_joint_sdpa -k \"{k_expr}\"'"
 
         run_device_profiler(
