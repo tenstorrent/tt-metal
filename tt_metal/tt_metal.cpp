@@ -447,7 +447,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
 
     const auto& cluster = MetalContext::instance().get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
-
+    TT_ASSERT(buffer.aligned_page_size() >= aligned_page_size);  // Check that we don't write to the end of the buffer
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
@@ -513,7 +513,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
     const auto& cluster = MetalContext::instance().get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
-
+    TT_ASSERT(buffer.aligned_page_size() >= aligned_page_size);  // Check that we don't write to the end of the buffer
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::span<const std::uint8_t> page;
