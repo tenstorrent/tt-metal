@@ -144,7 +144,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      gtest_filter: "*NIGHTLY_*"
+      gtest_filter: "*"
       nightly-run: true
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
