@@ -31,4 +31,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
+      scheduled: ${{ github.event_name == 'schedule' }}
       schedule:  ${{ github.event_name == 'schedule' }}
