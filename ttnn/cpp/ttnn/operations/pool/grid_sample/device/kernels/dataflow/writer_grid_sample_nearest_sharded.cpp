@@ -99,8 +99,8 @@ ALWI void process_grid_point_nearest(
         const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
         noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
     } else {
-        // Out of bounds - fill with zeros
-        zero_out_page<output_cb_index>(l1_write_output_addr);
+        // Out of bounds - fill with zeros (only zero the stick size, not the entire page)
+        zero_out_nbytes(l1_write_output_addr, input_stick_nbytes);
     }
 }
 
