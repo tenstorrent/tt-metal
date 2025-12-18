@@ -82,7 +82,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
-    TT_FABRIC_PROFILER,                     // Enable fabric codepath profiling
+    TT_FABRIC_PROFILER,                     // Enable fabric codepath profiling, details in code_profiling_types.hpp
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
