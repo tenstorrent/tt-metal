@@ -512,29 +512,30 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t data_index = 0;
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
-    TT_ASSERT(buffer.aligned_page_size() >= aligned_page_size);  // Check that we don't write to the end of the buffer
+    const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
+    const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
+    const size_t remainder_bytes = page_size - aligned_bytes;
+    TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        std::span<const std::uint8_t> page;
-        std::vector<uint8_t> aligned_page_buffer;
-        if (aligned_page_size > page_size) {
-            aligned_page_buffer.resize(aligned_page_size, 0);
-            // Copy only the valid data, pad the rest with zeros
-            std::memcpy(aligned_page_buffer.data(), host_buffer.data() + data_index, page_size);
-            page = std::span<const std::uint8_t>(aligned_page_buffer.data(), aligned_page_size);
-        } else {
-            page = std::span<const std::uint8_t>(host_buffer.data() + data_index, page_size);
-        }
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
-            case BufferType::L1:
-            case BufferType::L1_SMALL: {
-                CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
-                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
-            } break;
-            default: TT_THROW("Unsupported buffer type to write to device!");
-        }
+        auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
+            if (size_in_bytes == 0) {
+                return;
+            }
+            std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
+            switch (buffer.buffer_type()) {
+                case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address + offset, page); break;
+                case BufferType::L1:
+                case BufferType::L1_SMALL: {
+                    CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
+                    WriteToDeviceL1(device, logical_core, address + offset, page, CoreType::WORKER);
+                } break;
+                default: TT_THROW("Unsupported buffer type to write to device!");
+            }
+        };
+
+        write_chunk(0, aligned_bytes);
+        write_chunk(aligned_bytes, remainder_bytes);
 
         bank_index = (bank_index + 1) % num_banks;
         data_index += page_size;
