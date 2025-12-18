@@ -22,6 +22,17 @@ from tqdm import tqdm
 
 @torch.no_grad()
 @pytest.mark.parametrize(
+    "tracing",
+    (
+        # True,
+        False,
+    ),
+    ids=(
+        # "tracing",
+        "no_tracing",
+    ),
+)
+@pytest.mark.parametrize(
     "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
     ((81, 98),),
 )
@@ -92,6 +103,7 @@ def test_qwen_model_acc(
     reset_seeds,
     ensure_gc,
     is_ci_env,
+    tracing,
 ):
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
@@ -111,6 +123,8 @@ def test_qwen_model_acc(
 
     instruct = False
     dummy_weights = False
+
+    # mesh_device.disable_and_clear_program_cache()
 
     # Load Qwen model using TtQwenModelArgs
     model_args = TtQwenModelArgs(
@@ -310,39 +324,41 @@ def test_qwen_model_acc(
 
         return tt_out_tok, tt_out[0]
 
-    # Compile the model
-    logger.info("Compiling model...")
-    tt_out_tok, tt_out = run_model()
+    trace_id = None
+    if tracing:
+        # Compile the model
+        logger.info("Compiling model...")
+        tt_out_tok, tt_out = run_model()
 
-    # Capturing trace
-    logger.info("Capturing trace...")
+        # Capturing trace
+        logger.info("Capturing trace...")
 
-    tt_model.tt_ccl.reset_gather_and_buffer_idx()
+        tt_model.tt_ccl.reset_gather_and_buffer_idx()
 
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-    tt_out_tok, tt_out = run_model()
+        tt_out_tok, tt_out = run_model()
 
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
 
-    # Reset the decoding position for the proper run of the model
-    current_pos_reset = ttnn.from_torch(
-        current_pos,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 0) if batch_size > 1 else (None, None),
-            mesh_shape=model_args.cluster_shape,
-        ),
-    )
+        # Reset the decoding position for the proper run of the model
+        current_pos_reset = ttnn.from_torch(
+            current_pos,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
 
-    # Reset the current position and output token tensors for the real decode run
-    ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
-    ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
+        # Reset the current position and output token tensors for the real decode run
+        ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+        ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
-    ttnn.synchronize_device(mesh_device)
+        ttnn.synchronize_device(mesh_device)
 
     # Skip prefill if prefill_len is 0
     if prefill_len > 0:
@@ -359,9 +375,12 @@ def test_qwen_model_acc(
                 pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], on_host=True
             )
 
-            # Run the trace with a new input
-            ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            # Run the model with a new input
+
+            if tracing:
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            else:
+                tt_out_tok, tt_out = run_model()
 
     # Start decoding
     logger.info(f"Starting decode...")
@@ -391,11 +410,13 @@ def test_qwen_model_acc(
         decode_input_new = model_args.prepare_residual_tensor_decode(
             pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], on_host=True
         )
-        breakpoint()
 
-        # Run the trace with a new input
-        ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        # Run the model with a new input
+        if tracing:
+            ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        else:
+            tt_out_tok, tt_out = run_model()
 
         # Run reference model for comparison
         # ref_input_dtype = get_ref_model_dype(reference_model, model_args_ref.model_name)
@@ -453,6 +474,36 @@ def test_qwen_model_acc(
         true_match = (
             tt_argmax_token.item() == input_ids[0, prefill_len + i + 1].item() if i < generation_length - 1 else False
         )
+
+        # if not true_match:
+        #     # Save the input and KV cache tensors to file for debugging
+        #     debug_dir = "debug_mismatch_tensors"
+        #     os.makedirs(debug_dir, exist_ok=True)
+        #     debug_file = os.path.join(debug_dir, f"mismatch_pos_{prefill_len + i}.pt")
+
+        #     # Convert input tensor to torch
+        #     input_torch = pt_decode_input.clone()
+
+        #     # Convert KV cache from each layer to torch
+        #     kv_cache_torch = []
+        #     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape)
+        #     for layer_idx, layer in enumerate(tt_model.layers):
+        #         layer_k = ttnn.to_torch(layer.attention.layer_past[0], mesh_composer=mesh_composer)
+        #         layer_v = ttnn.to_torch(layer.attention.layer_past[1], mesh_composer=mesh_composer)
+        #         kv_cache_torch.append({"k": layer_k, "v": layer_v})
+
+        #     # Save debug information
+        #     debug_data = {
+        #         "position": prefill_len + i,
+        #         "input": input_torch,
+        #         "kv_cache": kv_cache_torch,
+        #         "input_token": input_ids[0, prefill_len + i].item(),
+        #         "expected_token": input_ids[0, prefill_len + i + 1].item(),
+        #         "predicted_token": tt_argmax_token.item(),
+        #         "logits": tt_logits.clone(),
+        #     }
+        #     torch.save(debug_data, debug_file)
+        #     logger.info(f"Saved debug tensors to {debug_file}")
 
         # Store error information vs reference model if top5 is incorrect
         if use_reference_file and not top5_match:
