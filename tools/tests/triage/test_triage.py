@@ -372,3 +372,4 @@ class TestTriage:
 
         if return_result:
             return result
+        return None
