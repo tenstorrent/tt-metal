@@ -10,32 +10,73 @@ from models.experimental.tt_dit.utils.padding import get_padded_vision_seq_len
 
 from tracy.process_model_log import run_device_profiler, post_process_ops_log
 
+benchmark_model_input_shapes = {
+    "wan_14b_720p": (1, 40, 75600, 0, 128),
+    "wan_14b_480p": (1, 40, 32760, 0, 128),
+    "mochi": (1, 24, 44520, 118, 128),
+    "flux": (1, 24, 4096, 512, 128),
+    "sd35": (1, 38, 4096, 333, 64),
+}
 
-benchmark_model_input_shapes = [
-    # shape (b, nh, base_seq_len, joint_seq_len, d), parallel_config (rp_axis, rp_factor, up_axis, up_factor)
-    [(1, 40, 32760, 0, 128), (0, 2, 1, 4)],
-    [(1, 24, 44520, 118, 128), (0, 2, 1, 4)],
-    [(1, 24, 4096, 512, 128), (0, 2, 1, 4)],
-    [(1, 38, 4096, 333, 64), (0, 2, 1, 2)],
-]
+parallel_config_map = {
+    "wh_glx": {
+        "wan_14b_720p": (0, 8, 1, 4),
+        "wan_14b_480p": (0, 8, 1, 4),
+        "mochi": (0, 8, 1, 4),
+        "flux": (0, 8, 1, 4),
+        "sd35": (0, 4, 1, 4),
+    },
+    "wh_t3k": {
+        "wan_14b_720p": (0, 2, 1, 4),
+        "wan_14b_480p": (0, 2, 1, 4),
+        "mochi": (0, 2, 1, 4),
+        "flux": (0, 2, 1, 4),
+        "sd35": (0, 2, 1, 2),
+    },
+    "bh_glx": {
+        "wan_14b_720p": (0, 8, 1, 4),
+        "wan_14b_480p": (0, 8, 1, 4),
+        "mochi": (0, 8, 1, 4),
+        "flux": (0, 8, 1, 4),
+        "sd35": (0, 4, 1, 4),
+    },
+    "bh_qb_ge": {
+        "wan_14b_720p": (0, 2, 1, 2),
+        "wan_14b_480p": (0, 2, 1, 2),
+        "mochi": (0, 2, 1, 2),
+        "flux": (0, 2, 1, 2),
+        "sd35": (0, 2, 1, 2),
+    },
+}
 
-benchmark_model_input_ids = [
-    "wan_14b_480p",
-    "mochi",
-    "flux",
-    "sd35",
+mesh_device_map = {
+    "wh_glx": [(8, 4), 4],
+    "wh_t3k": [(2, 4), 1],
+    "bh_glx": [(8, 4), 2],
+    "bh_qb_ge": [(2, 2), 2],
+}
+
+all_parallel_configs = list(set(config for configs in parallel_config_map.values() for config in configs.values()))
+
+
+def get_parallel_config_id(rp_factor, up_factor):
+    return f"{rp_factor}rpx{up_factor}up"
+
+
+all_parallel_config_ids = [
+    get_parallel_config_id(rp_factor, up_factor) for rp_axis, rp_factor, up_axis, up_factor in all_parallel_configs
 ]
 
 
 @pytest.mark.parametrize(
-    "model_input_shape, parallel_config",
-    benchmark_model_input_shapes,
-    ids=benchmark_model_input_ids,
+    "model_input_shape",
+    benchmark_model_input_shapes.values(),
+    ids=benchmark_model_input_shapes.keys(),
 )
+@pytest.mark.parametrize("parallel_config", all_parallel_configs, ids=all_parallel_config_ids)
 @pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512], ids=["k64", "k128", "k256", "k512"])
 @pytest.mark.parametrize("n_iters, trace_enabled, skip_check", [(1, False, False)], ids=["no_trace"])
-@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -50,10 +91,10 @@ benchmark_model_input_ids = [
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
-    indirect=True,
+    "mesh_device, num_links",
+    mesh_device_map.values(),
+    ids=mesh_device_map.keys(),
+    indirect=["mesh_device"],
 )
 def test_ring_joint_sdpa(
     mesh_device,
@@ -104,20 +145,17 @@ def test_ring_joint_sdpa(
 
 
 @pytest.mark.parametrize(
-    "mesh_device_shape",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
+    "mesh_device_id",
+    mesh_device_map.keys(),
+    ids=mesh_device_map.keys(),
 )
-@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
-def test_ring_joint_sdpa_perf_table(mesh_device_shape, num_links):
+def test_ring_joint_sdpa_perf_table(mesh_device_id):
     results = []
-    for (model_input_shape, parallel_config), model_input_id in zip(
-        benchmark_model_input_shapes, benchmark_model_input_ids
-    ):
+    for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
+        parallel_config = parallel_config_map[mesh_device_id][model_input_id]
         rp_axis, rp_factor, up_axis, up_factor = parallel_config
-        parallel_name = f"{rp_factor}rpx{up_factor}up"
-        mesh_name = f"{mesh_device_shape[0]}x{mesh_device_shape[1]}"
-        k_expr = f"{model_input_id} and {mesh_name} and {num_links}link and no_trace"
+        parallel_name = get_parallel_config_id(rp_factor, up_factor)
+        k_expr = f"{model_input_id} and {parallel_name} and {mesh_device_id} and no_trace"
         command = f"-m 'pytest models/experimental/tt_dit/tests/models/wan2_2/test_ring_joint_attention.py::test_ring_joint_sdpa -k \"{k_expr}\"'"
 
         run_device_profiler(
