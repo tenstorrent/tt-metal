@@ -162,12 +162,10 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
     std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
-    MeshCommandQueue::ShardDataTransfer read_transfer = {
-        .shard_coord = coord,
-        .host_data = aligned_ptr,
-        .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
-        .pinned_memory = pinned_mem,
-    };
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(aligned_ptr)
+                             .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
+    experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
 
     for (auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);

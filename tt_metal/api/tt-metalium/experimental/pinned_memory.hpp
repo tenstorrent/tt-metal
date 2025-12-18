@@ -26,6 +26,7 @@ namespace distributed {
 class MeshDevice;
 class MeshEvent;
 class MeshCoordinateRangeSet;
+class ShardDataTransfer;
 }  // namespace distributed
 
 namespace experimental {
@@ -194,6 +195,11 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
 
 std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer);
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory);
+
+const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(
+    const distributed::ShardDataTransfer& shard_data_transfer);
+void ShardDataTransferSetPinnedMemory(
+    distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory);
 
 }  // namespace experimental
 

@@ -620,7 +620,6 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
         .shard_coord = coord,
         .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
         .region = BufferRegion(0, bytes_per_device),
-        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -641,12 +640,10 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
     // Read back using enqueue_read_shards with pinned_memory populated
-    auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = coord,
-        .host_data = static_cast<void*>(dst_ptr_aligned),
-        .region = BufferRegion(0, bytes_per_device),
-        .pinned_memory = pinned_shared,
-    };
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst_ptr_aligned))
+                             .region(BufferRegion(0, bytes_per_device));
+    experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_shared);
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
@@ -681,7 +678,6 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
         .shard_coord = coord,
         .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
         .region = BufferRegion(0, bytes_per_device),
-        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -744,7 +740,6 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
         .shard_coord = coord,
         .host_data = src.data(),
         .region = BufferRegion(0, bytes_per_device),
-        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -769,7 +764,6 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
         .shard_coord = coord,
         .host_data = static_cast<void*>(dst_ptr_unaligned),
         .region = BufferRegion(0, bytes_per_device),
-        .pinned_memory = pinned_shared,
     };
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
