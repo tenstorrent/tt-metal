@@ -32,8 +32,9 @@ KERNEL_ENTRY {
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs =
         deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_tiny_tile") == 1>;
-    using McastCTArgs = deepseek_b1_ops::Mcast::
-        SenderCTArgs<get_named_compile_time_arg_val("mcast_num_cores"), Core::is_input_core && Core::is_matmul_core>;
+    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_num_cores"),
+        Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
 
     // RMSNorm reader runtime args
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
@@ -262,13 +263,15 @@ KERNEL_ENTRY {
         rmsnorm(rmsnorm_args);
     }
 
+    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul_core, true> mcast;
+    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         // Mcast: NCRISC sends from input core, BRISC receives on matmul cores, TRISC no-op
         // pop_src = true (input is consumed after mcast)
-        deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul_core, true> mcast;
         mcast(mcast_args);
     }
+    mcast.teardown(mcast_args);
 
     // ========================================================================
     // Matmul operation
@@ -362,8 +365,8 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("MCAST2");
         // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
         // pop_src = true (rmsnorm2 output is consumed after mcast)
-        deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
-        mcast2(mcast2_args);
+        // deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
+        // mcast2(mcast2_args);
     }
     DPRINT << "-------- mcast 2 completed --------" << ENDL();
 
@@ -377,8 +380,8 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("MATMUL2");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         // Note: Using main grid (all cores) instead of just matmul cores
-        deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
-        matmul2(matmul2_args);
+        // deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
+        // matmul2(matmul2_args);
     }
     DPRINT << "-------- matmul 2 completed --------" << ENDL();
 }

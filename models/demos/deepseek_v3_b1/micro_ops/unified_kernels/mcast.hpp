@@ -252,45 +252,93 @@ struct Mcast {
     // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
     // IsReceiverCore: compile-time flag for receiver cores
     // pop_src: whether to pop the source CB after sending
+    //
+    // Usage:
+    //   Op op;
+    //   op.init(args);      // Initialize persistent mcast sender (call once)
+    //   op(args);           // Send data (can be called multiple times)
+    //   op.teardown(args);  // Teardown persistent mcast sender (call once)
+    //
+    // Or use the legacy all-in-one call:
+    //   op.init_send_teardown(args);  // Does init + send + teardown
     // ========================================================================
     template <typename CTArgsT, bool IsSenderCore, bool IsReceiverCore, bool pop_src>
     class Op {
     public:
-        void operator()(const RTArgs& args) { impl(args); }
-
-    private:
-        void impl([[maybe_unused]] const RTArgs& args) {
+        // ====================================================================
+        // init - Initialize persistent mcast sender (NCRISC only)
+        // Must be called before operator() on sender core
+        // No-op for BRISC/TRISC
+        // ====================================================================
+        void init([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-            // ================================================================
-            // NCRISC - Only sender core runs the send logic
-            // ================================================================
             if constexpr (IsSenderCore) {
-                // Wait for source CB data to be ready
-                cb_wait_front(args.src_cb, args.src_num_pages);
-
                 // Get semaphore addresses from runtime args
                 uint32_t data_sender_semaphore_addr = get_semaphore(args.data_sender_semaphore_id);
                 uint32_t data_receiver_semaphore_addr = get_semaphore(args.data_receiver_semaphore_id);
 
-                // Compute multicast NOC address
-                const uint64_t noc_coord = get_noc_multicast_addr<noc_index>(
+                // Compute multicast NOC address and store for later use
+                noc_coord_ = get_noc_multicast_addr<noc_index>(
                     args.dest_noc_start_x, args.dest_noc_start_y, args.dest_noc_end_x, args.dest_noc_end_y, 0);
-                uint64_t mcast_flag_noc_addr = noc_coord | (uint64_t)(data_receiver_semaphore_addr);
+                mcast_flag_noc_addr_ = noc_coord_ | (uint64_t)(data_receiver_semaphore_addr);
 
                 volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)data_sender_semaphore_addr;
 
-                // Initialize persistent mcast sender (uses compile-time args for template params)
+                // Initialize persistent mcast sender
                 init_persistent_mcast_sender<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
                     CTArgsT::is_part_of_receiver_grid>(
-                    mcast_flag_noc_addr, data_sender_semaphore_addr, data_sender_semaphore_addr_ptr);
+                    mcast_flag_noc_addr_, data_sender_semaphore_addr, data_sender_semaphore_addr_ptr);
+            }
+#endif
+        }
+
+        // ====================================================================
+        // operator() - Send data via mcast (NCRISC sender) / Full receive logic (BRISC receiver)
+        // For NCRISC: Must call init() first, waits for src CB, sends data
+        // For BRISC: Reserve CB, wait for semaphore, push CB (complete receive)
+        // ====================================================================
+        void operator()(const RTArgs& args) { impl(args); }
+
+        // ====================================================================
+        // teardown - Teardown persistent mcast sender (NCRISC only)
+        // Must be called after all operator() calls on sender core
+        // No-op for BRISC/TRISC
+        // ====================================================================
+        void teardown([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (IsSenderCore) {
+                // Teardown persistent mcast sender
+                teardown_persistent_mcast_sender<
+                    CTArgsT::mcast_num_cores,
+                    CTArgsT::loopback,
+                    CTArgsT::is_part_of_receiver_grid>(mcast_flag_noc_addr_);
+            }
+#endif
+        }
+
+        // ====================================================================
+        // init_send_teardown - Legacy all-in-one call (init + send + teardown)
+        // ====================================================================
+        void init_send_teardown([[maybe_unused]] const RTArgs& args) {
+            init(args);
+            impl(args);
+            teardown(args);
+        }
+
+    private:
+        void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (IsSenderCore) {
+                // Wait for source CB data to be ready
+                cb_wait_front(args.src_cb, args.src_num_pages);
 
                 // Compute mcast data NOC address from runtime args
-                uint64_t mcast_data_noc_addr = noc_coord | (uint64_t)args.mcast_receiver_data_addr;
+                uint64_t mcast_data_noc_addr = noc_coord_ | (uint64_t)args.mcast_receiver_data_addr;
 
-                // Send data with state (uses compile-time args for template params)
+                // Send data with state
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -310,22 +358,14 @@ struct Mcast {
                     false,
                     write_reg_cmd_buf>(0, 0, 0);
 
-                // Teardown persistent mcast sender (uses compile-time args for template params)
-                teardown_persistent_mcast_sender<
-                    CTArgsT::mcast_num_cores,
-                    CTArgsT::loopback,
-                    CTArgsT::is_part_of_receiver_grid>(mcast_flag_noc_addr);
-
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
             }
-            // Receiver cores' NCRISC does nothing
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // BRISC - Receiver cores wait for semaphore
-            // Sender core also waits if loopback is enabled (sender is part of receiver grid)
+            // BRISC - Receiver cores: reserve, wait, push (all in operator)
             // ================================================================
             if constexpr (IsReceiverCore) {
                 // Reserve space in destination CB before mcast writes to it
@@ -341,12 +381,14 @@ struct Mcast {
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }
-#elif defined(COMPILE_FOR_TRISC)
-            // ================================================================
-            // TRISC - No-op (mcast is dataflow only)
-            // ================================================================
 #endif
         }
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Cached addresses computed during init, used during send and teardown
+        uint64_t noc_coord_ = 0;
+        uint64_t mcast_flag_noc_addr_ = 0;
+#endif
     };  // class Op
 
 };  // struct Mcast
