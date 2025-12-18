@@ -611,7 +611,6 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
 }
 
 inline uint32_t Hal::get_dma_alignment(void) const {
-    // DMA transfers are only available on Wormhole B0 devices today.
     switch (arch_) {
         case tt::ARCH::WORMHOLE_B0: return 4;
         // Only Wormhole B0 devices support DMA transfers today.
