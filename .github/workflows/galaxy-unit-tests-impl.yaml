@@ -190,7 +190,7 @@ jobs:
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
       - name: Run Multi-Process tests
-        if: ${{ (inputs.model == 'all' || inputs.model == 'multiprocess') && matrix.test-group.model == 'multiprocess' }}
+        if: ${{ matrix.test-group.model == 'multiprocess' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
