@@ -36,6 +36,7 @@ void get_max_page_size_and_num_pages(
     tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
+    // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
     uint32_t noc_max_page_size;
     if (device->arch() == tt::ARCH::WORMHOLE_B0) {
         noc_max_page_size = 8192;
