@@ -779,6 +779,11 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 // Test if RTA payload region initialized by HostMemDeviceCommand
 // is filled with known garbage (with 0xBEEF####) for cores with unset RTAs
 TEST_F(MeshWatcherFixture, WatcherKnownGarbageRTAs) {
+    auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (slow_dispatch) {
+        GTEST_SKIP() << "This test can only be run with fast dispatch mode";
+    }
+
     // First run the program with the initial runtime args
     CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
     CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(4, 4));
@@ -804,7 +809,7 @@ TEST_F(MeshWatcherFixture, WatcherKnownGarbageRTAs) {
 
     auto kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/runtime_args_test.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_runtime_args_prefill.cpp",
         core_range_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

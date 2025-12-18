@@ -477,14 +477,13 @@ void generate_runtime_args_cmds(
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             uint32_t total_words = (calculator.write_offset_bytes() - data_offset) / sizeof(uint32_t);
             uint32_t* command_start_ptr =
-                reinterpret_cast<uint32_t*>(command_obj.data()) + data_offset / sizeof(uint32_t);
+                reinterpret_cast<uint32_t*>(command_obj.data()) + (data_offset / sizeof(uint32_t));
             thread_local static std::mt19937 gen(std::random_device{}());
             std::uniform_int_distribution<int> dist(0, 65535);
             for (uint32_t count = 0; count < total_words; count++) {
                 uint16_t rnd = static_cast<uint16_t>(dist(gen));
                 const uint32_t known_garbage = 0xBEEF0000 | rnd;
-                *command_start_ptr = known_garbage;
-                command_start_ptr++;
+                command_start_ptr[count] = known_garbage;
             }
         }
 
