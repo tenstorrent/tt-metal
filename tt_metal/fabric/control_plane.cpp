@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
+#include <fstream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -3027,6 +3028,66 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
+std::map<ChipId, std::vector<uint32_t>> ControlPlane::get_chip_coordinates() const {
+    std::map<ChipId, std::vector<uint32_t>> chip_coordinates;
+
+    // Iterate through all physical chip ID to fabric node ID mappings
+    for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        // Get the mesh coordinate for this fabric node
+        MeshCoordinate mesh_coord = this->mesh_graph_->chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+
+        // Convert mesh coordinate to a vector and pad to 4D
+        std::vector<uint32_t> coord_vec;
+        size_t dims = mesh_coord.dims();
+        
+        // Copy existing dimensions
+        for (size_t i = 0; i < dims; ++i) {
+            coord_vec.push_back(mesh_coord[i]);
+        }
+        
+        // Pad with zeros to make it 4D (matching the format in cluster descriptor)
+        while (coord_vec.size() < 4) {
+            coord_vec.push_back(0);
+        }
+
+        chip_coordinates[physical_chip_id] = coord_vec;
+    }
+
+    return chip_coordinates;
+}
+
+void ControlPlane::serialize_chip_coordinates_to_file(const std::string& filepath) const {
+    auto chip_coordinates = get_chip_coordinates();
+
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    out << YAML::Key << "chips";
+    out << YAML::Value << YAML::BeginMap;
+
+    // Iterate through chip coordinates in sorted order by chip ID
+    for (const auto& [chip_id, coords] : chip_coordinates) {
+        out << YAML::Key << chip_id;
+        out << YAML::Value << YAML::Flow << YAML::BeginSeq;
+        for (const auto& coord : coords) {
+            out << coord;
+        }
+        out << YAML::EndSeq;
+    }
+
+    out << YAML::EndMap;
+    out << YAML::EndMap;
+
+    // Write to file
+    std::ofstream fout(filepath);
+    if (!fout.is_open()) {
+        TT_THROW("Failed to open file for writing: {}", filepath);
+    }
+    fout << out.c_str();
+    fout.close();
+
+    log_info(tt::LogFabric, "Chip coordinates serialized to: {}", filepath);
 }
 
 ControlPlane::~ControlPlane() = default;
