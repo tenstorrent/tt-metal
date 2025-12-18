@@ -1,21 +1,20 @@
 # Kernel Pipelining Analysis Methodology for TT-Metalium
 
-A comprehensive reference for understanding and analyzing pipeline behavior in TT-Metalium kernels.
+## Section Quick Reference
 
-**Purpose**: This reference file provides detailed methodology, worked examples, and formulas for pipeline analysis. The `ttnn-pipeline-analyzer` agent should consult this file when encountering unfamiliar patterns or needing worked examples.
+**Usage**: Grep for the pattern to find current line number, then `Read` with `offset`/`limit`.
 
----
-
-## Table of Contents
-
-1. CB Semantics Deep Dive
-2. CB State Model
-3. Tools & Techniques
-4. Case Studies
-5. Common Patterns (Detailed)
-6. Best Practices
-7. Methodology Summary & Decision Tree
-8. Appendix: Formulas & Quick Reference
+| Need | Grep Pattern | ~Lines |
+|------|--------------|--------|
+| CB basics (producer/consumer ops) | `## CB Semantics Deep Dive` | 35 |
+| State model (blocking conditions) | `## CB State Model` | 75 |
+| Tools (CB tracking, traces) | `## Tools & Techniques` | 105 |
+| Case studies (worked examples) | `## Case Studies` | 140 |
+| Common patterns (ping-pong, double-buffer) | `## Common Patterns` | 95 |
+| Best practices | `## Best Practices` | 60 |
+| Decision tree | `## Methodology Summary` | 45 |
+| Verification checklist | `## Sanity Checks` | 15 |
+| Formulas (buffer math, throughput) | `## Appendix: Formulas` | 55 |
 
 ---
 

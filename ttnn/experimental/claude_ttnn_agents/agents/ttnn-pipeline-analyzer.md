@@ -32,48 +32,25 @@ Separate cores sharing circular buffers can still execute strictly sequentially 
 
 The full methodology is in: `.claude/references/ttnn-pipeline-analysis-methodology.md`
 
-**DO NOT read the entire file.** Use grep to find specific sections:
+**DO NOT read the entire file.** Load sections on demand:
 
 ### How to Find Sections
 
-**Step 1**: Read the Table of Contents (first 30 lines):
-```bash
-head -30 .claude/references/ttnn-pipeline-analysis-methodology.md
+**Step 1**: Read the Quick Reference table (first 20 lines of the reference file):
 ```
+Read .claude/references/ttnn-pipeline-analysis-methodology.md with limit=20
+```
+This gives you grep patterns and approximate line counts for each section.
 
-**Step 2**: Grep for the section header you need:
+**Step 2**: Grep for the section header to find the current line number:
 ```bash
-# Find case studies
-grep -n "## 6. Case Studies" .claude/references/ttnn-pipeline-analysis-methodology.md
-
-# Find Gantt chart section
-grep -n "Gantt Chart" .claude/references/ttnn-pipeline-analysis-methodology.md
-
-# Find specific pattern
-grep -n "Pattern 4: Accumulator" .claude/references/ttnn-pipeline-analysis-methodology.md
+grep -n "## Case Studies" .claude/references/ttnn-pipeline-analysis-methodology.md
 ```
 
 **Step 3**: Use Read with offset/limit to load only that section:
 ```
-Read file with offset=530 limit=120  # For Case Studies section
+Read file with offset=<line_from_grep> limit=<lines_from_table>
 ```
-
-### Section Quick Reference
-
-| Need | Grep Pattern | Approx Lines |
-|------|--------------|--------------|
-| Overview/Why | `## 1. Overview` | 35-55 |
-| CB Semantics | `## 2. Prerequisites` | 60-180 |
-| Step-by-step process | `## 3. Step-by-Step` | 185-455 |
-| Gantt charts | `Step 5: Create Gantt` | 360-410 |
-| Tools (CB tracking, graphs) | `## 4. Tools` | 460-560 |
-| Common patterns | `## 5. Common Patterns` | 565-670 |
-| Case studies | `## 6. Case Studies` | 675-790 |
-| Best practices | `## 7. Best Practices` | 795-855 |
-| Decision tree | `## 8. Methodology Summary` | 860-900 |
-| Verification checklist | `## 9. Verification` | 905-940 |
-| Key takeaways | `## 10. Conclusion` | 940-970 |
-| Formulas | `## 11. Appendix` | 975-1025 |
 
 ---
 
