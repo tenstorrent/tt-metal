@@ -6,7 +6,7 @@
 
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
-#include "impl/debug/inspector/runtime_rpc_channel_generated.hpp"
+#include "debug/inspector/runtime_rpc_channel_generated.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal::inspector {

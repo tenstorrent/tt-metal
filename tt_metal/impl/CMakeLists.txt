@@ -108,52 +108,6 @@ endforeach()
 
 list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 
-# Generate Inspector Cap'n Proto headers and RPC server implementation
-set(INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp)
-set(RUNTIME_INSPECTOR_RPC_CAPNP ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp)
-set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/impl/)
-file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
-
-capnp_generate_cpp(INSPECTOR_RPC_CAPNP_SOURCES INSPECTOR_RPC_CAPNP_HEADER ${INSPECTOR_RPC_CAPNP})
-capnp_generate_cpp(RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES RUNTIME_INSPECTOR_RPC_CAPNP_HEADER ${RUNTIME_INSPECTOR_RPC_CAPNP})
-list(
-    APPEND
-    IMPL_SRC
-    ${INSPECTOR_RPC_CAPNP_SOURCES}
-    ${RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES}
-)
-
-# Generate Inspector RPC callbacks server implementation
-set(RUNTIME_INSPECTOR_RPC_GENERATED_HEADER
-    ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/runtime_rpc_channel_generated.hpp
-)
-set(RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE
-    ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/runtime_rpc_channel_generated.cpp
-)
-add_custom_command(
-    OUTPUT
-        ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
-        ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
-    COMMAND
-        python3 ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py ${RUNTIME_INSPECTOR_RPC_CAPNP}
-        ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER} ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
-    DEPENDS
-        ${RUNTIME_INSPECTOR_RPC_CAPNP}
-        ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py
-    COMMENT "Generating RPC server implementation for ${RUNTIME_INSPECTOR_RPC_CAPNP}"
-)
-list(APPEND IMPL_SRC ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE})
-# Disable clang-tidy for generated Inspector files
-set_source_files_properties(
-    ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
-    ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
-    ${INSPECTOR_RPC_CAPNP_SOURCES}
-    ${RUNTIME_INSPECTOR_RPC_CAPNP_SOURCES}
-    PROPERTIES
-        SKIP_LINTING
-            TRUE
-)
-
 # Disable unity build for files with complex dependencies
 set_source_files_properties(
     trace/trace_buffer.cpp
@@ -161,18 +115,6 @@ set_source_files_properties(
         SKIP_UNITY_BUILD_INCLUSION
             ON
 )
-
-# Define dependency for CI small build for clang-tidy
-if(TARGET all_generated_files)
-    add_custom_target(
-        capnp_generated_files
-        DEPENDS
-            ${INSPECTOR_RPC_CAPNP_HEADER}
-            ${RUNTIME_INSPECTOR_RPC_CAPNP_HEADER}
-            ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
-    )
-    add_dependencies(all_generated_files capnp_generated_files)
-endif()
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
@@ -192,8 +134,16 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
         Metalium::Metal::LLRT
-        capnp
-        capnp-rpc
+)
+
+TT_ADD_INSPECTOR_RPC_SUPPORT(
+    impl
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector
+    CAPNP_SCHEMAS
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
+    RPC_CHANNEL_SCHEMAS
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
 )
 
 target_include_directories(

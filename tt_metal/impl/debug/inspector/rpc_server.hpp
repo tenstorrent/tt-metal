@@ -8,7 +8,7 @@
 #include <map>
 #include <filesystem>
 #include <capnp/ez-rpc.h>
-#include "impl/debug/inspector/rpc.capnp.h"
+#include "debug/inspector/rpc.capnp.h"
 
 namespace tt::tt_metal::inspector {
 
