@@ -31,8 +31,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool transpose_a,
-    const bool transpose_b,
+    bool transpose_a,
+    bool transpose_b,
     uint32_t bias_single_tile_size,
     const matmul::operation_attributes_t& attributes);
 
