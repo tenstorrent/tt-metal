@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
+import pytest
 import numpy as np
 import torch
 from loguru import logger
 from PIL import Image
+
+from models.experimental.smolvla.common import get_model_path
 
 
 def compute_pcc(x: np.ndarray, y: np.ndarray) -> float:
@@ -28,14 +29,8 @@ def create_test_image(size: int = 512, seed: int = 42) -> Image.Image:
     return Image.fromarray(img_array)
 
 
-def get_model_path(model_location_generator=None):
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        return "lerobot/smolvla_base"
-    else:
-        return str(model_location_generator("vla-models/smolvla_base", model_subdir="", download_if_ci_v2=True))
-
-
-def test_smolvla_pcc(device, model_location_generator):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_smolvla_pcc(device, reset_seeds, model_location_generator):
     from models.experimental.smolvla.tt.smol_vla import SmolVLAForActionPrediction
 
     model_weights_path = get_model_path(model_location_generator)
