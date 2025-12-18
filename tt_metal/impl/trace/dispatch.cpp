@@ -229,7 +229,7 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
     constexpr uint32_t kExecBufPageMin = 1024;
     constexpr uint32_t kExecBufPageMax = 8192;
     // If the trace buffer is large enough, use the max page size to get maxium performance.
-    if (buf_size / (num_banks * kExecBufPageMax) > 2) {
+    if (buf_size / (num_banks * kExecBufPageMax) >= 2) {
         return kExecBufPageMax;
     }
     // The algorithm below currently minimizes the amount of wasted space due to
