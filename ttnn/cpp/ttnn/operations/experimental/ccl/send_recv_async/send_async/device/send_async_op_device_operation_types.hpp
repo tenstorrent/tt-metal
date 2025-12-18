@@ -19,7 +19,8 @@ struct operation_attributes_t {
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("mesh_socket", mesh_socket);
+        // Note: MeshSocket is complex to format and not needed for debug logging
+        // attrs.emplace_back("mesh_socket", mesh_socket);
         return attrs;
     }
 };

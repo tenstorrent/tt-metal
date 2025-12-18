@@ -202,12 +202,10 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
         .fifo_size = memory_config.fifo_size,
     };
 
-    tt::tt_metal::distributed::SocketConfig config{
-        .socket_connection_config = connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = test_socket_config.sender_rank,
-        .receiver_rank = test_socket_config.receiver_rank,
-        .distributed_context = distributed_context_};
+    tt::tt_metal::distributed::SocketConfig config(connections, socket_mem_config, 0, 0);
+    config.sender_rank = test_socket_config.sender_rank;
+    config.receiver_rank = test_socket_config.receiver_rank;
+    config.distributed_context = distributed_context_;
 
     return config;
 }
