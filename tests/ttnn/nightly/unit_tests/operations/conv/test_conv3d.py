@@ -96,11 +96,6 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             prev_C_in_block = C_in_block
 
         config = create_conv3d_config(
-            out_channels,
-            kernel_size,
-            stride,
-            padding,
-            padding_mode,
             T_out_block=T_out_block,
             H_out_block=H_out_block,
             W_out_block=W_out_block,
@@ -113,6 +108,13 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             input_tensor=tt_input,
             weight_tensor=tt_weight,
             bias_tensor=tt_bias,
+            dtype=ttnn.bfloat16,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            padding_mode=padding_mode,
+            groups=1,
             config=config,
             compute_kernel_config=kernel_config,
         )
@@ -196,11 +198,6 @@ def test_conv3d_mochi_shapes(
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
 
     config = create_conv3d_config(
-        out_channels,
-        kernel_size,
-        stride,
-        padding,
-        padding_mode,
         T_out_block=T_out_block,
         H_out_block=H_out_block,
         W_out_block=W_out_block,
@@ -213,6 +210,13 @@ def test_conv3d_mochi_shapes(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=1,
         config=config,
         compute_kernel_config=kernel_config,
     )
