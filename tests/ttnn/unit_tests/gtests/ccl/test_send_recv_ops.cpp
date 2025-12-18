@@ -49,8 +49,7 @@ void test_send_recv_async_(
         .fifo_size = socket_fifo_size,
     };
 
-    distributed::SocketConfig socket_config = {
-        .socket_connection_config = socket_connections, .socket_mem_config = socket_mem_config};
+    distributed::SocketConfig socket_config(socket_connections, socket_mem_config);
     auto [forward_send_socket, forward_recv_socket] =
         distributed::MeshSocket::create_socket_pair(md0, md1, socket_config);
     auto [backward_send_socket, backward_recv_socket] =

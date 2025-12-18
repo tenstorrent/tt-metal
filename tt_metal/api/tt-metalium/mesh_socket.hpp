@@ -55,9 +55,43 @@ struct SocketConfig {
     SocketMemoryConfig socket_mem_config;
     // Specifies the ranks of the sender and receiver hosts in a multi-host context.
     // Used for inital handshaking and validation of the socket configs.
+    uint32_t sender_mesh_id = 0;
+    uint32_t receiver_mesh_id = 0;
     multihost::Rank sender_rank{0};
     multihost::Rank receiver_rank{0};
     std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
+    SocketConfig(
+        const std::vector<SocketConnection>& socket_connection_config,
+        const SocketMemoryConfig& socket_mem_config,
+        uint32_t sender_mesh_id,
+        uint32_t receiver_mesh_id) :
+        socket_connection_config(socket_connection_config),
+        socket_mem_config(socket_mem_config),
+        sender_mesh_id(sender_mesh_id),
+        receiver_mesh_id(receiver_mesh_id),
+        sender_rank(0),
+        receiver_rank(0),
+        distributed_context(nullptr) {}
+    SocketConfig() = default;
+    SocketConfig(
+        const std::vector<SocketConnection>& socket_connection_config, const SocketMemoryConfig& socket_mem_config) :
+        socket_connection_config(socket_connection_config),
+        socket_mem_config(socket_mem_config),
+        sender_mesh_id(0),
+        receiver_mesh_id(0),
+        sender_rank(0),
+        receiver_rank(0),
+        distributed_context(nullptr) {}
+    SocketConfig(
+        const std::vector<SocketConnection>& socket_connection_config,
+        const SocketMemoryConfig& socket_mem_config,
+        multihost::Rank sender_rank,
+        multihost::Rank receiver_rank) :
+        socket_connection_config(socket_connection_config),
+        socket_mem_config(socket_mem_config),
+        sender_rank(sender_rank),
+        receiver_rank(receiver_rank),
+        distributed_context(nullptr) {}
 };
 
 enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };

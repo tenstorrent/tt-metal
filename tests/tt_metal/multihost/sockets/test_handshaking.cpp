@@ -62,39 +62,33 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
         socket_connections.push_back(socket_connection);
     }
     // L1 Socket Config
-    SocketConfig socket_config_l1 = {
-        .socket_connection_config = socket_connections,
-        .socket_mem_config =
-            {.socket_storage_type = BufferType::L1,
-             .fifo_size = l1_socket_fifo_size,
-             .sender_sub_device = SubDeviceId(0),
-             .receiver_sub_device = SubDeviceId(1)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
-    };
+    SocketMemoryConfig socket_mem_config_l1 = {
+        .socket_storage_type = BufferType::L1,
+        .fifo_size = l1_socket_fifo_size,
+        .sender_sub_device = SubDeviceId(0),
+        .receiver_sub_device = SubDeviceId(1)};
+    SocketConfig socket_config_l1 = SocketConfig(socket_connections, socket_mem_config_l1, 0, 0);
+    socket_config_l1.sender_rank = Rank{0};
+    socket_config_l1.receiver_rank = Rank{1};
     // Dram Socket Config
-    SocketConfig socket_config_dram = {
-        .socket_connection_config = socket_connections,
-        .socket_mem_config =
-            {.socket_storage_type = BufferType::DRAM,
-             .fifo_size = dram_socket_fifo_size,
-             .sender_sub_device = SubDeviceId(2),
-             .receiver_sub_device = SubDeviceId(3)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
-    };
+    SocketMemoryConfig socket_mem_config_dram = {
+        .socket_storage_type = BufferType::DRAM,
+        .fifo_size = dram_socket_fifo_size,
+        .sender_sub_device = SubDeviceId(2),
+        .receiver_sub_device = SubDeviceId(3)};
+    SocketConfig socket_config_dram = SocketConfig(socket_connections, socket_mem_config_dram, 0, 0);
+    socket_config_dram.sender_rank = Rank{0};
+    socket_config_dram.receiver_rank = Rank{1};
     // This config will be used to ensure that the verification step works correctly
     // Descriptors will be forced to mismatch.
-    SocketConfig incorrect_socket_config = {
-        .socket_connection_config = socket_connections,
-        .socket_mem_config =
-            {.socket_storage_type = BufferType::DRAM,
-             .fifo_size = dram_socket_fifo_size,
-             .sender_sub_device = SubDeviceId(2),
-             .receiver_sub_device = SubDeviceId(3)},
-        .sender_rank = Rank{0},
-        .receiver_rank = Rank{1},
-    };
+    SocketMemoryConfig incorrect_socket_mem_config = {
+        .socket_storage_type = BufferType::DRAM,
+        .fifo_size = dram_socket_fifo_size,
+        .sender_sub_device = SubDeviceId(2),
+        .receiver_sub_device = SubDeviceId(3)};
+    SocketConfig incorrect_socket_config = SocketConfig(socket_connections, incorrect_socket_mem_config, 0, 0);
+    incorrect_socket_config.sender_rank = Rank{0};
+    incorrect_socket_config.receiver_rank = Rank{1};
     // Generate dummy addresses for the sender and receiver buffers
     // In a real scenario, these would be allocated buffers on the MeshDevice.
     DeviceAddr l1_sender_config_buffer_address = 1 << 10;    // DUMMY ADDRESS: L1 Sender config buffer allocate at 1KB
