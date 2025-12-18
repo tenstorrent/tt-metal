@@ -497,6 +497,8 @@ class Transformer(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            # Synchronize device to ensure async all_gather completes before using the result
+            ttnn.synchronize_device(self.mesh_device)
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
