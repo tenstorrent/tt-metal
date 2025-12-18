@@ -140,7 +140,10 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         }
 
         tt::tt_metal::SetRuntimeArgs(
-            program, typecast_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+            program,
+            typecast_reader_kernel_id,
+            core,
+            {src_buffer->address(), num_tiles_per_core, num_tiles_written, (uint32_t)input.is_sharded()});
 
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
@@ -192,6 +195,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
     const auto& sub_core_grids = args.sub_core_grids;
+    const bool is_sharded = input.is_sharded() && sub_core_grids.has_value();
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
@@ -202,20 +206,29 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
-    uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
-    uint32_t ncores = sub_core_grids->num_cores();
+    uint32_t ntiles = 0;
+    uint32_t ncores = 0;
+    if (is_sharded) {
+        const auto& shard_shape = input.memory_config().shard_spec()->shape;
+        uint32_t tiles_per_core = (shard_shape[0] * shard_shape[1]) / TILE_HW;
+        ncores = input.memory_config().shard_spec()->num_cores();
+        ntiles = tiles_per_core * ncores;
+        TT_FATAL(ncores != 0, "number of cores cannot be 0");
 
-    TT_FATAL(ncores != 0, "number of cores cannot be 0");
-
-    for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
-        if (ntiles % ncores == 0) {
-            break;
-        } else {
-            ncores--;
+    } else {
+        ntiles = input.physical_volume() / tt::constants::TILE_HW;
+        ncores = sub_core_grids->num_cores();
+        TT_FATAL(ncores != 0, "number of cores cannot be 0");
+        for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
+            if (ntiles % ncores == 0) {
+                break;
+            } else {
+                ncores--;
+            }
         }
+        TT_FATAL(
+            (ntiles % (ncores) == 0), "{} num of tiles are not split uniformly across {} num of cores", ntiles, ncores);
     }
-    TT_FATAL(
-        (ntiles % (ncores) == 0), "{} num of tiles are not split uniformly across {} num of cores", ntiles, ncores);
 
     auto cores = corerange_to_cores(sub_core_grids.value(), ncores, true);
     auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids.value(), true);
@@ -230,14 +243,18 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = ntiles_per_block * 2;
+    uint32_t num_input_tiles = is_sharded ? ntiles_per_block : ntiles_per_block * 2;
+    uint32_t input_page_size = is_sharded ? input.buffer()->aligned_page_size() : single_tile_size;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * input_page_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, input_page_size);
+    if (is_sharded) {
+        cb_src0_config.set_globally_allocated_address(*input.buffer());
+    }
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = ntiles_per_block * 2;
+    uint32_t num_output_tiles = is_sharded ? ntiles_per_block : ntiles_per_block * 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
@@ -305,13 +322,19 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         CoreCoord core = cores[i];
 
         tt::tt_metal::SetRuntimeArgs(
-            program, typecast_reader_kernel_id, core, {src_buffer->address(), ntiles_per_core, tile_start_id});
+            program,
+            typecast_reader_kernel_id,
+            core,
+            {src_buffer->address(), ntiles_per_core, tile_start_id, (uint32_t)is_sharded});
 
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_writer_kernel_id, core, {dst_buffer->address(), ntiles_per_core, tile_start_id});
 
         cores_with_rtargs.push_back(core);
-        tile_start_id += ntiles_per_core;
+
+        if (!is_sharded) {
+            tile_start_id += ntiles_per_core;
+        }
     }
 
     return cached_program_t{

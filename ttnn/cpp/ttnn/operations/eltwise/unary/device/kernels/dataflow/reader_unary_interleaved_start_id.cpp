@@ -9,7 +9,7 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
-
+    bool is_sharded = get_arg_val<uint32_t>(3) == 1;
     constexpr auto src_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in0 = 0;
@@ -20,7 +20,13 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
-// read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    if (is_sharded) {
+        cb_reserve_back(cb_id_in0, num_tiles);
+        cb_push_back(cb_id_in0, num_tiles);
+        return;
+    }
+
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
     for (uint32_t i = start_id; i != end_id; --i) {

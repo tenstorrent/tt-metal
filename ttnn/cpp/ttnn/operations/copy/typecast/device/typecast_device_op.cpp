@@ -10,7 +10,7 @@ namespace ttnn::operations::copy {
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
+    if (tensor_args.input.is_sharded() && !args.sub_core_grids.has_value()) {
         return program::TypecastShardedProgramFactory{};
     } else if (args.sub_core_grids.has_value()) {
         return program::TypecastSubgridProgramFactory{};
@@ -63,8 +63,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(input_tensor.memory_config().memory_layout()));
     } else {
         TT_FATAL(
-            !args.sub_core_grids.has_value(),
-            "Typecast operation has sub_core_grids support for non-sharded inputs only");
+            args.sub_core_grids.value() == input_tensor.shard_spec().value().grid,
+            "When input is sharded, sub_core_grids must match the input's shard_spec grid.");
     }
 
     if (preallocated_output_tensor.has_value()) {
