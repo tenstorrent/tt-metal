@@ -863,14 +863,11 @@ class Attention(LightweightModule):
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        print(f"Attention.py: attn_output_11SH: {attn_output_11SH[0, 0, :80, :4]}")
 
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
-
-        print(f"Attention.py: attn_output_11SH after reshape: {attn_output_11SH[0, 0, :80, :4]}")
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
@@ -890,8 +887,6 @@ class Attention(LightweightModule):
             # Synchronize device to ensure async all_gather completes before using the result
             ttnn.synchronize_device(self.mesh_device)
 
-        print(f"Attention.py: attn_output_11SH after all_gather: {attn_output_11SH[0, 0, :80, :4]}")
-
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -901,13 +896,9 @@ class Attention(LightweightModule):
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
 
-        print(f"Attention.py: output_11SH after linear: {output_11SH[0, 0, :80, :4]}")
-
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
-
-        print(f"Attention.py: output_11SH after reshape: {output_11SH[0, 0, :80, :4]}")
 
         # Reduce-scatter
         if not self.use_fused_all_gather_matmul:
