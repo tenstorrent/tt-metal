@@ -49,7 +49,7 @@ public:
     }
 
     // Destructor ensures file descriptor is closed even if SetUp() throws
-    ~DPrintMeshFixture() {
+    ~DPrintMeshFixture() override {
         if (memfd_ >= 0) {
             close(memfd_);
         }
