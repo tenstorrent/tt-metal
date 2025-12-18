@@ -375,10 +375,11 @@ class FastOperation:
 
         lines = original_error.split("\n")
 
-        # Extract the expected signature
+        # Extract the expected signature (handle both pybind11 "1. (self:" and nanobind "1. __call__(self,")
         expected_signature = None
         for i, line in enumerate(lines):
-            if line.strip().startswith("1. (self:"):
+            stripped = line.strip()
+            if stripped.startswith("1. (self:") or stripped.startswith("1. __call__(self"):
                 # Found the expected signature, combine lines until we find the closing parenthesis
                 sig_lines = []
                 j = i
@@ -390,22 +391,25 @@ class FastOperation:
                 expected_signature = " ".join(sig_lines)
                 break
 
-        # Extract the invoked arguments
+        # Extract the invoked arguments (handle both pybind11 "Invoked with:" and nanobind "Invoked with types:")
         invoked_args = []
         invoked_section_started = False
         for line in lines:
-            if line.strip().startswith("Invoked with:"):
+            if line.strip().startswith("Invoked with:") or line.strip().startswith("Invoked with types:"):
                 invoked_section_started = True
                 # Extract arguments from this line if they exist
-                after_colon = line.split("Invoked with:", 1)[1].strip()
+                if "Invoked with types:" in line:
+                    after_colon = line.split("Invoked with types:", 1)[1].strip()
+                else:
+                    after_colon = line.split("Invoked with:", 1)[1].strip()
                 if after_colon:
                     invoked_args.append(after_colon)
             elif invoked_section_started:
                 # Continue collecting invoked arguments from subsequent lines
                 stripped = line.strip()
-                if stripped and not stripped.startswith("kwargs:"):
+                if stripped and not stripped.startswith("kwargs:") and not stripped.startswith("kwargs ="):
                     invoked_args.append(stripped)
-                elif "kwargs:" in stripped:
+                elif "kwargs:" in stripped or "kwargs =" in stripped:
                     # Capture kwargs
                     invoked_args.append(stripped)
                     break
@@ -416,7 +420,10 @@ class FastOperation:
         if expected_signature:
             # Extract parameter list from signature
             # Format: "1. (self: ..., param1: type1, param2: type2, *, kwarg: type3 = default, ...) -> return_type"
-            match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", expected_signature)
+            # Or nanobind: "1. __call__(self, param1: type1, param2: type2, *, kwarg: type3 = default, ...) -> return_type"
+            match = re.search(r"__call__\(self,\s*(.+?)\)\s*->", expected_signature)
+            if not match:
+                match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", expected_signature)
             if match:
                 params_str = match.group(1)
                 # Split by comma, but be careful with nested types
@@ -702,9 +709,11 @@ class FastOperation:
                 with command_queue(cq_id):
                     result = self.function(*function_args, **function_kwargs)
         except TypeError as e:
-            # Enhance pybind11 error messages to make argument type mismatches clearer
+            # Enhance pybind11/nanobind error messages to make argument type mismatches clearer
             error_msg = str(e)
-            if "incompatible function arguments" in error_msg and "Invoked with:" in error_msg:
+            # Debug: print original error
+            # print(f"DEBUG: Original error:\n{error_msg}\n{'='*60}")
+            if "incompatible function arguments" in error_msg and ("Invoked with:" in error_msg or "Invoked with types:" in error_msg):
                 enhanced_msg = self._enhance_type_error_message(error_msg, function_args, function_kwargs)
                 raise TypeError(enhanced_msg) from e
             else:
