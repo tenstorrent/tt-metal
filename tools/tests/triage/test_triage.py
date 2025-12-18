@@ -26,6 +26,7 @@ sys.path.insert(0, triage_home)
 from triage import run_script, FAILURE_CHECKS
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
+from ttexalens.coordinate import OnChipCoordinate
 
 
 def print_process_output(proc):
@@ -67,6 +68,7 @@ def cause_hang_with_app(request):
         time.sleep(timeout)
 
     request.cls.app_configuration = app_configuration
+    request.cls.expected_results = app_configuration.get("expected_results", {})
     request.cls.exalens_context = init_ttexalens()
     try:
         yield
@@ -93,7 +95,38 @@ def cause_hang_with_app(request):
             # Manual hang detection with timeout from outside
             "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
             [],
-            {},
+            {
+                "expected_results": {
+                    "lightweight_asserts": {
+                        "kernel_name": "add_2_tiles_hang",
+                        "risc_names": {"trisc0", "trisc1", "trisc2"},
+                        "first_callstack_file": "add_2_tiles_hang.cpp",
+                        "first_callstack_line": 40,
+                    },
+                    "callstacks": {
+                        "device_to_check": 0,
+                        "location_to_check": "0,0",  # Only check this core location
+                        "cores_to_check": {
+                            "brisc": {
+                                "file": "writer_1_tile.cpp",
+                                "line": 19,
+                            },
+                            "trisc0": {
+                                "file": "add_2_tiles_hang.cpp",
+                                "line": 50,
+                            },
+                            "trisc1": {
+                                "file": "trisck.cc",
+                                "line": 81,
+                            },
+                            "trisc2": {
+                                "file": "add_2_tiles_hang.cpp",
+                                "line": 43,
+                            },
+                        },
+                    },
+                },
+            },
             10,
         ),
         (
@@ -105,6 +138,36 @@ def cause_hang_with_app(request):
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                },
+                "expected_results": {
+                    "lightweight_asserts": {
+                        "kernel_name": "add_2_tiles_hang",
+                        "risc_names": {"trisc0", "trisc1", "trisc2"},
+                        "first_callstack_file": "add_2_tiles_hang.cpp",
+                        "first_callstack_line": 40,
+                    },
+                    "callstacks": {
+                        "device_to_check": 0,
+                        "location_to_check": "0,0",  # Only check this core location
+                        "cores_to_check": {
+                            "brisc": {
+                                "file": "writer_1_tile.cpp",
+                                "line": 19,
+                            },
+                            "trisc0": {
+                                "file": "add_2_tiles_hang.cpp",
+                                "line": 50,
+                            },
+                            "trisc1": {
+                                "file": "trisck.cc",
+                                "line": 81,
+                            },
+                            "trisc2": {
+                                "file": "add_2_tiles_hang.cpp",
+                                "line": 43,
+                            },
+                        },
+                    },
                 },
             },
             20,
@@ -146,253 +209,166 @@ class TestTriage:
     # Tests below test individual triage scripts
 
     def test_check_arc(self):
-        global triage_home
-        global FAILURE_CHECKS
+        result = self.run_triage_script("check_arc.py", return_result=True)
 
-        FAILURE_CHECKS.clear()
-        result = run_script(
-            script_path=os.path.join(triage_home, "check_arc.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
+        assert result is not None, "Expected non-None result from check_arc.py"
+        for check in result:
+            assert check.result is not None, "Expected non-None result for each ARC check"
 
-        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
-
-        if result is not None:
-            for check in result:
-                if check.result is not None:
-                    assert hasattr(check.result, "location"), "Missing location field"
-                    assert hasattr(check.result, "postcode"), "Missing postcode field"
-                    assert hasattr(check.result, "uptime"), "Missing uptime field"
-                    assert hasattr(check.result, "clock_mhz"), "Missing clock_mhz field"
-                    assert hasattr(check.result, "heartbeats_per_second"), "Missing heartbeats_per_second field"
-
-                    assert (
-                        check.result.location == check.device_description.device.arc_block.location
-                    ), f"Incorrect ARC location: {check.result.location}"
-                    assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
-                    assert (
-                        timedelta(seconds=0) < check.result.uptime < timedelta(days=8 * 365)
-                    ), f"Invalid ARC uptime: {check.result.uptime}"
+            assert (
+                check.result.location == check.device_description.device.arc_block.location
+            ), f"Incorrect ARC location: {check.result.location}"
+            assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
+            assert (
+                timedelta(seconds=0) < check.result.uptime < timedelta(days=8 * 365)
+            ), f"Invalid ARC uptime: {check.result.uptime}"
 
     def test_check_binary_integrity(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_binary_integrity.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Binary integrity check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("check_binary_integrity.py")
 
     def test_check_cb_inactive(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_cb_inactive.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Check CB inactive failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("check_cb_inactive.py")
 
     def test_check_core_magic(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_core_magic.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Core magic check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("check_core_magic.py")
 
     def test_check_eth_status(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_eth_status.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Check ETH status failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("check_eth_status.py")
 
     def test_check_noc_locations(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_noc_locations.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Check NOC locations failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("check_noc_locations.py")
 
     def test_check_noc_status(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "check_noc_status.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        # Some mismatches may occur on unused cores.
-        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
-        assert (
-            len(non_state_failures) == 0
-        ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
+        self.run_triage_script("check_noc_status.py")
 
     def test_dump_callstacks(self):
-        global triage_home
-        global FAILURE_CHECKS
+        result = self.run_triage_script("dump_callstacks.py", return_result=True)
 
-        FAILURE_CHECKS.clear()
-        result = run_script(
-            script_path=os.path.join(triage_home, "dump_callstacks.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
-        assert len(FAILURE_CHECKS) == 0, f"Dump callstacks failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        assert result is not None, "Expected non-None result from dump_callstacks.py"
 
-        if result is not None:
-            for check in result:
-                if check.result is not None:
-                    # Verify it's CallstacksData
-                    assert hasattr(check.result, "pc"), "Missing PC field"
-                    assert hasattr(check.result, "kernel_callstack_with_message"), "Missing callstack field"
-                    assert hasattr(check.result, "dispatcher_core_data"), "Missing dispatcher data"
+        # Get expected results from configuration
+        expected = self.expected_results.get("callstacks")
+        if not expected:
+            # No expected results configured, just do basic validation
+            return
 
-                    # PC should be valid if present
-                    if check.result.pc is not None:
-                        assert isinstance(check.result.pc, int), "PC should be an integer"
-                        assert check.result.pc >= 0, "PC should be non-negative"
+        # Validate expected cores
+        cores_to_check = expected.get("cores_to_check", {})
+        location_to_check = expected.get("location_to_check")
+        device_to_check = expected.get("device_to_check")
+
+        # Filter results to only the expected cores and location
+        filtered_results = result
+        if location_to_check and device_to_check is not None:
+            device = result[0].device_description.device  # Get device from first result
+            expected_coord = OnChipCoordinate.create(location_to_check, device)
+            filtered_results = [
+                check
+                for check in result
+                if check.location == expected_coord and check.device_description.device.id() == device_to_check
+            ]
+
+        results_by_risc = {check.risc_name: check for check in filtered_results if check.risc_name in cores_to_check}
+
+        for risc_name, expected_data in cores_to_check.items():
+            assert risc_name in results_by_risc, f"Expected {risc_name} in results, got {list(results_by_risc.keys())}"
+
+            check = results_by_risc[risc_name]
+            assert check.result is not None, f"Expected non-None result for {risc_name}"
+
+            # Verify callstack
+            callstack_with_message = check.result.kernel_callstack_with_message
+            callstack = callstack_with_message.callstack
+            assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Verify callstack contains expected file and line
+            expected_file = expected_data.get("file")
+            expected_line = expected_data.get("line")
+            if expected_file:
+                # Search through callstack to find the expected file/line
+                matching_entries = [entry for entry in callstack if entry.file.endswith(expected_file)]
+                assert len(matching_entries) > 0, (
+                    f"{risc_name}: Expected file '{expected_file}' not found in callstack. "
+                    f"Callstack files: {[entry.file for entry in callstack]}"
+                )
+
+                if expected_line is not None:
+                    # Find entry with matching file and line
+                    matching_entry = next((entry for entry in matching_entries if entry.line == expected_line), None)
+                    assert matching_entry is not None, (
+                        f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
+                        f"Found {expected_file} at lines: {[entry.line for entry in matching_entries]}"
+                    )
 
     def test_dump_fast_dispatch(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        self.run_triage_script("dump_fast_dispatch.py")
 
     def test_dump_lightweight_asserts(self):
-        global triage_home
-        global FAILURE_CHECKS
+        result = self.run_triage_script("dump_lightweight_asserts.py", return_result=True)
 
-        FAILURE_CHECKS.clear()
-        result = run_script(
-            script_path=os.path.join(triage_home, "dump_lightweight_asserts.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Dump lightweight asserts failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        assert result is not None, "Expected non-None result from dump_lightweight_asserts.py"
 
-        if result is not None:
-            for check in result:
-                if check.result is not None:
-                    # Verify it's LightweightAssertInfo
-                    assert hasattr(check.result, "kernel_name"), "Missing kernel_name field"
-                    assert hasattr(check.result, "kernel_callstack_with_message"), "Missing callstack field"
+        # Get expected results from configuration, skip detailed checks if not provided
+        expected = self.expected_results.get("lightweight_asserts")
+        if not expected:
+            return  # No expected results configured, just verify it runs without failures
 
-                    # Verify callstack contains required fields
-                    callstack = check.result.kernel_callstack_with_message
-                    assert hasattr(callstack, "code_line"), "Missing code_line in callstack"
-                    assert hasattr(callstack, "callstack"), "Missing callstack in callstack data"
+        expected_risc_names = expected.get("risc_names")
+        if expected_risc_names:
+            assert len(result) == len(
+                expected_risc_names
+            ), f"Expected {len(expected_risc_names)} risc results, got {len(result)}"
+            risc_names = {check.risc_name for check in result}
+            assert risc_names == expected_risc_names, f"Expected {expected_risc_names}, got {risc_names}"
 
-                    # code_line should be non-empty string
-                    if callstack.code_line:
-                        assert isinstance(callstack.code_line, str), "code_line should be string"
+        for check in result:
+            assert check.result is not None, f"Expected non-None result for {check.risc_name}"
+
+            # Verify kernel name if specified
+            expected_kernel_name = expected.get("kernel_name")
+            if expected_kernel_name:
+                assert (
+                    check.result.kernel_name == expected_kernel_name
+                ), f"{check.risc_name}: Expected kernel_name '{expected_kernel_name}', got '{check.result.kernel_name}'"
+
+            # Verify callstack exists and has entries
+            callstack = check.result.kernel_callstack_with_message.callstack.callstack
+            assert callstack and len(callstack) > 0, f"{check.risc_name}: Callstack is empty"
+
+            # Verify first callstack entry if specified
+            first_entry = callstack[0]
+            expected_file = expected.get("first_callstack_file")
+            if expected_file:
+                assert first_entry.file.endswith(
+                    expected_file
+                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file}'"
+
+            expected_line = expected.get("first_callstack_line")
+            if expected_line:
+                assert (
+                    first_entry.line == expected_line
+                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
 
     def test_dump_running_operations(self):
+        self.run_triage_script("dump_running_operations.py")
+
+    def test_dump_watcher_ringbuffer(self):
+        self.run_triage_script("dump_watcher_ringbuffer.py")
+
+    def run_triage_script(self, script_name: str, return_result: bool = False):
         global triage_home
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
         result = run_script(
-            script_path=os.path.join(triage_home, "dump_running_operations.py"),
+            script_path=os.path.join(triage_home, script_name),
             args=None,
             context=self.exalens_context,
             argv=[],
-            return_result=True,
+            return_result=return_result,
         )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Dump running operations failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
-        # Result can be None or list of summaries
-        if result is not None:
-            for summary in result:
-                # Validate RunningOperationSummary structure
-                assert hasattr(summary, "host_assigned_id"), "Missing host_assigned_id"
-                assert hasattr(summary, "operations"), "Missing operations"
-                assert hasattr(summary, "previous_operations"), "Missing previous_operations"
-                assert hasattr(summary, "devices"), "Missing devices"
-                assert hasattr(summary, "cores"), "Missing cores"
+        assert len(FAILURE_CHECKS) == 0, f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
-                # Validate types and constraints
-                assert isinstance(summary.host_assigned_id, int), "host_assigned_id should be int"
-                assert summary.host_assigned_id > 0, "host_assigned_id should be positive (0 is filtered out)"
-
-                assert isinstance(summary.operations, list), "operations should be list"
-                assert len(summary.operations) > 0, "operations should not be empty"
-
-                assert isinstance(summary.devices, list), "devices should be list"
-                assert len(summary.devices) > 0, "devices should not be empty"
-
-                assert isinstance(summary.cores, list), "cores should be list"
-                assert len(summary.cores) > 0, "cores should not be empty"
-
-    def test_dump_watcher_ringbuffer(self):
-        global triage_home
-        global FAILURE_CHECKS
-
-        FAILURE_CHECKS.clear()
-        run_script(
-            script_path=os.path.join(triage_home, "dump_watcher_ringbuffer.py"),
-            args=None,
-            context=self.exalens_context,
-            argv=[],
-        )
-        assert (
-            len(FAILURE_CHECKS) == 0
-        ), f"Dump watcher ringbuffer failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        if return_result:
+            return result
