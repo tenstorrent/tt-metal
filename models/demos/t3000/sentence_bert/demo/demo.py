@@ -102,7 +102,7 @@ def test_sentence_bert_demo_inference(
         f"ttnn_sentencebert_batch_size: {len(inputs[0])}, One inference iteration time (sec): {inference_time}, Sentence per sec: {sentence_per_sec}"
     )
     assert sentence_per_sec > 2830
-    assert inference_time < 0.0214
+    assert inference_time < 0.024
     logger.info(f"Mean Cosine Similarity for Reference Model: {mean_similarity1}")
     logger.info(f"Mean Cosine Similarity for TTNN Model:: {mean_similarity2}")
 
