@@ -78,13 +78,10 @@ void check_architecture(const MeshGraphDescriptor& desc, std::string_view expect
     EXPECT_FALSE(expected_arch.empty()) << "Expected architecture string must not be empty";
     EXPECT_GT(desc.all_meshes().size(), 0) << "No meshes found";
 
-    // Verify all meshes have the expected architecture
-    for (const auto mesh_id : desc.all_meshes()) {
-        const auto& inst = desc.get_instance(mesh_id);
-        const auto& arch_str = proto::Architecture_Name(inst.arch);
-        EXPECT_EQ(arch_str, expected_arch)
-            << "Mesh " << inst.local_id << " has architecture " << arch_str << " but expected " << expected_arch;
-    }
+    // Verify the descriptor has the expected architecture
+    const auto arch = desc.get_arch();
+    const auto arch_str = tt::tt_fabric::proto::Architecture_Name(arch);
+    EXPECT_EQ(arch_str, expected_arch) << "Architecture is " << arch_str << " but expected " << expected_arch;
 }
 
 void check_intermesh_connection_exists(
