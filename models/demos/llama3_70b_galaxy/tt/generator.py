@@ -632,12 +632,12 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            tt_log_probs_cpu = None
             if isinstance(tt_out, tuple):
                 tt_log_probs = tt_out[1]
                 tt_out = tt_out[0]
-                tt_log_probs_cpu = tt_log_probs.cpu()
-            else:
-                tt_log_probs_cpu = None
+                if tt_log_probs is not None:
+                    tt_log_probs_cpu = tt_log_probs.cpu()
 
             return tt_out.cpu(), tt_log_probs_cpu
 
