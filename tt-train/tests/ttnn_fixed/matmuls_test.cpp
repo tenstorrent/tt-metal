@@ -238,4 +238,86 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeBoth) {
     EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
     EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
 }
+
+struct MatMulManualVsFlagParams {
+    std::vector<size_t> shape_a;
+    std::vector<size_t> shape_b;
+    bool transpose_a;
+    bool transpose_b;
+
+    friend std::ostream& operator<<(std::ostream& os, const MatMulManualVsFlagParams& p) {
+        os << "a=[";
+        for (size_t i = 0; i < p.shape_a.size(); ++i) {
+            os << p.shape_a[i] << (i + 1 < p.shape_a.size() ? "," : "");
+        }
+        os << "]_b=[";
+        for (size_t i = 0; i < p.shape_b.size(); ++i) {
+            os << p.shape_b[i] << (i + 1 < p.shape_b.size() ? "," : "");
+        }
+        os << "]_transA=" << p.transpose_a << "_transB=" << p.transpose_b;
+        return os;
+    }
+};
+
+class MatMulManualVsFlagTest : public ::testing::TestWithParam<MatMulManualVsFlagParams> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(MatMulManualVsFlagTest, ManualTransposeMatchesFlag) {
+    const auto& params = GetParam();
+
+    xt::xarray<float>::shape_type shape_a(params.shape_a.begin(), params.shape_a.end());
+    xt::xarray<float>::shape_type shape_b(params.shape_b.begin(), params.shape_b.end());
+    xt::xarray<float> a = xt::random::rand<float>(shape_a, -1.0F, 1.0F);
+    xt::xarray<float> b = xt::random::rand<float>(shape_b, -1.0F, 1.0F);
+
+    auto t_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto t_b = ttml::core::from_xtensor(b, &ttml::autograd::ctx().get_device());
+
+    // Manual transpose approach
+    auto t_a_for_manual = params.transpose_a ? ttnn::transpose(t_a, -2, -1) : t_a;
+    auto t_b_for_manual = params.transpose_b ? ttnn::transpose(t_b, -2, -1) : t_b;
+    auto t_y_manual = ttml::ttnn_fixed::matmul(t_a_for_manual, t_b_for_manual, false, false);
+    xt::xarray<float> y_manual = ttml::core::to_xtensor(t_y_manual);
+
+    // Flag-based approach
+    auto t_y_flag = ttml::ttnn_fixed::matmul(t_a, t_b, params.transpose_a, params.transpose_b);
+    xt::xarray<float> y_flag = ttml::core::to_xtensor(t_y_flag);
+
+    std::cout << "y_manual shape: " << xt::adapt(y_manual.shape()) << std::endl;
+    std::cout << "y_flag shape: " << xt::adapt(y_flag.shape()) << std::endl;
+
+    auto num_diff = xt::sum(xt::not_equal(y_manual, y_flag))();
+    std::cout << "Number of differing elements: " << num_diff << " / " << y_manual.size() << std::endl;
+
+    EXPECT_EQ(y_manual.shape(), y_flag.shape());
+    EXPECT_EQ(y_manual, y_flag);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MatMulTransposeTests,
+    MatMulManualVsFlagTest,
+    ::testing::Values(
+        // a: shape=[64, 6, 256, 64], transpose_a=false | b: shape=[64, 6, 256, 64], transpose_b=true
+        MatMulManualVsFlagParams{{64, 6, 256, 64}, {64, 6, 256, 64}, false, true},
+        // a: shape=[64, 6, 256, 256], transpose_a=true | b: shape=[64, 6, 256, 64], transpose_b=false
+        MatMulManualVsFlagParams{{64, 6, 256, 256}, {64, 6, 256, 64}, true, false},
+        // a: shape=[16384, 96], transpose_a=true | b: shape=[16384, 384], transpose_b=false
+        MatMulManualVsFlagParams{{16384, 96}, {16384, 384}, true, false},
+        // a: shape=[16384, 384], transpose_a=true | b: shape=[16384, 1536], transpose_b=false
+        MatMulManualVsFlagParams{{16384, 384}, {16384, 1536}, true, false},
+        // a: shape=[16384, 1536], transpose_a=true | b: shape=[16384, 384], transpose_b=false
+        MatMulManualVsFlagParams{{16384, 1536}, {16384, 384}, true, false},
+        // a: shape=[16384, 384], transpose_a=true | b: shape=[16384, 384], transpose_b=false
+        MatMulManualVsFlagParams{{16384, 384}, {16384, 384}, true, false},
+        // a: shape=[16384, 1152], transpose_a=true | b: shape=[16384, 384], transpose_b=false
+        MatMulManualVsFlagParams{{16384, 1152}, {16384, 384}, true, false}));
+
 }  // namespace ttml::ttnn_fixed::tests
