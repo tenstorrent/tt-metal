@@ -146,6 +146,8 @@ void end_capture() {
     if (is_capture_active) {
         trace = graph_processor->end_graph_capture();
         is_capture_active = false;
+    } else {
+        fmt::print("WARNING: Calling end_capture() without active capture\n");
     }
 }
 
