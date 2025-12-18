@@ -272,7 +272,7 @@ class Model:
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Forward through layers and head (shared with prefill)
-        return self._forward_layers_and_head(
+        out = self._forward_layers_and_head(
             hidden_states=input_embeds,
             rope_mats=rope_mats,
             current_pos=current_pos,
