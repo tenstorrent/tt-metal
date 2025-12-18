@@ -40,20 +40,21 @@ Core
    :template: function.rst
 
    ttnn.as_tensor
-   ttnn.from_torch
-   ttnn.to_torch
-   ttnn.to_device
-   ttnn.from_device
-   ttnn.to_layout
-   ttnn.dump_tensor
-   ttnn.load_tensor
-   ttnn.deallocate
-   ttnn.reallocate
-   ttnn.to_memory_config
-   ttnn.split_work_to_cores
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
+   ttnn.deallocate
+   ttnn.dump_tensor
+   ttnn.from_device
+   ttnn.from_torch
+   ttnn.get_device_tensors
+   ttnn.load_tensor
+   ttnn.reallocate
+   ttnn.split_work_to_cores
+   ttnn.to_device
    ttnn.to_dtype
+   ttnn.to_layout
+   ttnn.to_memory_config
+   ttnn.to_torch
    ttnn.typecast
 
 Tensor Creation
@@ -65,20 +66,20 @@ Tensor Creation
    :template: function.rst
 
    ttnn.arange
-   ttnn.empty
-   ttnn.empty_like
-   ttnn.zeros
-   ttnn.zeros_like
-   ttnn.ones
-   ttnn.ones_like
-   ttnn.full
-   ttnn.full_like
-   ttnn.rand
-   ttnn.from_buffer
    ttnn.bernoulli
    ttnn.complex_tensor
+   ttnn.empty
+   ttnn.empty_like
+   ttnn.from_buffer
+   ttnn.full
+   ttnn.full_like
    ttnn.index_fill
+   ttnn.ones
+   ttnn.ones_like
+   ttnn.rand
    ttnn.uniform
+   ttnn.zeros
+   ttnn.zeros_like
 
 Matrix Multiplication
 =====================
@@ -113,201 +114,201 @@ Pointwise Unary
    :template: function.rst
 
    ttnn.abs
+   ttnn.abs_bw
    ttnn.acos
+   ttnn.acos_bw
    ttnn.acosh
+   ttnn.acosh_bw
+   ttnn.alt_complex_rotate90
+   ttnn.angle
+   ttnn.angle_bw
    ttnn.asin
+   ttnn.asin_bw
    ttnn.asinh
+   ttnn.asinh_bw
    ttnn.atan
+   ttnn.atan_bw
    ttnn.atanh
+   ttnn.atanh_bw
    ttnn.bitcast
-   ttnn.bitwise_not
    ttnn.bitwise_left_shift
+   ttnn.bitwise_not
    ttnn.bitwise_right_shift
-   ttnn.logical_left_shift
-   ttnn.logical_right_shift
    ttnn.cbrt
    ttnn.ceil
+   ttnn.ceil_bw
    ttnn.celu
+   ttnn.celu_bw
    ttnn.clamp
+   ttnn.clamp_bw
    ttnn.clip
+   ttnn.clip_bw
    ttnn.clone
+   ttnn.conj
+   ttnn.conj_bw
    ttnn.cos
+   ttnn.cos_bw
    ttnn.cosh
+   ttnn.cosh_bw
    ttnn.deg2rad
+   ttnn.deg2rad_bw
    ttnn.digamma
+   ttnn.digamma_bw
+   ttnn.div_no_nan_bw
+   ttnn.elu_bw
+   ttnn.eqz
+   ttnn.erf
+   ttnn.erf_bw
+   ttnn.erfc
+   ttnn.erfc_bw
+   ttnn.erfinv
+   ttnn.erfinv_bw
+   ttnn.exp
+   ttnn.exp2
+   ttnn.exp2_bw
+   ttnn.exp_bw
    ttnn.experimental.dropout
    ttnn.experimental.gelu_bw
    ttnn.elu
-   ttnn.eqz
-   ttnn.erf
-   ttnn.erfc
-   ttnn.erfinv
-   ttnn.exp
-   ttnn.exp2
    ttnn.expm1
+   ttnn.expm1_bw
    ttnn.fill
+   ttnn.fill_bw
+   ttnn.fill_zero_bw
    ttnn.floor
+   ttnn.floor_bw
    ttnn.frac
+   ttnn.frac_bw
    ttnn.geglu
    ttnn.gelu
-   ttnn.glu
+   ttnn.gelu_bw
    ttnn.gez
+   ttnn.glu
    ttnn.gtz
+   ttnn.hardmish
    ttnn.hardshrink
+   ttnn.hardshrink_bw
    ttnn.hardsigmoid
+   ttnn.hardsigmoid_bw
    ttnn.hardswish
+   ttnn.hardswish_bw
    ttnn.hardtanh
+   ttnn.hardtanh_bw
    ttnn.heaviside
    ttnn.i0
+   ttnn.i0_bw
    ttnn.i1
    ttnn.identity
+   ttnn.imag
+   ttnn.imag_bw
+   ttnn.is_imag
+   ttnn.is_real
    ttnn.isfinite
    ttnn.isinf
    ttnn.isnan
    ttnn.isneginf
    ttnn.isposinf
    ttnn.leaky_relu
+   ttnn.leaky_relu_bw
    ttnn.lez
    ttnn.lgamma
+   ttnn.lgamma_bw
    ttnn.log
    ttnn.log10
+   ttnn.log10_bw
    ttnn.log1p
+   ttnn.log1p_bw
    ttnn.log2
+   ttnn.log2_bw
+   ttnn.log_bw
    ttnn.log_sigmoid
+   ttnn.log_sigmoid_bw
+   ttnn.logical_left_shift
    ttnn.logical_not
    ttnn.logical_not_
+   ttnn.logical_right_shift
    ttnn.logit
+   ttnn.logit_bw
+   ttnn.logiteps_bw
    ttnn.ltz
    ttnn.mish
-   ttnn.hardmish
    ttnn.multigammaln
+   ttnn.multigammaln_bw
    ttnn.neg
+   ttnn.neg_bw
    ttnn.nez
    ttnn.normalize_global
    ttnn.normalize_hw
+   ttnn.polar
+   ttnn.polar_bw
    ttnn.polygamma
+   ttnn.polygamma_bw
+   ttnn.pow_bw
    ttnn.prelu
+   ttnn.prod_bw
    ttnn.rad2deg
+   ttnn.rad2deg_bw
    ttnn.rdiv
+   ttnn.rdiv_bw
+   ttnn.real
+   ttnn.real_bw
    ttnn.reciprocal
+   ttnn.reciprocal_bw
    ttnn.reglu
    ttnn.relu
+   ttnn.relu6
+   ttnn.relu6_bw
+   ttnn.relu_bw
    ttnn.relu_max
    ttnn.relu_min
-   ttnn.relu6
    ttnn.remainder
+   ttnn.repeat_bw
    ttnn.round
+   ttnn.round_bw
+   ttnn.rpow_bw
    ttnn.rsqrt
+   ttnn.rsqrt_bw
    ttnn.selu
+   ttnn.selu_bw
    ttnn.sigmoid
    ttnn.sigmoid_accurate
+   ttnn.sigmoid_bw
    ttnn.sign
+   ttnn.sign_bw
    ttnn.signbit
    ttnn.silu
+   ttnn.silu_bw
    ttnn.sin
+   ttnn.sin_bw
    ttnn.sinh
-   ttnn.std_hw
-   ttnn.var_hw
+   ttnn.sinh_bw
    ttnn.softplus
+   ttnn.softplus_bw
    ttnn.softshrink
+   ttnn.softshrink_bw
    ttnn.softsign
+   ttnn.softsign_bw
    ttnn.sqrt
+   ttnn.sqrt_bw
    ttnn.square
+   ttnn.square_bw
+   ttnn.std_hw
    ttnn.swiglu
    ttnn.swish
    ttnn.tan
+   ttnn.tan_bw
    ttnn.tanh
+   ttnn.tanh_bw
    ttnn.tanhshrink
+   ttnn.tanhshrink_bw
    ttnn.threshold
+   ttnn.threshold_bw
    ttnn.tril
    ttnn.triu
    ttnn.trunc
-   ttnn.unary_chain
-   ttnn.clamp_bw
-   ttnn.clip_bw
-   ttnn.hardtanh_bw
-   ttnn.threshold_bw
-   ttnn.softplus_bw
-   ttnn.rdiv_bw
-   ttnn.pow_bw
-   ttnn.exp_bw
-   ttnn.tanh_bw
-   ttnn.sqrt_bw
-   ttnn.multigammaln_bw
-   ttnn.lgamma_bw
-   ttnn.fill_bw
-   ttnn.hardsigmoid_bw
-   ttnn.cos_bw
-   ttnn.acosh_bw
-   ttnn.acos_bw
-   ttnn.atan_bw
-   ttnn.rad2deg_bw
-   ttnn.frac_bw
    ttnn.trunc_bw
-   ttnn.log_sigmoid_bw
-   ttnn.fill_zero_bw
-   ttnn.i0_bw
-   ttnn.tan_bw
-   ttnn.sigmoid_bw
-   ttnn.rsqrt_bw
-   ttnn.neg_bw
-   ttnn.relu_bw
-   ttnn.logit_bw
-   ttnn.hardshrink_bw
-   ttnn.softshrink_bw
-   ttnn.leaky_relu_bw
-   ttnn.elu_bw
-   ttnn.celu_bw
-   ttnn.rpow_bw
-   ttnn.floor_bw
-   ttnn.round_bw
-   ttnn.log_bw
-   ttnn.relu6_bw
-   ttnn.abs_bw
-   ttnn.silu_bw
-   ttnn.selu_bw
-   ttnn.square_bw
-   ttnn.prod_bw
-   ttnn.hardswish_bw
-   ttnn.tanhshrink_bw
-   ttnn.atanh_bw
-   ttnn.asin_bw
-   ttnn.asinh_bw
-   ttnn.sin_bw
-   ttnn.sinh_bw
-   ttnn.log10_bw
-   ttnn.log1p_bw
-   ttnn.erfc_bw
-   ttnn.ceil_bw
-   ttnn.softsign_bw
-   ttnn.cosh_bw
-   ttnn.logiteps_bw
-   ttnn.log2_bw
-   ttnn.sign_bw
-   ttnn.div_no_nan_bw
-   ttnn.exp2_bw
-   ttnn.expm1_bw
-   ttnn.reciprocal_bw
-   ttnn.digamma_bw
-   ttnn.erfinv_bw
-   ttnn.erf_bw
-   ttnn.deg2rad_bw
-   ttnn.polygamma_bw
-   ttnn.gelu_bw
-   ttnn.repeat_bw
-   ttnn.real
-   ttnn.imag
-   ttnn.angle
-   ttnn.is_imag
-   ttnn.is_real
-   ttnn.polar_bw
-   ttnn.imag_bw
-   ttnn.real_bw
-   ttnn.angle_bw
-   ttnn.conj_bw
-   ttnn.conj
-   ttnn.polar
-   ttnn.alt_complex_rotate90
+   ttnn.unary_chain
+   ttnn.var_hw
 
 Pointwise Binary
 ================
@@ -319,90 +320,90 @@ Pointwise Binary
 
    ttnn.add
    ttnn.add_
+   ttnn.add_bw
    ttnn.addalpha
-   ttnn.subalpha
-   ttnn.multiply
-   ttnn.multiply_
-   ttnn.subtract
-   ttnn.subtract_
-   ttnn.div
-   ttnn.div_no_nan
-   ttnn.divide
-   ttnn.divide_
-   ttnn.floor_div
-   ttnn.remainder
-   ttnn.fmod
-   ttnn.gcd
-   ttnn.lcm
-   ttnn.logical_and_
-   ttnn.logical_or_
-   ttnn.logical_xor_
-   ttnn.rpow
-   ttnn.rsub
-   ttnn.rsub_
-   ttnn.ldexp
-   ttnn.ldexp_
-   ttnn.logical_and
-   ttnn.logical_or
-   ttnn.logical_xor
+   ttnn.addalpha_bw
+   ttnn.assign_bw
+   ttnn.atan2
+   ttnn.atan2_bw
+   ttnn.bias_gelu
+   ttnn.bias_gelu_
+   ttnn.bias_gelu_bw
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
-   ttnn.logaddexp
-   ttnn.logaddexp_
-   ttnn.logaddexp2
-   ttnn.logaddexp2_
-   ttnn.hypot
-   ttnn.xlogy
-   ttnn.squared_difference
-   ttnn.squared_difference_
+   ttnn.concat_bw
+   ttnn.div
+   ttnn.div_bw
+   ttnn.div_no_nan
+   ttnn.divide
+   ttnn.divide_
+   ttnn.embedding_bw
+   ttnn.eq
+   ttnn.eq_
+   ttnn.floor_div
+   ttnn.fmod
+   ttnn.fmod_bw
+   ttnn.gcd
+   ttnn.ge
+   ttnn.ge_
    ttnn.gt
    ttnn.gt_
-   ttnn.lt_
-   ttnn.ge_
-   ttnn.le_
-   ttnn.eq_
-   ttnn.ne_
-   ttnn.ge
-   ttnn.lt
-   ttnn.le
-   ttnn.eq
-   ttnn.ne
+   ttnn.hypot
+   ttnn.hypot_bw
    ttnn.isclose
-   ttnn.nextafter
+   ttnn.lcm
+   ttnn.ldexp
+   ttnn.ldexp_
+   ttnn.ldexp_bw
+   ttnn.le
+   ttnn.le_
+   ttnn.logaddexp
+   ttnn.logaddexp2
+   ttnn.logaddexp2_
+   ttnn.logaddexp2_bw
+   ttnn.logaddexp_
+   ttnn.logaddexp_bw
+   ttnn.logical_and
+   ttnn.logical_and_
+   ttnn.logical_or
+   ttnn.logical_or_
+   ttnn.logical_xor
+   ttnn.logical_xor_
+   ttnn.lt
+   ttnn.lt_
+   ttnn.max_bw
    ttnn.maximum
+   ttnn.min_bw
    ttnn.minimum
+   ttnn.mul_bw
+   ttnn.multiply
+   ttnn.multiply_
+   ttnn.ne
+   ttnn.ne_
+   ttnn.nextafter
    ttnn.outer
-   ttnn.pow
    ttnn.polyval
+   ttnn.pow
+   ttnn.prim.binary
+   ttnn.remainder
+   ttnn.remainder_bw
+   ttnn.rpow
+   ttnn.rsub
+   ttnn.rsub_
+   ttnn.rsub_bw
    ttnn.scatter
    ttnn.scatter_add
-   ttnn.atan2
-   ttnn.bias_gelu
-   ttnn.bias_gelu_
-   ttnn.add_bw
-   ttnn.assign_bw
-   ttnn.atan2_bw
-   ttnn.bias_gelu_bw
-   ttnn.div_bw
-   ttnn.embedding_bw
-   ttnn.fmod_bw
-   ttnn.remainder_bw
-   ttnn.addalpha_bw
-   ttnn.subalpha_bw
-   ttnn.xlogy_bw
-   ttnn.hypot_bw
-   ttnn.ldexp_bw
-   ttnn.logaddexp_bw
-   ttnn.logaddexp2_bw
-   ttnn.mul_bw
-   ttnn.sub_bw
+   ttnn.squared_difference
+   ttnn.squared_difference_
    ttnn.squared_difference_bw
-   ttnn.concat_bw
-   ttnn.rsub_bw
-   ttnn.min_bw
-   ttnn.max_bw
-   ttnn.prim.binary
+   ttnn.sub_bw
+   ttnn.subalpha
+   ttnn.subalpha_bw
+   ttnn.subtract
+   ttnn.subtract_
+   ttnn.xlogy
+   ttnn.xlogy_bw
 
 Pointwise Ternary
 =================
@@ -413,14 +414,14 @@ Pointwise Ternary
    :template: function.rst
 
    ttnn.addcdiv
+   ttnn.addcdiv_bw
    ttnn.addcmul
+   ttnn.addcmul_bw
+   ttnn.lerp
+   ttnn.lerp_bw
    ttnn.mac
    ttnn.where
-   ttnn.lerp
-   ttnn.addcmul_bw
-   ttnn.addcdiv_bw
    ttnn.where_bw
-   ttnn.lerp_bw
 
 Quantization
 ============
@@ -430,9 +431,9 @@ Quantization
    :nosignatures:
    :template: function.rst
 
+   ttnn.dequantize
    ttnn.quantize
    ttnn.requantize
-   ttnn.dequantize
 
 Losses
 ======
@@ -453,21 +454,21 @@ Reduction
    :nosignatures:
    :template: function.rst
 
+   ttnn.argmax
    ttnn.cumprod
+   ttnn.cumsum
    ttnn.ema
+   ttnn.manual_seed
    ttnn.max
    ttnn.mean
    ttnn.min
+   ttnn.moe
+   ttnn.prod
+   ttnn.sampling
    ttnn.std
    ttnn.sum
-   ttnn.var
-   ttnn.argmax
-   ttnn.prod
    ttnn.topk
-   ttnn.cumsum
-   ttnn.manual_seed
-   ttnn.moe
-   ttnn.sampling
+   ttnn.var
 
 Data Movement
 =============
@@ -477,47 +478,47 @@ Data Movement
    :nosignatures:
    :template: function.rst
 
-   ttnn.concat
-   ttnn.nonzero
-   ttnn.pad
-   ttnn.permute
-   ttnn.reshape
-   ttnn.repeat
-   ttnn.repeat_interleave
-   ttnn.slice
-   ttnn.tilize
-   ttnn.tilize_with_val_padding
-   ttnn.fill_rm
-   ttnn.fill_ones_rm
-   ttnn.untilize
-   ttnn.untilize_with_unpadding
-   ttnn.indexed_fill
-   ttnn.gather
-   ttnn.sort
    ttnn.assign
    ttnn.bcast
    ttnn.chunk
+   ttnn.concat
    ttnn.copy
    ttnn.expand
    ttnn.fill_implicit_tile_padding
+   ttnn.fill_ones_rm
+   ttnn.fill_rm
    ttnn.fold
+   ttnn.gather
+   ttnn.indexed_fill
    ttnn.interleaved_to_sharded
    ttnn.interleaved_to_sharded_partial
    ttnn.moe_expert_token_remap
    ttnn.moe_routing_remap
    ttnn.move
+   ttnn.nonzero
+   ttnn.pad
+   ttnn.permute
+   ttnn.repeat
+   ttnn.repeat_interleave
+   ttnn.reshape
    ttnn.reshape_on_device
    ttnn.reshard
    ttnn.roll
    ttnn.sharded_to_interleaved
    ttnn.sharded_to_interleaved_partial
+   ttnn.slice
+   ttnn.sort
    ttnn.split
    ttnn.squeeze
    ttnn.stack
+   ttnn.tilize
+   ttnn.tilize_with_val_padding
    ttnn.tilize_with_zero_padding
    ttnn.transpose
    ttnn.unsqueeze
    ttnn.unsqueeze_to_4D
+   ttnn.untilize
+   ttnn.untilize_with_unpadding
    ttnn.view
 
 Normalization
@@ -528,19 +529,19 @@ Normalization
    :nosignatures:
    :template: function.rst
 
+   ttnn.batch_norm
    ttnn.group_norm
    ttnn.layer_norm
-   ttnn.layer_norm_pre_all_gather
    ttnn.layer_norm_post_all_gather
+   ttnn.layer_norm_pre_all_gather
    ttnn.rms_norm
-   ttnn.rms_norm_pre_all_gather
    ttnn.rms_norm_post_all_gather
-   ttnn.batch_norm
-   ttnn.softmax
-   ttnn.scale_mask_softmax
-   ttnn.softmax_in_place
-   ttnn.scale_mask_softmax_in_place
+   ttnn.rms_norm_pre_all_gather
    ttnn.scale_causal_mask_hw_dims_softmax_in_place
+   ttnn.scale_mask_softmax
+   ttnn.scale_mask_softmax_in_place
+   ttnn.softmax
+   ttnn.softmax_in_place
 
 Normalization Program Configs
 =============================
@@ -550,8 +551,8 @@ Normalization Program Configs
    :nosignatures:
    :template: class.rst
 
-   ttnn.SoftmaxProgramConfig
    ttnn.SoftmaxDefaultProgramConfig
+   ttnn.SoftmaxProgramConfig
    ttnn.SoftmaxShardedMultiCoreProgramConfig
 
 Transformer
@@ -562,14 +563,11 @@ Transformer
    :nosignatures:
    :template: function.rst
 
-   ttnn.transformer.split_query_key_value_and_split_heads
-   ttnn.transformer.concatenate_heads
    ttnn.transformer.attention_softmax
    ttnn.transformer.attention_softmax_
-   ttnn.transformer.scaled_dot_product_attention
-   ttnn.transformer.scaled_dot_product_attention_decode
    ttnn.transformer.chunked_flash_mla_prefill
    ttnn.transformer.chunked_scaled_dot_product_attention
+   ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
    ttnn.transformer.joint_scaled_dot_product_attention
@@ -577,6 +575,9 @@ Transformer
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.scaled_dot_product_attention
+   ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.split_query_key_value_and_split_heads
    ttnn.transformer.windowed_scaled_dot_product_attention
 
 CCL
@@ -587,16 +588,16 @@ CCL
    :nosignatures:
    :template: function.rst
 
+   ttnn.all_broadcast
    ttnn.all_gather
-   ttnn.reduce_scatter
    ttnn.all_reduce
-   ttnn.broadcast
    ttnn.all_to_all_combine
    ttnn.all_to_all_dispatch
+   ttnn.broadcast
    ttnn.mesh_partition
    ttnn.point_to_point
+   ttnn.reduce_scatter
    ttnn.reduce_to_root
-   ttnn.all_broadcast
 
 Embedding
 =========
@@ -617,13 +618,12 @@ Convolution
 
    ttnn.conv1d
    ttnn.conv2d
-   ttnn.experimental.conv3d
    ttnn.conv_transpose2d
-   ttnn.prepare_conv_weights
+   ttnn.experimental.conv3d
    ttnn.prepare_conv_bias
-   ttnn.prepare_conv_transpose2d_weights
    ttnn.prepare_conv_transpose2d_bias
-
+   ttnn.prepare_conv_transpose2d_weights
+   ttnn.prepare_conv_weights
 
 .. autosummary::
    :toctree: api
@@ -641,12 +641,12 @@ Pooling
    :nosignatures:
    :template: function.rst
 
-   ttnn.global_avg_pool2d
-   ttnn.max_pool2d
-   ttnn.avg_pool2d
    ttnn.adaptive_avg_pool2d
    ttnn.adaptive_max_pool2d
+   ttnn.avg_pool2d
+   ttnn.global_avg_pool2d
    ttnn.grid_sample
+   ttnn.max_pool2d
 
 Prefetcher
 ==========
