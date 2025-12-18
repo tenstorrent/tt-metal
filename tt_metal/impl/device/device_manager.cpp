@@ -486,7 +486,6 @@ void DeviceManager::initialize_active_devices() {
             continue;
         }
         events.emplace_back(detail::async([&, dev, mmio_device_id]() {
-
             auto tunnels_from_mmio =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
             dev->init_command_queue_device();
@@ -502,7 +501,7 @@ void DeviceManager::initialize_active_devices() {
                     }
                 }
             }
-        );
+        }));
     }
     for (const auto& event : events) {
         event.get();
