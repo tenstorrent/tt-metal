@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -32,7 +32,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    return ttnn::operations::experimental::ccl::all_gather_matmul_async(
+    return ttnn::prim::all_gather_matmul_async(
         input_tensor,
         weight_tensor,
         persistent_output_buffer,

@@ -12,6 +12,7 @@ on:
           - all
           - unit
           - fabric
+          - multiprocess
           - llama3-70b
           - prefetcher
           - distributed-ops
