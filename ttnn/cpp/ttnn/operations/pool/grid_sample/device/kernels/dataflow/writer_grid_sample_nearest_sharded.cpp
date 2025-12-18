@@ -100,11 +100,7 @@ ALWI void process_grid_point_nearest(
         noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
     } else {
         // Out of bounds - fill with zeros
-        for (uint32_t i = 0; i < input_stick_nbytes; i += sizeof(uint32_t)) {
-            volatile tt_l1_ptr uint32_t* zero_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_output_addr + i);
-            *zero_ptr = 0;
-        }
+        zero_out_page<output_cb_index>(l1_write_output_addr);
     }
 }
 

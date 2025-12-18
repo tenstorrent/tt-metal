@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstdint>
 #include <dataflow_api.h>
-#include <ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp>
+#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include <ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 
 void kernel_main() {
@@ -35,10 +35,8 @@ void kernel_main() {
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
     constexpr uint32_t batch_size = num_cb_pages / 2 < 5 ? num_cb_pages / 2 : 5;
 
-    uint32_t fill_stick_addr;
-    if constexpr (fill_is_zero) {
-        fill_stick_addr = MEM_ZEROS_BASE;
-    } else {
+    uint32_t fill_stick_addr = 0;
+    if constexpr (!fill_is_zero) {
         fill_stick_addr = get_write_ptr(fill_cb_index);
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
@@ -85,14 +83,10 @@ void kernel_main() {
                     batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
                 const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
                 noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
+            } else if constexpr (fill_is_zero) {
+                zero_out_page<output_cb_index>(l1_write_addr);
             } else {
-                uint32_t copy_size = input_stick_nbytes_unaligned;
-                if constexpr (fill_is_zero) {
-                    if (copy_size > MEM_ZEROS_SIZE) {
-                        copy_size = MEM_ZEROS_SIZE;
-                    }
-                }
-                noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, copy_size);
+                noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, input_stick_nbytes_unaligned);
             }
             l1_write_addr += input_stick_nbytes;
         }

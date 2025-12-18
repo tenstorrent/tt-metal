@@ -114,14 +114,18 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         tt::CBIndex::c_0, program, all_cores, output_cb_page_size, num_cb_pages, output_cb_data_format);
 
-    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy
-    const auto [fill_cb_index, fill_cb_handle] =
-        tt::tt_metal::create_cb(tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
-
-    // Check if fill value is zero (can use MEM_ZEROS_BASE)
+    // Check if fill value is zero (can use zero_out_page instead of fill CB)
     const bool fill_is_zero = (fill_value_bf16 == 0);
 
-    // Reader compile-time arguments (RISCV_0)
+    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy (only needed for non-zero fill)
+    uint32_t fill_cb_index = 0;
+    if (!fill_is_zero) {
+        auto [cb_index, cb_handle] = tt::tt_metal::create_cb(
+            tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+        fill_cb_index = cb_index;
+    }
+
+    // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,                      // ct_arg[0]: output_cb_index
         aligned_input_stick_nbytes,           // ct_arg[1]: aligned_input_stick_nbytes (for DRAM reads)
@@ -130,7 +134,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         input_width,                          // ct_arg[4]: input_width
         input_channels,                       // ct_arg[5]: input_channels
         num_cb_pages,                         // ct_arg[6]: num_cb_pages
-        fill_cb_index,                        // ct_arg[7]: fill_cb_index
+        fill_cb_index,                        // ct_arg[7]: fill_cb_index (0 if fill_is_zero)
         input_stick_nbytes,                   // ct_arg[8]: input_stick_nbytes (unaligned, for fill)
         static_cast<uint32_t>(fill_is_zero),  // ct_arg[9]: fill_is_zero
     };
