@@ -477,6 +477,30 @@ ALWI void fast_tilize_block(
 #endif
 }
 
+// clang-format off
+/**
+ * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
+ * modified by _llk_unpack_tilizeA_B_init_.
+ *
+ * Return value: None
+ *
+ * Parameters:
+ *
+ * | Param Type | Name | Description           | Type     | Valid Range | Required |
+ * |------------|------|-----------------------|----------|-------------|----------|
+ * | Function   | icb  | Input circular buffer | uint32_t | 0 - 31.     | True     |
+ *
+ * Restored hardware state:
+ *
+ * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
+ * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
+ * | X-dim & base (ADCXX)      | UNP_A/B    | Face X-extent for address counters                    | face_r_dim * FACE_C_DIM elements, start at 0                                               |
+ * | XY address counters       | UNP_A/B    | X/Y counters used by tilizeA_B y-stride pattern       | Counters reset to 0 (mask selects CH0/CH1 X/Y)                                             |
+ * | ZW address counters       | UNP_A/B    | Z/W counters used for face/row stepping               | Counters reset to 0 for both unpackers                                                     |
+ * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Restored to FACE_DIM_16x16 (16 | (16 << 16))                                               |
+ */
+// clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
 
 }  // namespace ckernel

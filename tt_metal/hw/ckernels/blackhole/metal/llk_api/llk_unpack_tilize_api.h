@@ -221,7 +221,8 @@ inline void llk_unpack_tilizeA_B_block(
     }
 }
 
-inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
 }
