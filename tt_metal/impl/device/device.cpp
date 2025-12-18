@@ -665,14 +665,10 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
 }
 
 SystemMemoryManager& Device::sysmem_manager() {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        static std::unordered_map<chip_id_t, std::unique_ptr<SystemMemoryManager>> mock_sysmem_managers;
-        static std::mutex mock_sysmem_mutex;
-        std::lock_guard<std::mutex> lock(mock_sysmem_mutex);
-        if (mock_sysmem_managers.find(this->id_) == mock_sysmem_managers.end()) {
-            mock_sysmem_managers[this->id_] = std::make_unique<SystemMemoryManager>(this->id_, 1);
-        }
-        return *mock_sysmem_managers[this->id_];
+    // SystemMemoryManager handles mock devices internally with stubs
+    // For mock devices, ensure lazy initialization if not already done
+    if (!sysmem_manager_) {
+        sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, 1);
     }
     return *sysmem_manager_;
 }
@@ -718,6 +714,10 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_dat
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    // Mock devices may not have command queues fully initialized
+    if (this->command_queues_.empty() || cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
+        return CoreCoord{0, 0};  // Return default for mock devices
+    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 

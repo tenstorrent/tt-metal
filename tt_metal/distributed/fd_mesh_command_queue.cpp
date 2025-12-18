@@ -164,7 +164,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
-    for (auto& device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->get_devices()) {
         read_descriptors_.emplace(
             device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
     }
@@ -194,6 +194,10 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event =
@@ -469,6 +473,10 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     ZoneScoped;
     auto lock = lock_api_function_();
 
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     if (!mesh_device_->is_local(address.device_coord)) {
         return;
     }
@@ -503,6 +511,10 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
 
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
@@ -664,6 +676,11 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        // Return a dummy event for mock devices
+        return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
@@ -744,6 +761,10 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     while (!thread_exception_state_.load()) {
         try {
             {
@@ -842,7 +863,6 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 }
 
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
-    // For mock devices, sysmem_manager() returns a stubbed singleton
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->get_device(coord);
@@ -885,7 +905,7 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
-    for (auto device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
     cq_shared_state_->sub_device_cq_owner.clear();

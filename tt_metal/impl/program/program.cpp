@@ -1445,7 +1445,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     // Mock devices don't compile kernels, skip elf path registration
                     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
                         tt::TargetDevice::Mock) {
-                        KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
+                        kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
 
                     // Mock devices don't compile kernels - skip binary generation and use empty stubs
@@ -1457,9 +1457,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             GenerateBinaries(device, build_options, kernel);
                         } else {
                             // Create empty stub binaries for mock devices
-                            std::vector<const ll_api::memory*> empty_binaries(
-                                KernelImpl::from(*kernel).expected_num_binaries(), nullptr);
-                            KernelImpl::from(*kernel).set_binaries(build_env.build_key, std::move(empty_binaries));
+                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
@@ -1478,7 +1477,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     if (!is_mock) {
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                launch_build_step([kernel, device] { KernelImpl::from(*kernel).read_binaries(device); }, events);
+                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
             }
         }
         sync_build_steps(events);

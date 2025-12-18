@@ -307,7 +307,10 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
     // May be called again below
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
-    if (any_remote_devices) {
+    // Mock devices don't support fabric operations
+    bool is_mock =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    if (any_remote_devices && !is_mock) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
@@ -530,8 +533,12 @@ void DeviceManager::activate_device(ChipId id) {
     auto* device = get_device(id);
     if (!device) {
         log_debug(tt::LogMetal, "DeviceManager new device {}", id);
-        int worker_core_thread_core = this->worker_thread_to_cpu_core_map_.at(id);
-        int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map_.at(id);
+        // For mock devices, these maps may not be populated, use defaults
+        int worker_core_thread_core =
+            this->worker_thread_to_cpu_core_map_.count(id) ? this->worker_thread_to_cpu_core_map_.at(id) : -1;
+        int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map_.count(id)
+                                               ? this->completion_queue_reader_to_cpu_core_map_.at(id)
+                                               : -1;
         device = new Device(
             id,
             this->num_hw_cqs_,

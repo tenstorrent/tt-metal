@@ -321,11 +321,7 @@ void MetalContext::initialize(
                 // Skip hardware operations for mock devices
                 if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
                     ClearNocData(device_id);
-
-                    if (!rtoptions_.get_skip_reset_cores_on_init()) {
-                        reset_cores(device_id);
-                    }
-
+                    reset_cores(device_id);
                     initialize_and_launch_firmware(device_id);
                 }
             }));
@@ -385,15 +381,21 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        dprint_server_->detach_devices();
+        // Skip dprint detach for mock devices
+        if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+            dprint_server_->detach_devices();
+        }
         dprint_server_.reset();
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    watcher_server_->detach_devices();
+    // Skip watcher detach for mock devices (they may not have been properly attached)
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        watcher_server_->detach_devices();
+    }
     watcher_server_.reset();
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        for (chip_id_t device_id : all_devices) {
+        for (ChipId device_id : all_devices) {
             assert_cores(device_id);
 
             cluster_->l1_barrier(device_id);
@@ -645,6 +647,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
+        // Initialize control plane (creates stub for mock devices)
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
@@ -687,6 +690,7 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
+    // Stub control plane for mock devices will make this a no-op
     this->get_control_plane().clear_fabric_context();
 }
 
@@ -761,6 +765,12 @@ void MetalContext::initialize_fabric_config() {
         return;
     }
 
+    // Mock devices don't have real fabric/ethernet
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogDistributed, "Skipping fabric config initialization for mock devices");
+        return;
+    }
+
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
@@ -773,6 +783,10 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -798,6 +812,13 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
+    // Mock devices get a stub control plane (no real fabric/ethernet operations)
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogDistributed, "Creating stub control plane for mock devices.");
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
+        return;
+    }
+
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
@@ -808,6 +829,13 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::construct_control_plane() {
+    // Mock devices get a stub control plane (no real fabric/ethernet operations)
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogDistributed, "Creating stub control plane for mock devices.");
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
+        return;
+    }
+
     // Use auto-discovery to generate mesh graph from physical system descriptor
     // This uses MeshGraph::generate_from_physical_system_descriptor which internally
     // uses map_mesh_to_physical to find a valid mapping
@@ -1031,7 +1059,10 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    // For mock devices, NOC translation may not be configured, default to disabled
+    bool noc_translation_enabled = (cluster_->get_target_device_type() == tt::TargetDevice::Mock)
+                                       ? false
+                                       : cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {

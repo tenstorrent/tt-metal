@@ -108,11 +108,10 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
     }
 
     // Real hardware initialization below
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-    char* hugepage_start =
-        (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+    char* hugepage_start = static_cast<char*>(
+        tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel));
     hugepage_start += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     this->cq_sysmem_start = hugepage_start;
 
