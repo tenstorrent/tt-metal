@@ -317,10 +317,11 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
-    mesh_device_impl->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
-
     auto mesh_device = std::make_shared<MeshDevice>(std::unique_ptr<MeshDeviceImpl>(mesh_device_impl));
+    // Set back pointer to the mesh device, before initializing the mesh device.
     mesh_device_impl->pimpl_wrapper_ = mesh_device.get();
+    
+    mesh_device_impl->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
@@ -508,6 +509,11 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         parent_mesh_);
 
+    // Create MeshDevice wrapper
+    auto submesh = std::make_shared<MeshDevice>(std::unique_ptr<MeshDeviceImpl>(submesh_impl));
+    // Set back pointer to the mesh device, before initializing the mesh device.
+    submesh_impl->pimpl_wrapper_ = submesh.get();
+
     const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh_impl->initialize(
         num_hw_cqs(),
@@ -515,10 +521,6 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         allocator_config.trace_region_size,
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
-
-    // Create MeshDevice wrapper
-    auto submesh = std::make_shared<MeshDevice>(std::unique_ptr<MeshDeviceImpl>(submesh_impl));
-    submesh_impl->pimpl_wrapper_ = submesh.get();
 
     // TODO #20966: Remove these calls
     if (!submesh_impl->get_view().get_devices().empty()) {
