@@ -62,6 +62,7 @@ jobs:
           mkdir -p /work/coverage
 
       - name: Warmup caches
+        if: false # No need to warmup currently because slow tests will never fail the job
         timeout-minutes: 2
         env:
           GTEST_COLOR: yes

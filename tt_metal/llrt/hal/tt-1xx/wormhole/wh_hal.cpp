@@ -35,35 +35,41 @@ constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
+constexpr static std::uint32_t get_dram_profiler_size(
+    [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
 #if defined(TRACY_ENABLE)
-constexpr static std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 80;
-constexpr static std::uint32_t MAX_NUM_ETH_CORES = 16;
-constexpr static std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
-constexpr static std::uint32_t NUM_DRAM_CHANNELS = 12;
-constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
-    (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
-constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
-      DRAM_ALIGNMENT - 1) /
-     DRAM_ALIGNMENT) *
-    DRAM_ALIGNMENT;
+    constexpr std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 80;
+    constexpr std::uint32_t MAX_NUM_ETH_CORES = 16;
+    constexpr std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
+    constexpr std::uint32_t NUM_DRAM_CHANNELS = 12;
+    constexpr std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
+        (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
+    return (((profiler_dram_bank_size_per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+             DRAM_ALIGNMENT - 1) /
+            DRAM_ALIGNMENT) *
+           DRAM_ALIGNMENT;
 #else
-constexpr static std::uint32_t DRAM_PROFILER_SIZE = 0;
+    return 0;
 #endif
+}
 
-constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_PROFILER_BASE + DRAM_PROFILER_SIZE;
-constexpr static std::uint32_t DRAM_UNRESERVED_SIZE = MEM_DRAM_SIZE - DRAM_UNRESERVED_BASE;
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+    return DRAM_PROFILER_BASE + dram_profiler_size;
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+}
 
 static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
@@ -202,9 +208,11 @@ public:
             enchantum::to_string(params.processor_class),
             enchantum::to_string(params.core_type));
     }
+
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
 };
 
-void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
+void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -226,9 +234,12 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_SIZE;
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_SIZE;
-    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_SIZE;
+    const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
+        get_dram_unreserved_size(dram_profiler_size);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -375,5 +386,4 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -8,29 +8,31 @@
 #include "pad_tile.hpp"
 
 void kernel_main() {
-    // in0/in1 common args
-    const uint32_t num_blocks = get_arg_val<uint32_t>(0);
-
-    // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(1);
-    const uint32_t bcast_B = get_arg_val<uint32_t>(2);
-    const uint32_t MtKt = get_arg_val<uint32_t>(3);  // if 0
-
+    // RUNTIME ARGS
+    uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(4);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(5);
-    const uint32_t in0_tensor_stride_w = get_arg_val<uint32_t>(6);
-    const uint32_t in0_tensor_stride_h = get_arg_val<uint32_t>(7);
-    const uint32_t in0_tensor_next_block_stride = get_arg_val<uint32_t>(8);
-
-    // in0 block args
-    const uint32_t in0_block_w = get_arg_val<uint32_t>(9);
-    const uint32_t in0_block_h = get_arg_val<uint32_t>(10);
-    const uint32_t in0_block_num_tiles = get_arg_val<uint32_t>(11);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // batch args
+    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(0);
-    constexpr auto in0_args = TensorAccessorArgs<1>();
+    // in0 tensor args
+    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_tensor_next_block_stride = get_compile_time_arg_val(2);
+    // in0 block args
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(6);
+    // in0/in1 common args
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);
+    // batch args
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(8);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(9);
+
+    constexpr auto in0_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t one_tile = 1;

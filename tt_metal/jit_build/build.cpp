@@ -26,6 +26,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
@@ -176,7 +177,14 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_trace_only()) {
             profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
         }
+        if (rtoptions.get_profiler_sum()) {
+            profiler_options |= PROFILER_OPT_DO_SUM;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
+
+        const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
+        this->defines_ +=
+            "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" + std::to_string(profiler_dram_bank_size_per_risc_bytes) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -238,6 +246,14 @@ void JitBuildEnv::init(
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
+    }
+
+    if (rtoptions.get_lightweight_kernel_asserts()) {
+        this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
+    }
+
+    if (rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
     // Includes
@@ -307,7 +323,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, build_config.core_type, build_config.processor_class, build_config.processor_id};
+        this->is_fw_,
+        build_config.core_type,
+        build_config.processor_class,
+        static_cast<uint32_t>(build_config.processor_id)};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -338,19 +357,21 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->lflags_ += common_flags;
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
+    this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     // Source files
     {
         auto srcs = jit_build_query.srcs(params);
         this->srcs_.insert(this->srcs_.end(), std::move_iterator(srcs.begin()), std::move_iterator(srcs.end()));
     }
+    this->firmware_is_kernel_object_ = jit_build_query.firmware_is_kernel_object(params);
 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
         // Lop off the right side from the last "."
-        string stub = src.substr(0, src.find_last_of("."));
+        string stub = src.substr(0, src.find_last_of('.'));
         // Lop off the leading path
-        stub = stub.substr(stub.find_last_of("/") + 1, stub.length());
+        stub = stub.substr(stub.find_last_of('/') + 1, stub.length());
         this->objs_.push_back(stub + ".o");
     }
 
@@ -502,9 +523,12 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // 2. Weakened firmware elf (for kernels)
     std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        std::string weakened_elf = weakened_firmeware_elf_name();
-        cmd += "-Wl,--just-symbols=" + weakened_elf + " ";
-        link_deps.push_back(weakened_elf);
+        std::string weakened = weakened_firmware_name();
+        link_deps.push_back(weakened);
+        if (!this->firmware_is_kernel_object_) {
+            cmd += "-Wl,--just-symbols=";
+        }
+        cmd += weakened + " ";
     }
 
     // Append common args provided by the build state
@@ -538,17 +562,21 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
+    std::string pathname_out = weakened_firmware_name();
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
+    if (this->firmware_is_kernel_object_) {
+        elf.ObjectifyExecutable();
+    }
     elf.WriteImage(pathname_out);
 }
 
-std::string JitBuildState::weakened_firmeware_elf_name() const {
-    return fmt::format("{}{}/{}_weakened.elf", this->env_.out_firmware_root_, this->target_name_, this->target_name_);
+std::string JitBuildState::weakened_firmware_name() const {
+    std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
+    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {

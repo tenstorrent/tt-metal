@@ -445,3 +445,30 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
         expected_results=expected_results,
         comments="",
     )
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "expected_kernel_samples_per_second",
+    ((2.95) if is_wormhole_b0() else (4.10),),
+)
+def test_stable_diffusion_vae_device_perf(expected_kernel_samples_per_second):
+    subdir = "ttnn_stable_diffusion_vae"
+    margin = 0.07
+    batch = 1
+    iterations = 1
+    command = f"pytest models/demos/wormhole/stable_diffusion/tests/vae/test_vae.py::test_decoder[4-64-64-3-512-512-device_params0]"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
+
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+    prep_device_perf_report(
+        model_name=f"stable_diffusion_vae_{batch}batch",
+        batch_size=batch,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )

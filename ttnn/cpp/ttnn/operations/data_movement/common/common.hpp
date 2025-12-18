@@ -10,16 +10,13 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
-
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Tensor squeeze_from_ND_to_4D(
+    const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
@@ -231,6 +228,4 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

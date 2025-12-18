@@ -8,7 +8,6 @@
 #include <vector>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -18,8 +17,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-namespace rs_heads_fusion {
+namespace detail::rs_heads_fusion {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
@@ -257,8 +255,7 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
     return worker_cores;
 }
 
-}  // namespace rs_heads_fusion
-}  // namespace detail
+}  // namespace detail::rs_heads_fusion
 
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cached_mesh_workload_t
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::create_mesh_workload(

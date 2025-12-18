@@ -240,7 +240,7 @@ def _golden_function(input_tensor, *args, **kwargs):
 
 @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
 def from_torch(
-    tensor: "torch.Tensor",
+    tensor: Optional["torch.Tensor"],
     dtype: Optional[ttnn.DataType] = None,
     *,
     spec: Optional[ttnn.TensorSpec] = None,
@@ -251,15 +251,17 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
-) -> ttnn.Tensor:
+) -> Optional[ttnn.Tensor]:
     """
-    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
+
+    For bfloat8_b or bfloat4_b format, the function itself is called twice,
     first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
     is not tile padded). Second call runs in desired format and does not call to_layout for bfloat8_b or bfloat4_b as we now convert
     to tile layout during tensor creation (ttnn.Tensor).
 
     Args:
-        tensor (torch.Tensor): the input tensor.
+        tensor (torch.Tensor | None): the input tensor. If `tensor` is `None`, the function returns `None`.
         dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
 
     Keyword Args:
@@ -273,8 +275,11 @@ def from_torch(
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
     Returns:
-        ttnn.Tensor: The resulting `ttnn` tensor.
+        ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
     """
+
+    if tensor is None:
+        return None
 
     if spec is not None:
         if spec.shape != tensor.shape:

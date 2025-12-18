@@ -11,13 +11,22 @@ on:
         description: "Job/subjob name within the workflow"
         required: true
         type: string
-      model:
-        description: "OpenCode model"
-        required: true
-        type: choice
-        options:
-          - openai/gpt-5.1-codex-mini
-          - openai/gpt-5.1-codex
+      slack_ts:
+        description: "Slack message timestamp for threading replies"
+        required: false
+        default: ""
+        type: string
+      send-slack-message:
+        description: "Send slack message"
+        required: false
+        default: false
+        type: boolean
+      slack_channel_id:
+        description: "Slack channel ID for sending notifications"
+        required: false
+        default: ''
+        type: string
+
 
 jobs:
   auto-triage:
@@ -26,40 +35,22 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    env:
-      OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_OPENAI_KEY }}
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Install opencode CLI
-        run: |
-          curl -fsSL https://opencode.ai/install | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          opencode --version || (echo "opencode CLI installation failed" && exit 1)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/metal-infra-actions/.github/actions/auto-triage@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
-          model: ${{ inputs.model }}
-
-      - name: Publish triage report to summary
-        if: always()
-        run: |
-          if [ -f .auto_triage/output/explanation.md ]; then
-            {
-              echo "## Auto Triage Report"
-              cat .auto_triage/output/explanation.md
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No explanation produced." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload auto-triage artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: auto-triage-output
-          path: .auto_triage/output
-          if-no-files-found: ignore
+          copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow-pings: true
+          send-slack-message: ${{ inputs.send-slack-message }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}

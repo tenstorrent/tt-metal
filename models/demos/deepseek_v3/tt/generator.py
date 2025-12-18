@@ -456,11 +456,15 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
+        repeat_batches: int = 1,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
         early_print_first_user: If True, prints generated tokens for the first user
                                 at each step. Better for demo visibility.
+
+        repeat_batches: Number of times to repeat the prefill+decode pass. Only the
+                        last pass's tokens are returned; timings aggregate.
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
@@ -489,82 +493,89 @@ class DeepseekGenerator:
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
 
-        # Prefill
-        profiler.start("inference_prefill")
-        num_of_users = tokens_batched.shape[0]
-        last_logits = []
-        for user_id in range(num_of_users):
-            if lengths[user_id] == 0:
-                logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                last_logits.append(torch.zeros(self.hf_config.vocab_size))
-                continue
-            logger.info(f"Running prefill for user_id: {user_id}")
-            logger.info(
-                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
-            )
-            user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
-            user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
-            last_logits.append(user_out)
-            self.ccl.reset_sem_counters()
-        last_logits = torch.stack(last_logits)
-        profiler.end("inference_prefill")
+        # Run one or more prefill+decode batches
+        for _ in range(repeat_batches):
+            # Prefill
+            profiler.start("inference_prefill")
+            num_of_users = tokens_batched.shape[0]
+            last_logits = []
+            for user_id in range(num_of_users):
+                if lengths[user_id] == 0:
+                    logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                    continue
+                logger.info(f"Running prefill for user_id: {user_id}")
+                logger.info(
+                    f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+                )
+                user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
+                user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
+                last_logits.append(user_out)
+                self.ccl.reset_sem_counters()
+            last_logits = torch.stack(last_logits)
+            profiler.end("inference_prefill")
 
-        assert len(last_logits) == num_of_users
+            assert len(last_logits) == num_of_users
 
-        logger.info(f"Finished prefill for all users...")
+            logger.info(f"Finished prefill for all users...")
 
-        # First sampled token after prompt
-        next_tokens = self._sample_greedy(last_logits)
-        profiler.end("inference_prefill")
+            # First sampled token after prompt
+            next_tokens = self._sample_greedy(last_logits)
+            profiler.end("inference_prefill")
 
-        # First sampled token after prompt
-        last_logits = last_logits.squeeze(0).squeeze(0)
-        next_tokens = self._sample_greedy(last_logits)
-        token_value = int(next_tokens[0].item())
-        logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
+            # First sampled token after prompt (original code keeps this second pass)
+            last_logits = last_logits.squeeze(0).squeeze(0)
+            next_tokens = self._sample_greedy(last_logits)
+            token_value = int(next_tokens[0].item())
+            logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
-        positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
-        # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
-        if teacher_forcing is not None:
-            # Only enforce for the first user to keep scope minimal
-            forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
-            next_tokens[0] = int(forced)
-
-        generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
-        logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
-        if early_print_first_user:
-            logger.info("===== Generation for first user =====")
-
-        profiler.start("inference_decode")
-        for gen_idx in range(max_new_tokens):
-            # Decode one step with previous next_tokens
-            logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
-            profiler.start(f"decode_time_{gen_idx}")
-            logits = self.decode_forward(
-                next_tokens, positions, self.batch_size_per_row, profiler, gen_idx, enable_trace=self.enable_trace
-            )
-            profiler.end(f"decode_time_{gen_idx}")
-            self.ccl.reset_sem_counters()
-            pred_tokens = self._sample_greedy(logits)
+            positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
+            # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
             if teacher_forcing is not None:
-                forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                pred_tokens[0] = int(forced)
-            next_tokens = pred_tokens
-            positions += 1
+                # Only enforce for the first user to keep scope minimal
+                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+                next_tokens[0] = int(forced)
 
-            # Collect only for the original batch size
-            for i in range(num_of_prompts):
-                token_value = int(next_tokens[i].item())
-                generations[i].append(token_value)
-                if early_print_first_user and i == 0:
-                    print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+            generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+            logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
+            if early_print_first_user:
+                logger.info("===== Generation for first user =====")
 
-        profiler.end("inference_decode")
+            profiler.start("inference_decode")
+            for gen_idx in range(max_new_tokens):
+                # Decode one step with previous next_tokens
+                logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
+                profiler.start(f"decode_time_{gen_idx}")
+                logits = self.decode_forward(
+                    next_tokens,
+                    positions,
+                    self.batch_size_per_row,
+                    profiler,
+                    gen_idx,
+                    enable_trace=self.enable_trace,
+                )
+                profiler.end(f"decode_time_{gen_idx}")
+                self.ccl.reset_sem_counters()
+                pred_tokens = self._sample_greedy(logits)
+                if teacher_forcing is not None:
+                    forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                    pred_tokens[0] = int(forced)
+                next_tokens = pred_tokens
+                positions += 1
+
+                # Collect only for the original batch size
+                for i in range(num_of_prompts):
+                    token_value = int(next_tokens[i].item())
+                    generations[i].append(token_value)
+                    if early_print_first_user and i == 0:
+                        print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+
+            profiler.end("inference_decode")
+
+            if early_print_first_user:
+                logger.info("\n===== Done =====")
+
         profiler.end("run")
-
-        if early_print_first_user:
-            logger.info("\n===== Done =====")
-
         # Calculate statistics
         prefill_time = profiler.get_duration("inference_prefill")
         decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(max_new_tokens)]
@@ -577,22 +588,30 @@ class DeepseekGenerator:
         avg_prompt_len = float(lengths[0] if len(lengths) > 0 else 0)
 
         # Calculate statistics
-        prefill_tokens_per_sec = (avg_prompt_len / prefill_time) * num_of_prompts if prefill_time > 0 else 0
+        if prefill_time > 0:
+            prefill_tokens_per_sec = (avg_prompt_len * num_of_prompts * repeat_batches) / prefill_time
+        else:
+            prefill_tokens_per_sec = 0
 
         # Calculate decode throughput excluding the first iteration (compile time)
         # This matches simple_text_demo.py: line 1071-1072 excludes iteration 0 when summing times
         if len(decode_times) > 1:
             total_decode_time = sum(decode_times[1:])  # Exclude iteration 0 (compile time)
-            decode_tokens_per_sec_per_user = (max_new_tokens - 1) / total_decode_time if total_decode_time > 0 else 0
+            if total_decode_time > 0:
+                decode_tokens_per_sec_per_user = ((max_new_tokens - 1) * repeat_batches) / total_decode_time
+            else:
+                decode_tokens_per_sec_per_user = 0
         else:
             total_decode_time = sum(decode_times)
             decode_tokens_per_sec_per_user = 0
         decode_tokens_per_sec = decode_tokens_per_sec_per_user * num_of_prompts
-        avg_time_to_first_token = prefill_time / num_of_prompts if num_of_prompts > 0 else 0
+        avg_time_to_first_token = prefill_time / (num_of_prompts * repeat_batches) if num_of_prompts > 0 else 0
 
         if self.enable_trace and max_new_tokens >= 128:
             trace_execution_time_for_128th_token = profiler.get_duration("trace_execution_127")
-            trace_execution_tokens_per_sec_per_user_128th_token = 1 / trace_execution_time_for_128th_token
+            trace_execution_tokens_per_sec_per_user_128th_token = (
+                repeat_batches / trace_execution_time_for_128th_token if trace_execution_time_for_128th_token > 0 else 0
+            )
         else:
             trace_execution_tokens_per_sec_per_user_128th_token = None
 
@@ -803,6 +822,10 @@ class DeepseekGenerator:
                 ),
             )
             return logits.squeeze(0).squeeze(0)
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+        logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
+        logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]

@@ -40,7 +40,8 @@ jobs:
 
           # Initialize models JSON with all false
           models_json='{
-            "stable-diffusion": false,
+            "stable-diffusion-xl": false,
+            "stable-diffusion-1-4": false,
             "distilbert": false,
             "vgg": false,
             "vgg-unet": false,
@@ -102,9 +103,9 @@ jobs:
           # Define which models belong to each matrix group
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
-            "N300 WH B0 Set 1": ["stable-diffusion", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit"],
+            "N300 WH B0 Set 1": ["stable-diffusion-xl", "stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit"],
             "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0"],
-            "P150 BH": ["stable-diffusion", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "oft", "panoptic-deeplab"]
+            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "oft", "panoptic-deeplab"]
           }'
 
           # Original matrix definition
@@ -166,8 +167,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -180,20 +186,27 @@ jobs:
           device_perf_model_name: "non-civ2_tests"
           commands: |
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-            # TODO: return this once issue https://github.com/tenstorrent/tt-metal/issues/33467 is resolved
-            # pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
             pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: stable_diffusion tests
+      - name: stable_diffusion_xl tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          device_perf_model_name: "stable_diffusion"
+          device_perf_model_name: "stable_diffusion_xl"
+          commands: |
+            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion-xl'] }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: stable_diffusion_1_4 tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "stable_diffusion_1_4"
           commands: |
             pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
-            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion'] }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion-1-4'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: distilbert tests
@@ -201,7 +214,6 @@ jobs:
         with:
           device_perf_model_name: "distilbert"
           commands: |
-            pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
             pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['distilbert'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -229,7 +241,6 @@ jobs:
         with:
           device_perf_model_name: "bert_tiny"
           commands: |
-            pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
             pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['bert-tiny'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -371,14 +382,22 @@ jobs:
             pytest models/experimental/oft/tests/test_device_perf_oft.py -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible &&  matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['oft'] }}
 
-      - name: panoptic_deeplab tests
+      - name: panoptic_deeplab tests (20 cores)
         env:
           TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          device_perf_model_name: "panoptic_deeplab"
+          device_perf_model_name: "panoptic_deeplab_20_cores"
           commands: |
-            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py -m models_device_performance_bare_metal --timeout=600
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores -m models_device_performance_bare_metal --timeout=600
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
+
+      - name: panoptic_deeplab tests (130 cores)
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "panoptic_deeplab_130_cores"
+          commands: |
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_130_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
       - name: Merge test reports

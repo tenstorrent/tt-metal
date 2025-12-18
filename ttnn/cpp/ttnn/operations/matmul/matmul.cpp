@@ -11,11 +11,9 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-namespace ttnn {
-
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 namespace detail {
 
@@ -44,6 +42,8 @@ bool is_input_batched(const ttnn::Shape& shape) {
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
+ * @param transpose_a Whether to transpose the first input tensor
+ * @param transpose_b Whether to transpose the second input tensor
  * @param memory_config Memory configuration for the output tensor
  * @param dtype Data type for the output tensor
  * @param bias Optional bias tensor to add to the result
@@ -54,9 +54,11 @@ Tensor handle_zero_volume_matmul(
     const Tensor& input_tensor_b,
     const MemoryConfig& memory_config,
     const std::optional<DataType>& dtype,
+    const bool transpose_a,
+    const bool transpose_b,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
     // Calculate the expected output shape
-    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b, transpose_a, transpose_b);
 
     // Use the appropriate data type (either from parameters or from input tensor)
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
@@ -92,7 +94,8 @@ static bool get_post_process_bias(
     const std::optional<const CoreCoord>& user_core_coord,
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a_adjusted,
-    const ttnn::Tensor& input_tensor_b_adjusted) {
+    const ttnn::Tensor& input_tensor_b_adjusted,
+    const bool transpose_a) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
@@ -102,7 +105,7 @@ static bool get_post_process_bias(
         const auto& bias_tensor = bias.value();
         const auto& bias_padded_shape = bias_tensor.padded_shape();
         const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
-        uint32_t tile_height = tile_shape[0];
+        uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
 
         // If bias second-to-last dimension doesn't match tile height, must post-process
         if (bias_padded_shape[-2] != tile_height) {
@@ -140,7 +143,7 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
+    struct Matmul& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -160,32 +163,59 @@ ttnn::Tensor bound_matmul(
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
-            input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype, bias);
+            input_tensor_a,
+            input_tensor_b,
+            parameters.output_mem_config,
+            parameters.output_dtype,
+            parameters.transpose_a,
+            parameters.transpose_b,
+            bias);
     }
 
-    const auto& input_tensor_a_adjusted = parameters.transpose_a
+    //----------------------------------------------------------------------------------------------
+    // The following code is replicated from matmul_op.cpp and helps determine the program config
+    auto matmul_struct = create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
+
+    uint32_t bias_single_tile_size = 0;
+    if (bias.has_value()) {
+        auto bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
+        bias_single_tile_size = tt::tile_size(bias_data_format);
+    }
+    MatmulProgramConfig chosen_program_config = bmm_op_utils::get_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        parameters.transpose_a,
+        parameters.transpose_b,
+        bias_single_tile_size,
+        &matmul_struct);
+    //----------------------------------------------------------------------------------------------
+
+    // Decide if we need to manually transpose or if the program config will handle it
+    bool needs_manual_transpose =
+        !(std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) ||
+          std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
+          std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config));
+    bool needs_manual_transpose_a = parameters.transpose_a && needs_manual_transpose;
+    bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
+
+    const auto& input_tensor_a_adjusted = needs_manual_transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
-    const auto& input_tensor_b_adjusted =
-        (input_tensor_b.logical_shape().rank() == 1)
-            ? ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}))
-        : parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
-                                 : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.logical_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.logical_shape();
+    ttnn::Tensor input_tensor_b_adjusted = input_tensor_b;
+    if (input_tensor_b.logical_shape().rank() == 1) {
+        input_tensor_b_adjusted = ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}));
+    } else if (needs_manual_transpose_b) {
+        input_tensor_b_adjusted = ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config());
+    }
 
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW(
-            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
-            "The shape of first tensor was {} and the shape of second tensor was {})",
-            width_a,
-            height_b,
-            input_tensor_a_shape,
-            input_tensor_b_shape);
+    // We need to change the transpose_a and transpose_b flags if we manually transposed
+    // the input tensors
+    if (needs_manual_transpose_a) {
+        parameters.transpose_a = false;
+    }
+    if (needs_manual_transpose_b) {
+        parameters.transpose_b = false;
     }
 
     bool post_process_bias = get_post_process_bias(
@@ -194,7 +224,8 @@ ttnn::Tensor bound_matmul(
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a_adjusted,
-        input_tensor_b_adjusted);
+        input_tensor_b_adjusted,
+        parameters.transpose_a);
 
     auto output_tensor = matmul(
         input_tensor_a_adjusted,
@@ -205,16 +236,18 @@ ttnn::Tensor bound_matmul(
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
-            output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
+            output_tensor,
+            ttnn::operations::matmul::compute_matmul_output_shape(
+                input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b));
     }
 
     // Apply bias as post-processing if needed
-    if (post_process_bias && bias.has_value()) {
+    if (post_process_bias) {
         output_tensor = ttnn::add(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            parameters.output_mem_config,
+            output_tensor.memory_config(),
             optional_output_tensor);
     }
 
@@ -222,7 +255,7 @@ ttnn::Tensor bound_matmul(
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
+            output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
@@ -253,25 +286,26 @@ Tensor MatmulOperation::invoke(
                 std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
             ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
             : false;
+    Matmul matmul_params{
+        program_config,
+        /*bcast_batch=*/std::nullopt,
+        memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+        dtype,
+        compute_kernel_config,
+        untilize_out,
+        user_core_coord,
+        get_fused_activation(activation),
+        user_run_batched,
+        transpose_a,
+        transpose_b,
+        output_tile,
+        global_cb,
+        sub_device_id};
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        Matmul{
-            program_config,
-            /*bcast_batch=*/std::nullopt,
-            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
-            dtype,
-            compute_kernel_config,
-            untilize_out,
-            user_core_coord,
-            get_fused_activation(activation),
-            user_run_batched,
-            transpose_a,
-            transpose_b,
-            output_tile,
-            global_cb,
-            sub_device_id},
+        matmul_params,
         optional_output_tensor);
 }
 
@@ -298,26 +332,22 @@ Tensor LinearOperation::invoke(
     bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
     TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
 
-    return bound_matmul(
-        input_tensor_a,
-        input_tensor_b,
-        bias,
-        Matmul{
-            program_config,
-            /*bcast_batch=*/std::nullopt,
-            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
-            dtype,
-            compute_kernel_config,
-            /*untilize_out=*/false,
-            user_core_coord,
-            get_fused_activation(activation),
-            /*user_run_batched=*/false,
-            transpose_a,
-            transpose_b,
-            output_tile,
-            global_cb,
-            sub_device_id},
-        optional_output_tensor);
+    Matmul matmul_params{
+        program_config,
+        /*bcast_batch=*/std::nullopt,
+        memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+        dtype,
+        compute_kernel_config,
+        /*untilize_out=*/false,
+        user_core_coord,
+        get_fused_activation(activation),
+        /*user_run_batched=*/false,
+        transpose_a,
+        transpose_b,
+        output_tile,
+        global_cb,
+        sub_device_id};
+    return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 
 std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
@@ -420,26 +450,22 @@ Tensor AddmmOperation::invoke(
 
     validate(input_tensor, mat1_tensor, mat2_tensor, alpha, beta);
 
-    auto out_tensor = bound_matmul(
-        mat1_tensor,
-        mat2_tensor,
+    Matmul matmul_params{
+        program_config,
         std::nullopt,
-        Matmul{
-            program_config,
-            std::nullopt,
-            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
-            dtype,
-            compute_kernel_config,
-            /*untilize_out=*/false,
-            /*user_core_coord=*/user_core_coord,
-            /*user_fused_activation=*/std::nullopt,
-            /*user_run_batched=*/false,
-            /*transpose_a=*/false,
-            /*transpose_b=*/false,
-            output_tile,
-            /*global_cb=*/std::nullopt,
-            /*sub_device_id=*/std::nullopt},
-        optional_output_tensor);
+        memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+        dtype,
+        compute_kernel_config,
+        /*untilize_out=*/false,
+        /*user_core_coord=*/user_core_coord,
+        /*user_fused_activation=*/std::nullopt,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        output_tile,
+        /*global_cb=*/std::nullopt,
+        /*sub_device_id=*/std::nullopt};
+    auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, optional_output_tensor);
 
     if (alpha != 1.0) {
         multiply_(out_tensor, alpha);
@@ -490,6 +516,4 @@ Tensor SparseMatmulOperation::invoke(
         optional_output_tensor);
 }
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

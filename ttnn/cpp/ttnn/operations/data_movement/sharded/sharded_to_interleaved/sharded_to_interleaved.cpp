@@ -8,16 +8,12 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ShardedToInterleavedOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const MemoryConfig& memory_config,
-    const std::optional<DataType>& output_dtype,
-    const std::optional<bool>& is_l1_aligned) {
+    const ttnn::Tensor& input_tensor, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
     if (!input_tensor.shard_spec().has_value()) {
         return input_tensor;
     }
 
-    return ttnn::prim::sharded_to_interleaved(
-        input_tensor, memory_config, output_dtype.value_or(input_tensor.dtype()), is_l1_aligned.value_or(false));
+    return ttnn::prim::sharded_to_interleaved(input_tensor, memory_config, output_dtype.value_or(input_tensor.dtype()));
 }
 
 }  // namespace ttnn::operations::data_movement

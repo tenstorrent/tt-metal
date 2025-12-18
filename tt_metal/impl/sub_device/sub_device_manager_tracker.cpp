@@ -31,11 +31,12 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();

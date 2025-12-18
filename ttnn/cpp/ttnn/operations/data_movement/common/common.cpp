@@ -10,9 +10,7 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
@@ -29,8 +27,7 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 4); }
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 3); }
 
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto shape = tensor.logical_shape();
     auto rank = shape.rank();
     TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
@@ -49,9 +46,16 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
         if (rank <= 4) {
             return squeezed;
         }
-        return ttnn::reshape(squeezed, squeeze_shape_to_4D(shape));
+        return ttnn::reshape(
+            squeezed,
+            squeeze_shape_to_4D(shape),
+            std::nullopt,
+            std::nullopt,
+            TileReshapeMapMode::CACHE,
+            sub_core_grids);
     }
-    return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
+    return ttnn::reshape(
+        tensor, squeeze_shape_to_4D(shape), std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
 }
 
 ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
@@ -748,6 +752,4 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     }
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

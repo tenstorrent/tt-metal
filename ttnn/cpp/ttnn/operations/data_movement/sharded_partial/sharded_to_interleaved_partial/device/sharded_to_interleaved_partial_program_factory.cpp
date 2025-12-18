@@ -14,7 +14,6 @@ ShardedToInterleavedPartialProgramFactory::cached_program_t ShardedToInterleaved
     sharded_to_interleaved_operation_attributes_t shared_attrs{
         .output_mem_config = operation_attributes.output_mem_config,
         .output_dtype = operation_attributes.output_dtype,
-        .is_l1_aligned = false,
         .num_slices = operation_attributes.num_slices,
         .slice_index = operation_attributes.slice_index,
     };
@@ -37,7 +36,6 @@ void ShardedToInterleavedPartialProgramFactory::override_runtime_arguments(
     sharded_to_interleaved_operation_attributes_t shared_attrs{
         .output_mem_config = operation_attributes.output_mem_config,
         .output_dtype = operation_attributes.output_dtype,
-        .is_l1_aligned = false,
         .num_slices = operation_attributes.num_slices,
         .slice_index = operation_attributes.slice_index,
     };

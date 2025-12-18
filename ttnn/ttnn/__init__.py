@@ -78,14 +78,26 @@ logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
 @contextlib.contextmanager
-def manage_config(name, value):
+def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    setattr(CONFIG, name, original_value)
-    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    try:
+        setattr(CONFIG, name, original_value)
+        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    except Exception as e:
+        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+        # afuller
+        if original_value is None:
+            try:
+                setattr(CONFIG, name, "")
+                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+            except Exception as e2:
+                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
+        else:
+            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -182,6 +194,7 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    corerange_to_cores,
     Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
@@ -208,14 +221,20 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    DataMovementProcessor,
+    NOC,
+    NOC_MODE,
+    TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
     WriterConfigDescriptor,
+    DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 
@@ -249,7 +268,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
@@ -269,6 +295,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    split_work_to_cores,
     get_current_command_queue_id_for_thread,
 )
 

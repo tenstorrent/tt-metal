@@ -59,7 +59,6 @@ def test_max_pool2d():
     ttnn.close_device(device)
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_avg_pool2d():
     device = ttnn.CreateDevice(0, l1_small_size=8192)
     # Define input parameters
@@ -67,7 +66,6 @@ def test_avg_pool2d():
     stride_h, stride_w = 1, 1
     pad_h, pad_w = 0, 0
     nchw_shape = (4, 256, 40, 40)
-    dilation_h, dilation_w = 1, 1
     in_N, in_C, in_H, in_W = nchw_shape
     input_shape = (1, 1, in_N * in_H * in_W, in_C)
 
@@ -87,7 +85,6 @@ def test_avg_pool2d():
         kernel_size=[kernel_h, kernel_w],
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
-        dilation=[dilation_h, dilation_w],
         ceil_mode=False,
         count_include_pad=True,
         divisor_override=None,
@@ -97,6 +94,7 @@ def test_avg_pool2d():
         reallocate_halo_output=True,
         dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        compute_kernel_config=None,
     )
     logger.info(f"Output: {tt_output}")
     ttnn.close_device(device)

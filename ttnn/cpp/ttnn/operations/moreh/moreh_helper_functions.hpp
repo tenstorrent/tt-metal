@@ -12,8 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn {
-namespace operations {
+namespace ttnn::operations {
 
 using namespace tt::tt_metal;
 
@@ -277,5 +276,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape&
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
     const ttnn::Shape& shape, uint32_t dim);
 
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations

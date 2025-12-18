@@ -3,6 +3,15 @@ name: "(T3K) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
+      trigger_type:
+        description: "Trigger type. 'manual' = custom selection below; other options = predefined configs. ⚠️ Resource intensive!"
+        required: true
+        type: choice
+        options:
+          - manual
+          - models-mandatory # unit tests only
+          - models-extended # unit, demo, model perf tests
+        default: manual
       build-type:
         required: false
         type: choice
@@ -12,55 +21,170 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-        default: "Release"
+        default: Release
       extra-tag:
         required: true
         type: string
         default: "in-service"
       t3000-unit:
-        required: false
-        type: boolean
-        default: false
+        description: "Unit tests: Select 'all', specific model or 'disabled'"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - falcon7b
+          - falcon40b
+          - llama3-small
+          - llama3.2-11b
+          - llama3.2-11b-vision
+          - n300 mesh llama3.2-11b-vision
+          - llama3.2-90b-vision
+          # - llama3.1-70b
+          - llama3.2-90b
+          - mistral
+          - mixtral
+          - grok
+          - unet shallow
+          - qwen25_vl
+          - gemma3-small
       t3000-demo:
-        required: false
-        type: boolean
-        default: false
+        description: "Demo tests: Select 'all', specific model or 'disabled'"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - falcon7b
+          - falcon40b
+          - llama3
+          - llama3_vision
+          - llama3_90b_vision
+          - llama3_70b
+          - resnet50
+          - sentence_bert
+          - sd35_large
+          - flux1-dev
+          - motif
+          - mistral
+          - mixtral
+          - whisper
+          - qwen3
+          - qwen25
+          - qwen25_vl
+          - gemma3
+          - wan22
+          - mochi
+      t3000-model-perf:
+        description: "Model perf tests: Select 'all', specific model or 'disabled'"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - falcon7b
+          - falcon40b
+          - resnet50
+          - sentence_bert
+          - stable_diffusion_35_large
+          - mochi
+          - wan22
+          - flux1-dev
+          - motif
+          - gemma-3-27b-it
       t3000-frequent:
-        required: false
-        type: boolean
-        default: false
+        description: "Frequent tests: Select 'all', specific model or 'disabled'"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - tteager
+          - ethernet
+          - trace stress
+          - falcon40b
+          - llama3.2-vision
+          - n300 mesh llama3.2-vision
+          - llama3.2-90b-vision
+          - llama3
+          - llama3 accuracy
+          - llama3_70n90b accuracy
+          - llama3_90b
+          # - llama3_70b # disabled in -impl file
+          # - mixtral # disabled in -impl file
+          - resnet
+          - sd35_large
+          - flux1
+          - motif
+          - mistral
+          - wan2.2
+          - mochi
       t3000-nightly:
         required: false
         type: boolean
         default: false
-      t3000-model-perf:
-        required: false
-        type: boolean
-        default: false
       t3000-profiler:
-        description: "T3000 profiler tests"
-        required: false
-        type: boolean
-        default: false
-      t3000-perplexity:
+        description: "Profiler tests"
         required: false
         type: boolean
         default: false
 
-run-name: ${{ inputs.description }}
+run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-unit: ${{ steps.logic.outputs.run-unit }}
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+      run-frequent: ${{ steps.logic.outputs.run-frequent }}
+      run-nightly: ${{ steps.logic.outputs.run-nightly }}
+      run-profiler: ${{ steps.logic.outputs.run-profiler }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        run: |
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+              echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.t3000-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.t3000-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
+              echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
+              ;;
+            "models-mandatory")
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              ;;
+            "models-extended")
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-nightly=false" >> $GITHUB_OUTPUT
+              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
+    needs: determine-tests
     with:
       version: 22.04
       build-type: ${{ inputs.build-type }}
       build-wheel: true
-      tracy: true
+      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
   t3000-unit-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
@@ -68,9 +192,10 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-unit }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit || 'all' }}
   t3000-demo-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -78,29 +203,10 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-demo }}
-  t3000-frequent-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-frequent }}
-  t3000-nightly-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-nightly }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
   t3000-model-perf-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     with:
@@ -108,9 +214,31 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-model-perf }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-model-perf || 'all' }}
+  t3000-frequent-tests:
+    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
+  t3000-nightly-tests:
+    if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-profiler-tests:
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
@@ -120,14 +248,3 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: config-t3000
       test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
-    if: ${{ inputs.t3000-profiler }}
-  t3000-perplexity-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-perplexity }}

@@ -59,8 +59,18 @@ def test_decoder(
     ttnn_input = ttnn.from_torch(
         torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    ttnn_output = ttnn_model.decode(ttnn_input)
 
+    use_signpost = True
+    try:
+        from tracy import signpost
+    except ModuleNotFoundError:
+        use_signpost = False
+
+    if use_signpost:
+        signpost(header="start")
+    ttnn_output = ttnn_model.decode(ttnn_input)
+    if use_signpost:
+        signpost(header="stop")
     ttnn_output = ttnn.reshape(ttnn_output, [1, output_height, output_width, out_channels])
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)

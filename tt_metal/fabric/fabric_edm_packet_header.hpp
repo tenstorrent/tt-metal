@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <climits>
+#include <initializer_list>
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -25,6 +26,10 @@
 
 // NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
+
+// Helper for dependent static_assert that always evaluates to false
+template <class>
+inline constexpr bool always_false_v = false;
 
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
@@ -51,7 +56,38 @@ enum EDMStatus : uint32_t {
     READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA4B4C4D4
+    TERMINATED = 0xA4B4C4D4,
+
+    // Fabric Initialization Postcodes
+    // Initialization started
+    INITIALIZATION_STARTED = 0xB0C0D0E0,
+
+    // TXQ initialized
+    TXQ_INITIALIZED = 0xB1C1D1E1,
+
+    // Stream registers initialized
+    STREAM_REG_INITIALIZED = 0xB2C2D2E2,
+
+    // Started setting up downstream EDMs
+    DOWNSTREAM_EDM_SETUP_STARTED = 0xB3C3D3E3,
+
+    // EDM VC0 setup complete
+    EDM_VCS_SETUP_COMPLETE = 0xB4C4D4E4,
+
+    // Worker interfaces initialized
+    WORKER_INTERFACES_INITIALIZED = 0xB6C6D6E6,
+
+    // Ethernet handshake complete
+    ETHERNET_HANDSHAKE_COMPLETE = 0xB7C7D7E7,
+
+    // VCs opened
+    VCS_OPENED = 0xB8C8D8E8,
+
+    // Routing table initialized
+    ROUTING_TABLE_INITIALIZED = 0xB9C9D9E9,
+
+    // Initialization complete
+    INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
 // 3 bits
@@ -98,10 +134,63 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
+#define NOC_SCATTER_WRITE_MAX_CHUNKS 4
+static constexpr uint8_t NOC_SCATTER_WRITE_MIN_CHUNKS = 2;
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
+    uint8_t chunk_count;
+    uint8_t reserved = 0;
+
+    NocUnicastScatterCommandHeader() = delete;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        std::initializer_list<uint64_t> addresses, std::initializer_list<uint16_t> chunk_sizes = {}) {
+        const size_t num_addresses = addresses.size();
+        this->chunk_count = static_cast<uint8_t>(num_addresses);
+
+        size_t idx = 0;
+        for (auto addr : addresses) {
+            this->noc_address[idx++] = addr;
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (auto size : chunk_sizes) {
+            this->chunk_size[idx++] = size;
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
+
+    // Requires: addresses[num_addresses], chunk_sizes[num_addresses - 1].
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+    NocUnicastScatterCommandHeader(
+        const uint64_t* addresses, const uint16_t* chunk_sizes, const uint8_t num_addresses) :
+        chunk_count(num_addresses) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(num_addresses > 0 && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+#endif
+
+        uint8_t idx = 0;
+        for (; idx < num_addresses; idx++) {
+            this->noc_address[idx] = addresses[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS) {
+            this->noc_address[idx++] = 0;
+        }
+
+        idx = 0;
+        for (; idx < num_addresses - 1; idx++) {
+            this->chunk_size[idx] = chunk_sizes[idx];
+        }
+        while (idx < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+            this->chunk_size[idx++] = 0;
+        }
+    }
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -149,8 +238,11 @@ static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
+    NocUnicastCommandHeader unicast_read;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
     NocMulticastCommandHeader mcast_write;
     NocUnicastAtomicIncCommandHeader unicast_seminc;
@@ -158,7 +250,8 @@ union NocCommandFields {
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
 };
-static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
+static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
 
 struct UDMWriteControlHeader {
     uint8_t src_chip_id;
@@ -168,6 +261,7 @@ struct UDMWriteControlHeader {
     uint8_t risc_id;
     uint8_t transaction_id;
     uint8_t posted;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -179,22 +273,29 @@ struct UDMReadControlHeader {
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 9, "UDMWriteControlHeader size is not 9 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 16, "UDMReadControlHeader size is not 16 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
+static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
-    NocCommandFields command_fields;  // size = 16B due to uint64_t alignment
+private:
+    PacketHeaderBase() = default;
+    friend Derived;
+
+public:
+    NocCommandFields command_fields;  // size = 40B due to scatter metadata
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
     //   -> unicast_write, mcast_write, unicast_seminc, mcast_seminc
@@ -247,6 +348,29 @@ struct PacketHeaderBase {
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return *static_cast<Derived*>(this);
+    }
+
+    Derived& to_noc_unicast_read(const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_read = modified_command_header;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -336,11 +460,38 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
+    volatile Derived* to_noc_unicast_read(
+        const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_read.noc_address = noc_addr;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
     volatile Derived* to_noc_unicast_scatter_write(
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+        const uint8_t chunk_count = noc_unicast_scatter_command_header.chunk_count;
+        ASSERT(chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+
+        this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
+
+        for (uint8_t i = 0; i < chunk_count; i++) {
             auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(
                 noc_address_components.first.x,
@@ -348,12 +499,25 @@ struct PacketHeaderBase {
                 noc_address_components.second,
                 edm_to_local_chip_noc);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
-            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                this->command_fields.unicast_scatter_write.chunk_size[i] =
-                    noc_unicast_scatter_command_header.chunk_size[i];
-            }
         }
-        this->payload_size_bytes = payload_size_bytes;
+        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
+        }
+
+        const uint8_t chunk_size_count = chunk_count - 1;
+        size_t accumulated_chunk_bytes = 0;
+        for (uint8_t i = 0; i < chunk_size_count; i++) {
+            uint16_t chunk_bytes = noc_unicast_scatter_command_header.chunk_size[i];
+            ASSERT(chunk_bytes > 0);
+            accumulated_chunk_bytes += chunk_bytes;
+            this->command_fields.unicast_scatter_write.chunk_size[i] = chunk_bytes;
+        }
+        for (uint8_t i = chunk_size_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
+            this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+        }
+
+        ASSERT(accumulated_chunk_bytes < payload_size_bytes);
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
 #endif
@@ -474,7 +638,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
     // and pad their own CBs conditionally when reading from DRAM. It'll be up to the users to
     // manage this complexity.
-    uint8_t padding0[2];
+    uint8_t padding0[18];
 
     static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
@@ -515,22 +679,23 @@ public:
 
 struct LowLatencyRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint32_t FIELD_MASK = 0b11;
+    static constexpr uint64_t FIELD_MASK = 0b11;
     static constexpr uint32_t NOOP = 0b00;
     static constexpr uint32_t WRITE_ONLY = 0b01;
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
-    uint32_t value;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
+    static constexpr uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
+    uint64_t value;
 };
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
     LowLatencyRoutingFields routing_fields;
+    uint8_t padding0[4];
 
 private:
-    static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    static uint64_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         // Example of unicast 3 hops away
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
         // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
@@ -538,11 +703,12 @@ private:
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
-                ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
+        const uint64_t shift_amount =
+            static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
+        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
+               (static_cast<uint64_t>(LowLatencyRoutingFields::WRITE_ONLY) << shift_amount);
     }
-    static uint32_t calculate_chip_multicast_routing_fields_value(
+    static uint64_t calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
@@ -557,13 +723,14 @@ private:
             chip_multicast_command_header.start_distance_in_hops > 0 &&
             distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
-                ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               // TODO: We can skip the masking of the upper bits for improved performance on the workers, at the cost
-               // of readability of the packet header
-               ((LowLatencyRoutingFields::WR_ONLY_FIELD &
-                 ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1))
-                << ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
+        const uint64_t total_shift = static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
+        const uint64_t start_shift = static_cast<uint64_t>(chip_multicast_command_header.start_distance_in_hops - 1) *
+                                     LowLatencyRoutingFields::FIELD_WIDTH;
+        const uint64_t range_bits =
+            static_cast<uint64_t>(chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH;
+
+        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << total_shift) - 1ULL)) |
+               ((LowLatencyRoutingFields::WR_ONLY_FIELD & ((1ULL << range_bits) - 1ULL)) << start_shift);
     }
 
 public:
@@ -647,24 +814,24 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed));
-static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHeader) is not equal to 80B");
+static_assert(sizeof(HybridMeshPacketHeader) == 96, "sizeof(HybridMeshPacketHeader) is not equal to 96B");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
 
     // Override to return correct size for UDMHybridMeshPacketHeader
     size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
 } __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 112, "sizeof(UDMHybridMeshPacketHeader) is not equal to 112B");
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
-static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
-// Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
+static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
 static_assert(
-    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
+    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader),
+    "sizeof(LowLatencyPacketHeader) is expected to be 64B after expanding routing fields storage");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -679,7 +846,8 @@ static_assert(
 
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
-    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE)) != 0))
 // 1D routing with UDM is not supported
 static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 

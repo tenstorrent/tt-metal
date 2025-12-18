@@ -37,11 +37,11 @@ jobs:
         test-group:
           - name: "llama3.1-8b ${{ inputs.runner-label }} performance"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }} --max_seq_len 131072
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
             arch: blackhole
@@ -49,11 +49,11 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-1024-2-2-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -83,8 +83,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -103,9 +108,6 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
-          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-            pip install -r /work/models/tt_transformers/requirements.txt
-          fi
           ${{ matrix.test-group.cmd }}
       - name: Print tt-smi data on failure
         if: ${{ failure() }}
@@ -156,27 +158,27 @@ jobs:
         test-group:
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 40960
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-40960-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-1024-2-10-1-1-False"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-40960-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -203,8 +205,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -216,11 +223,125 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
-          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-            pip install -r /work/models/tt_transformers/requirements.txt
-          fi
           ${{ matrix.test-group.cmd }}
 
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ matrix.test-group.arch }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+  multi-card-demo-tt_dit-tests:
+    if: ${{ inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "Flux.1-dev ${{ inputs.runner-label }} performance"
+            arch: blackhole
+            cmd: |
+              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then
+                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
+              else
+                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
+              fi
+            owner_id: U08TED0JM9D # Samuel Adesoye
+          - name: "Wan2.2-T2V-A14B ${{ inputs.runner-label }} performance"
+            arch: blackhole
+            cmd: |
+              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then echo "Skipping - not supported on viommu"; exit 0; fi
+              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x4sp0tp1 and resolution_480p"
+            owner_id: U08TED0JM9D # Samuel Adesoye
+    name: ${{ matrix.test-group.name }}
+    runs-on:
+      - "in-service"
+      - arch-blackhole
+      - "${{ inputs.runner-label }}"
+      - "${{ inputs.extra-tag }}"
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        # If extra-tag is pipeline-yyz2-lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
+        # If extra-tag is pipeline-functional, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
+        # If extra-tag is pipeline-perf, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
+        - "${{ inputs.extra-tag != 'pipeline-yyz2-lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        timeout-minutes: 10
+        with:
+          runner-label: ${{ inputs.runner-label }}
+      - name: Download Flux.1-dev model weights from LFC
+        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        timeout-minutes: 15
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
+      - name: Run demo regression tests
+        timeout-minutes: 70
+        run: |
+          ${{ matrix.test-group.cmd }}
+      - name: Print tt-smi data on failure
+        if: ${{ failure() }}
+        run: |
+          tt-smi -s
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}

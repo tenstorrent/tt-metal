@@ -74,15 +74,19 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
+    // For bitcast, use output format for input CB to avoid unpacker conversion
+    // This ensures raw bit copying without conversion
+    tt::DataFormat cb_data_format_for_input = (ops_chain[0].type() == UnaryOpType::BITCAST) ? out_df : act_df;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, cb_data_format_for_input}})
             .set_page_size(in_cb_id, in_cb_pagesize)
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
+        ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -153,11 +157,25 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
+            case UnaryOpType::LOGIT: {
+                float value1 = *ops_chain[0].get_param_if<float>(0);
+                float value2 = 1.0f - value1;
+                packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
+                if (value1 > 0.5f) {
+                    unary_defines["WHERE"] = "where_tile";
+                    unary_defines["CLAMP"] = "clamp_tile";
+                } else if (value1 >= 0.0f) {
+                    unary_defines["CLAMP"] = "clamp_tile";
+                }
+                break;
+            }
             default: break;
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
+    auto path =
+        fmt::format("{}/{}", compute_root_sharded, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,

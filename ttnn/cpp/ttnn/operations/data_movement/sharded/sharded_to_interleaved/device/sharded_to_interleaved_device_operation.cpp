@@ -102,13 +102,11 @@ ShardedToInterleavedDeviceOperation::invoke(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
-    bool is_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
-            .is_l1_aligned = is_l1_aligned,
             .num_slices = 1,
             .slice_index = 0,
         },

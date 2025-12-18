@@ -35,7 +35,6 @@ struct ShardedToInterleavedDeviceOperation {
         const Tensor& input_tensor,
         const tt::tt_metal::MemoryConfig& output_mem_config,
         const tt::tt_metal::DataType& output_dtype,
-        bool is_l1_aligned = false,
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 

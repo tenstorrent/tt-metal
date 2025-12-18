@@ -10,10 +10,7 @@
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path)
-    : initialized(false)
-    , logging_path(logging_path)
-{
+Logger::Logger(const std::filesystem::path& logging_path) : logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
@@ -216,7 +213,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_devices()) {
+            for (const auto& device : mesh_device->get_view().get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }

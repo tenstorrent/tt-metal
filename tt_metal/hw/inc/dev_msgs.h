@@ -34,7 +34,7 @@
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
 // compiler will complain (ODR violation when compiling with LTO).
 // Wrap the definitions in a unique namespace to avoid that.
-namespace HAL_BUILD {
+namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #endif
 
 // TODO: move these to processor specific files
@@ -98,6 +98,7 @@ constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
+constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -193,6 +194,7 @@ struct launch_msg_t {  // must be cacheline aligned
 
 struct subordinate_sync_msg_t {
     union {
+        // this is for WH/BH
         volatile uint32_t all;
         struct {
             volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
@@ -200,8 +202,43 @@ struct subordinate_sync_msg_t {
             volatile uint8_t trisc1;
             volatile uint8_t trisc2;
         };
-    };
-};
+        // QSR starts here
+        struct {
+            volatile uint64_t allDMs;
+            volatile uint32_t allNeo0;
+            volatile uint32_t allNeo1;
+            volatile uint32_t allNeo2;
+            volatile uint32_t allNeo3;
+        };
+        struct {
+            volatile uint8_t dm1Q;
+            volatile uint8_t dm2;
+            volatile uint8_t dm3;
+            volatile uint8_t dm4;
+            volatile uint8_t dm5;
+            volatile uint8_t dm6;
+            volatile uint8_t dm7;
+            volatile uint8_t padding;
+            volatile uint8_t neo0Trisc0;
+            volatile uint8_t neo0Trisc1;
+            volatile uint8_t neo0Trisc2;
+            volatile uint8_t neo0Trisc3;
+            volatile uint8_t neo1Trisc0;
+            volatile uint8_t neo1Trisc1;
+            volatile uint8_t neo1Trisc2;
+            volatile uint8_t neo1Trisc3;
+            volatile uint8_t neo2Trisc0;
+            volatile uint8_t neo2Trisc1;
+            volatile uint8_t neo2Trisc2;
+            volatile uint8_t neo2Trisc3;
+            volatile uint8_t neo3Trisc0;
+            volatile uint8_t neo3Trisc1;
+            volatile uint8_t neo3Trisc2;
+            volatile uint8_t neo3Trisc3;
+            uint8_t pad[12];
+        };
+    } __attribute__((packed));
+} __attribute__((packed));
 
 constexpr int num_waypoint_bytes_per_riscv = 4;
 struct debug_waypoint_msg_t {
@@ -352,6 +389,12 @@ constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
 constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
+
+enum class CoreMagicNumber : uint32_t {
+    WORKER = 0x50ec09a3,
+    ACTIVE_ETH = 0xc63050d1,
+    IDLE_ETH = 0x837b6cae,
+};
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
@@ -368,6 +411,7 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
+    volatile CoreMagicNumber core_magic_number;
     uint8_t pad;  // CODEGEN:skip
 };
 
@@ -375,6 +419,7 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
