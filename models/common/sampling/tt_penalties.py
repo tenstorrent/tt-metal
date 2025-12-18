@@ -219,7 +219,10 @@ class TTPenalties(LightweightModule):
         # replaces -1s in tokens with self.vocab_size - 1
         tokens = torch.where(tokens == -1, self.vocab_size - 1, tokens)
         tokens_tt = ttnn.from_torch(
-            tokens.reshape(-1, 1), device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            tokens.reshape(-1, tokens.shape[-1]),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
@@ -233,10 +236,17 @@ class TTPenalties(LightweightModule):
         # reshape decode token
         if new_tokens.shape[-1] == 32 and new_tokens.shape[-2] == 1:
             new_tokens = ttnn.reshape(new_tokens, [32, 1], **self._op_kwargs)
+            src = self.decode_src
+        else:
+            src = self._alloc_int_buffer(
+                host=torch.ones(self.max_batch_size, new_tokens.shape[-1]),
+                shard_dims=(None, None),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
         self.token_bin_counts_and_mask(
             new_tokens=new_tokens,
             counts=self.output_counts_gathered,
-            src=self.decode_src,
+            src=src,
             counts_sliced=self.output_counts,
             mask=self.output_mask,
         )
