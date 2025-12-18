@@ -137,6 +137,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
           { arch: blackhole, runner-label: P150b },
+          { arch: blackhole, runner-label: P100a },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
