@@ -10,6 +10,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "math.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -62,6 +63,12 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
 ProfilerStateManager::ProfilerStateManager() : do_sync_on_close(true) {}
 
 void ProfilerStateManager::cleanup_device_profilers() {
+    // This thread only exists when debug dump is enabled
+    if (this->debug_dump_thread.joinable()) {
+        this->stop_debug_dump_thread = true;
+        this->stop_debug_dump_thread_cv.notify_all();
+        this->debug_dump_thread.join();
+    }
     std::vector<std::thread> threads(this->device_profiler_map.size());
 
     uint32_t i = 0;
@@ -82,6 +89,7 @@ void ProfilerStateManager::cleanup_device_profilers() {
 }
 
 uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler_thread_pool() const {
+    std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
     const uint32_t num_threads_available = std::thread::hardware_concurrency();
 
     if (num_threads_available == 0 || this->device_profiler_map.size() > num_threads_available) {
@@ -96,27 +104,58 @@ uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler
 }
 
 void ProfilerStateManager::mark_trace_begin(ChipId device_id, uint32_t trace_id) {
+    std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
     TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceBegin(trace_id);
 }
 
 void ProfilerStateManager::mark_trace_end(ChipId device_id, uint32_t trace_id) {
+    std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
     TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceEnd(trace_id);
 }
 
 void ProfilerStateManager::mark_trace_replay(ChipId device_id, uint32_t trace_id) {
+    std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
     TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceReplay(trace_id);
 }
 
 void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id) {
+    std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
     TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
+}
+
+void ProfilerStateManager::start_debug_dump_thread(
+    std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
+    log_info(tt::LogMetal, "Starting profiler dump thread");
+    this->debug_dump_thread = std::thread([this,
+                                           active_devices = std::move(active_devices),
+                                           virtual_cores_map = std::move(virtual_cores_map)]() {
+        while (true) {
+            {
+                std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
+                for (auto* device : active_devices) {
+                    auto profiler_it = this->device_profiler_map.find(device->id());
+                    TT_ASSERT(profiler_it != this->device_profiler_map.end());
+                    DeviceProfiler& profiler = profiler_it->second;
+                    profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()));
+                }
+            }
+
+            constexpr auto interval = std::chrono::milliseconds(100);
+            std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
+            if (this->stop_debug_dump_thread_cv.wait_for(
+                    lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {
+                break;
+            }
+        }
+    });
 }
 
 }  // namespace tt::tt_metal

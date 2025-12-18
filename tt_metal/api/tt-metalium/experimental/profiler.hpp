@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -66,6 +67,15 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData();
  */
 // clang-format on
 std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData();
+
+// clang-format off
+/**
+ * Launch a thread that will read the profiler results at a fixed interval.
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ */
+// clang-format on
+void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
 
 }  // namespace tt::tt_metal::experimental
 

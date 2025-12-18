@@ -1057,7 +1057,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                     .enqueue_read_shard_from_core(
                         distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
                         &(profile_buffer[profile_buffer_idx]),
-                        profile_buffer_bank_size_bytes,
+                        getProfileBufferBankSizeBytes(),
                         true);
             } else {
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -1065,10 +1065,10 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         dram_core,
                         &(profile_buffer[profile_buffer_idx]),
                         profiler_addr,
-                        profile_buffer_bank_size_bytes,
+                        getProfileBufferBankSizeBytes(),
                         true);
             }
-            profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
+            profile_buffer_idx += getProfileBufferBankSizeBytes() / sizeof(uint32_t);
         }
     }
 }
@@ -1080,15 +1080,15 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
 
     const int num_dram_channels = device->num_dram_channels();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
-        std::vector<uint32_t> profile_buffer_bank_data(profile_buffer_bank_size_bytes / sizeof(uint32_t), 0);
+        std::vector<uint32_t> profile_buffer_bank_data(getProfileBufferBankSizeBytes() / sizeof(uint32_t), 0);
         MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data.data(), profile_buffer_bank_size_bytes, device_id, dram_channel, profiler_addr);
+            profile_buffer_bank_data.data(), getProfileBufferBankSizeBytes(), device_id, dram_channel, profiler_addr);
 
         std::copy(
             profile_buffer_bank_data.begin(),
             profile_buffer_bank_data.end(),
             profile_buffer.begin() + profile_buffer_idx);
-        profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
+        profile_buffer_idx += getProfileBufferBankSizeBytes() / sizeof(uint32_t);
     }
 }
 
@@ -1764,6 +1764,21 @@ void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = fal
 
 void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; }
 
+uint32_t DeviceProfiler::getProfileBufferBankSizeBytes() const { return this->profile_buffer_bank_size_bytes; }
+
+void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks) {
+    this->profile_buffer_bank_size_bytes = size;
+    this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
+}
+
+uint32_t DeviceProfiler::getProfileNumBuffersPerRisc() const { return this->profile_buffer_per_risc_size_bytes; }
+
+void DeviceProfiler::setProfileNumBuffersPerRisc(uint32_t num_buffers) {
+    TT_FATAL(num_buffers == 1 || num_buffers == 2, "Only 1 or 2 is supported for num_buffers");
+    this->profile_num_buffers_per_risc = num_buffers;
+    this->profile_buffer_per_risc_size_bytes = this->profile_buffer_bank_size_bytes / num_buffers;
+}
+
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[maybe_unused]]) :
@@ -2218,7 +2233,24 @@ void DeviceProfiler::destroyTracyContexts() {
 #endif
 }
 
+void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+#if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState() || !getDeviceDebugDumpEnabled()) {
+        return;
+    }
+
+    TT_ASSERT(device_id == device->id());
+
+    log_info(tt::LogMetal, "Reading control buffers for device {}", device->id());
+    readControlBuffers(device, virtual_cores);
+#endif
+}
+
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
+
+bool getDeviceDebugDumpEnabled() {
+    return MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+}
 
 }  // namespace tt::tt_metal
 

@@ -86,6 +86,12 @@ constexpr uint32_t myRiscID = 0;
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 #endif
 
+#if (PROFILE_KERNEL & PROFILER_OPT_DEBUG_DUMP)
+constexpr bool NON_DROPPING = true;
+#else
+constexpr bool NON_DROPPING = false;
+#endif
+
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
     return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
 }
@@ -408,6 +414,9 @@ __attribute__((noinline)) void quick_push() {
     }
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
+#if defined(DEVICE_DEBUG_DUMP)
+    // Host is polling for full DRAM buffers. We can stall until the buffer is free again.
+#else
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
         NocRegisterStateSave noc_state;
         profiler_noc_async_write_posted(
@@ -425,6 +434,7 @@ __attribute__((noinline)) void quick_push() {
 
     mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+#endif  // defined(DEVICE_DEBUG_DUMP)
 
 #endif
 }

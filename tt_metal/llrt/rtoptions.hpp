@@ -178,6 +178,7 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool experimental_device_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -508,6 +509,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }

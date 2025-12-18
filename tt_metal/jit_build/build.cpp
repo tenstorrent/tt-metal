@@ -193,6 +193,13 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        // force profiler on if device debug dump events are being collected
+        if (not tt::tt_metal::getDeviceProfilerState()) {
+            this->defines_ += "-DPROFILE_KERNEL=1 ";
+        }
+        this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
+    }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(tt::tt_metal::getDeviceProfilerState());

@@ -72,9 +72,11 @@ void RunFillUpAllBuffers(
 
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
-        for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
-            // Enqueue the same mesh workload multiple times to generate profiler traffic
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        for (int it = 0; it < 4; ++it) {
+            for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
+                // Enqueue the same mesh workload multiple times to generate profiler traffic
+                distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+            }
         }
     } else {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
@@ -88,8 +90,9 @@ int main() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+        // int device_id = 0;
+        std::shared_ptr<distributed::MeshDevice> mesh_device =
+            distributed::MeshDevice::create(distributed::MeshDeviceConfig{tt::tt_fabric::MeshShape(1, 2)});
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
