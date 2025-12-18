@@ -96,7 +96,7 @@ jobs:
 
 
   galaxy-bh-nightly-tests:
-    if: ${{ inputs.blackhole == true }}
+    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
