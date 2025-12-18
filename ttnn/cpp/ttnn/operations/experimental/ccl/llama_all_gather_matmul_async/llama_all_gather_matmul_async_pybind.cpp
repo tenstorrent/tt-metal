@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_pybind.hpp"
+#include "llama_all_gather_matmul_async_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -50,9 +50,9 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                     mesh_device,
                     topology,
                     multi_device_global_semaphore,
-                    ag_memory_config,     // = std::nullopt
-                    mm_memory_config,     // = std::nullopt
-                    num_preferred_links,  // = std::nullopt
+                    ag_memory_config,     // = std::nullopt,
+                    mm_memory_config,     // = std::nullopt,
+                    num_preferred_links,  // = std::nullopt,
                     subdevice_id,         // = std::nullopt
                     // MM optional params
                     program_config,         // = std::nullopt
