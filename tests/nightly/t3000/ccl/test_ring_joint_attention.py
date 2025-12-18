@@ -79,6 +79,7 @@ def run_ring_joint_sdpa(
     all_gather_topology,
     skip_check,
     pcc_threshold,
+    max_mse=None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -294,7 +295,10 @@ def run_ring_joint_sdpa(
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
             print("spatial")
             print(f"{out_pcc}")
-            print(f"mse: {((gt_out - tt_out) ** 2).mean()}")
+            mse = ((gt_out - tt_out) ** 2).mean()
+            print(f"mse: {mse}")
+            if max_mse is not None and mse > max_mse:
+                passing = False
             passing = passing and out_pass
 
             if joint_seq_len > 0:
@@ -303,7 +307,10 @@ def run_ring_joint_sdpa(
                     joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
                     out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
                     print(f"{out_pcc}")
-                    print(f"mse: {((gt_joint_out - joint_replica_out) ** 2).mean()}")
+                    mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
+                    print(f"mse: {mse}")
+                    if max_mse is not None and mse > max_mse:
+                        passing = False
                     passing = passing and out_pass
 
             assert passing
