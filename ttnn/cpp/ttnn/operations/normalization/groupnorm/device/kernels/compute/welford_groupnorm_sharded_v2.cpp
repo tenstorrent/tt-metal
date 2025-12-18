@@ -229,8 +229,8 @@ void MAIN {
             add_tiles(cb_ex_global, cb_eps, 1 + (g << 1), 0, dst0);
 
             // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<false>();
-            rsqrt_tile<false>(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);

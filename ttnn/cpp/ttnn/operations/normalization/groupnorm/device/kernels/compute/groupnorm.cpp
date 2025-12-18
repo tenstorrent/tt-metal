@@ -120,8 +120,7 @@ void MAIN {
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
-        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
@@ -292,7 +291,7 @@ void MAIN {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                            mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                        mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
 #else
                             mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
 #endif
@@ -527,8 +526,8 @@ void MAIN {
             add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<false>();
-            rsqrt_tile<false>(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);
