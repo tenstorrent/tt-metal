@@ -510,3 +510,153 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    [
+        [
+            benchmark_model_input_shapes["wan_14b_720p"],
+            parallel_config_map["wh_glx"]["wan_14b_720p"],
+            (256, 256),
+            (0.9994, 7.5e-5),
+        ],
+        [
+            benchmark_model_input_shapes["wan_14b_480p"],
+            parallel_config_map["wh_glx"]["wan_14b_480p"],
+            (128, 512),
+            (0.9996, 5e-5),
+        ],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["wh_glx"]["mochi"], (128, 512), (0.9995, 6e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["wh_glx"]["flux"], (128, 256), (0.9997, 2.2e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["wh_glx"]["sd35"], (256, 512), (0.9997, 3.5e-5)],
+    ],
+    ids=[
+        "wan_14b_720p",
+        "wan_14b_480p",
+        "mochi",
+        "flux",
+        "sd35",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_wh_glx(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    [
+        [
+            benchmark_model_input_shapes["wan_14b_720p"],
+            parallel_config_map["bh_glx"]["wan_14b_720p"],
+            (128, 512),
+            (0.9994, 7.5e-5),
+        ],
+        [
+            benchmark_model_input_shapes["wan_14b_480p"],
+            parallel_config_map["bh_glx"]["wan_14b_480p"],
+            (256, 256),
+            (0.9996, 5e-5),
+        ],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_glx"]["mochi"], (128, 512), (0.9995, 6e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["bh_glx"]["flux"], (64, 512), (0.9997, 2.2e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_glx"]["sd35"], (128, 512), (0.9997, 3.5e-5)],
+    ],
+    ids=[
+        "wan_14b_720p",
+        "wan_14b_480p",
+        "mochi",
+        "flux",
+        "sd35",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_bh_glx(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold, max_mse = expected_correctness
+    q_chunk_size, k_chunk_size = chunk_sizes
+
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        input_shape,
+        parallel_config,
+        q_chunk_size,
+        k_chunk_size,
+        n_iters,
+        trace_enabled,
+        num_links,
+        all_gather_topology,
+        skip_check,
+        dtype,
+        pcc_threshold=pcc_threshold,
+        max_mse=max_mse,
+    )
