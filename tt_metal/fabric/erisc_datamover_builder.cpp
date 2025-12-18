@@ -596,9 +596,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     // Initialize per-RISC channel servicing flags
     const auto& sender_counts =
-        actual_sender_channels_per_vc.value_or(config.get_channel_spec().sender_channels_per_vc);
+        actual_sender_channels_per_vc.value_or(config.get_channel_spec().get_sender_channels_per_vc());
     const auto& receiver_counts =
-        actual_receiver_channels_per_vc.value_or(config.get_channel_spec().receiver_channels_per_vc);
+        actual_receiver_channels_per_vc.value_or(config.get_channel_spec().get_receiver_channels_per_vc());
 
     // Populate sender channel connection info addresses from L1 layout
     for (size_t ch = 0; ch < config.get_channel_spec().get_total_sender_channels(); ++ch) {
@@ -873,7 +873,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
     // VC1 runtime args are passed when VC1 is configured (both inter-mesh and intra-mesh have VC1)
-    bool needs_vc1 = config.get_channel_spec().receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0;
 
     // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
@@ -1063,7 +1063,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     // Pack VC1 runtime args if VC1 is configured
     // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
-    bool needs_vc1 = config.get_channel_spec().receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
     }
@@ -1355,7 +1355,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     // Validate upstream VC1 usage
     if (upstream_vc_idx == 1) {
         TT_FATAL(
-            config.get_channel_spec().receiver_channels_per_vc[1] > 0,
+            config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0,
             "VC1 receiver channels not configured on upstream router.");
     }
 

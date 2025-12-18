@@ -95,10 +95,10 @@ TEST_F(RouterChannelMappingTest, MeshRouter_1D_Linear_VC0Only) {
         RouterVariant::MESH);
 
     // 1D routers only have VC0
-    EXPECT_EQ(spec.num_vcs, 1);
+    EXPECT_EQ(spec.get_num_vcs(), 1);
 
     // VC0 has 2 sender channels in 1D
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 2);
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(0), 2);
 
     // VC1 should have 0 channels in 1D
     EXPECT_FALSE(spec.has_vc(1));
@@ -122,10 +122,10 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Mesh_VC0Only) {
         RouterVariant::MESH);
 
     // 2D mesh routers currently only expose VC0 (VC1 not fully enabled yet)
-    EXPECT_EQ(spec.num_vcs, 1);
+    EXPECT_EQ(spec.get_num_vcs(), 1);
 
     // VC0 has 4 sender channels in 2D
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 4);
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(0), 4);
 
     // Verify all 4 VC0 channels map correctly
     for (uint32_t i = 0; i < 4; ++i) {
@@ -138,8 +138,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Mesh_VC0Only) {
 TEST_F(MeshChannelSpecTest, Torus_OnlyVC0) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Torus, nullptr);
 
-    EXPECT_EQ(spec.num_vcs, 1);
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 4);
+    EXPECT_EQ(spec.get_num_vcs(), 1);
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(0), 4);
     EXPECT_FALSE(spec.has_vc(1));
 }
 
@@ -150,7 +150,7 @@ TEST_F(MeshChannelSpecTest, ZRouter_Has2VCs) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
 
     // Z routers have both VC0 and VC1
-    EXPECT_EQ(spec.num_vcs, 2);
+    EXPECT_EQ(spec.get_num_vcs(), 2);
     EXPECT_TRUE(spec.has_vc(0));
     EXPECT_TRUE(spec.has_vc(1));
 }
@@ -161,7 +161,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC0_Has4SenderChannels) {
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER);
 
     // VC0 should have 4 sender channels (same as 2D mesh)
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 4);
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(0), 4);
 
     // Verify VC0 channels map to erisc 0-3
     for (uint32_t i = 0; i < 4; ++i) {
@@ -176,7 +176,7 @@ TEST_F(MeshChannelSpecTest, ZRouter_VC1_Has4Senders) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
 
     // VC1 should have 4 sender channels (Z→mesh, one per direction)
-    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(spec.get_z_router_sender_channel_count_for_vc(1), 4);
 }
 
 TEST_F(RouterChannelMappingTest, ZRouter_VC1_SenderChannels_MapToErisc4Through7) {
@@ -197,9 +197,9 @@ TEST_F(RouterChannelMappingTest, ZRouterNoTensix_VC0_VC1_ReceiverChannel_MapsToE
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER);
 
-    EXPECT_EQ(spec.num_vcs, 2);
-    EXPECT_EQ(spec.sender_channels_z_router_per_vc[0], 4);
-    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(spec.get_num_vcs(), 2);
+    EXPECT_EQ(spec.get_z_router_sender_channel_count_for_vc(0), 4);
+    EXPECT_EQ(spec.get_z_router_sender_channel_count_for_vc(1), 4);
 
     // VC0 receiver channel should still map to erisc receiver 0
     for (auto vc = 0; vc < 2; ++vc) {
@@ -238,7 +238,7 @@ TEST_F(MeshChannelSpecTest, 2D_WithoutIntermesh_OnlyVC0) {
     // Without intermesh config, VC1 should not be created
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, nullptr);
 
-    EXPECT_EQ(spec.num_vcs, 1);    // Only VC0
+    EXPECT_EQ(spec.get_num_vcs(), 1);  // Only VC0
     EXPECT_FALSE(spec.has_vc(1));  // VC1 not created
 }
 
@@ -248,8 +248,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshEdgeOnly) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH);
 
-    EXPECT_EQ(spec.num_vcs, 2);                    // VC0 + VC1
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 3);  // VC1 created
+    EXPECT_EQ(spec.get_num_vcs(), 2);              // VC0 + VC1
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(1), 3);  // VC1 created
 
     // Verify VC1 mappings exist
     auto vc1_ch0 = mapping.get_sender_mapping(1, 0);
@@ -262,8 +262,8 @@ TEST_F(MeshChannelSpecTest, 2D_WithIntermeshFullMesh_HasVC1) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
 
-    EXPECT_EQ(spec.num_vcs, 2);                    // VC0 + VC1
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 3);  // VC1 created
+    EXPECT_EQ(spec.get_num_vcs(), 2);              // VC0 + VC1
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(1), 3);  // VC1 created
 }
 
 TEST_F(MeshChannelSpecTest, 2D_WithIntermeshPassThrough_HasVC1) {
@@ -271,8 +271,8 @@ TEST_F(MeshChannelSpecTest, 2D_WithIntermeshPassThrough_HasVC1) {
     auto intermesh_config = IntermeshVCConfig::full_mesh_with_pass_through();
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
 
-    EXPECT_EQ(spec.num_vcs, 2);                    // VC0 + VC1
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 3);  // VC1 created
+    EXPECT_EQ(spec.get_num_vcs(), 2);              // VC0 + VC1
+    EXPECT_EQ(spec.get_sender_channel_count_for_vc(1), 3);  // VC1 created
     // All modes that require VC1 create the same mappings
 }
 
@@ -332,8 +332,8 @@ TEST_F(RouterChannelMappingTest, IntermeshVCConfig_AllModesCreateVC1WhenRequired
         auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &config);
         FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH);
 
-        EXPECT_EQ(spec.num_vcs, 2) << "Mode " << static_cast<int>(config.mode) << " should enable VC1";
-        EXPECT_EQ(spec.sender_channels_per_vc[1], 3)
+        EXPECT_EQ(spec.get_num_vcs(), 2) << "Mode " << static_cast<int>(config.mode) << " should enable VC1";
+        EXPECT_EQ(spec.get_sender_channel_count_for_vc(1), 3)
             << "Mode " << static_cast<int>(config.mode) << " should have 3 VC1 channels";
     }
 }
@@ -427,7 +427,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     // Verify complete channel layout for Z router
 
     // VC0: 4 sender channels → erisc 0-3
-    EXPECT_EQ(spec.sender_channels_z_router_per_vc[0], 4);
+    EXPECT_EQ(spec.get_z_router_sender_channel_count_for_vc(0), 4);
     for (uint32_t i = 0; i < 4; ++i) {
         auto s = mapping.get_sender_mapping(0, i);
         EXPECT_EQ(s.builder_type, BuilderType::ERISC);
@@ -440,7 +440,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     EXPECT_EQ(vc0_r.internal_receiver_channel_id, 0);
 
     // VC1: 4 sender channels → erisc 4-7
-    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(spec.get_z_router_sender_channel_count_for_vc(1), 4);
     for (uint32_t i = 0; i < 4; ++i) {
         auto s = mapping.get_sender_mapping(1, i);
         EXPECT_EQ(s.builder_type, BuilderType::ERISC);
@@ -453,7 +453,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     EXPECT_EQ(vc1_r.internal_receiver_channel_id, 1);
 
     // Total: 8 sender channels, 2 receiver channels
-    EXPECT_EQ(spec.num_vcs, 2);
+    EXPECT_EQ(spec.get_num_vcs(), 2);
 }
 
 // ============ get_all_sender_mappings Tests ============

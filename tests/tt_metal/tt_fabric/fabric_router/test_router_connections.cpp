@@ -124,8 +124,8 @@ TEST_F(RouterConnectionsTest, MeshToMesh_VC0_Connection) {
         RouterVariant::MESH);
 
     // Verify both routers have VC0 only
-    EXPECT_EQ(spec.num_vcs, 1);
-    EXPECT_EQ(spec.num_vcs, 1);
+    EXPECT_EQ(spec.get_num_vcs(), 1);
+    EXPECT_EQ(spec.get_num_vcs(), 1);
 
     // Simulate connection: router0 (EAST) → router1 (WEST), VC0 channel 1
     record_test_connection(
@@ -231,8 +231,8 @@ TEST_F(RouterConnectionsTest, MeshToZ_VC0_Connection) {
     FabricRouterChannelMapping z_mapping(Topology::Mesh, z_spec, false, RouterVariant::Z_ROUTER);
 
     // Verify Z router has 2 VCs
-    EXPECT_EQ(z_spec.num_vcs, 2);
-    EXPECT_EQ(z_spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(z_spec.get_num_vcs(), 2);
+    EXPECT_EQ(z_spec.get_z_router_sender_channel_count_for_vc(1), 4);
 
     // Simulate connection: mesh (VC0, sender ch 2) → Z (VC1, receiver ch 0)
     // Mesh router uses VC0 sender channel 2 to send to Z router
@@ -323,7 +323,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
     FabricRouterChannelMapping mesh_mapping(Topology::Mesh, mesh_spec, false, RouterVariant::MESH);
 
     // Verify Z router VC1 has 4 sender channels
-    EXPECT_EQ(z_spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(z_spec.get_z_router_sender_channel_count_for_vc(1), 4);
 
     // Verify Z router VC1 sender channels map to erisc 4-7
     for (uint32_t i = 0; i < 4; ++i) {
@@ -546,8 +546,8 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
     FabricRouterChannelMapping z_mapping(Topology::Mesh, z_spec, false, RouterVariant::Z_ROUTER);
 
     // Verify Z router has correct VC1 layout
-    EXPECT_EQ(z_spec.num_vcs, 2);
-    EXPECT_EQ(z_spec.sender_channels_z_router_per_vc[1], 4);
+    EXPECT_EQ(z_spec.get_num_vcs(), 2);
+    EXPECT_EQ(z_spec.get_z_router_sender_channel_count_for_vc(1), 4);
 
     // Verify VC1 receiver channel 0 maps to erisc receiver 1
     auto vc1_receiver = z_mapping.get_receiver_mapping(1, 0);
@@ -565,7 +565,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
         FabricRouterChannelMapping mesh_mapping(Topology::Mesh, mesh_spec, false, RouterVariant::MESH);
 
         // Verify mesh router VC0 sender channel 2 exists
-        EXPECT_GE(mesh_spec.sender_channels_per_vc[0], 3);
+        EXPECT_GE(mesh_spec.get_sender_channel_count_for_vc(0), 3);
 
         // Record connection: mesh VC0 ch2 → Z VC1 ch0
         record_test_connection(
@@ -1053,7 +1053,7 @@ TEST_F(RouterConnectionsTest, Phase2_ChannelMapping_And_ConnectionMapping_Consis
     auto z_conn_mapping = RouterConnectionMapping::for_z_router();
 
     // Verify VC1 sender channel count matches target count
-    uint32_t channel_map_senders = z_spec.sender_channels_z_router_per_vc[1];
+    uint32_t channel_map_senders = z_spec.get_z_router_sender_channel_count_for_vc(1);
     uint32_t conn_map_targets = z_conn_mapping.get_total_sender_count();
 
     EXPECT_EQ(channel_map_senders, 4);

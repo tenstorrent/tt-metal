@@ -72,9 +72,9 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     available_channel_buffering_space(available_channel_buffering_space) {
     // Extract channel counts from spec (only needed during construction)
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        if (vc < spec.num_vcs) {
-            num_used_sender_channels_per_vc[vc] = spec.sender_channels_per_vc[vc];
-            num_used_receiver_channels_per_vc[vc] = spec.receiver_channels_per_vc[vc];
+        if (vc < spec.get_num_vcs()) {
+            num_used_sender_channels_per_vc[vc] = spec.get_sender_channel_count_for_vc(vc);
+            num_used_receiver_channels_per_vc[vc] = spec.get_receiver_channel_count_for_vc(vc);
         }
     }
 

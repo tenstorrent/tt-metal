@@ -27,17 +27,6 @@ struct IntermeshVCConfig;
  * For meshes with Z routers, separate arrays track the Z router channel structure.
  */
 struct MeshChannelSpec {
-    size_t num_vcs = 0;
-
-    // Standard mesh router channel counts
-    std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> downstream_edms_per_vc = {};  // Forwarding paths per VC
-
-    // Z router channel counts (for meshes with vertical inter-device connectivity)
-    std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels_z_router_per_vc = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels_z_router_per_vc = {};
-
     // ═══════════════════════════════════════════════════════════
     // Factory Methods
     // ═══════════════════════════════════════════════════════════
@@ -68,14 +57,45 @@ struct MeshChannelSpec {
         return sender_channels_per_vc[vc];
     }
 
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& get_sender_channels_per_vc() const {
+        return sender_channels_per_vc;
+    }
+
     size_t get_receiver_channel_count_for_vc(uint32_t vc) const {
         TT_ASSERT(vc < num_vcs, "VC {} out of bounds (max {})", vc, num_vcs);
         return receiver_channels_per_vc[vc];
     }
 
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& get_receiver_channels_per_vc() const {
+        return receiver_channels_per_vc;
+    }
+
     size_t get_downstream_edm_count_for_vc(uint32_t vc) const {
         TT_ASSERT(vc < num_vcs, "VC {} out of bounds (max {})", vc, num_vcs);
         return downstream_edms_per_vc[vc];
+    }
+
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& get_downstream_edms_per_vc() const {
+        return downstream_edms_per_vc;
+    }
+
+    // Z router accessors
+    size_t get_z_router_sender_channel_count_for_vc(uint32_t vc) const {
+        TT_ASSERT(vc < num_vcs, "VC {} out of bounds (max {})", vc, num_vcs);
+        return z_router_sender_channels_per_vc[vc];
+    }
+
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& get_z_router_sender_channels_per_vc() const {
+        return z_router_sender_channels_per_vc;
+    }
+
+    size_t get_z_router_receiver_channel_count_for_vc(uint32_t vc) const {
+        TT_ASSERT(vc < num_vcs, "VC {} out of bounds (max {})", vc, num_vcs);
+        return z_router_receiver_channels_per_vc[vc];
+    }
+
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& get_z_router_receiver_channels_per_vc() const {
+        return z_router_receiver_channels_per_vc;
     }
 
     size_t get_total_sender_channels() const {
@@ -125,6 +145,14 @@ struct MeshChannelSpec {
             get_total_downstream_edms(),
             builder_config::max_downstream_edms);
     }
+
+private:
+    size_t num_vcs = 0;
+    std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> downstream_edms_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> z_router_sender_channels_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> z_router_receiver_channels_per_vc = {};
 };
 
 }  // namespace tt::tt_fabric

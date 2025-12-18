@@ -34,8 +34,8 @@ MeshChannelSpec MeshChannelSpec::create_for_compute_mesh(Topology topology, cons
 
     // Z router VC0 configuration
     if (is_2d) {
-        spec.sender_channels_z_router_per_vc[0] = builder_config::num_sender_channels_z_router_vc0;
-        spec.receiver_channels_z_router_per_vc[0] = 1;
+        spec.z_router_sender_channels_per_vc[0] = builder_config::num_sender_channels_z_router_vc0;
+        spec.z_router_receiver_channels_per_vc[0] = 1;
     }
 
     // VC1: only for 2D topologies with intermesh
@@ -53,8 +53,8 @@ MeshChannelSpec MeshChannelSpec::create_for_compute_mesh(Topology topology, cons
         spec.receiver_channels_per_vc[1] = 1;
 
         // Z router VC1 configuration
-        spec.sender_channels_z_router_per_vc[1] = builder_config::num_sender_channels_z_router_vc1;
-        spec.receiver_channels_z_router_per_vc[1] = 1;
+        spec.z_router_sender_channels_per_vc[1] = builder_config::num_sender_channels_z_router_vc1;
+        spec.z_router_receiver_channels_per_vc[1] = 1;
     }
 
     spec.validate();

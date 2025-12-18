@@ -135,9 +135,9 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_mesh_router(topology, routing_dir, has_z);
 
     // Verify consistency: receiver channel 0 should have targets matching sender channel count
-    uint32_t num_vcs = spec.num_vcs;
+    uint32_t num_vcs = spec.get_num_vcs();
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_senders = spec.sender_channels_per_vc[vc];
+        uint32_t num_senders = spec.get_sender_channel_count_for_vc(vc);
 
         // For mesh router VC0, receiver channel 0 should have targets
         if (num_senders > 0) {
@@ -166,8 +166,8 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_z_router();
 
     // Verify VC1 consistency
-    EXPECT_EQ(spec.num_vcs, 2);
-    uint32_t vc1_senders = spec.sender_channels_z_router_per_vc[1];
+    EXPECT_EQ(spec.get_num_vcs(), 2);
+    uint32_t vc1_senders = spec.get_z_router_sender_channel_count_for_vc(1);
     EXPECT_EQ(vc1_senders, 4);
 
     // VC1 receiver channel 0 should have 4 targets
