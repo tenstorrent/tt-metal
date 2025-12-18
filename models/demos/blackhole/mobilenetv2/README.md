@@ -21,7 +21,7 @@ pytest models/demos/blackhole/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mo
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=9):
-- End-2-end perf is 2800 FPS (**On P150**)
+- End-2-end perf is 4100 FPS (**On P150**)
 
 ```
 pytest models/demos/blackhole/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py::test_mobilenetv2_e2e
