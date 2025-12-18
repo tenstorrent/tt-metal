@@ -5,6 +5,7 @@
 import os
 
 import pytest
+import json
 
 from models.demos.gpt_oss.tt.model_config import ModelArgs
 
@@ -16,3 +17,8 @@ def state_dict():
         return None
     else:
         return ModelArgs.load_state_dict(model_path, dummy_weights=False)
+
+
+@pytest.fixture
+def test_thresholds(request):
+    return json.load(open("models/demos/gpt_oss/unit_test_thresholds.json", "r"))

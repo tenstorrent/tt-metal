@@ -25,6 +25,7 @@ class DecoderLayer:
         mesh_config=None,
         create_kv_cache=True,
         transformation_mats=None,
+        max_seq_len=1024,
         max_local_batch_size=1,
     ):
         self.input_layernorm = RMSNorm(
@@ -49,6 +50,7 @@ class DecoderLayer:
             dtype=dtype,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
             mesh_config=mesh_config,
+            use_throughput_experts=max_local_batch_size > 1 # for batch size = 1, use EP=4 experts
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]
@@ -59,9 +61,8 @@ class DecoderLayer:
             num_heads=hf_config.num_attention_heads,
             num_kv_heads=hf_config.num_key_value_heads,
             head_dim=hf_config.head_dim,
-            # max_seq_len=hf_config.max_position_embeddings,
-            max_seq_len=1024,
             sliding_window=hf_config.sliding_window,
+            max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,
         )
 

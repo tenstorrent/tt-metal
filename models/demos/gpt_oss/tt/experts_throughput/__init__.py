@@ -193,7 +193,7 @@ class ThroughputExperts:
             hidden_states: Input tensor [batch/seq, 1, 1, hidden_size]
             topk_expert_indices: Top-k expert indices per token
                 [batch/seq, 1, 1, num_experts_per_tok]
-            topk_expert_weights: Routing weights for top-k experts
+            topk_expert_weights: Dense routing scores for top-k experts
                 [batch/seq, 1, 1, num_experts_per_tok]
             chunk_size: Chunk size for prefill (default: 2048)
 

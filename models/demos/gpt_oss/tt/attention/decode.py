@@ -152,12 +152,12 @@ def decode_forward(
 
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    # tt_out = ttnn.reshape(
-    #     tt_out,
-    #     (batch_size, seq_len, hidden_size),
-    #     (batch_size, 32, hidden_size),
-    # )
+    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    tt_out = ttnn.reshape(
+        tt_out,
+        (1, 1, batch_size, hidden_size),
+        (1, 1, 32, hidden_size),
+    )
     # tt_out = ttnn.unsqueeze(tt_out, 0)
 
     # Tensor parallel allreduce

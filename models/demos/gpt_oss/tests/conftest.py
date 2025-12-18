@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from loguru import logger
+from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+from tests.scripts.common import get_updated_device_params
+from conftest import set_fabric, reset_fabric
 
 
 def pytest_addoption(parser):
