@@ -3034,7 +3034,7 @@ void ControlPlane::serialize_eth_coordinates_to_file(const std::filesystem::path
     // Ensure output directory exists
     std::filesystem::create_directories(output_dir);
 
-    // Build YAML structure with chips mapping chip_id to N-dimensional coordinates
+    // Build YAML structure with chips mapping chip_id to [x, y, rack, shelf]
     YAML::Node chips_node;
     chips_node = YAML::Node(YAML::NodeType::Map);
 
@@ -3046,11 +3046,17 @@ void ControlPlane::serialize_eth_coordinates_to_file(const std::filesystem::path
         // Get mesh coordinates from the mesh graph
         MeshCoordinate mesh_coord = mesh_graph_->chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 
-        // Create array with N-dimensional coordinates
+        // Create array [x, y, rack, shelf] format
+        // x, y come from mesh coordinates, rack and shelf default to 0
         YAML::Node coord_array = YAML::Node(YAML::NodeType::Sequence);
-        for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
-            coord_array.push_back(mesh_coord[dim]);
-        }
+        // x coordinate (first dimension of mesh)
+        coord_array.push_back(mesh_coord.dims() > 0 ? mesh_coord[0] : 0);
+        // y coordinate (second dimension of mesh, or 0 if 1D)
+        coord_array.push_back(mesh_coord.dims() > 1 ? mesh_coord[1] : 0);
+        // rack (always 0)
+        coord_array.push_back(0);
+        // shelf (always 0)
+        coord_array.push_back(0);
         chips_node[logical_chip_id] = coord_array;
     }
 

@@ -1108,27 +1108,31 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
 
         const auto& coord_array = chips_node[chip_id];
         EXPECT_TRUE(coord_array.IsSequence()) << "Chip " << chip_id << " should have a sequence value";
-        EXPECT_EQ(coord_array.size(), 2) << "Chip " << chip_id << " should have 2 coordinates [row, col] for 2D mesh";
+        EXPECT_EQ(coord_array.size(), 4) << "Chip " << chip_id << " should have 4 coordinates [x, y, rack, shelf]";
 
         // Compute expected coordinates from chip_id
-        uint32_t expected_row = chip_id / mesh_shape[1];
-        uint32_t expected_col = chip_id % mesh_shape[1];
+        uint32_t expected_x = chip_id / mesh_shape[1];
+        uint32_t expected_y = chip_id % mesh_shape[1];
 
-        // Verify coordinates match
-        uint32_t actual_row = coord_array[0].as<uint32_t>();
-        uint32_t actual_col = coord_array[1].as<uint32_t>();
+        // Verify coordinates match [x, y, rack, shelf] format
+        uint32_t actual_x = coord_array[0].as<uint32_t>();
+        uint32_t actual_y = coord_array[1].as<uint32_t>();
+        uint32_t actual_rack = coord_array[2].as<uint32_t>();
+        uint32_t actual_shelf = coord_array[3].as<uint32_t>();
 
-        EXPECT_EQ(actual_row, expected_row)
-            << "Chip " << chip_id << " should have row coordinate " << expected_row << ", got " << actual_row;
-        EXPECT_EQ(actual_col, expected_col)
-            << "Chip " << chip_id << " should have col coordinate " << expected_col << ", got " << actual_col;
+        EXPECT_EQ(actual_x, expected_x) << "Chip " << chip_id << " should have x coordinate " << expected_x << ", got "
+                                        << actual_x;
+        EXPECT_EQ(actual_y, expected_y) << "Chip " << chip_id << " should have y coordinate " << expected_y << ", got "
+                                        << actual_y;
+        EXPECT_EQ(actual_rack, 0) << "Chip " << chip_id << " should have rack coordinate 0";
+        EXPECT_EQ(actual_shelf, 0) << "Chip " << chip_id << " should have shelf coordinate 0";
 
         // Also verify using mesh_graph's chip_to_coordinate for consistency
         MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(mesh_id, chip_id);
-        EXPECT_EQ(actual_row, expected_coord[0])
-            << "Chip " << chip_id << " row coordinate should match mesh_graph.chip_to_coordinate";
-        EXPECT_EQ(actual_col, expected_coord[1])
-            << "Chip " << chip_id << " col coordinate should match mesh_graph.chip_to_coordinate";
+        EXPECT_EQ(actual_x, expected_coord[0])
+            << "Chip " << chip_id << " x coordinate should match mesh_graph.chip_to_coordinate";
+        EXPECT_EQ(actual_y, expected_coord[1])
+            << "Chip " << chip_id << " y coordinate should match mesh_graph.chip_to_coordinate";
     }
 
     // Clean up
