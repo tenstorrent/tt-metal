@@ -68,27 +68,31 @@ protected:
     };
 
     MockRouter create_mock_mesh_router(RoutingDirection dir, uint32_t router_id, bool has_z) {
-        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, nullptr);
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
         return MockRouter{
             .node_id = FabricNodeId(MeshId{0}, router_id),
             .direction = dir,
             .spec = spec,
             .channel_mapping = FabricRouterChannelMapping(
                 Topology::Mesh,
-                spec,
                 false,  // No tensix
-                RouterVariant::MESH),
+                RouterVariant::MESH,
+                nullptr),  // No intermesh config for standard mesh routers
             .connection_mapping = RouterConnectionMapping::for_mesh_router(Topology::Mesh, dir, has_z)};
     }
 
     MockRouter create_mock_z_router(uint32_t router_id) {
         static auto intermesh_config = IntermeshVCConfig::full_mesh();
-        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
         return MockRouter{
             .node_id = FabricNodeId(MeshId{0}, router_id),
             .direction = RoutingDirection::Z,
             .spec = spec,
-            .channel_mapping = FabricRouterChannelMapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER),
+            .channel_mapping = FabricRouterChannelMapping(
+                Topology::Mesh,
+                false,  // No tensix
+                RouterVariant::Z_ROUTER,
+                &intermesh_config),  // Z routers require intermesh config
             .connection_mapping = RouterConnectionMapping::for_z_router()};
     }
 
