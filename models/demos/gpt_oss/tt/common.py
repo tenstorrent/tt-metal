@@ -59,7 +59,7 @@ def create_tt_model(
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+        tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
         paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
         create_kv_cache=create_kv_cache,
