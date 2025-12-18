@@ -54,6 +54,8 @@ constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;         // broadcasted rst
 constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_13;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr auto kScaledDyGammaXnormSumCbIndex =
     tt::CBIndex::c_14;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
+constexpr auto kAccumulateCbIndex = tt::CBIndex::c_26;  // For accumulating partial sums between blocks
+constexpr auto kTempTileCbIndex = tt::CBIndex::c_27;    // For temporary tile storage
 
 // CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
@@ -63,6 +65,8 @@ constexpr uint32_t kNumRstdBcastTiles = 1U;
 constexpr uint32_t kNumMeanBcastTiles = 1U;
 constexpr uint32_t kNumDyGammaSumTiles = 1U;
 constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
+constexpr uint32_t kNumAccumulateTiles = 1U;
+constexpr uint32_t kNumTempTileTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
@@ -334,6 +338,15 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         precise_data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
+    [[maybe_unused]] auto cb_accumulate = create_circular_buffer(
+        program,
+        all_cores,
+        kAccumulateCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumAccumulateTiles);
+    [[maybe_unused]] auto cb_temp_tile = create_circular_buffer(
+        program, all_cores, kTempTileCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumTempTileTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

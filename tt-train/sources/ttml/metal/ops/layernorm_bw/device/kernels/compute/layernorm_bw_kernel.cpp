@@ -43,6 +43,8 @@ constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;     // broadcasted rst
 constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_13;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr uint32_t cb_scaled_dy_gamma_xnorm_sum_idx =
     tt::CBIndex::c_14;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
+constexpr uint32_t cb_accumulate_idx = tt::CBIndex::c_26;  // For accumulating partial sums between blocks
+constexpr uint32_t cb_temp_tile_idx = tt::CBIndex::c_27;   // For temporary tile storage
 
 constexpr uint32_t onetile = 1;
 
@@ -91,48 +93,74 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
 //                             Wt] [1/N * sum_i(dy[1, :] * gamma[:]), 1/N * sum_i(dy[1, :] * gamma[:]), ...], // shape:
 //                             [1, Wt]
 //                             ...]
-// cb_dL_out_idx, cb_gamma_idx, cb_x_hat_idx blocks are read
-// acquire in the beginning, release in the end
+// cb_dL_out_idx, cb_gamma_idx blocks are read
+// Uses same accumulation pattern as compute_dy_gamma_xnorm_sum
+// Key insight: UNPACKER (copy_tile from CB) must be involved before mul_binary_tile
+// Solution: Pre-fill a "ones" tile in temp CB, then use copy_tile from that CB
 inline void compute_dy_gamma_sum(const uint32_t row) {
-    const uint32_t sum_register = 0U;
-    const uint32_t working_register = 1U;
-    const uint32_t temp_register = 2U;
+    constexpr uint32_t sum_register = 0U;
+    constexpr uint32_t working_register = 1U;
+    constexpr uint32_t temp_register = 2U;
 
+    // First, create a ones tile in cb_temp_tile_idx
+    tile_regs_acquire();
+    fill_tile_init();
+    fill_tile(temp_register, 1.0f);
+    tile_regs_commit();
+
+    // Pack the ones tile to temp CB
+    tile_regs_wait();
+    cb_reserve_back(cb_temp_tile_idx, onetile);
+    pack_reconfig_data_format(cb_temp_tile_idx);
+    pack_tile(temp_register, cb_temp_tile_idx);
+    cb_push_back(cb_temp_tile_idx, onetile);
+    tile_regs_release();
+
+    // Now do the main accumulation loop
     tile_regs_acquire();
 
-    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
+    reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
+
+    // Wait for the ones tile we just created
+    cb_wait_front(cb_temp_tile_idx, onetile);
 
     // Accumulate dy * gamma into sum_register
     for (uint32_t col = 0; col < Wt; ++col) {
-        // Mask the tile if needed
+        const uint32_t target_register = (col == 0) ? sum_register : working_register;
+
+        // Compute dy * gamma
+        zero_dst_reg(target_register);
+        mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+        mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
+
+        // Load ones from CB using copy_tile - this is the KEY: involves UNPACKER
+        copy_tile_init(cb_temp_tile_idx);
+        copy_tile(cb_temp_tile_idx, 0, temp_register);
+
+        // Transition hardware mode by doing identity multiply
+        mul_binary_tile_init();
+        mul_binary_tile(target_register, temp_register, target_register);
+
+        // Mask the last tile if needed
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
-                const uint32_t target_register = (col == 0) ? sum_register : working_register;
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
-
-                // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                 const uint32_t mask_register = target_register + 1U;
-
                 copy_tile_init(cb_mask_w_idx);
-                copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
-
+                copy_tile(cb_mask_w_idx, 0, mask_register);
                 mask_tile_init();
                 mask_tile(target_register, mask_register);
-
-                if (col > 0) {
-                    add_binary_tile_init();
-                    add_binary_tile(sum_register, target_register, sum_register);
-                }
-            } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
             }
-        } else {
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-            mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
+        }
+
+        // Accumulate to sum (skip for first tile, it's already in sum_register)
+        if (col > 0) {
+            add_binary_tile_init();
+            add_binary_tile(sum_register, working_register, sum_register);
         }
     }
+
+    // Pop the ones tile
+    cb_pop_front(cb_temp_tile_idx, onetile);
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
@@ -240,60 +268,111 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 //                             [1, Wt]
 //                             ...]
 // cb_dL_out_idx, cb_gamma_idx blocks are read
-// acquire in the beginning, release in the end
+// Uses same pattern as L1 version: copy_tile from ones CB + mul_binary_tile for hardware mode transition
+// With save/restore pattern for accumulator across blocks
 inline void compute_dy_gamma_sum(const uint32_t row) {
-    // Block-based processing when not everything fits in L1
-    const uint32_t sum_register = 0U;
-    const uint32_t working_register = 1U;
+    constexpr uint32_t sum_register = 0U;
+    constexpr uint32_t working_register = 1U;
+    constexpr uint32_t temp_register = 2U;
 
+    // First, create a ones tile in cb_temp_tile_idx (same as L1 version)
     tile_regs_acquire();
+    fill_tile_init();
+    fill_tile(temp_register, 1.0f);
+    tile_regs_commit();
 
-    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
+    tile_regs_wait();
+    cb_reserve_back(cb_temp_tile_idx, onetile);
+    pack_reconfig_data_format(cb_temp_tile_idx);
+    pack_tile(temp_register, cb_temp_tile_idx);
+    cb_push_back(cb_temp_tile_idx, onetile);
+    tile_regs_release();
 
-    // Accumulate dy * gamma into sum_register
+    // Wait for the ones tile
+    cb_wait_front(cb_temp_tile_idx, onetile);
+
+    reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
+
+    // Process tiles in blocks with save/restore for accumulator
     for (uint32_t col = 0; col < Wt; col += block_size) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gamma_idx, block_size);
 
         const uint32_t current_block_size = std::min(block_size, Wt - col);
+
+        // Process tiles within this block - use single tile_regs session per block
+        tile_regs_acquire();
+
+        // Restore accumulator from CB if not first block
+        if (col > 0) {
+            cb_wait_front(cb_accumulate_idx, onetile);
+            reconfig_data_format_srca(cb_accumulate_idx);
+            copy_tile_init(cb_accumulate_idx);
+            copy_tile(cb_accumulate_idx, 0, sum_register);
+            cb_pop_front(cb_accumulate_idx, onetile);
+        }
+
+        reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
+
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-            uint32_t global_col = col + block_idx;
-            // Mask the tile if needed
+            const uint32_t global_col = col + block_idx;
+            const bool is_first_tile = (global_col == 0);
+            const bool is_last_tile = (global_col + 1 == Wt);
+            const uint32_t target_register = is_first_tile ? sum_register : working_register;
+
+            // Compute dy * gamma
+            zero_dst_reg(target_register);
+            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
+
+            // Load ones from CB and multiply (identity) - KEY for hardware mode transition
+            copy_tile_init(cb_temp_tile_idx);
+            copy_tile(cb_temp_tile_idx, 0, temp_register);
+            mul_binary_tile_init();
+            mul_binary_tile(target_register, temp_register, target_register);
+
+            // Mask the last tile if needed
             if constexpr (do_mask_w) {
-                if (global_col + 1 == Wt) {
-                    const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
-
-                    // Limitation: mask_tile only works when the mask register is immediately next to the data register.
+                if (is_last_tile) {
                     const uint32_t mask_register = target_register + 1U;
-
                     copy_tile_init(cb_mask_w_idx);
-                    copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
-
+                    copy_tile(cb_mask_w_idx, 0, mask_register);
                     mask_tile_init();
                     mask_tile(target_register, mask_register);
-
-                    if (global_col > 0) {
-                        add_binary_tile_init();
-                        add_binary_tile(sum_register, target_register, sum_register);
-                    }
-                } else {
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
                 }
-            } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
             }
+
+            // Accumulate to sum (skip for first tile overall)
+            if (!is_first_tile) {
+                add_binary_tile_init();
+                add_binary_tile(sum_register, working_register, sum_register);
+            }
+        }
+
+        tile_regs_commit();
+
+        // Check if this is the final block
+        const bool is_final_block = (col + current_block_size >= Wt);
+
+        if (is_final_block) {
+            // Final block: pack to output CB
+            pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
+        } else {
+            // Not final: save accumulator to CB for next block
+            tile_regs_wait();
+            cb_reserve_back(cb_accumulate_idx, onetile);
+            pack_reconfig_data_format(cb_accumulate_idx);
+            pack_tile(sum_register, cb_accumulate_idx);
+            cb_push_back(cb_accumulate_idx, onetile);
+            tile_regs_release();
         }
 
         cb_pop_front(cb_dL_out_idx, block_size);
         cb_pop_front(cb_gamma_idx, block_size);
     }
 
-    tile_regs_commit();
-    pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
+    // Pop the ones tile
+    cb_pop_front(cb_temp_tile_idx, onetile);
 
     // Reduce using matmul and scale by 1/N
     const uint32_t reduced_sum_register = 0U;
