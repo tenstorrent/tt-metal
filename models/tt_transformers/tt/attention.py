@@ -816,8 +816,10 @@ class Attention(LightweightModule):
         print("SDPA input tensors:")
         ttnn.set_printoptions(profile="full")
         print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, :80, :4]}")
-        print(f"keys_BKSD: {keys_BKSD[0, 0, :80, :4]}")
-        print(f"values_BKSD: {values_BKSD[0, 0, :80, :4]}")
+        print(f"keys_BKSD 275: {keys_BKSD[275, 0, :, :4]}")
+        print(f"values_BKSD 275: {values_BKSD[275, 0, :, :4]}")
+        print(f"keys_BKSD 215: {keys_BKSD[215, 0, :, :4]}")
+        print(f"values_BKSD 215: {values_BKSD[215, 0, :, :4]}")
         print(f"chunk_start_idx: {chunk_start_idx}")
         print(f"page_table: {page_table}")
 
