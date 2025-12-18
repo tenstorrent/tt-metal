@@ -55,16 +55,6 @@ inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_
            (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);
 }
 
-void llk_zero_operand(std::uint32_t operand) {
-    std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t fifo_base_addr =
-        (get_local_cb_interface(operand_id).fifo_limit + 1) - get_local_cb_interface(operand_id).fifo_size;
-    std::uint32_t size = get_local_cb_interface(operand_id).fifo_size;
-    _llk_zero_buffer_(fifo_base_addr, size);
-}
-
-inline void llk_unpack_debug_dump_seek(std::uint8_t offset) { _llk_unpack_debug_dump_seek_(offset); }
-
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
