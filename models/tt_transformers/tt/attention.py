@@ -816,12 +816,16 @@ class Attention(LightweightModule):
         print("SDPA input tensors:")
         ttnn.set_printoptions(profile="full")
         print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, :80, :4]}")
-        print(f"keys_BKSD 275: {keys_BKSD[275, 0, :, :4]}")
-        print(f"values_BKSD 275: {values_BKSD[275, 0, :, :4]}")
-        print(f"keys_BKSD 215: {keys_BKSD[215, 0, :, :4]}")
-        print(f"values_BKSD 215: {values_BKSD[215, 0, :, :4]}")
-        print(f"chunk_start_idx: {chunk_start_idx}")
         print(f"page_table: {page_table}")
+        first_page_table_entry = page_table[0, 0]
+        print(f"first_page_table_entry: {first_page_table_entry}")
+        second_page_table_entry = page_table[0, 1]
+        print(f"second_page_table_entry: {second_page_table_entry}")
+        print(f"keys_BKSD first page: {keys_BKSD[first_page_table_entry, 0, :, :4]}")
+        print(f"values_BKSD first page: {values_BKSD[first_page_table_entry, 0, :, :4]}")
+        print(f"keys_BKSD second page: {keys_BKSD[second_page_table_entry, 0, :, :4]}")
+        print(f"values_BKSD second page: {values_BKSD[second_page_table_entry, 0, :, :4]}")
+        print(f"chunk_start_idx: {chunk_start_idx}")
 
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
