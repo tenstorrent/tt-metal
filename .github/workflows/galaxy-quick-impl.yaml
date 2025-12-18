@@ -94,7 +94,7 @@ jobs:
           if [ -d "generated/fabric" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
             echo "Benchmark files found, will upload to database"
-          else 
+          else
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
             echo "Benchmark files not found, database upload will be skipped"
           fi
