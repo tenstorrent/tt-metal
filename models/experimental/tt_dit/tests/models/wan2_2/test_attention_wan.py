@@ -130,7 +130,7 @@ def test_wan_attention(
     torch.manual_seed(0)
     # Create input tensors
     spatial_input = torch.randn((B, spatial_seq_len, dim), dtype=torch_dtype)
-    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=256, num_devices=sp_factor)
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     logger.info(f"spatial_input shape: {spatial_input.shape}. tt_spatial shape: {tt_spatial.shape}")
 
@@ -154,8 +154,8 @@ def test_wan_attention(
 
         rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
         rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
-        rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=256, num_devices=sp_factor)
-        rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=256, num_devices=sp_factor)
+        rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+        rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
         # Rope cos and sin sequence fractured and head fractured
         tt_rope_cos = bf16_tensor(rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         tt_rope_sin = bf16_tensor(rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
