@@ -377,6 +377,8 @@ class Generator:
         for idx, out in enumerate(out_list):
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
+            num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
+            last_token_idx_relative = last_token_idx - num_cached_tokens
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
@@ -387,6 +389,7 @@ class Generator:
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx_relative) % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        print(f"output_logits: {output_logits}")
         return output_logits
 
     def prefill_forward_single_user_text(
@@ -470,6 +473,23 @@ class Generator:
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                print(f"executing chunked prefill for chunk_start: {chunk_start}")
+                print(f"chunk_tokens: {chunk_tokens}")
+                print(f"chunk_page_table: {chunk_page_table}")
+                print(f"chunk_start: {chunk_start}")
+                print(f"chunk_end: {chunk_end}")
+                print(f"chunk_start_relative: {chunk_start_relative}")
+                print(f"chunk_end_relative: {chunk_end_relative}")
+                print(f"last_token_idx_in_chunk: {last_token_idx_in_chunk}")
+                print(f"last_chunk_start: {last_chunk_start}")
+                print(f"seq_len: {seq_len}")
+                print(f"num_cached_tokens: {num_cached_tokens}")
+                print(f"chunk_size: {chunk_size}")
+                print(f"last_token_idx: {last_token_idx}")
+                print(f"block_size: {block_size}")
+                print(f"last_token_idx_in_seq: {last_token_idx_in_seq}")
+                print(f"page_table_user_padded: {page_table_user_padded}")
+                print(f"page_table_user: {page_table_user}")
 
                 (
                     chunk_prefill_input,
@@ -497,6 +517,7 @@ class Generator:
                 )
 
                 if chunk_start_relative == last_chunk_start:
+                    print(f"returning tt_logits: {tt_logits}")
                     return tt_logits
                 else:
                     del tt_logits
