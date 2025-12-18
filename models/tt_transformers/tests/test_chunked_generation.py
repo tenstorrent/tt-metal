@@ -158,9 +158,11 @@ def test_chunked_prefill_single_user(
                 start_pos=[start_pos],
             )
             ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
+            logger.info(f"ref_output_slice: {ref_output_slice}")
+            logger.info(f"tt_output_torch: {tt_output_torch}")
 
             passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output_slice, tt_output_torch))
-            logger.info(f"PCC: {pcc_message}")
+            logger.info(f"PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos})")
             assert passing
