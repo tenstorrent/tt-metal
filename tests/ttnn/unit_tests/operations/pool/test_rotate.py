@@ -232,6 +232,38 @@ def test_memory_configs(device, memory_config):
     assert comparison_passed, f"Memory config test failed for {memory_config}"
 
 
+def test_sharded_memory(device):
+    """Test rotation with sharded memory configuration."""
+    torch.manual_seed(0)
+
+    input_shape = (1, 32, 32, 32)
+    angle = 45.0
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # PyTorch reference using golden function
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
+
+    # Create sharded memory config
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        (input_shape[1] * input_shape[2], input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    # TTNN with sharded memory config
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    # Use tolerances for diagonal rotation
+    atol, rtol = 5.0, 0.05
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    assert comparison_passed, "Sharded memory test failed"
+
+
 # ============================================================================
 # Data Type Tests
 # ============================================================================
