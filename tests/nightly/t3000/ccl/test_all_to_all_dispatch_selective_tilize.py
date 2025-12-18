@@ -180,7 +180,7 @@ def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_sha
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
     ],
     indirect=True,
 )
@@ -305,3 +305,6 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"output_tokens shape: {output_tokens.shape}")
     logger.info(f"metadata shape: {metadata.shape}")
     logger.info(f"gathered_scores shape: {gathered_scores.shape}")
+
+    logger.info(f"metadata: {metadata}")
+    logger.info(f"gathered_scores: {gathered_scores}")

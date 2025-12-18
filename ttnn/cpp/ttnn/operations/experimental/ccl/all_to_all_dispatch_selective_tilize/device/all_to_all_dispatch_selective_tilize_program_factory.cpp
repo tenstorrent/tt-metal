@@ -217,7 +217,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         aligned_metadata_page_size);
 
     constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 2;
+    constexpr uint32_t num_packet_headers = 6;
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -357,6 +357,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
         {"l1_alignment", l1_alignment},
         {"dram_alignment", dram_alignment},
+        {"metadata_alignment", metadata_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
+        {"scores_alignment", input_scores_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
+        {"output_alignment", output_tensor.buffer()->is_dram() ? dram_alignment : l1_alignment},
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
         {"max_indices_pages_per_packet", max_indices_pages_per_packet},

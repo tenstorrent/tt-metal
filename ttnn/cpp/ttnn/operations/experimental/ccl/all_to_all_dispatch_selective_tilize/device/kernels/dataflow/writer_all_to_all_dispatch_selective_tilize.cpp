@@ -11,6 +11,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
+using namespace ttnn::operations::ccl::common;
+
 void print_tile_rows(
     uint32_t cb_idx,
     uint32_t tile_idx,
@@ -60,99 +62,121 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
-/**
- * Configure packet headers for multicast scatter/unicast page writes.
- * This sets up both scatter (2 pages per packet) and unicast (1 page) headers.
- *
- * Call this once before using fabric_multicast_pages_with_scatter.
- *
- * @param fabric_connection The fabric connection manager
- * @param scatter_route_id Pre-allocated packet header index for scatter writes
- * @param unicast_route_id Pre-allocated packet header index for unicast writes
- * @param starts Array of start distances in hops for each connection [forward, backward, ...]
- * @param ranges Array of multicast ranges for each connection [forward, backward, ...]
- * @param page_size Size of each page in bytes
- */
-inline void fabric_multicast_pages_set_state(
-    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection,
-    uint32_t scatter_route_id,
-    uint32_t unicast_route_id,
-    uint8_t* starts,
-    uint8_t* ranges,
-    uint32_t page_size) {
-    using namespace tt::tt_fabric::linear::experimental;
-
-    // Configure scatter write headers: 2 pages per packet, each chunk is page_size
-    fabric_multicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-        fabric_connection,
-        scatter_route_id,
-        starts,
-        ranges,
-        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-        page_size * 2);
-
-    // Configure unicast write headers: 1 page per packet
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, starts, ranges, nullptr, page_size);
+inline Polarity simple_reverse_polarity(Polarity polarity) {
+    return polarity == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE;
 }
 
-/**
- * Send M pages via fabric multicast using scatter write for efficiency.
- * Pages are sent in pairs using scatter write. If M is odd, the last page
- * is sent via simple unicast.
- *
- * Prerequisites:
- * - Call fabric_multicast_pages_set_state() first to configure headers
- *
- * @param fabric_connection The fabric connection manager
- * @param scatter_route_id Pre-allocated packet header index for scatter writes
- * @param unicast_route_id Pre-allocated packet header index for unicast writes
- * @param output_addrgen Address generator for output tensor
- * @param l1_base_address Base L1 address where data starts
- * @param start_page Starting page index in output tensor
- * @param page_size Size of each page in bytes
- * @param num_pages Number of pages to send (M)
- */
-template <typename AddrGenType>
-inline void fabric_multicast_pages_with_scatter(
-    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection,
-    uint32_t scatter_route_id,
-    uint32_t unicast_route_id,
-    AddrGenType& output_addrgen,
-    uint32_t l1_base_address,
-    uint32_t start_page,
-    uint32_t page_size,
-    uint32_t num_pages) {
-    using namespace tt::tt_fabric::linear;
-    using namespace tt::tt_fabric::linear::experimental;
-
-    uint32_t pages_sent = 0;
-    uint32_t current_l1_addr = l1_base_address;
-    uint32_t current_page = start_page;
-
-    // Send pairs of pages using scatter write for efficiency
-    while (pages_sent + 2 <= num_pages) {
-        auto noc_address0 = addrgen_detail::get_noc_address(output_addrgen, current_page, 0);
-        auto noc_address1 = addrgen_detail::get_noc_address(output_addrgen, current_page + 1, 0);
-
-        fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-            fabric_connection,
-            scatter_route_id,
-            current_l1_addr,
-            NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
-
-        current_l1_addr += page_size * 2;
-        current_page += 2;
-        pages_sent += 2;
+template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+uint32_t get_simple_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord, Polarity polarity) {
+    auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
+    auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
+    // default_polary is for ties in a ring
+    // if default is positive, then for a E-W tie, we go East, and for a N-S tie, we go South
+    // if default is negative, then for a E-W tie, we go West, and for a N-S tie, we go North
+    if (src_row == dest_row) {
+        if (polarity == Polarity::POSITIVE) {
+            return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        } else {
+            return src_col <= dest_col ? eth_chan_directions::WEST : eth_chan_directions::EAST;
+        }
+    } else {
+        if (polarity == Polarity::POSITIVE) {
+            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
+        } else {
+            return src_row <= dest_row ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+        }
     }
+}
 
-    // Send remaining page via unicast if odd number of pages
-    if (pages_sent < num_pages) {
-        auto noc_address = addrgen_detail::get_noc_address(output_addrgen, current_page, 0);
+// Get multicast direction based on axis and polarity
+// COLS axis (vertical) → SOUTH (positive), NORTH (negative)
+// ROWS axis (horizontal) → EAST (positive), WEST (negative)
+template <ReplicateGroup Axis, Polarity P>
+constexpr uint32_t get_multicast_direction() {
+    if constexpr (Axis == ReplicateGroup::ROWS) {
+        if constexpr (P == Polarity::POSITIVE) {
+            return eth_chan_directions::SOUTH;
+        } else {
+            return eth_chan_directions::NORTH;
+        }
+    } else {
+        if constexpr (P == Polarity::POSITIVE) {
+            return eth_chan_directions::EAST;
+        } else {
+            return eth_chan_directions::WEST;
+        }
+    }
+}
 
-        fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-            fabric_connection, unicast_route_id, current_l1_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+// Fabric multicast metadata write helper - handles both unicast (1 page) and scatter (2 pages) cases
+template <uint32_t PageSize, uint32_t PositiveDistance, uint32_t NegativeDistance, typename AddrGenT>
+FORCE_INLINE void fabric_multicast_metadata_write(
+    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* fabric_connection_east,
+    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* fabric_connection_west,
+    volatile PACKET_HEADER_TYPE* unicast_header_pos,
+    volatile PACKET_HEADER_TYPE* unicast_header_neg,
+    volatile PACKET_HEADER_TYPE* scatter_header_pos,
+    volatile PACKET_HEADER_TYPE* scatter_header_neg,
+    const AddrGenT& addr_gen,
+    uint32_t src_addr,
+    uint32_t dest_page_id,
+    uint32_t pages_to_write) {
+    // Compute addresses once
+    const uint64_t local_noc_addr_0 = addr_gen.get_noc_addr(dest_page_id, 0);
+    const uint64_t fabric_noc_addr_0 = linear::addrgen_detail::get_noc_address(addr_gen, dest_page_id, 0);
+
+    if (pages_to_write == 1) {
+        noc_async_write(src_addr, local_noc_addr_0, PageSize);
+
+        const auto cmd_header = tt::tt_fabric::NocUnicastCommandHeader{fabric_noc_addr_0};
+
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+            fabric_connection_east,
+            unicast_header_pos,
+            src_addr,
+            static_cast<uint16_t>(PageSize),
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(PositiveDistance));
+
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+            fabric_connection_west,
+            unicast_header_neg,
+            src_addr,
+            static_cast<uint16_t>(PageSize),
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(NegativeDistance));
+    } else {
+        const uint64_t local_noc_addr_1 = addr_gen.get_noc_addr(dest_page_id + 1, 0);
+        const uint64_t fabric_noc_addr_1 = linear::addrgen_detail::get_noc_address(addr_gen, dest_page_id + 1, 0);
+
+        noc_async_write(src_addr, local_noc_addr_0, PageSize);
+        noc_async_write(src_addr + PageSize, local_noc_addr_1, PageSize);
+
+        // For scatter with 2 equal-sized chunks: first chunk size is explicit, last is implicit
+        // Total payload = 2 * PageSize, with chunk_size[0] = PageSize
+        constexpr uint16_t total_payload_size = 2 * PageSize;
+        const auto scatter_cmd_header = tt::tt_fabric::NocUnicastScatterCommandHeader{
+            {fabric_noc_addr_0, fabric_noc_addr_1}, {static_cast<uint16_t>(PageSize)}};
+
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+            fabric_connection_east,
+            scatter_header_pos,
+            src_addr,
+            total_payload_size,
+            scatter_cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(PositiveDistance));
+
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+            fabric_connection_west,
+            scatter_header_neg,
+            src_addr,
+            total_payload_size,
+            scatter_cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(NegativeDistance));
     }
     noc_async_writes_flushed();
 }
@@ -202,11 +226,16 @@ void kernel_main() {
     constexpr uint32_t aligned_metadata_page_size = get_named_compile_time_arg_val("aligned_metadata_page_size");
 
     constexpr uint32_t fabric_max_packet_size = get_named_compile_time_arg_val("fabric_max_packet_size");
-    constexpr uint32_t alignment = get_named_compile_time_arg_val("l1_alignment");
+    constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
+    constexpr uint32_t dram_alignment = get_named_compile_time_arg_val("dram_alignment");
+    constexpr uint32_t metadata_alignment = get_named_compile_time_arg_val("metadata_alignment");
+    constexpr uint32_t scores_alignment = get_named_compile_time_arg_val("scores_alignment");
+    constexpr uint32_t output_alignment = get_named_compile_time_arg_val("output_alignment");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
     constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
     constexpr uint32_t num_connections = get_named_compile_time_arg_val("num_connections");
+    DPRINT << "num_connections: " << num_connections << ENDL();
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -214,7 +243,7 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto input_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
-    constexpr auto output_scores_args = TensorAccessorArgs<input_scores_args.next_compile_time_args_offset()>();
+    constexpr auto gathered_scores_args = TensorAccessorArgs<input_scores_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 0
@@ -225,11 +254,14 @@ void kernel_main() {
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);      // 5
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);        // 6
     uint32_t input_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 7
-    uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 8
+    uint32_t gathered_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 8
     uint32_t subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);               // 9
     uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                 // 10
     uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
     uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
+
+    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
+    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
@@ -259,21 +291,22 @@ void kernel_main() {
     constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
+    const auto gathered_scores_addr_gen =
+        TensorAccessor(gathered_scores_args, gathered_scores_tensor_address, indices_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-    // Scores tensors use same page size as indices tensor
-    const auto input_scores_addr_gen =
-        TensorAccessor(input_scores_args, input_scores_tensor_address, indices_page_size);
-    const auto output_scores_addr_gen =
-        TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto* mcast_noc_unicast_packet_header_pos =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
+    auto* mcast_noc_unicast_packet_header_neg =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 3 * sizeof(PACKET_HEADER_TYPE));
+    auto* mcast_noc_scatter_packet_header_pos =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 4 * sizeof(PACKET_HEADER_TYPE));
+    auto* mcast_noc_scatter_packet_header_neg =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -287,16 +320,16 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         axis,
-        num_devices>(fabric_connections, metadata_packet_header, nullptr, nullptr, init_noc_semaphore_addr);
-
+        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+    constexpr uint32_t positive_distance = dispatch_index % 2 == 0 ? (dispatch_devices - 1) / 2 : dispatch_devices / 2;
+    constexpr uint32_t negative_distance = (dispatch_devices - 1) - positive_distance;
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
-    close_direction_connections(directions, fabric_connections);
-
     // Write out the indices tensor
+    constexpr uint32_t base_page = dispatch_index * indices_pages;
     for (uint32_t indices_page = indices_start; indices_page < indices_end;
          indices_page += max_indices_pages_per_packet) {
         uint32_t pages_left = indices_end - indices_page;
@@ -305,7 +338,18 @@ void kernel_main() {
         cb_wait_front(indices_tensor_cb_id, max_indices_pages_per_packet);
 
         uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-        // fabric write the indices tensor
+        // fabric write the indices tensor to metadata tensor
+        detail::fabric_multicast_metadata_write<metadata_page_size, positive_distance, negative_distance>(
+            &fabric_connections[eth_chan_directions::EAST],
+            &fabric_connections[eth_chan_directions::WEST],
+            mcast_noc_unicast_packet_header_pos,
+            mcast_noc_unicast_packet_header_neg,
+            mcast_noc_scatter_packet_header_pos,
+            mcast_noc_scatter_packet_header_neg,
+            metadata_addr_gen,
+            base_indices_addr,
+            base_page + indices_page,
+            pages_to_write);
         cb_pop_front(indices_tensor_cb_id, max_indices_pages_per_packet);
     }
 
@@ -315,7 +359,38 @@ void kernel_main() {
         uint32_t pages_to_write = std::min(max_indices_pages_per_packet, pages_left);
         cb_wait_front(scores_tensor_cb_id, max_indices_pages_per_packet);
         uint32_t base_input_scores_addr = get_read_ptr(scores_tensor_cb_id);
-        // fabric write
+        // fabric write the scores tensor to gathered scores tensor
+        detail::fabric_multicast_metadata_write<indices_page_size, positive_distance, negative_distance>(
+            &fabric_connections[eth_chan_directions::EAST],
+            &fabric_connections[eth_chan_directions::WEST],
+            mcast_noc_unicast_packet_header_pos,
+            mcast_noc_unicast_packet_header_neg,
+            mcast_noc_scatter_packet_header_pos,
+            mcast_noc_scatter_packet_header_neg,
+            gathered_scores_addr_gen,
+            base_input_scores_addr,
+            base_page + input_scores_page,
+            pages_to_write);
         cb_pop_front(scores_tensor_cb_id, max_indices_pages_per_packet);
     }
+
+    DPRINT << "Before global sem send" << ENDL();
+    const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_address);
+    send_init_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        src_chip_id,
+        mesh_rows,
+        mesh_cols,
+        axis,
+        num_devices>(
+        fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
+    DPRINT << "After global sem send, before barrier" << ENDL();
+    noc_async_write_barrier();
+    DPRINT << "After barrier, before sem wait" << ENDL();
+    noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices - 1);
+    DPRINT << "After sem wait" << ENDL();
+    noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+
+    close_direction_connections(directions, fabric_connections);
 }
