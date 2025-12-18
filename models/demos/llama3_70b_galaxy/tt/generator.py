@@ -471,8 +471,7 @@ class Generator:
             tt_out_for_read = (tt_tok, tt_log_probs) if tt_log_probs is not None else tt_tok
             tt_out = self.read_decode_output(tt_out_for_read, async_read=async_read)
             if async_read:
-                tt_tok, tt_log_probs, read_event = tt_out
-                return (tt_tok, tt_log_probs), read_event
+                return tt_out
             else:
                 return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
@@ -644,7 +643,7 @@ class Generator:
             return tt_out_cpu, tt_log_probs_cpu
 
         logits, log_probs, read_event = self.model.process_output_decode(tt_out)
-        return logits, log_probs, [read_event]
+        return (logits, log_probs), [read_event]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
         if isinstance(tt_out, tuple):
@@ -665,7 +664,7 @@ class Generator:
             return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs
 
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :], tt_log_probs
+        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
 
     def chat_completion(
         self,
