@@ -593,25 +593,25 @@ jobs:
         run: |
           echo "No new commits found since latest release. No RC release needed."
 
-  trigger-prod-after-rc-success:
-    needs: [build-test-publish, release-precheck, create-tag]
-    runs-on: ubuntu-latest
-    # Only trigger if we are on an RC and the RC build-test-publish succeeded
-    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
-    steps:
-      - name: Wait for RC workflow completion
-        run: |
-          echo "RC build-test-publish completed successfully"
-          echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
-          echo "Preparing to trigger prod release workflow on the same commit"
-      - name: Trigger prod release workflow on same commit
-        uses: benc-uk/workflow-dispatch@v1
-        with:
-          workflow: package-and-release.yaml
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ needs.create-tag.outputs.version }}
-          inputs: |
-            {
-              "release-type": "prod",
-              "dry-run": "${{ inputs.dry-run || 'false' }}"
-            }
+  # trigger-prod-after-rc-success:
+  #   needs: [build-test-publish, release-precheck, create-tag]
+  #   runs-on: ubuntu-latest
+  #   # Only trigger if we are on an RC and the RC build-test-publish succeeded
+  #   if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+  #   steps:
+  #     - name: Wait for RC workflow completion
+  #       run: |
+  #         echo "RC build-test-publish completed successfully"
+  #         echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
+  #         echo "Preparing to trigger prod release workflow on the same commit"
+  #     - name: Trigger prod release workflow on same commit
+  #       uses: benc-uk/workflow-dispatch@v1
+  #       with:
+  #         workflow: package-and-release.yaml
+  #         token: ${{ secrets.GITHUB_TOKEN }}
+  #         ref: ${{ needs.create-tag.outputs.version }}
+  #         inputs: |
+  #           {
+  #             "release-type": "prod",
+  #             "dry-run": "${{ inputs.dry-run || 'false' }}"
+  #           }
