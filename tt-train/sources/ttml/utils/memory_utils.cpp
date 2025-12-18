@@ -131,7 +131,7 @@ static std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
 static nlohmann::json trace;
 static bool is_capture_active = false;
 
-void begin_capture() {
+ttnn::ScopeGuard begin_capture() {
     if (is_capture_active) {
         throw std::runtime_error("MemoryUsageTracker: Capture already active");
     }
@@ -139,11 +139,14 @@ void begin_capture() {
     graph_processor = std::make_shared<ttnn::graph::GraphProcessor>(mode);
     graph_processor->begin_graph_capture(mode);
     is_capture_active = true;
+    return ttnn::make_guard([&]() { end_capture(); });
 }
 
 void end_capture() {
-    trace = graph_processor->end_graph_capture();
-    is_capture_active = false;
+    if (is_capture_active) {
+        trace = graph_processor->end_graph_capture();
+        is_capture_active = false;
+    }
 }
 
 DRAMUsage get_DRAM_usage() {

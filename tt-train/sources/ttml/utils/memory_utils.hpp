@@ -8,25 +8,33 @@
 #include <string>
 #include <unordered_map>
 
+#include "ttnn/common/guard.hpp"
+
 namespace ttml::utils {
 
 struct DRAMUsage {
-    std::unordered_map<std::string, long long> peak;     // per device
-    std::unordered_map<std::string, long long> current;  // at end of trace
+    // device id -> peak memory usage in bytes between begin_capture and end_capture
+    std::unordered_map<std::string, long long> peak;
+    // device id -> current memory usage in bytes at the time of end_capture
+    std::unordered_map<std::string, long long> current;
 };
 
 struct L1Usage {
-    std::unordered_map<std::string, long long> peak_cb;      // peak circular buffer usage per device
-    std::unordered_map<std::string, long long> peak_buffer;  // peak L1 buffer usage per device
-    std::unordered_map<std::string, long long> peak_total;   // peak total (cb + buffer) per device
-    std::unordered_map<std::string, long long> current;      // current L1 buffer usage at end of trace per device
+    // device id -> peak circular buffer usage in bytes between begin_capture and end_capture
+    std::unordered_map<std::string, long long> peak_cb;
+    // device id -> peak L1 buffer usage in bytes between begin_capture and end_capture
+    std::unordered_map<std::string, long long> peak_buffer;
+    // device id -> peak total (cb + buffer) usage in bytes between begin_capture and end_capture
+    std::unordered_map<std::string, long long> peak_total;
+    // device id -> current L1 buffer usage in bytes at the time of end_capture
+    std::unordered_map<std::string, long long> current;
 };
 
 DRAMUsage extract_DRAM_usage(const nlohmann::json& trace);
 L1Usage extract_L1_usage(const nlohmann::json& trace);
 
 namespace MemoryUsageTracker {
-void begin_capture();
+ttnn::ScopeGuard begin_capture();
 void end_capture();
 DRAMUsage get_DRAM_usage();
 L1Usage get_L1_usage();

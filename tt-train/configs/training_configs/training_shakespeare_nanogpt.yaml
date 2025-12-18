@@ -14,7 +14,6 @@ training_config:
   tokenizer_type: "char"
   data_path: "data/shakespeare.txt"
   model_config: "configs/model_configs/nanogpt.yaml"
-  estimate_memory_usage: true
 
 device_config:
   enable_ddp: false

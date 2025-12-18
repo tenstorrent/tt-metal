@@ -110,7 +110,6 @@ struct TrainingConfig {
     std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    bool estimate_memory_usage = false;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -136,7 +135,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
-    config.estimate_memory_usage = training_config["estimate_memory_usage"].as<bool>(false);
 
     return config;
 }
@@ -324,9 +322,7 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
-    if (training_config.estimate_memory_usage) {
-        ttml::utils::MemoryUsageTracker::begin_capture();
-    }
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
@@ -377,7 +373,6 @@ int main(int argc, char **argv) {
     fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
     fmt::print("Scheduler type {}\n", training_config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
-    fmt::print("estimate_memory_usage: {}\n", training_config.estimate_memory_usage);
     auto sequence_length =
         std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
@@ -741,10 +736,8 @@ int main(int argc, char **argv) {
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
-                    if (training_config.estimate_memory_usage) {
-                        ttml::utils::MemoryUsageTracker::end_capture();
-                        ttml::utils::MemoryUsageTracker::print_memory_usage();
-                    }
+                    ttml::utils::MemoryUsageTracker::end_capture();
+                    ttml::utils::MemoryUsageTracker::print_memory_usage();
                 }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
