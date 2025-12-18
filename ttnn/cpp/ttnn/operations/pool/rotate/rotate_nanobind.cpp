@@ -2,20 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotate_pybind.hpp"
+#include "rotate_nanobind.hpp"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <optional>
 
-#include "ttnn-pybind/decorators.hpp"
+#include <fmt/format.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+
+#include "ttnn-nanobind/decorators.hpp"
 #include "rotate.hpp"
 
 namespace ttnn::operations::rotate {
 
-namespace py = pybind11;
+namespace {
 
-void py_bind_rotate(py::module& module) {
-    const auto* const doc = R"doc(
+void bind_rotate(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
         Rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
         The rotate operation performs spatial transformation by rotating each pixel position
@@ -52,21 +58,27 @@ void py_bind_rotate(py::module& module) {
             >>>
             >>> # Rotate around custom center (x=128, y=64) with white fill
             >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 64), fill=1.0, interpolation_mode="nearest")
-        )doc";
+        )doc",
+        ttnn::rotate.base_name(),
+        ttnn::rotate.python_fully_qualified_name());
 
-    ttnn::bind_registered_operation(
-        module,
+    bind_registered_operation(
+        mod,
         ttnn::rotate,
         doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("angle"),
-            py::kw_only(),
-            py::arg("center") = std::nullopt,
-            py::arg("fill") = 0.0f,
-            py::arg("expand") = false,
-            py::arg("interpolation_mode") = "nearest",
-            py::arg("memory_config") = std::nullopt});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor"),
+            nb::arg("angle"),
+            nb::kw_only(),
+            nb::arg("center") = nb::none(),
+            nb::arg("fill") = 0.0f,
+            nb::arg("expand") = false,
+            nb::arg("interpolation_mode") = "nearest",
+            nb::arg("memory_config") = nb::none()});
 }
+
+}  // namespace
+
+void py_module(nb::module_& mod) { bind_rotate(mod); }
 
 }  // namespace ttnn::operations::rotate
