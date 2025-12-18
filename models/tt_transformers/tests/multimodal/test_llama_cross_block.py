@@ -51,16 +51,10 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model.cross_attention_layers.0."
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
-    # reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
-    # reference_model.load_state_dict(partial_state_dict)
 
     # Initialization of HF subclass parameters
     hf_weights_repo_name = os.getenv("HF_MODEL")
@@ -169,7 +163,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             attention_mask=None,
         )[
             0
-        ]  # 0 element is the actuall feature map/hidden state needed for comparison
+        ]  # 0 element is the actual feature map/hidden state needed for comparison
 
         if mode == "prefill":
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
