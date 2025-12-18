@@ -282,8 +282,14 @@ void write_socket_configs(
     const SocketSenderSize sender_size;
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
+        auto recv_mesh_id = peer_descriptor.config.receiver_mesh_id;
+        const auto local_coord_range = control_plane.get_coord_range(
+            tt_fabric::MeshId{local_descriptor.config.sender_mesh_id}, tt_fabric::MeshScope::LOCAL);
         const auto sender_total_size_bytes =
             sender_size.md_size_bytes +
             (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
@@ -291,6 +297,13 @@ void write_socket_configs(
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
+            if (!control_plane
+                     .get_coord_range(
+                         tt_fabric::MeshId{local_descriptor.config.sender_mesh_id}, tt_fabric::MeshScope::LOCAL)
+                     .contains(device_coord)) {
+                continue;
+            }
+
             if (cores_map.size() > 1) {
                 log_warning(
                     tt::LogAlways,
@@ -317,14 +330,24 @@ void write_socket_configs(
 
                 // Write one encoding per receiver, ordered by receiver ID
                 for (const auto& [conn_idx, connection] : connections) {
+                    MeshCoordinate recv_device_coord = connection.receiver_core.device_coord;
+                    auto recv_virtual_core =
+                        mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
+                    auto recv_fabric_node_id = tt_fabric::FabricNodeId(
+                        tt_fabric::MeshId{recv_mesh_id},
+                        mesh_graph.coordinate_to_chip(tt_fabric::MeshId{recv_mesh_id}, recv_device_coord));
+                    std::cout << "Locally derived fabric node id: " << recv_fabric_node_id
+                              << " Fabric Node ID in peer descriptor: "
+                              << tt_fabric::FabricNodeId(
+                                     tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]},
+                                     peer_descriptor.chip_ids[conn_idx])
+                              << std::endl;
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        tt_fabric::FabricNodeId(
-                            tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
+                        recv_fabric_node_id,
                         fabric_config,
                         SocketEndpoint::SENDER);
-                    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
 
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
@@ -338,22 +361,40 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
+        auto sender_mesh_id = peer_descriptor.config.sender_mesh_id;
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
+            if (!control_plane
+                     .get_coord_range(
+                         tt_fabric::MeshId{local_descriptor.config.receiver_mesh_id}, tt_fabric::MeshScope::LOCAL)
+                     .contains(device_coord)) {
+                continue;
+            }
+
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
                 const auto& [conn_idx, connection] =
                     indexed_connections.front();  // Only one connection per receiver core for now
+                MeshCoordinate sender_device_coord = connection.sender_core.device_coord;
+                auto sender_virtual_core =
+                    mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
+                auto sender_fabric_node_id = tt_fabric::FabricNodeId(
+                    tt_fabric::MeshId{sender_mesh_id},
+                    mesh_graph.coordinate_to_chip(tt_fabric::MeshId{sender_mesh_id}, sender_device_coord));
+                std::cout << "Locally derived fabric node id: " << sender_fabric_node_id
+                          << " Fabric Node ID in peer descriptor: "
+                          << tt_fabric::FabricNodeId(
+                                 tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]},
+                                 peer_descriptor.chip_ids[conn_idx])
+                          << std::endl;
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                    tt_fabric::FabricNodeId(
-                        tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
+                    sender_fabric_node_id,
                     mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
-                auto sender_virtual_core = mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
@@ -403,22 +444,41 @@ void forward_descriptor_to_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    auto peer_mesh_id = is_sender ? config.receiver_mesh_id : config.sender_mesh_id;
+
+    std::vector<tt_metal::distributed::multihost::Rank> peer_ranks = {};
+    const auto& global_logical_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+
+    for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
+        if (*std::get<0>(mesh_id_and_host_rank) == peer_mesh_id) {
+            peer_ranks.push_back(rank);
+        }
+    }
     // Serialize the local endpoint descriptor
     std::vector<uint8_t> serialized_local_desc = serialize_to_bytes(desc);
     // Send size of serialized descriptor first, so that the peer knows the amount of data to expect
     int descriptor_size_bytes = serialized_local_desc.size();
-    context->send(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&descriptor_size_bytes), sizeof(descriptor_size_bytes)),
-        Rank{peer_rank},
-        desc.exchange_tag  // Forward this descriptor over the specified tag
-    );
-    // Send the serialized descriptor
-    context->send(
-        tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
-        Rank{peer_rank},
-        desc.exchange_tag  // Forward this descriptor over the specified tag
-    );
+    for (const auto& peer_rank : peer_ranks) {
+        if (socket_endpoint_type == SocketEndpoint::SENDER) {
+            std::cout << "Forward sender descriptor to: " << *peer_rank << std::endl;
+        } else {
+            std::cout << "Forward receiver descriptor to: " << *peer_rank << std::endl;
+        }
+        context->send(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&descriptor_size_bytes), sizeof(descriptor_size_bytes)),
+            Rank{peer_rank},
+            desc.exchange_tag  // Forward this descriptor over the specified tag
+        );
+        // Send the serialized descriptor
+        context->send(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
+            Rank{peer_rank},
+            desc.exchange_tag  // Forward this descriptor over the specified tag
+        );
+    }
 }
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
@@ -427,45 +487,57 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    auto peer_mesh_id = is_sender ? config.receiver_mesh_id : config.sender_mesh_id;
+    std::vector<tt_metal::distributed::multihost::Rank> peer_ranks = {};
+    const auto& global_logical_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
-    // Query the size of the serialized descriptor first (this is the only element in the header)
-    auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
-    TT_FATAL(
-        msg_header_size == sizeof(int),
-        "Expected {} bytes in the header for socket descriptor, but got {} bytes during multi-host handshake.",
-        sizeof(int),
-        msg_header_size);
+    for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
+        if (*std::get<0>(mesh_id_and_host_rank) == peer_mesh_id) {
+            peer_ranks.push_back(rank);
+        }
+    }
+    std::vector<SocketPeerDescriptor> remote_descs;
+    for (const auto& peer_rank : peer_ranks) {
+        // Query the size of the serialized descriptor first (this is the only element in the header)
+        auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
+        TT_FATAL(
+            msg_header_size == sizeof(int),
+            "Expected {} bytes in the header for socket descriptor, but got {} bytes during multi-host handshake.",
+            sizeof(int),
+            msg_header_size);
 
-    int expected_descriptor_size_bytes = 0;
-    context->recv(
-        tt::stl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
-        Rank{peer_rank},
-        desc.exchange_tag  // Read the descriptor over the specified tag
-    );
-    // Validate that the size in the header matches the descriptor message size
-    auto descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
-    TT_FATAL(
-        descriptor_size_bytes == expected_descriptor_size_bytes,
-        "Expected {} bytes in the socket descriptor, but got {} bytes during multi-host handshake.",
-        expected_descriptor_size_bytes,
-        descriptor_size_bytes);
+        int expected_descriptor_size_bytes = 0;
+        context->recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
+            Rank{peer_rank},
+            desc.exchange_tag  // Read the descriptor over the specified tag
+        );
+        // Validate that the size in the header matches the descriptor message size
+        auto descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
+        TT_FATAL(
+            descriptor_size_bytes == expected_descriptor_size_bytes,
+            "Expected {} bytes in the socket descriptor, but got {} bytes during multi-host handshake.",
+            expected_descriptor_size_bytes,
+            descriptor_size_bytes);
 
-    // Allocate a buffer to receive the serialized descriptor
-    std::vector<uint8_t> serialized_remote_desc(descriptor_size_bytes);
-    // Receive the serialized descriptor
-    context->recv(
-        tt::stl::as_writable_bytes(
-            tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
-        Rank{peer_rank},
-        desc.exchange_tag  // Read the descriptor over the specified tag
-    );
-    // Deserialize the received descriptor
-    auto remote_desc = deserialize_from_bytes(serialized_remote_desc);
-    // Validate that socket configs from remote and local descriptors match
-    validate_remote_desc(desc, remote_desc);
-    return remote_desc;
+        // Allocate a buffer to receive the serialized descriptor
+        std::vector<uint8_t> serialized_remote_desc(descriptor_size_bytes);
+        // Receive the serialized descriptor
+        context->recv(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
+            Rank{peer_rank},
+            desc.exchange_tag  // Read the descriptor over the specified tag
+        );
+        // Deserialize the received descriptor
+        auto remote_desc = deserialize_from_bytes(serialized_remote_desc);
+        // Validate that socket configs from remote and local descriptors match
+        validate_remote_desc(desc, remote_desc);
+        remote_descs.push_back(remote_desc);
+    }
+    return remote_descs.at(0);
 }
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(

@@ -77,16 +77,12 @@ void test_send_recv_async_(
         .fifo_size = socket_fifo_size,
     };
 
-    distributed::SocketConfig forward_socket_config = {
-        .socket_connection_config = forward_socket_connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = sender_rank,
-        .receiver_rank = receiver_rank};
-    distributed::SocketConfig backward_socket_config = {
-        .socket_connection_config = backward_socket_connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = receiver_rank,
-        .receiver_rank = sender_rank};
+    distributed::SocketConfig forward_socket_config(forward_socket_connections, socket_mem_config, 0, 0);
+    forward_socket_config.sender_rank = sender_rank;
+    forward_socket_config.receiver_rank = receiver_rank;
+    distributed::SocketConfig backward_socket_config(backward_socket_connections, socket_mem_config, 0, 0);
+    backward_socket_config.sender_rank = receiver_rank;
+    backward_socket_config.receiver_rank = sender_rank;
     auto forward_socket = distributed::MeshSocket(mesh_device, forward_socket_config);
     auto backward_socket = distributed::MeshSocket(mesh_device, backward_socket_config);
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();

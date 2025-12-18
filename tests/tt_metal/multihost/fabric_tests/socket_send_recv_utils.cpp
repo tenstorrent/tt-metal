@@ -246,6 +246,10 @@ bool test_socket_send_recv(
     return is_data_match;
 }
 
+bool test_socket_send_recv(
+
+) {}
+
 std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
     std::vector<uint32_t> recv_ranks;
 
@@ -293,11 +297,9 @@ void test_multi_mesh_single_conn_bwd(
         std::vector<uint32_t> recv_node_ranks = get_neighbor_host_ranks(system_config);
 
         for (const auto& recv_rank : recv_node_ranks) {
-            SocketConfig socket_config = {
-                .socket_connection_config = {socket_connection},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_context->rank(),
-                .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank}};
+            SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, 0, 0);
+            socket_config.sender_rank = distributed_context->rank();
+            socket_config.receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank};
             sockets.emplace(recv_rank, MeshSocket(mesh_device, socket_config));
         }
 
@@ -308,11 +310,9 @@ void test_multi_mesh_single_conn_bwd(
         }
 
     } else {
-        SocketConfig socket_config = {
-            .socket_connection_config = {socket_connection},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-            .receiver_rank = distributed_context->rank()};
+        SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, 0, 0);
+        socket_config.sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank};
+        socket_config.receiver_rank = distributed_context->rank();
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -352,11 +352,9 @@ void test_multi_mesh_single_conn_fwd(
         std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
 
         for (const auto& sender_rank : sender_node_ranks) {
-            SocketConfig socket_config = {
-                .socket_connection_config = {socket_connection},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                .receiver_rank = distributed_context->rank()};
+            SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, 0, 0);
+            socket_config.sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank};
+            socket_config.receiver_rank = distributed_context->rank();
             sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
@@ -365,11 +363,9 @@ void test_multi_mesh_single_conn_fwd(
             }
         }
     } else {
-        SocketConfig socket_config = {
-            .socket_connection_config = {socket_connection},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
-            .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank}};
+        SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, 0, 0);
+        socket_config.sender_rank = distributed_context->rank();
+        socket_config.receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank};
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -411,11 +407,9 @@ void test_multi_mesh_multi_conn_fwd(
         std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
 
         for (const auto& sender_rank : sender_node_ranks) {
-            SocketConfig socket_config = {
-                .socket_connection_config = {socket_connections},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                .receiver_rank = distributed_context->rank()};
+            SocketConfig socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+            socket_config.sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank};
+            socket_config.receiver_rank = distributed_context->rank();
             sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
@@ -424,12 +418,9 @@ void test_multi_mesh_multi_conn_fwd(
             }
         }
     } else {
-        SocketConfig socket_config = {
-            .socket_connection_config = {socket_connections},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
-            .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank},
-        };
+        SocketConfig socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+        socket_config.sender_rank = distributed_context->rank();
+        socket_config.receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank};
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -473,18 +464,14 @@ void test_multi_mesh_multi_conn_bidirectional(
         std::vector<uint32_t> compute_node_ranks = get_neighbor_host_ranks(system_config);
 
         for (const auto& compute_rank : compute_node_ranks) {
-            SocketConfig forward_socket_config = {
-                .socket_connection_config = {socket_connections},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank},
-                .receiver_rank = distributed_context->rank()};
+            SocketConfig forward_socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+            forward_socket_config.sender_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank};
+            forward_socket_config.receiver_rank = distributed_context->rank();
             forward_sockets.emplace(compute_rank, MeshSocket(mesh_device, forward_socket_config));
 
-            SocketConfig backward_socket_config = {
-                .socket_connection_config = {socket_connections},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_context->rank(),
-                .receiver_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank}};
+            SocketConfig backward_socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+            backward_socket_config.sender_rank = distributed_context->rank();
+            backward_socket_config.receiver_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank};
             backward_sockets.emplace(compute_rank, MeshSocket(mesh_device, backward_socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
@@ -506,18 +493,14 @@ void test_multi_mesh_multi_conn_bidirectional(
             }
         }
     } else {
-        SocketConfig forward_socket_config = {
-            .socket_connection_config = {socket_connections},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
-            .receiver_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank}};
+        SocketConfig forward_socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+        forward_socket_config.sender_rank = distributed_context->rank();
+        forward_socket_config.receiver_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank};
         auto forward_socket = MeshSocket(mesh_device, forward_socket_config);
 
-        SocketConfig backward_socket_config = {
-            .socket_connection_config = {socket_connections},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank},
-            .receiver_rank = distributed_context->rank()};
+        SocketConfig backward_socket_config = SocketConfig({socket_connections}, socket_mem_config, 0, 0);
+        backward_socket_config.sender_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank};
+        backward_socket_config.receiver_rank = distributed_context->rank();
         auto backward_socket = MeshSocket(mesh_device, backward_socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);

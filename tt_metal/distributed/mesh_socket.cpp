@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -39,27 +40,37 @@ void point_to_point_barrier(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config.distributed_context ? config.distributed_context : DistributedContext::get_current_world();
+    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
-    if (!(context->rank() == config.sender_rank || context->rank() == config.receiver_rank)) {
+    if (!(*local_mesh_binding[0] == config.sender_mesh_id || *local_mesh_binding[0] == config.receiver_mesh_id)) {
         log_warning(
             LogMetal,
-            "Creating a null socket on host rank {} with sender rank {} and receiver rank {}.",
-            *context->rank(),
-            *config.sender_rank,
-            *config.receiver_rank);
+            "Creating a null socket on Mesh ID {} with sender Mesh ID {} and receiver Mesh ID {}.",
+            *local_mesh_binding[0],
+            config.sender_mesh_id,
+            config.receiver_mesh_id);
         return;
     }
 
     TT_FATAL(
-        config.sender_rank != config.receiver_rank,
+        config.sender_mesh_id != config.receiver_mesh_id,
         "{} must only be used for communication between different host ranks, not within the same rank.",
         __func__);
 
-    bool is_sender = context->rank() == config.sender_rank;
+    bool is_sender = *local_mesh_binding[0] == config.sender_mesh_id;
+    // Allocate config buffers on both the sender and receiver meshes (even if the current host does not open a
+    // connection)
     if (is_sender) {
+        std::cout << "Creating sender buffer on Mesh ID: " << config.sender_mesh_id << " Host Rank ID: "
+                  << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
+                  << std::endl;
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
     } else {
+        std::cout << "Creating receiver buffer on Mesh ID: " << config.receiver_mesh_id << " Host Rank ID: "
+                  << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
+                  << std::endl;
         socket_endpoint_type_ = SocketEndpoint::RECEIVER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
         data_buffer_ = create_socket_data_buffer(device, config);
@@ -86,7 +97,27 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
-    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
+
+    std::vector<Rank> sender_ranks = {};
+    std::vector<Rank> recv_ranks = {};
+    const auto& global_logical_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+
+    for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
+        if (*std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id) {
+            sender_ranks.push_back(rank);
+        } else if (*std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id) {
+            recv_ranks.push_back(rank);
+        }
+    }
+    for (const auto& sender_rank : sender_ranks) {
+        for (const auto& recv_rank : recv_ranks) {
+            if (context->rank() == sender_rank || context->rank() == recv_rank) {
+                point_to_point_barrier({sender_rank, recv_rank}, context);
+            }
+        }
+    }
+    // point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
