@@ -857,6 +857,9 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
+        # Synchronize device to ensure SDPA completes on all devices before using the output
+        ttnn.synchronize_device(self.mesh_device)
+
         print(f"attn_output_84SD LO: {attn_output_84SD[0, 0, :8, :4]}")
         print(f"attn_output_84SD HI: {attn_output_84SD[0, 0, -8:, :4]}")
 
