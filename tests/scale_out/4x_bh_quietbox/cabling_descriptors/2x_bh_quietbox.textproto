@@ -80,10 +80,10 @@ root_instance {
   template_name: "2x_bh_quietbox"
   child_mappings {
     key: "qb-03"
-    value { host_id: 2 }
+    value { host_id: 1 }
   }
   child_mappings {
     key: "qb-04"
-    value { host_id: 3 }
+    value { host_id: 2 }
   }
 }
