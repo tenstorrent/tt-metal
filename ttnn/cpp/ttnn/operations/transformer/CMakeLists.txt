@@ -32,7 +32,7 @@ target_sources(
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
         sdpa/device/ring_fusion.cpp
-        sdpa/device/joint_sdpa_op.cpp
+        sdpa/device/joint_sdpa_device_operation.cpp
         sdpa/device/joint_sdpa_program_factory.cpp
         sdpa/device/ring_joint_sdpa_op.cpp
         sdpa/device/ring_joint_sdpa_program_factory.cpp
