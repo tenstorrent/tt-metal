@@ -129,6 +129,8 @@ uint32_t calculate_L1_usage(
     const Layout& output_layout,
     const DataType& output_dtype);
 
+uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor);
+
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures
 void validate_input_params(

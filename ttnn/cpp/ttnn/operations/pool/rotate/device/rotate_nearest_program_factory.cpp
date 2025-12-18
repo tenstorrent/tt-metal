@@ -4,6 +4,7 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 #include <ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
+#include <ttnn/operations/pool/pool_utils.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +16,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::rotate {
@@ -88,14 +88,11 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     // Get logical cores for setting runtime args
     std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    // Calculate stick sizes (aligned to DRAM for efficient reads)
+    // Calculate stick sizes (aligned based on buffer type for efficient reads)
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
-    const uint32_t aligned_input_stick_nbytes =
-        tt::round_up(input_stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
-    const uint32_t output_stick_nbytes = input_channels * element_size;
-    const uint32_t aligned_output_stick_nbytes =
-        tt::round_up(output_stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
+    const uint32_t aligned_input_stick_nbytes = pool::get_aligned_stick_size(input_shape, input_tensor);
+    const uint32_t aligned_output_stick_nbytes = pool::get_aligned_stick_size(input_shape, output_tensor);
 
     // Calculate max CB pages based on available L1 memory
     // Due to nothing else taking L1 in this data movement op, let's assume
