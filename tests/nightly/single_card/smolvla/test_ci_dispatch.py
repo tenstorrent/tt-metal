@@ -7,7 +7,6 @@ This test validates that TT implementation matches CPU within expected precision
 """
 
 import numpy as np
-import pytest
 import torch
 from loguru import logger
 from PIL import Image
