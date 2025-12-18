@@ -884,6 +884,8 @@ class Attention(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            # Synchronize device to ensure async all_gather completes before using the result
+            ttnn.synchronize_device(self.mesh_device)
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
