@@ -127,7 +127,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -137,6 +137,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
           { arch: blackhole, runner-label: P150b },
+          { arch: blackhole, runner-label: P100a },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
@@ -144,7 +145,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      gtest_filter: "*"
+      gtest_filter: "*NIGHTLY_*"
       nightly-run: true
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
