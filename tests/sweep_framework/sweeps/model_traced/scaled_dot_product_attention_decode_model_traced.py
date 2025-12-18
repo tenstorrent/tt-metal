@@ -5,40 +5,17 @@
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from models.common.utility_functions import torch_random
-from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
+# Import helper functions from unit test
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
+    nearest_n,
+    nearest_pow_2,
+    fa_rand,
+    get_chunk_size,
+)
+
 TIMEOUT = 60
-
-
-# Unit test helper functions for proper tensor generation and attention handling
-def nearest_n(x, n):
-    """Round up to nearest multiple of n"""
-    return ((x + n - 1) // n) * n
-
-
-def nearest_pow_2(x):
-    """Round up to nearest power of 2"""
-    if x < 1:
-        raise ValueError("x must be >= 1")
-    import math
-
-    power = math.ceil(math.log2(x))
-    return 1 << power
-
-
-def fa_rand(*shape):
-    """
-    Flash attention random tensor generator - creates realistic attention patterns
-    with Gaussian distribution + sparse outliers for numerical stability testing.
-    This matches the unit test's tensor generation approach.
-    """
-    normal_1 = torch.randn(shape)
-    normal_2 = torch.randn(shape) * 10
-    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
-    return normal_1 + normal_2 * bernoulli
 
 
 loader = MasterConfigLoader()
@@ -135,26 +112,12 @@ def run(
     cur_pos = s_kv - 1
     start_indices = [cur_pos] * b
 
-    # Get k_chunk_size from config or calculate it
+    # Get k_chunk_size from config or calculate it using unit test's helper
     if program_config_k_chunk_size is not None:
         k_chunk_size = int(program_config_k_chunk_size)
     else:
-        # Fallback calculation matching unit test
-        if cur_pos <= 32:
-            k_chunk_size = 32
-        elif cur_pos <= 64:
-            k_chunk_size = 32
-        elif cur_pos <= 128:
-            k_chunk_size = 32
-        elif cur_pos <= 1024:
-            k_chunk_size = 128
-        else:
-            k_chunk_size = 512
-        # Find maximum power of 2 divisor of s_kv
-        for i in range(1, s_kv):
-            if s_kv % (2 ** (i + 1)) != 0:
-                break
-        k_chunk_size = min(k_chunk_size, 2**i)
+        # Use unit test's get_chunk_size function
+        k_chunk_size = get_chunk_size(cur_pos + 1, s_kv)
 
     # Calculate padded_layer_len (unit test uses this for K/V slicing)
     padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
