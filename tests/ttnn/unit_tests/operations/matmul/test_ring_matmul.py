@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Hardcoded grid from PREFETCHER_NOC1_OUTPUT_GRID
+# Hardcoded grid from PREFETCHER_NOC1_OUTPUT_GRID adjusted to work on smaller grids like on an x2
 GRID = [
     (1, 3),
     (2, 3),
