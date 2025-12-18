@@ -5,7 +5,7 @@
 #pragma once
 
 #include <string>
-#include "ttnn/decorators.hpp"
+#include <ttnn/decorators.hpp>
 
 namespace ttnn::operations::rotate {
 

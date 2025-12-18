@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotate_device_operation.hpp"
-#include "kernels/fixed_point_q16.h"
+#include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
+#include <ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include "tt-metalium/tensor_accessor_args.hpp"
-#include "tt-metalium/work_split.hpp"
-#include "ttnn/operations/cb_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <ttnn/operations/cb_utils.hpp>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -148,27 +148,21 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     // Append tensor accessor args for output tensor (starts at ct_arg[3])
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Create reader kernel (RISCV_0)
+    // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
         "reader_rotate_nearest_interleaved.cpp",
         all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()),
-            .compile_args = reader_compile_time_args});
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Create writer kernel (RISCV_1)
+    // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
         "writer_rotate_nearest_interleaved.cpp",
         all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
-            .compile_args = writer_compile_time_args});
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Set runtime arguments for each core
     uint32_t sticks_processed = 0;

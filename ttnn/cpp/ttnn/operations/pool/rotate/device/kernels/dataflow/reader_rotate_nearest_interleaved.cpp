@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
-#include "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h"
+#include <dataflow_api.h>
+#include <ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp>
+#include <ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 
 void kernel_main() {
     // Runtime arguments
@@ -40,9 +40,15 @@ void kernel_main() {
         fill_stick_addr = MEM_ZEROS_BASE;
     } else {
         fill_stick_addr = get_write_ptr(fill_cb_index);
-        volatile tt_l1_ptr uint16_t* fill_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
-        for (uint32_t c = 0; c < input_channels; c++) {
-            fill_ptr[c] = static_cast<uint16_t>(fill_value_bf16);
+        volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
+        const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
+        const uint32_t num_pairs = input_channels / 2;
+        for (uint32_t c = 0; c < num_pairs; c++) {
+            fill_ptr32[c] = fill_value_packed;
+        }
+        if (input_channels & 1) {
+            volatile tt_l1_ptr uint16_t* fill_ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
+            fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bf16);
         }
     }
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotate_nanobind.hpp"
+#include <ttnn/operations/pool/rotate/rotate_nanobind.hpp>
 
 #include <optional>
 
@@ -12,8 +12,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "rotate.hpp"
+#include <ttnn-nanobind/decorators.hpp>
+#include <ttnn/operations/pool/rotate/rotate.hpp>
 
 namespace ttnn::operations::rotate {
 

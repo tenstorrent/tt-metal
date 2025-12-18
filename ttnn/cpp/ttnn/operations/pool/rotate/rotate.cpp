@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotate.hpp"
-#include "device/rotate_device_operation.hpp"
+#include <ttnn/operations/pool/rotate/rotate.hpp>
+#include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 
 namespace ttnn::operations::rotate {
 
