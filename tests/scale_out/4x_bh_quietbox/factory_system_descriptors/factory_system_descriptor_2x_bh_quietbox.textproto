@@ -1,21 +1,5 @@
 hosts {
-  hostname: "sjc1-tt-qb-01"
-  hall: "SC_Floor_5"
-  aisle: "A"
-  rack: 1
-  shelf_u: 10
-  motherboard: "SIENAD8-2L2T"
-}
-hosts {
-  hostname: "sjc1-tt-qb-02"
-  hall: "SC_Floor_5"
-  aisle: "A"
-  rack: 1
-  shelf_u: 20
-  motherboard: "SIENAD8-2L2T"
-}
-hosts {
-  hostname: "sjc1-tt-qb-03"
+  hostname: "bh-qbae-03"
   hall: "SC_Floor_5"
   aisle: "A"
   rack: 1
@@ -23,7 +7,7 @@ hosts {
   motherboard: "SIENAD8-2L2T"
 }
 hosts {
-  hostname: "sjc1-tt-qb-04"
+  hostname: "bh-qbae-04"
   hall: "SC_Floor_5"
   aisle: "A"
   rack: 1
