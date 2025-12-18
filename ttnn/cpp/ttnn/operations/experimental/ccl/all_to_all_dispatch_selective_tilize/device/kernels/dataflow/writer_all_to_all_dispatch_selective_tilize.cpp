@@ -351,6 +351,8 @@ void kernel_main() {
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Write out the indices tensor
+    constexpr bool reuse_index = true;
+    uint32_t base_indices_addr = reuse_index ? get_read_ptr(indices_tensor_cb_id) : 0;
     constexpr uint32_t base_page = dispatch_index * indices_pages;
     for (uint32_t indices_page = indices_start; indices_page < indices_end;
          indices_page += max_indices_pages_per_packet) {
@@ -359,7 +361,7 @@ void kernel_main() {
 
         cb_wait_front(indices_tensor_cb_id, max_indices_pages_per_packet);
 
-        uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+        uint32_t indices_addr = get_read_ptr(indices_tensor_cb_id);
         // fabric write the indices tensor to metadata tensor
         detail::fabric_multicast_metadata_write<metadata_page_size, positive_distance, negative_distance>(
             &fabric_connections[eth_chan_directions::EAST],
@@ -369,7 +371,7 @@ void kernel_main() {
             mcast_noc_scatter_packet_header_pos,
             mcast_noc_scatter_packet_header_neg,
             metadata_addr_gen,
-            base_indices_addr,
+            indices_addr,
             base_page + indices_page,
             pages_to_write);
         cb_pop_front(indices_tensor_cb_id, max_indices_pages_per_packet);
@@ -395,6 +397,91 @@ void kernel_main() {
             pages_to_write);
         cb_pop_front(scores_tensor_cb_id, max_indices_pages_per_packet);
     }
+
+    uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
+    uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
+
+    uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
+    uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
+                                             (token_start_idx * aligned_indices_page_size);
+
+    cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+    uint32_t base_mapping_addr = get_read_ptr(mapping_tensor_cb_id);
+    uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
+    for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+        // global_token is the global token index for the current token
+        // we need the global token index to write to the output buffer – each global token that could potentially be
+        // sent has a unique output buffer address to ensure that it is not overwritten by another token
+        uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
+        uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
+        // uint16_t* token_indices = (uint16_t*)(base_indices_addr + (local_token * (aligned_indices_page_size / 32)));
+        // wrong
+        cb_wait_front(input_tensor_cb_id, 1);
+        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
+
+        for (uint32_t k = 0; k < selected_experts_k; k++) {
+            // get the expert that is chosen for the current token
+            // uint16_t expert_chosen = tiled_access<32, 32, 16, 16>(token_indices, k); need to correct this
+            uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
+            uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+
+            // find the devices that the expert lives on and dispatch the input tokens to them
+            // if there is no tensor parallelism, then the token will only be sent to one device
+            for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
+                if (devices_for_expert[d] == 1 &&
+                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
+                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
+                    if (d == linearized_mesh_coord) {
+                        // if the expert lives on the current device, we dispatch the input token to it
+                        detail::dispatch_input_local_device_flushed(
+                            input_token_read_addr, output_token_write_addr, output_page_size);
+                        needs_barrier = true;
+                    } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+                        // if the expert lives on a remote device, we dispatch the input token to it
+                        // if axis is specified then we only send to the devices that are along the axis
+                        // if axis is not specified then we send to all devices
+                        if constexpr (is_1d_topology<topology>()) {
+                            fabric_send_chip_unicast_noc_unicast_1d<
+                                linearized_mesh_coord,
+                                topology,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size>(
+                                output_addr_gen,
+                                fabric_connections,
+                                unicast_packet_header,
+                                d,
+                                input_token_read_addr,
+                                global_token,
+                                (int)output_page_size,
+                                alignment);
+                        } else {
+                            fabric_send_chip_unicast_noc_unicast<
+                                src_chip_id,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size>(
+                                output_addr_gen,
+                                fabric_connections,
+                                unicast_packet_header,
+                                dest_chip_ids[d],
+                                dest_mesh_ids[d],
+                                input_token_read_addr,
+                                global_token,
+                                (int)output_page_size,
+                                alignment);
+                        }
+                    }
+                }
+            }
+        }
+        cb_pop_front(input_tensor_cb_id, 1);
+    }
+    if (needs_barrier) {
+        noc_async_write_barrier();
+    }
+
+    cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_address);
     detail::fabric_multicast_bidirectional_atomic_inc<positive_distance, negative_distance>(

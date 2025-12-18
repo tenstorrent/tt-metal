@@ -103,6 +103,7 @@ void kernel_main() {
         TensorAccessor(input_scores_args, input_scores_tensor_address, indices_page_size);
     const auto output_scores_addr_gen =
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
 
     // read in the indices tensor
     for (uint32_t indices_page = indices_start; indices_page < indices_end;
@@ -138,5 +139,21 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(scores_tensor_cb_id, max_indices_pages_per_packet);
+    }
+
+    // read in the mapping tensor
+    for (uint32_t mapping_page = 0; mapping_page < mapping_pages; mapping_page++) {
+        cb_reserve_back(mapping_tensor_cb_id, 1);
+        noc_async_read_page(mapping_page, mapping_addr_gen, get_write_ptr(mapping_tensor_cb_id));
+        noc_async_read_barrier();
+        cb_push_back(mapping_tensor_cb_id, 1);
+    }
+
+    for (uint32_t token = 0; token < tokens_per_device; token++) {
+        cb_reserve_back(input_tensor_cb_id, 1);
+        noc_async_read(
+            get_noc_addr(token, input_addr_gen) + subtoken_offset, get_write_ptr(input_tensor_cb_id), subtoken_size);
+        noc_async_read_barrier();
+        cb_push_back(input_tensor_cb_id, 1);
     }
 }
