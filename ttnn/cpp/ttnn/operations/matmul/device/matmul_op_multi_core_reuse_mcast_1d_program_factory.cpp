@@ -2589,8 +2589,8 @@ inline void override_gather_in0_program_parameters(
             UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
         }
     }
-
-    if (not src1_sharded) {
+    bool in1_uses_buffer = !src1_sharded || (src1_sharded && src_buffer_b->is_dram());
+    if (in1_uses_buffer) {
         auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
         for (uint32_t i = 0; i < override_variables.cores.size(); ++i) {
             const auto& core = override_variables.cores[i];
