@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
 
 #include <array>
+#include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <utility>
@@ -603,9 +604,12 @@ uint32_t ConvT2DSliceAttr::get_L1_usage(
     const IOShape& output_slice_start,
     const IOShape& output_slice_end,
     const op_slicing::Op2DSliceConfig& slice_config) {
+    auto conv_config = this->conv_config;
+    bool auto_shard = false;
     auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
     if (!conv_config.shard_layout.has_value()) {
         conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
+        auto_shard = true;
     }
     auto [input_slice, this_slice_padding, this_output_padding] =
         get_input_slice_and_padding(output_slice_start, output_slice_end);
@@ -704,6 +708,9 @@ uint32_t ConvT2DSliceAttr::get_L1_usage(
         sliced_input_tensor_memory_config.shard_spec().value(),
         precise_max_halo_bytes,
         l1_usage);
+    if (auto_shard) {
+        this->conv_config.shard_layout = std::nullopt;
+    }
     return std::max(
         precise_max_halo_bytes + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
         input_size + precise_max_halo_bytes);

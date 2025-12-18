@@ -1145,14 +1145,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    bool is_dram_conv = (dram_slice_config_.has_value() &&
-                         dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) ||
-                        (!dram_slice_config_.has_value() && !input_memory_config.is_l1());
-
+    auto conv_execution_path =
+        determine_conv2d_execution_path(input_memory_config.buffer_type() == BufferType::L1, dram_slice_config_);
     // Conv1D doesn't support DRAM
-    is_dram_conv = is_dram_conv && !is_conv1d;
+    bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
-    if (is_dram_conv) {
+    if (is_dram_conv && !mm_conv /*DRAM with Mamtul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
@@ -1354,7 +1352,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
-        mm_conv && auto_shard,
+        mm_conv && (auto_shard || is_dram_conv),
         has_bias,
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding.value(),

@@ -371,31 +371,6 @@ ResultWithOptions result_to_result_with_options(
     return std::get<0>(result);
 }
 
-// Enum to represent the execution path for conv2d operations
-enum class Conv2dExecutionPath {
-    L1,   // Execute conv2d using L1 memory
-    DRAM  // Execute conv2d using DRAM slicing
-};
-
-// Helper function to determine which conv2d execution path to take based on
-// slice configuration and input tensor properties
-Conv2dExecutionPath determine_conv2d_execution_path(
-    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config) {
-    // If slice config explicitly specifies L1_FULL, use L1 path
-    if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
-        return Conv2dExecutionPath::L1;
-    }
-
-    // If no slice config and input is already on device in L1, use L1 path
-    if (!slice_config.has_value() && tt::tt_metal::is_device_tensor(input_tensor) &&
-        input_tensor.memory_config().is_l1()) {
-        return Conv2dExecutionPath::L1;
-    }
-
-    // Otherwise, use DRAM path
-    return Conv2dExecutionPath::DRAM;
-}
-
 class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
     using RefTensor = std::reference_wrapper<ttnn::Tensor>;
