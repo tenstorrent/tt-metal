@@ -256,6 +256,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
 
         // Collect all cores' gcores in this row (sender + receivers)
         std::vector<const tt::tt_metal::experimental::udm::Gcore*> row_gcores;
+        row_gcores.reserve(num_cores_x);
         for (uint32_t x = 0; x < num_cores_x; ++x) {
             row_gcores.push_back(&gcores[y * num_cores_x + x]);
         }

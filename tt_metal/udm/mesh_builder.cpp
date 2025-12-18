@@ -380,6 +380,7 @@ private:
     void create_mesh() {
         // Create mesh object with the mesh_shape passed in as its dims
         std::vector<uint32_t> dims;
+        dims.reserve(mesh_shape_.dims());
         for (size_t i = 0; i < mesh_shape_.dims(); ++i) {
             dims.push_back(mesh_shape_[i]);
         }
