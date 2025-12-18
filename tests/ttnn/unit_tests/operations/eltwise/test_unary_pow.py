@@ -224,6 +224,8 @@ def test_pow_arange_masking_binary(device):
     # Generate all possible bit pattern for bf16
     tt_input = generate_clean_bf16_tensor()
 
+    
+
     tt_in = ttnn.from_torch(
         tt_input,
         dtype=ttnn.bfloat16,
@@ -418,303 +420,125 @@ def test_pow_arange_masking_unary_improved(exponent, device):
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_unary_pow_sweep_BF16_scalar_test(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor()
-    num_values = tensor_a.numel()
+def test_unary_pow_sweep(device):
+    """
+    Test unary pow (scalar exponent) with all configurations.
+    Tests: bf16, bf16-improved, fp32, fp32-improved
+    Each with check_fractional_ulp True and False.
 
-    # Summary file path based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    summary_file_path = f"unary_pow_bf16_scalar_summary_{fractional_suffix}.txt"
+    Note: Standard unary pow only supports positive exponents.
+    Improved version supports all exponents.
 
-    print(f"Testing unary pow (BF16) with scalar exponent, {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^b operations (b is scalar)")
+    Generates separate summary files for each configuration.
+    """
+    # Test configurations: (case_name, ttnn_dtype, torch_dtype, check_fractional_ulp, use_improved)
+    test_configs = [
+        ("bf16-false", ttnn.bfloat16, torch.bfloat16, False, False),
+        ("bf16-true", ttnn.bfloat16, torch.bfloat16, True, False),
+        ("bf16-improved-false", ttnn.bfloat16, torch.bfloat16, False, True),
+        ("bf16-improved-true", ttnn.bfloat16, torch.bfloat16, True, True),
+        ("fp32-false", ttnn.float32, torch.float32, False, False),
+        ("fp32-true", ttnn.float32, torch.float32, True, False),
+        ("fp32-improved-false", ttnn.float32, torch.float32, False, True),
+        ("fp32-improved-true", ttnn.float32, torch.float32, True, True),
+    ]
 
-    # Collect results for summary
-    all_results = []
+    for case_name, ttnn_dtype, torch_dtype, check_fractional_ulp, use_improved in test_configs:
+        print(f"\n{'='*60}")
+        print(f"Testing case: {case_name}")
+        print(f"{'='*60}")
 
-    # Filter to only positive exponents
-    positive_count = 0
+        # Generate clean tensor (tensor A)
+        tensor_a = generate_clean_bf16_tensor(torch_dtype)
+        num_values = tensor_a.numel()
 
-    # Iterate through each value in tensor_a as the scalar B value
-    for i in range(num_values):
-        # Get the i-th value from tensor_a to use as scalar B
-        b_val = tensor_a[i]
-        b_scalar = b_val.item()
+        # Summary file path
+        summary_file_path = f"unary_pow_{case_name}_summary.txt"
 
-        # Skip negative exponents
-        if b_scalar < 0:
-            continue
-
-        positive_count += 1
-
-        # Convert to ttnn tensor
-        tt_a = ttnn.from_torch(
-            tensor_a,
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Calculate golden result using torch
-        if not check_fractional_ulp:
-            golden = torch.pow(tensor_a, b_scalar)  # bf16 vs bf16
+        # Determine data type name for report
+        data_type_name = "BFloat16" if torch_dtype == torch.bfloat16 else "Float32"
+        test_name = f"Unary Power ({data_type_name}) - Scalar Exponent"
+        if use_improved:
+            test_name += " - Improved"
         else:
-            golden = torch.pow(tensor_a.to(torch.float32), b_scalar)  # bf16 vs fp32
+            test_name += " (Positive Only)"
 
-        # Run ttnn unary pow with scalar exponent
-        tt_result = ttnn.pow(tt_a, b_scalar)
-        result = ttnn.to_torch(tt_result)
+        print(f"Testing with {num_values} B values...")
+        print(f"Each iteration tests {num_values} element-wise A^b operations (b is scalar)")
 
-        # Run comp_ulp_check to get max ULP
-        max_ulp = comp_ulp_check(
-            golden=golden,
-            calculated=result,
-            allow_nonfinite=True,
+        # Collect results for summary
+        all_results = []
+        processed_count = 0
+
+        # Iterate through each value in tensor_a as the scalar B value
+        for i in range(num_values):
+            # Get the i-th value from tensor_a to use as scalar B
+            b_val = tensor_a[i]
+            b_scalar = b_val.item()
+
+            # Standard unary pow only supports positive exponents
+            if not use_improved and b_scalar < 0:
+                continue
+
+            processed_count += 1
+
+            # Convert to ttnn tensor
+            tt_a = ttnn.from_torch(
+                tensor_a,
+                dtype=ttnn_dtype,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Calculate golden result using torch
+            if not check_fractional_ulp:
+                golden = torch.pow(tensor_a, b_scalar)
+            else:
+                if torch_dtype == torch.bfloat16:
+                    golden = torch.pow(tensor_a.to(torch.float32), b_scalar)
+                else:
+                    golden = torch.pow(tensor_a.to(torch.float64), b_scalar)
+
+            # Run ttnn unary pow
+            if use_improved:
+                # Improved version using exp(b * log(A))
+                tt_result = ttnn.multiply(
+                    tt_a,
+                    b_scalar,
+                    input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
+                    activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
+                    use_legacy=False,
+                )
+            else:
+                # Standard unary pow with scalar exponent
+                tt_result = ttnn.pow(tt_a, b_scalar)
+
+            result = ttnn.to_torch(tt_result)
+
+            # Run comp_ulp_check to get max ULP
+            max_ulp = comp_ulp_check(
+                golden=golden,
+                calculated=result,
+                allow_nonfinite=True,
+            )
+
+            all_results.append((b_scalar, max_ulp))
+
+            # Print progress every 1000 iterations
+            if processed_count % 1000 == 0:
+                print(f"Processed {processed_count} B values...")
+
+        print(f"Total exponents tested: {processed_count}")
+
+        # Generate summary report
+        _generate_summary_report(
+            results=all_results,
+            summary_file_path=summary_file_path,
+            test_name=test_name,
+            data_type=data_type_name,
+            num_a_values=num_values,
+            num_b_values=processed_count,
         )
 
-        all_results.append((b_scalar, max_ulp))
-
-        # Print progress every 1000 iterations
-        if positive_count % 1000 == 0:
-            print(f"Processed {positive_count} positive B values...")
-
-    print(f"Total positive exponents tested: {positive_count}")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Unary Power (BF16) - Scalar Exponent (Positive Only)",
-        data_type="BFloat16",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nSummary report saved to {summary_file_path}")
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_unary_pow_sweep_FP32_scalar_test(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor(torch.float32)
-    num_values = tensor_a.numel()
-
-    # Summary file path based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    summary_file_path = f"unary_pow_fp32_scalar_summary_{fractional_suffix}.txt"
-
-    print(f"Testing unary pow (FP32) with scalar exponent, {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^b operations (b is scalar)")
-
-    # Collect results for summary
-    all_results = []
-
-    # Filter to only positive exponents
-    positive_count = 0
-
-    # Iterate through each value in tensor_a as the scalar B value
-    for i in range(num_values):
-        # Get the i-th value from tensor_a to use as scalar B
-        b_val = tensor_a[i]
-        b_scalar = b_val.item()
-
-        # Skip negative exponents
-        if b_scalar < 0:
-            continue
-
-        positive_count += 1
-
-        # Convert to ttnn tensor
-        tt_a = ttnn.from_torch(
-            tensor_a,
-            dtype=ttnn.float32,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Calculate golden result using torch (fp64 for higher precision reference)
-        if not check_fractional_ulp:
-            golden = torch.pow(tensor_a, b_scalar)  # fp32 vs fp32
-        else:
-            golden = torch.pow(tensor_a.to(torch.float64), b_scalar)  # fp32 vs fp64
-
-        # Run ttnn unary pow with scalar exponent
-        tt_result = ttnn.pow(tt_a, b_scalar)
-        result = ttnn.to_torch(tt_result)
-
-        # Run comp_ulp_check to get max ULP
-        max_ulp = comp_ulp_check(
-            golden=golden,
-            calculated=result,
-            allow_nonfinite=True,
-        )
-
-        all_results.append((b_scalar, max_ulp))
-
-        # Print progress every 1000 iterations
-        if positive_count % 1000 == 0:
-            print(f"Processed {positive_count} positive B values...")
-
-    print(f"Total positive exponents tested: {positive_count}")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Unary Power (FP32) - Scalar Exponent (Positive Only)",
-        data_type="Float32",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nSummary report saved to {summary_file_path}")
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_unary_pow_sweep_BF16_scalar_test_improved(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor()
-    num_values = tensor_a.numel()
-
-    # Summary file path based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    summary_file_path = f"unary_pow_bf16_scalar_improved_summary_{fractional_suffix}.txt"
-
-    print(f"Testing unary pow (BF16) with scalar exponent (improved), {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^b operations (b is scalar)")
-
-    # Collect results for summary
-    all_results = []
-
-    # Iterate through each value in tensor_a as the scalar B value
-    for i in range(num_values):
-        # Get the i-th value from tensor_a to use as scalar B
-        b_val = tensor_a[i]
-        b_scalar = b_val.item()
-
-        # Convert to ttnn tensor
-        tt_a = ttnn.from_torch(
-            tensor_a,
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Calculate golden result using torch
-        if not check_fractional_ulp:
-            golden = torch.pow(tensor_a, b_scalar)  # bf16 vs bf16
-        else:
-            golden = torch.pow(tensor_a.to(torch.float32), b_scalar)  # bf16 vs fp32
-
-        # Run ttnn unary pow using improved exp/log: A^b = exp(b * log(A))
-        tt_result = ttnn.multiply(
-            tt_a,
-            b_scalar,
-            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
-            use_legacy=False,
-        )
-        result = ttnn.to_torch(tt_result)
-
-        # Run comp_ulp_check to get max ULP
-        max_ulp = comp_ulp_check(
-            golden=golden,
-            calculated=result,
-            allow_nonfinite=True,
-        )
-
-        all_results.append((b_scalar, max_ulp))
-
-        # Print progress every 1000 iterations
-        if (i + 1) % 1000 == 0:
-            print(f"Processed {i + 1}/{num_values} B values...")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Unary Power (BF16) - Scalar Exponent - Improved",
-        data_type="BFloat16",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nSummary report saved to {summary_file_path}")
-
-
-@pytest.mark.parametrize("check_fractional_ulp", [True, False])
-def test_unary_pow_sweep_FP32_scalar_test_improved(device, check_fractional_ulp):
-    # Generate clean bf16 tensor (tensor A)
-    tensor_a = generate_clean_bf16_tensor(torch.float32)
-    num_values = tensor_a.numel()
-
-    # Summary file path based on check_fractional_ulp parameter
-    fractional_suffix = "true" if check_fractional_ulp else "false"
-    summary_file_path = f"unary_pow_fp32_scalar_improved_summary_{fractional_suffix}.txt"
-
-    print(f"Testing unary pow (FP32) with scalar exponent (improved), {num_values} B values...")
-    print(f"Each iteration tests {num_values} element-wise A^b operations (b is scalar)")
-
-    # Collect results for summary
-    all_results = []
-
-    # Iterate through each value in tensor_a as the scalar B value
-    for i in range(num_values):
-        # Get the i-th value from tensor_a to use as scalar B
-        b_val = tensor_a[i]
-        b_scalar = b_val.item()
-
-        # Convert to ttnn tensor
-        tt_a = ttnn.from_torch(
-            tensor_a,
-            dtype=ttnn.float32,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Calculate golden result using torch (fp64 for higher precision reference)
-        if not check_fractional_ulp:
-            golden = torch.pow(tensor_a, b_scalar)  # fp32 vs fp32
-        else:
-            golden = torch.pow(tensor_a.to(torch.float64), b_scalar)  # fp32 vs fp64
-
-        # Run ttnn unary pow using improved exp/log: A^b = exp(b * log(A))
-        tt_result = ttnn.multiply(
-            tt_a,
-            b_scalar,
-            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)],
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)],
-            use_legacy=False,
-        )
-        result = ttnn.to_torch(tt_result)
-
-        # Run comp_ulp_check to get max ULP
-        max_ulp = comp_ulp_check(
-            golden=golden,
-            calculated=result,
-            allow_nonfinite=True,
-        )
-
-        all_results.append((b_scalar, max_ulp))
-
-        # Print progress every 1000 iterations
-        if (i + 1) % 1000 == 0:
-            print(f"Processed {i + 1}/{num_values} B values...")
-
-    # Generate summary report
-    _generate_summary_report(
-        results=all_results,
-        summary_file_path=summary_file_path,
-        test_name="Unary Power (FP32) - Scalar Exponent - Improved",
-        data_type="Float32",
-        num_a_values=num_values,
-        num_b_values=num_values,
-    )
-
-    print(f"\nSummary report saved to {summary_file_path}")
+        print(f"Summary report saved to {summary_file_path}")
