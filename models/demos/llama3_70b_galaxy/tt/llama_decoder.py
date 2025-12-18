@@ -13,6 +13,7 @@ from models.common.utility_functions import (
 )
 
 import torch
+import os
 
 
 class TtTransformerBlock(LightweightModule):
@@ -151,7 +152,10 @@ class TtTransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         # breakpoint()
-        print(f"Layer nr: {self.layer_num}")
+
+        if os.environ.get("DEBUG_PCC") == "1":
+            print(f"Layer nr: {self.layer_num}")
+
         if self.layer_num == 0 or mode == "prefill":
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
@@ -165,7 +169,7 @@ class TtTransformerBlock(LightweightModule):
                 h = ttnn.add(x, h, dtype=ttnn.bfloat16)
 
                 # debug pcc
-                if self.reference_model is not None:
+                if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
                     ref_after_ffn_add = self.reference_model.layers[self.layer_num - 1].ref_after_ffn_add
                     # convert to torch
                     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -182,7 +186,7 @@ class TtTransformerBlock(LightweightModule):
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_attention_norm = self.reference_model.layers[self.layer_num].ref_after_attention_norm
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -208,7 +212,7 @@ class TtTransformerBlock(LightweightModule):
         )
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_attention = self.reference_model.layers[self.layer_num].ref_after_attention
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -229,7 +233,7 @@ class TtTransformerBlock(LightweightModule):
                 h = ttnn.add(attn_out, h, dtype=ttnn.bfloat16)
 
             # debug pcc
-            if self.reference_model is not None:
+            if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
                 ref_after_attention_add = self.reference_model.layers[self.layer_num].ref_after_attention_add
                 # convert to torch
                 mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -247,7 +251,7 @@ class TtTransformerBlock(LightweightModule):
             attn_out.deallocate(True)
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_ffn_norm = self.reference_model.layers[self.layer_num].ref_after_ffn_norm
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -263,7 +267,7 @@ class TtTransformerBlock(LightweightModule):
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_feed_forward = self.reference_model.layers[self.layer_num].ref_after_feed_forward
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
@@ -279,7 +283,7 @@ class TtTransformerBlock(LightweightModule):
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
 
             # debug pcc
-            if self.reference_model is not None:
+            if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
                 ref_after_ffn_add = self.reference_model.layers[self.layer_num].ref_after_ffn_add
                 # convert to torch
                 mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])

@@ -12,6 +12,8 @@ from models.common.utility_functions import (
     comp_allclose,
 )
 
+import os
+
 
 def pad_to_next_multiple(tensor):
     # Get the current size of the last two dimensions
@@ -165,7 +167,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
@@ -194,17 +196,18 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # # debug pcc
-        # if self.reference_model is not None:
-        #     ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
-        #     # convert to torch
-        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
-        #     comp_out = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)[:, :,:,:]
-        #     comp_out= torch.permute(comp_out, (0,2,1,3))
-        #     passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
-        #     print(f"W1 reduced PCC: {pcc_message}")
-        #     print(comp_allclose(ref_after_w1, comp_out))
-        #     print()
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
+            # convert to torch
+            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
+            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
+            comp_out = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)[:, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
+            print(f"W1 reduced PCC: {pcc_message}")
+            print(comp_allclose(ref_after_w1, comp_out))
+            print()
 
         w3_out = ttnn.linear(
             x,
@@ -222,7 +225,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(x)
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
@@ -242,17 +245,18 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w3_out)
 
-        # # debug pcc
-        # if self.reference_model is not None:
-        #     ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
-        #     # convert to torch
-        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
-        #     comp_out = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)
-        #     comp_out= torch.permute(comp_out, (0,2,1,3))
-        #     passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
-        #     print(f"W3 reduced PCC: {pcc_message}")
-        #     print(comp_allclose(ref_after_w3, comp_out))
-        #     print()
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
+            # convert to torch
+            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
+            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
+            comp_out = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)[:, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
+            print(f"W3 reduced PCC: {pcc_message}")
+            print(comp_allclose(ref_after_w3, comp_out))
+            print()
 
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
@@ -262,17 +266,18 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        # # debug pcc
-        # if self.reference_model is not None:
-        #     ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
-        #     # convert to torch
-        #     mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 3), mesh_shape=[8,4])
-        #     comp_out = ttnn.to_torch(ff1ff3, mesh_composer=mesh_composer)
-        #     comp_out= torch.permute(comp_out, (0,2,1,3))
-        #     passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
-        #     print(f"W3 reduced PCC: {pcc_message}")
-        #     print(comp_allclose(ref_after_mul, comp_out))
-        #     print()
+        # debug pcc
+        if self.reference_model is not None:
+            ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
+            # convert to torch
+            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
+            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
+            comp_out = ttnn.to_torch(ff1ff3, mesh_composer=mesh_composer)[:, :, :, :]
+            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
+            passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
+            print(f"After mul PCC: {pcc_message}")
+            print(comp_allclose(ref_after_mul, comp_out))
+            print()
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
@@ -288,7 +293,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
@@ -315,7 +320,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         # debug pcc
-        if self.reference_model is not None:
+        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
             ref_after_w2 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w2
             # convert to torch
             mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
