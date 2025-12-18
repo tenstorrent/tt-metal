@@ -7,10 +7,37 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
 #include <ostream>
+#include <simde/x86/avx2.h>
 
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
+
+namespace {
+// Runtime CPU feature detection - checked once at startup
+inline bool cpu_supports_avx2() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__GNUC__) || defined(__clang__)
+    // GCC/Clang built-in - safe and portable
+    static const bool supported = __builtin_cpu_supports("avx2");
+    return supported;
+#elif defined(_MSC_VER)
+    // MSVC path (if ever needed)
+    static const bool supported = []() {
+        int cpuInfo[4];
+        __cpuidex(cpuInfo, 7, 0);
+        return (cpuInfo[1] & (1 << 5)) != 0;  // AVX2 bit in EBX
+    }();
+    return supported;
+#else
+    return false;
+#endif
+#else
+    // Non-x86 architecture (ARM, etc.) - AVX not available
+    return false;
+#endif
+}
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
     switch (layout) {
@@ -254,6 +281,87 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     return result;
 }
 
+// AVX-optimized tilize for the common case: 16x16 faces, bfloat16 (2 bytes per element)
+// Each face row = 16 elements * 2 bytes = 32 bytes = one AVX2 register
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
+    tt::stl::Span<const T> in_row_major,
+    const PhysicalSize& shape,
+    std::optional<PhysicalSize> tile_shape,
+    std::optional<PhysicalSize> face_shape) {
+    ZoneScoped;
+
+    const size_t H = shape[0];
+    const size_t W = shape[1];
+    const size_t batch_size = H * W;
+    const size_t B = in_row_major.size() / batch_size;
+
+    const size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    const size_t tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    const size_t face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    const size_t face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+
+    const size_t row_tiles = H / tile_H;
+    const size_t col_tiles = W / tile_W;
+    const size_t faces_per_tile_row = tile_H / face_H;
+    const size_t faces_per_tile_col = tile_W / face_W;
+    const size_t elements_per_tile = tile_H * tile_W;
+    const size_t elements_per_face = face_H * face_W;
+    const size_t face_row_bytes = face_W * sizeof(T);
+
+    // Pre-allocate entire output buffer
+    std::vector<T> tilized_output(in_row_major.size());
+
+    // Check if we can use AVX: face row must be 32 bytes AND CPU must support AVX2
+    const bool can_use_avx = (face_row_bytes == 32) && cpu_supports_avx2();
+
+    for (size_t b = 0; b < B; b++) {
+        const T* batch_src = in_row_major.data() + b * batch_size;
+        T* batch_dst = tilized_output.data() + b * batch_size;
+
+        for (size_t tile_row = 0; tile_row < row_tiles; tile_row++) {
+            for (size_t tile_col = 0; tile_col < col_tiles; tile_col++) {
+                const size_t tile_idx = tile_row * col_tiles + tile_col;
+                T* tile_dst = batch_dst + tile_idx * elements_per_tile;
+
+                // Process each face in the tile
+                for (size_t face_row_idx = 0; face_row_idx < faces_per_tile_row; face_row_idx++) {
+                    for (size_t face_col_idx = 0; face_col_idx < faces_per_tile_col; face_col_idx++) {
+                        const size_t face_idx = face_row_idx * faces_per_tile_col + face_col_idx;
+                        T* face_dst = tile_dst + face_idx * elements_per_face;
+
+                        // Source position in row-major input
+                        const size_t src_row_start = tile_row * tile_H + face_row_idx * face_H;
+                        const size_t src_col_start = tile_col * tile_W + face_col_idx * face_W;
+
+                        if (can_use_avx) {
+                            // AVX path: each row is exactly 32 bytes
+                            for (size_t row = 0; row < face_H; row++) {
+                                const T* src_row = batch_src + (src_row_start + row) * W + src_col_start;
+                                T* dst_row = face_dst + row * face_W;
+
+                                // Load 32 bytes and store (unaligned)
+                                simde__m256i data =
+                                    simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(src_row));
+                                simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst_row), data);
+                            }
+                        } else {
+                            // Fallback: use memcpy
+                            for (size_t row = 0; row < face_H; row++) {
+                                const T* src_row = batch_src + (src_row_start + row) * W + src_col_start;
+                                T* dst_row = face_dst + row * face_W;
+                                std::memcpy(dst_row, src_row, face_row_bytes);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return tilized_output;
+}
+
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_nfaces(
     tt::stl::Span<const T> in_row_major,
@@ -269,21 +377,27 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
     size_t batch_size = H * W;
     size_t B = in_row_major.size() / batch_size;  // Number of batches
 
-    std::vector<T> tilized_input;
-    tilized_input.reserve(in_row_major.size());
-
     size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     size_t tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     size_t face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
     size_t face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
 
-    size_t row_tiles = H / tile_H;
-    size_t col_tiles = W / tile_W;
-    size_t row_of_tiles_num_elements = tile_H * W;
-
     TT_FATAL(!in_row_major.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
+
+    // Use AVX-optimized path for the common case (no transpose)
+    if (!transpose_face && !transpose_face_order) {
+        return convert_layout_row_major_to_tile_nfaces_avx(in_row_major, shape, tile_shape, face_shape);
+    }
+
+    // Original path for transpose cases
+    std::vector<T> tilized_input;
+    tilized_input.reserve(in_row_major.size());
+
+    size_t row_tiles = H / tile_H;
+    size_t col_tiles = W / tile_W;
+    size_t row_of_tiles_num_elements = tile_H * W;
 
     auto write_face = [&](size_t face_idx, size_t face_height, size_t face_width, size_t stride) {
         size_t offset = tilized_input.size();
