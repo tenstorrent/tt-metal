@@ -346,7 +346,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> local_writer_kernel_ids;
     std::vector<CoreCoord> local_copy_core_coords;
     {
-        auto compute_grid = target_device->compute_with_storage_grid_size();
+        auto compute_grid = mesh_device->compute_with_storage_grid_size();
         CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
         CoreRangeSet fabric_cores = worker_core_ranges;
         CoreRangeSet local_copy_cores = all_cores.subtract(fabric_cores);
