@@ -4,7 +4,7 @@ hosts: {
   rack: 1
   shelf_u: 30
   node_type: "1x_bh_quietbox"
-  host: "sjc1-tt-qb-03"
+  host: "bh-qbae-03"
 }
 hosts: {
   hall: "SC_Floor_5"
@@ -12,5 +12,5 @@ hosts: {
   rack: 1
   shelf_u: 40
   node_type: "1x_bh_quietbox"
-  host: "sjc1-tt-qb-04"
+  host: "bh-qbae-04"
 }
