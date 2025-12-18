@@ -145,6 +145,8 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
+      - name: See kmd's debug mappings
+        run: sudo cat /sys/kernel/debug/tenstorrent/0/mappings
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         uses: ./.github/actions/docker-run
@@ -171,6 +173,9 @@ jobs:
             else
               pytest tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
+      - name: See kmd's debug mappings after
+        if: ${{ always() }}
+        run: sudo cat /sys/kernel/debug/tenstorrent/0/mappings
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
