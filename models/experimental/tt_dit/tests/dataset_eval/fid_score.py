@@ -10,7 +10,7 @@ import torch
 from torchvision import transforms as TF
 from PIL import Image
 from loguru import logger
-from inception import InceptionV3
+from .inception import InceptionV3
 from threadpoolctl import threadpool_limits
 
 COCO_STATISTICS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/tools/val2014.npz"

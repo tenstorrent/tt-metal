@@ -12,8 +12,8 @@ from pathlib import Path
 from loguru import logger
 from PIL import Image
 
-from clip_encoder import CLIPEncoder
-from fid_score import calculate_fid_score
+from ..clip_encoder import CLIPEncoder
+from ..fid_score import calculate_fid_score
 
 
 COCO_CAPTIONS_DOWNLOAD_PATH = (
