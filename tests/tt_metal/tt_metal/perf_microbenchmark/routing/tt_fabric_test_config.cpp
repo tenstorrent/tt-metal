@@ -1393,19 +1393,21 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
     } else if (is_multi_mesh()) {
         // In multi-mesh tests, we can only send to adjacent meshes.
         std::vector<MeshId> adjacent_mesh_ids = get_adjacent_mesh_ids();
+        const auto& local_nodes = device_info_provider_.get_local_node_ids();
+        MeshId local_mesh_id = local_nodes[0].mesh_id;
+        log_info(tt::LogTest, "Current mesh ID: {}", local_nodes[0].mesh_id);
         for (auto mesh_id : adjacent_mesh_ids) {
             log_info(tt::LogTest, "Adjacent mesh ID: {}", mesh_id);
         }
-        const auto& local_nodes = device_info_provider_.get_local_node_ids();
-        MeshId local_mesh_id = local_nodes[0].mesh_id;
-
         std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        log_info(tt::LogTest, "FOR CURRENT MESH_ID : Current mesh ID: {}", local_nodes[0].mesh_id);
         for (const auto& pair : all_pairs) {
             bool src_is_local = (pair.first.mesh_id == local_mesh_id);
             bool dst_is_local = (pair.second.mesh_id == local_mesh_id);
             bool dst_is_adjacent = std::find(adjacent_mesh_ids.begin(), adjacent_mesh_ids.end(), pair.second.mesh_id) !=
                                    adjacent_mesh_ids.end();
             if (src_is_local && (dst_is_local || dst_is_adjacent)) {
+                log_info(tt::LogTest, "Adding pair: {} -> {}", pair.first.mesh_id, pair.second.mesh_id);
                 filtered_pairs.push_back(pair);
             }
         }

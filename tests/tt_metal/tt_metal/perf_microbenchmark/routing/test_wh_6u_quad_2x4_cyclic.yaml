@@ -36,3 +36,18 @@ Tests:
         patterns:
           - destination:
               device: [0, 4]
+
+  - name: "FlowControlCyclicMesh"
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      ntype: unicast_write
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all

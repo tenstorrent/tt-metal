@@ -194,6 +194,13 @@ def generate_supported_rank_bindings():
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
         "4x2_multi_mesh_rank_binding.yaml",
     )
+    generate_rank_binding_yaml(
+        tray_to_pcie_device_mapping,
+        QUAD_MESH_RANK_BINDINGS,
+        WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
+        "4x2_multi_mesh_rank_binding.yaml",
+    )
 
 
 if __name__ == "__main__":
