@@ -563,6 +563,7 @@ Vision
 
    ttnn.grid_sample
    ttnn.upsample
+   ttnn.rotate
 
 Generic
 =======
