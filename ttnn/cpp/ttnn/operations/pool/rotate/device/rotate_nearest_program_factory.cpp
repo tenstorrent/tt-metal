@@ -114,18 +114,28 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         tt::CBIndex::c_0, program, all_cores, output_cb_page_size, num_cb_pages, output_cb_data_format);
 
+    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy
+    const auto [fill_cb_index, fill_cb_handle] =
+        tt::tt_metal::create_cb(tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+
+    // Check if fill value is zero (can use MEM_ZEROS_BASE)
+    const bool fill_is_zero = (fill_value_bf16 == 0);
+
     // Reader compile-time arguments (RISCV_0)
     std::vector<uint32_t> reader_compile_time_args = {
-        output_cb_index,             // ct_arg[0]: output_cb_index
-        aligned_input_stick_nbytes,  // ct_arg[1]: aligned_input_stick_nbytes (for DRAM reads)
-        input_batch,                 // ct_arg[2]: input_batch
-        input_height,                // ct_arg[3]: input_height
-        input_width,                 // ct_arg[4]: input_width
-        input_channels,              // ct_arg[5]: input_channels
-        num_cb_pages,                // ct_arg[6]: num_cb_pages
+        output_cb_index,                      // ct_arg[0]: output_cb_index
+        aligned_input_stick_nbytes,           // ct_arg[1]: aligned_input_stick_nbytes (for DRAM reads)
+        input_batch,                          // ct_arg[2]: input_batch
+        input_height,                         // ct_arg[3]: input_height
+        input_width,                          // ct_arg[4]: input_width
+        input_channels,                       // ct_arg[5]: input_channels
+        num_cb_pages,                         // ct_arg[6]: num_cb_pages
+        fill_cb_index,                        // ct_arg[7]: fill_cb_index
+        input_stick_nbytes,                   // ct_arg[8]: input_stick_nbytes (unaligned, for fill)
+        static_cast<uint32_t>(fill_is_zero),  // ct_arg[9]: fill_is_zero
     };
 
-    // Append tensor accessor args for input tensor (starts at ct_arg[7])
+    // Append tensor accessor args for input tensor (starts at ct_arg[10])
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     // Writer compile-time arguments (RISCV_1)

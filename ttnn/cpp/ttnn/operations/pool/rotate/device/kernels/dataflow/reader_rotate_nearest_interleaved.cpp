@@ -27,10 +27,24 @@ void kernel_main() {
     constexpr uint32_t input_width = get_compile_time_arg_val(4);
     constexpr uint32_t input_channels = get_compile_time_arg_val(5);
     constexpr uint32_t num_cb_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
+    constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
 
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr auto src_args = TensorAccessorArgs<10>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
     constexpr uint32_t batch_size = num_cb_pages / 2 < 5 ? num_cb_pages / 2 : 5;
+
+    uint32_t fill_stick_addr;
+    if constexpr (fill_is_zero) {
+        fill_stick_addr = MEM_ZEROS_BASE;
+    } else {
+        fill_stick_addr = get_write_ptr(fill_cb_index);
+        volatile tt_l1_ptr uint16_t* fill_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
+        for (uint32_t c = 0; c < input_channels; c++) {
+            fill_ptr[c] = static_cast<uint16_t>(fill_value_bf16);
+        }
+    }
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_batch =
@@ -66,10 +80,13 @@ void kernel_main() {
                 const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
                 noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
             } else {
-                volatile tt_l1_ptr uint16_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-                for (uint32_t c = 0; c < input_channels; c++) {
-                    output_ptr[c] = static_cast<uint16_t>(fill_value_bf16);
+                uint32_t copy_size = input_stick_nbytes_unaligned;
+                if constexpr (fill_is_zero) {
+                    if (copy_size > MEM_ZEROS_SIZE) {
+                        copy_size = MEM_ZEROS_SIZE;
+                    }
                 }
+                noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, copy_size);
             }
             l1_write_addr += input_stick_nbytes;
         }
