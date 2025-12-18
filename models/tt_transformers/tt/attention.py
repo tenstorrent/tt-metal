@@ -815,9 +815,9 @@ class Attention(LightweightModule):
 
         print("SDPA input tensors:")
         ttnn.set_printoptions(profile="full")
-        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[1, 1, :80, :4]}")
-        print(f"keys_BKSD: {keys_BKSD[1, 1, :80, :4]}")
-        print(f"values_BKSD: {values_BKSD[1, 1, :80, :4]}")
+        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, :80, :4]}")
+        print(f"keys_BKSD: {keys_BKSD[0, 0, :80, :4]}")
+        print(f"values_BKSD: {values_BKSD[0, 0, :80, :4]}")
         print(f"chunk_start_idx: {chunk_start_idx}")
         print(f"page_table: {page_table}")
 
@@ -845,7 +845,7 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
-        print(f"attn_output_84SD: {attn_output_84SD[1, 1, :80, :4]}")
+        print(f"attn_output_84SD: {attn_output_84SD[0, 0, :80, :4]}")
         ttnn.set_printoptions(profile="short")
 
         # deallocate keys and values
