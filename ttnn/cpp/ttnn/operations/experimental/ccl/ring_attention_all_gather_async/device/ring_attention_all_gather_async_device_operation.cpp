@@ -234,10 +234,8 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
         tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
-
 // TODO: Remove the following helper function once ring_join_sdpa is migrated to new infra
-namespace ttnn {
+
 tt::tt_metal::operation::ProgramWithCallbacks
 ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
     tt::tt_metal::Program& program,
@@ -253,26 +251,25 @@ ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
-    auto cached_program = operations::experimental::ccl::ring_attention_all_gather_async::
-        RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
-            ring_attention_all_gather_async_multi_core_with_workers_helper(
-                program,
-                input_tensor,
-                target_device,
-                forward_device,
-                backward_device,
-                output_tensor,
-                dim,
-                num_links,
-                ring_size,
-                ring_index,
-                topology,
-                semaphore,
-                sub_device_id,
-                fused_op_signaler,
-                core_grid_offset);
+    auto cached_program = RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
+        ring_attention_all_gather_async_multi_core_with_workers_helper(
+            program,
+            input_tensor,
+            target_device,
+            forward_device,
+            backward_device,
+            output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            semaphore,
+            sub_device_id,
+            fused_op_signaler,
+            core_grid_offset);
 
     auto& shared_variables = cached_program.shared_variables;
     auto override_runtime_arguments_callback =
@@ -283,17 +280,15 @@ ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& semaphore =
-                static_cast<const ttnn::operations::experimental::ccl::ring_attention_all_gather_async::
-                                RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t*>(operation)
+                static_cast<const RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t*>(operation)
                     ->semaphore;
 
-            operations::experimental::ccl::ring_attention_all_gather_async::
-                RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments_helper(
-                    shared_variables, program, input_tensors, output_tensors, semaphore);
+            RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_runtime_arguments_helper(
+                shared_variables, program, input_tensors, output_tensors, semaphore);
         };
 
     return {
         .program = std::move(cached_program.program),
         .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async

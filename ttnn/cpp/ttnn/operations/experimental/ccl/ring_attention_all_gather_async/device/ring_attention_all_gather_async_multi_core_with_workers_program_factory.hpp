@@ -46,9 +46,17 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    template <typename shared_variables_t>
+    static void override_runtime_arguments_helper(
+        const shared_variables_t& shared_variables,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<Tensor>& output_tensors,
+        const std::vector<GlobalSemaphore>& semaphore);
 
-    static cached_program_t ring_attention_all_gather_async_multi_core_with_workers_helper(
+    // Due to constraints, cannot use cached_program_t with cached_mesh_workload_t
+    using cached_program_shared_variable_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    static cached_program_shared_variable_t ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::Program& program,
         const std::vector<Tensor>& input_tensor,
         IDevice* target_device,
@@ -65,16 +73,8 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
         CoreCoord core_grid_offset = CoreCoord(0, 0));
 
-    template <typename shared_variables_t>
-    static void override_runtime_arguments_helper(
-        const shared_variables_t& shared_variables,
-        Program& program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<Tensor>& output_tensors,
-        const std::vector<GlobalSemaphore>& semaphore);
-
 private:
-    static cached_program_t create_at(
+    static cached_program_shared_variable_t create_at(
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,

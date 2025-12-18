@@ -386,22 +386,23 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         persistent_output_buffer_v,
     };
     // TODO: TODO: Remove the following helper function once ring_join_sdpa is migrated to new infra
-    auto all_gather_program = ttnn::ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
-        ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
-        all_gather_input_tensors,
-        target_device,
-        forward_device,
-        backward_device,
-        all_gather_output_tensors,
-        this->all_gather_struct.dim,
-        this->all_gather_struct.num_links,
-        this->all_gather_struct.ring_size,
-        device_index,
-        this->all_gather_struct.topology,
-        this->all_gather_struct.semaphore,
-        this->all_gather_struct.sub_device_id,
-        all_gather_fused_op_signaler,
-        this->ccl_core_grid_offset);
+    auto all_gather_program = ttnn::operations::experimental::ccl::ring_attention_all_gather_async::
+        ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
+            ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
+            all_gather_input_tensors,
+            target_device,
+            forward_device,
+            backward_device,
+            all_gather_output_tensors,
+            this->all_gather_struct.dim,
+            this->all_gather_struct.num_links,
+            this->all_gather_struct.ring_size,
+            device_index,
+            this->all_gather_struct.topology,
+            this->all_gather_struct.semaphore,
+            this->all_gather_struct.sub_device_id,
+            all_gather_fused_op_signaler,
+            this->ccl_core_grid_offset);
 
     const auto all_gather_callback = all_gather_program.override_runtime_arguments_callback;
 

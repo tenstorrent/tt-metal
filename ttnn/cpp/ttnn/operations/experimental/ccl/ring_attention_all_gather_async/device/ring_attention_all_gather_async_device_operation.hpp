@@ -52,10 +52,7 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
-
 // TODO: Remove the following helper function once ring_join_sdpa is migrated to new infra
-namespace ttnn {
 tt::tt_metal::operation::ProgramWithCallbacks
 ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
     tt::tt_metal::Program& program,
@@ -73,7 +70,7 @@ ring_attention_all_gather_async_multi_core_with_workers_program_with_callbacks(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
-}
+}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
 
 namespace ttnn::prim {
 constexpr auto ring_attention_all_gather_async = ttnn::register_operation<

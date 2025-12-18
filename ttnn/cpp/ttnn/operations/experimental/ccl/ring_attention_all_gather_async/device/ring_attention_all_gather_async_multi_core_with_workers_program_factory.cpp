@@ -29,7 +29,7 @@
 
 namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
 
-RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_t
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         tt::tt_metal::Program& program,
@@ -464,7 +464,7 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::
     return {std::move(program), std::move(shared_variables)};
 }
 
-ttnn::device_operation::CachedProgram<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::shared_variables_t>
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
