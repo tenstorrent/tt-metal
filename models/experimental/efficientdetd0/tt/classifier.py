@@ -11,7 +11,7 @@ class TtClassifier:
         self,
         device,
         parameters,
-        conv_params,
+        module_args,
         num_classes,
         num_layers,
         pyramid_levels=5,
@@ -24,8 +24,7 @@ class TtClassifier:
                     device=device,
                     parameters=parameters.conv_list[j][i],
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    conv_params=conv_params.conv_list[j][i],
-                    batch=1,
+                    module_args=module_args.conv_list[j][i],
                     deallocate_activation=True,
                     dtype=ttnn.bfloat8_b,
                 )
@@ -39,8 +38,7 @@ class TtClassifier:
                 device=device,
                 parameters=parameters.header_list[j],
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                conv_params=conv_params.header[j],
-                batch=1,
+                module_args=module_args.header[j],
                 deallocate_activation=True,
                 dtype=ttnn.bfloat8_b,
             )

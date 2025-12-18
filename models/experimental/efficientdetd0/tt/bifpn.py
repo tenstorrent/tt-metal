@@ -5,10 +5,12 @@
 import ttnn
 from typing import Tuple
 from models.experimental.efficientdetd0.tt.utils import (
+    UpsampleConfiguration,
     TtSeparableConvBlock,
     TtMaxPool2dDynamicSamePadding,
     TtConv2dDynamicSamePadding,
 )
+from models.tt_cnn.tt.builder import TtUpsample
 
 
 def compute_fast_attention_weights(weight, epsilon, three_weights):
@@ -38,7 +40,7 @@ class TtBiFPN:
         self,
         device,
         parameters,
-        conv_params,
+        module_args,
         num_channels: int,
         first_time: bool = False,
         epsilon: float = 1e-4,
@@ -51,7 +53,7 @@ class TtBiFPN:
         Args:
             device: TTNN device
             parameters: Model parameters containing weights for all conv layers
-            conv_params: Configuration parameters for all conv operations
+            module_args: Configuration parameters for all operations
             num_channels: Number of channels in BiFPN layers
             first_time: Whether input comes directly from backbone (requires channel reduction)
             epsilon: Small constant for numerical stability in weighted attention
@@ -68,16 +70,16 @@ class TtBiFPN:
 
         # Initialize separable conv blocks for upsampling path
         self.conv6_up = TtSeparableConvBlock(
-            device, parameters.conv6_up, shard_layout, conv_params.conv6_up, deallocate_activation=True
+            device, parameters.conv6_up, shard_layout, module_args.conv6_up, deallocate_activation=True
         )
         self.conv5_up = TtSeparableConvBlock(
-            device, parameters.conv5_up, shard_layout, conv_params.conv5_up, deallocate_activation=True
+            device, parameters.conv5_up, shard_layout, module_args.conv5_up, deallocate_activation=True
         )
         self.conv4_up = TtSeparableConvBlock(
-            device, parameters.conv4_up, shard_layout, conv_params.conv4_up, deallocate_activation=True
+            device, parameters.conv4_up, shard_layout, module_args.conv4_up, deallocate_activation=True
         )
         self.conv3_up = TtSeparableConvBlock(
-            device, parameters.conv3_up, shard_layout, conv_params.conv3_up, deallocate_activation=True
+            device, parameters.conv3_up, shard_layout, module_args.conv3_up, deallocate_activation=True
         )
 
         # Initialize separable conv blocks for downsampling path
@@ -85,62 +87,68 @@ class TtBiFPN:
             device,
             parameters.conv4_down,
             shard_layout,
-            conv_params.conv4_down,
+            module_args.conv4_down,
             deallocate_activation=True,
         )
         self.conv5_down = TtSeparableConvBlock(
             device,
             parameters.conv5_down,
             shard_layout,
-            conv_params.conv5_down,
+            module_args.conv5_down,
             deallocate_activation=True,
         )
         self.conv6_down = TtSeparableConvBlock(
             device,
             parameters.conv6_down,
             shard_layout,
-            conv_params.conv6_down,
+            module_args.conv6_down,
             deallocate_activation=True,
         )
         self.conv7_down = TtSeparableConvBlock(
             device,
             parameters.conv7_down,
             shard_layout,
-            conv_params.conv7_down,
+            module_args.conv7_down,
             deallocate_activation=True,
+        )
+
+        # Initialize Upsample layers
+        self.p6_upsample = TtUpsample(
+            configuration=UpsampleConfiguration.from_model_args(module_args.p6_upsample),
+            device=device,
+        )
+        self.p5_upsample = TtUpsample(
+            configuration=UpsampleConfiguration.from_model_args(module_args.p5_upsample),
+            device=device,
+        )
+        self.p4_upsample = TtUpsample(
+            configuration=UpsampleConfiguration.from_model_args(module_args.p4_upsample),
+            device=device,
+        )
+        self.p3_upsample = TtUpsample(
+            configuration=UpsampleConfiguration.from_model_args(module_args.p3_upsample),
+            device=device,
         )
 
         # Initialize maxpool layers for downsampling
         self.p4_downsample = TtMaxPool2dDynamicSamePadding(
             device,
-            None,
-            # shard_layout,
-            None,
-            conv_params.p4_downsample,
+            module_args.p4_downsample,
             deallocate_activation=False,
         )
         self.p5_downsample = TtMaxPool2dDynamicSamePadding(
             device,
-            None,
-            # shard_layout,
-            None,
-            conv_params.p5_downsample,
+            module_args.p5_downsample,
             deallocate_activation=False,
         )
         self.p6_downsample = TtMaxPool2dDynamicSamePadding(
             device,
-            None,
-            # shard_layout,
-            None,
-            conv_params.p6_downsample,
+            module_args.p6_downsample,
             deallocate_activation=False,
         )
         self.p7_downsample = TtMaxPool2dDynamicSamePadding(
             device,
-            None,
-            # shard_layout,
-            None,
-            conv_params.p7_downsample,
+            module_args.p7_downsample,
             deallocate_activation=False,
         )
 
@@ -150,21 +158,21 @@ class TtBiFPN:
                 device,
                 parameters.p3_down_channel[0],
                 shard_layout,
-                conv_params.p3_down_channel[0],
+                module_args.p3_down_channel[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p4_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p4_down_channel[0],
                 shard_layout,
-                conv_params.p4_down_channel[0],
+                module_args.p4_down_channel[0],
                 deallocate_activation=False,
             )
             self.p5_down_channel = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_down_channel[0],
                 shard_layout,
-                conv_params.p5_down_channel[0],
+                module_args.p5_down_channel[0],
                 deallocate_activation=False,
             )
 
@@ -173,25 +181,19 @@ class TtBiFPN:
                 device,
                 parameters.p5_to_p6[0],
                 shard_layout,
-                conv_params.p5_to_p6[0],
+                module_args.p5_to_p6[0],
                 deallocate_activation=False,
             )
             self.p5_to_p6_pool = TtMaxPool2dDynamicSamePadding(
                 device,
-                None,
-                # shard_layout,
-                None,
-                conv_params.p5_to_p6[2],
+                module_args.p5_to_p6[2],
                 deallocate_activation=False,
             )
 
             # P6 to P7 conversion (maxpool only)
             self.p6_to_p7 = TtMaxPool2dDynamicSamePadding(
                 device,
-                None,
-                # shard_layout,
-                None,
-                conv_params.p6_to_p7[0],
+                module_args.p6_to_p7[0],
                 deallocate_activation=False,
             )
 
@@ -200,14 +202,14 @@ class TtBiFPN:
                 device,
                 parameters.p4_down_channel_2[0],
                 shard_layout,
-                conv_params.p4_down_channel_2[0],
+                module_args.p4_down_channel_2[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p5_down_channel_2 = TtConv2dDynamicSamePadding(
                 device,
                 parameters.p5_down_channel_2[0],
                 shard_layout,
-                conv_params.p5_down_channel_2[0],
+                module_args.p5_down_channel_2[0],
                 deallocate_activation=deallocate_activation,
             )
 
@@ -238,21 +240,18 @@ class TtBiFPN:
                 parameters.p7_w2, epsilon=self.epsilon, three_weights=False
             )
 
-    def _upsample(self, x, scale_factor, input_shape=None):
+    @staticmethod
+    def _pre_upsample_reshape(x, config: UpsampleConfiguration):
+        """Convert sharded tensor [1,1,NHW,C] to [N,H,W,C] for Upsample layer."""
         # Convert to interleaved if sharded
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         # Convert to ROW_MAJOR layout for upsample
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if input_shape:
-            N, C, H, W = input_shape
-            x = ttnn.reshape(x, (N, H, W, C))
-        # Perform upsample
-        x = ttnn.upsample(x, (scale_factor, scale_factor))
 
-        # Convert back to TILE layout if needed
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
+        # Get the actual shape
+        unflattened_shape = (config.batch_size, config.input_height, config.input_width, config.channels)
+        x = ttnn.reshape(x, unflattened_shape)
         return x
 
     def _swish(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -292,48 +291,36 @@ class TtBiFPN:
         else:
             p3_in, p4_in, p5_in, p6_in, p7_in = inputs
 
-        # P6_1 = weighted_sum(P6_0, upsample(P7_0))
-        if self.first_time:
-            p7_upsampled = self._upsample(p7_in, scale_factor=2, input_shape=self.p6_to_p7.dynamic_maxpool.output_shape)
-        else:
-            p7_upsampled = self._upsample(
-                p7_in, scale_factor=2, input_shape=self.conv7_down.pointwise_conv.dynamic_conv.output_shape
-            )
+        p7_upsampled = self._pre_upsample_reshape(p7_in, self.p6_upsample.configuration)
+        p7_upsampled = self.p6_upsample(p7_upsampled)
 
         p6_in = ttnn.to_memory_config(p6_in, ttnn.DRAM_MEMORY_CONFIG)
         p6_in = ttnn.reshape(p6_in, p7_upsampled.shape)
         p6_up = self.conv6_up(self._swish(self.p6_w1_weight_0 * p6_in + self.p6_w1_weight_1 * p7_upsampled))
-
         ttnn.deallocate(p7_upsampled)
 
-        # P5_1 = weighted_sum(P5_0, upsample(P6_1))
-        p6_upsampled = self._upsample(
-            p6_up, scale_factor=2, input_shape=self.conv6_up.pointwise_conv.dynamic_conv.output_shape
-        )
+        p6_upsampled = self._pre_upsample_reshape(p6_up, self.p5_upsample.configuration)
+        p6_upsampled = self.p5_upsample(p6_upsampled)
+
         p5_in = ttnn.to_memory_config(p5_in, ttnn.DRAM_MEMORY_CONFIG)
         p5_in = ttnn.reshape(p5_in, p6_upsampled.shape)
         p5_up = self.conv5_up(self._swish(self.p5_w1_weight_0 * p5_in + self.p5_w1_weight_1 * p6_upsampled))
-
         ttnn.deallocate(p6_upsampled)
 
-        # P4_1 = weighted_sum(P4_0, upsample(P5_1))
-        p5_upsampled = self._upsample(
-            p5_up, scale_factor=2, input_shape=self.conv5_up.pointwise_conv.dynamic_conv.output_shape
-        )
+        p5_upsampled = self._pre_upsample_reshape(p5_up, self.p4_upsample.configuration)
+        p5_upsampled = self.p4_upsample(p5_upsampled)
+
         p4_in = ttnn.to_memory_config(p4_in, ttnn.DRAM_MEMORY_CONFIG)
         p4_in = ttnn.reshape(p4_in, p5_upsampled.shape)
         p4_up = self.conv4_up(self._swish(self.p4_w1_weight_0 * p4_in + self.p4_w1_weight_1 * p5_upsampled))
-
         ttnn.deallocate(p5_upsampled)
 
-        # P3_2 = weighted_sum(P3_0, upsample(P4_1))
-        p4_upsampled = self._upsample(
-            p4_up, scale_factor=2, input_shape=self.conv4_up.pointwise_conv.dynamic_conv.output_shape
-        )
+        p4_upsampled = self._pre_upsample_reshape(p4_up, self.p3_upsample.configuration)
+        p4_upsampled = self.p3_upsample(p4_upsampled)
+
         p3_in = ttnn.to_memory_config(p3_in, ttnn.DRAM_MEMORY_CONFIG)
         p3_in = ttnn.reshape(p3_in, p4_upsampled.shape)
         p3_out = self.conv3_up(self._swish(self.p3_w1_weight_0 * p3_in + self.p3_w1_weight_1 * p4_upsampled))
-
         ttnn.deallocate(p3_in)
         ttnn.deallocate(p4_upsampled)
 

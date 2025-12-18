@@ -55,7 +55,7 @@ def test_efficient_det(batch, channels, height, width, device):
     ttnn_model = TtEfficientDetBackbone(
         device=device,
         parameters=parameters,
-        conv_params=module_args,
+        module_args=module_args,
         num_classes=num_classes,
     )
     # Convert inputs to TTNN format

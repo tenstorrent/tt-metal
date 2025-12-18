@@ -96,7 +96,7 @@ def test_bifpn(
     ttnn_model = TtBiFPN(
         device=device,
         parameters=parameters,
-        conv_params=module_args,
+        module_args=module_args,
         num_channels=num_channels,
         first_time=first_time,
         epsilon=1e-4,

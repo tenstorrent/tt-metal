@@ -8,6 +8,9 @@ import torch.nn as nn
 
 from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import (
+    ModuleArgs,
+    Conv2dArgs,
+    MaxPool2dArgs,
     fold_batch_norm2d_into_conv2d,
     convert_torch_model_to_ttnn_model,
 )
@@ -176,7 +179,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-class ModuleArgs(dict):
+class UpsampleArgs(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
 
@@ -193,24 +196,48 @@ def register_layer_hooks(model, layer_type):
             # input and output are tuples
             input_shape = tuple(input[0].shape) if isinstance(input, (tuple, list)) else tuple(input.shape)
             output_shape = tuple(output.shape) if isinstance(output, torch.Tensor) else tuple(output[0].shape)
-
             if name not in layer_info:
                 layer_info[name] = {}
-
-            layer_info[name][len(layer_info[name])] = ModuleArgs(
-                kernel_size=getattr(module, "kernel_size", None),
-                stride=getattr(module, "stride", None),
-                padding=getattr(module, "padding", None),
-                padding_mode=getattr(module, "padding_mode", None),
-                dilation=getattr(module, "dilation", None),
-                groups=getattr(module, "groups", None),
-                in_channels=getattr(module, "in_channels", None),
-                out_channels=getattr(module, "out_channels", None),
-                batch_size=input_shape[0],
-                input_height=input_shape[-2],
-                input_width=input_shape[-1],
-                output_shape=output_shape,
-            )
+            if isinstance(module, torch.nn.Conv2d):
+                layer_info[name][len(layer_info[name])] = Conv2dArgs(
+                    kernel_size=getattr(module, "kernel_size", None),
+                    stride=getattr(module, "stride", None),
+                    padding=getattr(module, "padding", None),
+                    padding_mode=getattr(module, "padding_mode", None),
+                    dilation=getattr(module, "dilation", None),
+                    groups=getattr(module, "groups", None),
+                    in_channels=getattr(module, "in_channels", None),
+                    out_channels=getattr(module, "out_channels", None),
+                    batch_size=input_shape[0],
+                    input_height=input_shape[-2],
+                    input_width=input_shape[-1],
+                    dtype=ttnn.bfloat16,
+                )
+            elif isinstance(module, torch.nn.MaxPool2d):
+                layer_info[name][len(layer_info[name])] = MaxPool2dArgs(
+                    kernel_size=getattr(module, "kernel_size", None),
+                    stride=getattr(module, "stride", None),
+                    padding=getattr(module, "padding", None),
+                    padding_mode=getattr(module, "padding_mode", None),
+                    dilation=getattr(module, "dilation", None),
+                    batch_size=input_shape[0],
+                    channels=input_shape[1],
+                    input_height=input_shape[-2],
+                    input_width=input_shape[-1],
+                    dtype=ttnn.bfloat16,
+                )
+            elif isinstance(module, torch.nn.Upsample):
+                layer_info[name][len(layer_info[name])] = UpsampleArgs(
+                    scale_factor=getattr(module, "scale_factor", None),
+                    mode=getattr(module, "mode", "nearest"),
+                    batch_size=input_shape[0],
+                    channels=input_shape[1],
+                    input_height=input_shape[-2],
+                    input_width=input_shape[-1],
+                    dtype=ttnn.bfloat16,
+                )
+            else:
+                layer_info[name][len(layer_info[name])] = {}
 
         return hook_fn
 
@@ -271,7 +298,7 @@ def _make_dot_accessible_args(layer_info):
     return make_dot_access_dict(structured_args, ignore_types=(ModuleArgs,))
 
 
-def infer_torch_module_args(model, input, layer_type=(nn.Conv2d, nn.MaxPool2d)):
+def infer_torch_module_args(model, input, layer_type=(nn.Conv2d, nn.MaxPool2d, nn.Upsample)):
     """Run forward pass and collect layer information."""
     model.eval()
 

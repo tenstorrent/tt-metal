@@ -12,8 +12,7 @@ class TtMBConvBlock:
         self,
         device,
         parameters,
-        conv_params,
-        batch=1,
+        module_args,
         is_depthwise_first=False,
         is_height_sharded=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -23,24 +22,23 @@ class TtMBConvBlock:
         id_skip=True,
     ):
         self.parameters = parameters
-        self.batch = batch
-        self.conv_params = conv_params
+        self.module_args = module_args
         self.is_depthwise_first = is_depthwise_first
         self.is_height_sharded = is_height_sharded
         self.shard_layout = shard_layout
-        self.in_features = conv_params._depthwise_conv.in_channels
+        self.in_features = module_args._depthwise_conv.in_channels
         if not is_depthwise_first:
-            self.in_features = conv_params._expand_conv.in_channels
-        self.out_features = conv_params._project_conv.out_channels
+            self.in_features = module_args._expand_conv.in_channels
+        self.out_features = module_args._project_conv.out_channels
         self.id_skip = (
-            id_skip and (conv_params._depthwise_conv.stride[0] == 1) and self.in_features == self.out_features
+            id_skip and (module_args._depthwise_conv.stride[0] == 1) and self.in_features == self.out_features
         )
 
         if not is_depthwise_first:
             self._expand_conv = TtConv2dDynamicSamePadding(
                 device=device,
                 parameters=parameters["_expand_conv"],
-                conv_params=conv_params._expand_conv,
+                module_args=module_args._expand_conv,
                 shard_layout=self.shard_layout,
                 deallocate_activation=deallocate_activation,
             )
@@ -48,7 +46,7 @@ class TtMBConvBlock:
         self._depthwise_conv = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_depthwise_conv"],
-            conv_params=conv_params._depthwise_conv,
+            module_args=module_args._depthwise_conv,
             shard_layout=shard_layout_depthwise_conv,
             deallocate_activation=deallocate_activation,
         )
@@ -56,7 +54,7 @@ class TtMBConvBlock:
         self._se_reduce = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_se_reduce"],
-            conv_params=conv_params._se_reduce,
+            module_args=module_args._se_reduce,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=deallocate_activation,
         )
@@ -64,7 +62,7 @@ class TtMBConvBlock:
         self._se_expand = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_se_expand"],
-            conv_params=conv_params._se_expand,
+            module_args=module_args._se_expand,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=deallocate_activation,
         )
@@ -72,7 +70,7 @@ class TtMBConvBlock:
         self._project_conv = TtConv2dDynamicSamePadding(
             device,
             parameters=parameters["_project_conv"],
-            conv_params=conv_params._project_conv,
+            module_args=module_args._project_conv,
             shard_layout=self.shard_layout,
             deallocate_activation=deallocate_activation,
         )
@@ -118,16 +116,15 @@ class TtMBConvBlock:
 
 
 class TtEfficientNet:
-    def __init__(self, device, parameters, conv_params, batch=1):
+    def __init__(self, device, parameters, module_args):
         self.device = device
         self.parameters = parameters
-        self.batch = batch
         self.conv_cache = {}
-        self.conv_params = conv_params
+        self.module_args = module_args
         self._conv_stem = TtConv2dDynamicSamePadding(
             device=device,
             parameters=parameters["_conv_stem"],
-            conv_params=conv_params._conv_stem,
+            module_args=module_args._conv_stem,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
         )
@@ -135,7 +132,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][0],
             is_depthwise_first=True,
-            conv_params=conv_params._blocks[0],
+            module_args=module_args._blocks[0],
             deallocate_activation=True,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
@@ -143,7 +140,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][1],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[1],
+            module_args=module_args._blocks[1],
             deallocate_activation=True,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
@@ -151,27 +148,27 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][2],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[2],
+            module_args=module_args._blocks[2],
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self._blocks3 = TtMBConvBlock(
             device,
             parameters["_blocks"][3],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[3],
+            module_args=module_args._blocks[3],
             deallocate_activation=True,
         )
         self._blocks4 = TtMBConvBlock(
             device,
             parameters["_blocks"][4],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[4],
+            module_args=module_args._blocks[4],
         )
         self._blocks5 = TtMBConvBlock(
             device,
             parameters["_blocks"][5],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[5],
+            module_args=module_args._blocks[5],
             id=5,
             deallocate_activation=True,
         )
@@ -179,21 +176,21 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][6],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[6],
+            module_args=module_args._blocks[6],
             id=6,
         )
         self._blocks7 = TtMBConvBlock(
             device,
             parameters["_blocks"][7],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[7],
+            module_args=module_args._blocks[7],
             id=7,
         )
         self._blocks8 = TtMBConvBlock(
             device,
             parameters["_blocks"][8],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[8],
+            module_args=module_args._blocks[8],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=8,
             deallocate_activation=True,
@@ -202,7 +199,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][9],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[9],
+            module_args=module_args._blocks[9],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=9,
         )
@@ -210,7 +207,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][10],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[10],
+            module_args=module_args._blocks[10],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=10,
         )
@@ -218,7 +215,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][11],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[11],
+            module_args=module_args._blocks[11],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             id=11,
             deallocate_activation=True,
@@ -227,7 +224,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][12],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[12],
+            module_args=module_args._blocks[12],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
@@ -235,7 +232,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][13],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[13],
+            module_args=module_args._blocks[13],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
@@ -243,7 +240,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][14],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[14],
+            module_args=module_args._blocks[14],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
@@ -251,7 +248,7 @@ class TtEfficientNet:
             device,
             parameters["_blocks"][15],
             is_depthwise_first=False,
-            conv_params=conv_params._blocks[15],
+            module_args=module_args._blocks[15],
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_layout_depthwise_conv=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=True,

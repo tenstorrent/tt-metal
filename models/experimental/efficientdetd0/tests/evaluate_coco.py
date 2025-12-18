@@ -164,7 +164,7 @@ def evaluate_coco(
         ttnn_model = TtEfficientDetBackbone(
             device=device,
             parameters=parameters,
-            conv_params=module_args,
+            module_args=module_args,
             num_classes=num_classes,
             compound_coef=0,
         )

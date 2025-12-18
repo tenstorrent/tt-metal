@@ -65,7 +65,7 @@ class TtEfficientDetBackbone:
     Args:
         device: TTNN device instance
         parameters: Model parameters containing weights for all components
-        conv_params: Configuration parameters for all operations
+        module_args: Configuration parameters for all operations
         num_classes: Number of object classes (default: 80)
         **kwargs: Additional arguments (ratios, scales, etc.)
     """
@@ -74,7 +74,7 @@ class TtEfficientDetBackbone:
         self,
         device: ttnn.Device,
         parameters,
-        conv_params,
+        module_args,
         num_classes: int = 80,
         compound_coef: int = 0,
         **kwargs,
@@ -88,40 +88,39 @@ class TtEfficientDetBackbone:
 
         # Initialize backbone network
         backbone_params = parameters.backbone_net.model
-        backbone_conv_params = conv_params.backbone_net.model
+        backbone_module_args = module_args.backbone_net.model
 
         self.backbone_net = TtEfficientNet(
             device=device,
             parameters=backbone_params,
-            conv_params=backbone_conv_params,
-            batch=1,
+            module_args=backbone_module_args,
         )
 
         # Initialize BiFPN layers
         self.bifpn_layers = self._create_bifpn_layers(
             device=device,
             parameters=parameters,
-            conv_params=conv_params,
+            module_args=module_args,
         )
 
         # Initialize detection head components
         self.regressor = self._create_regressor(
             device=device,
             parameters=parameters,
-            conv_params=conv_params,
+            module_args=module_args,
         )
 
         self.classifier = self._create_classifier(
             device=device,
             parameters=parameters,
-            conv_params=conv_params,
+            module_args=module_args,
         )
 
     def _create_bifpn_layers(
         self,
         device: ttnn.Device,
         parameters,
-        conv_params,
+        module_args,
     ) -> List[TtBiFPN]:
         """
         Create BiFPN layers for EfficientDet D0.
@@ -129,14 +128,14 @@ class TtEfficientDetBackbone:
         Args:
             device: TTNN device
             parameters: Model parameters
-            conv_params: Convolution parameters
+            module_args: Layer configuration parameters
 
         Returns:
             List of BiFPN layer instances
         """
         bifpn_layers = []
         bifpn_params = _get_param(parameters, "bifpn", {})
-        bifpn_conv_params = _get_param(conv_params, "bifpn", {})
+        bifpn_module_args = _get_param(module_args, "bifpn", {})
 
         for i in range(FPN_CELL_REPEATS):
             is_first_time = i == 0
@@ -144,9 +143,9 @@ class TtEfficientDetBackbone:
             bifpn = TtBiFPN(
                 device=device,
                 parameters=bifpn_params[i] if isinstance(bifpn_params, (list, tuple)) else bifpn_params.get(i, {}),
-                conv_params=bifpn_conv_params[i]
-                if isinstance(bifpn_conv_params, (list, tuple))
-                else bifpn_conv_params.get(i, {}),
+                module_args=bifpn_module_args[i]
+                if isinstance(bifpn_module_args, (list, tuple))
+                else bifpn_module_args.get(i, {}),
                 num_channels=FPN_NUM_FILTERS,
                 first_time=is_first_time,
                 epsilon=BIFPN_EPSILON,
@@ -163,7 +162,7 @@ class TtEfficientDetBackbone:
         self,
         device: ttnn.Device,
         parameters,
-        conv_params,
+        module_args,
     ) -> TtRegressor:
         """
         Create regressor component for bounding box prediction.
@@ -171,18 +170,18 @@ class TtEfficientDetBackbone:
         Args:
             device: TTNN device
             parameters: Model parameters
-            conv_params: Convolution parameters
+            module_args: Layer configuration parameters
 
         Returns:
             Regressor instance
         """
         regressor_params = _get_param(parameters, "regressor", {})
-        regressor_conv_params = _get_param(conv_params, "regressor", {})
+        regressor_module_args = _get_param(module_args, "regressor", {})
 
         return TtRegressor(
             device=device,
             parameters=regressor_params,
-            conv_params=regressor_conv_params,
+            module_args=regressor_module_args,
             num_layers=BOX_CLASS_REPEATS,
             pyramid_levels=PYRAMID_LEVELS,
         )
@@ -191,7 +190,7 @@ class TtEfficientDetBackbone:
         self,
         device: ttnn.Device,
         parameters,
-        conv_params,
+        module_args,
     ) -> TtClassifier:
         """
         Create classifier component for class prediction.
@@ -199,18 +198,18 @@ class TtEfficientDetBackbone:
         Args:
             device: TTNN device
             parameters: Model parameters
-            conv_params: Convolution parameters
+            module_args: Layer configuration parameters
 
         Returns:
             Classifier instance
         """
         classifier_params = _get_param(parameters, "classifier", {})
-        classifier_conv_params = _get_param(conv_params, "classifier", {})
+        classifier_module_args = _get_param(module_args, "classifier", {})
 
         return TtClassifier(
             device=device,
             parameters=classifier_params,
-            conv_params=classifier_conv_params,
+            module_args=classifier_module_args,
             num_classes=self.num_classes,
             num_layers=BOX_CLASS_REPEATS,
             pyramid_levels=PYRAMID_LEVELS,
