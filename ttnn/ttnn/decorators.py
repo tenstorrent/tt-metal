@@ -368,7 +368,7 @@ class FastOperation:
 
     def _enhance_type_error_message(self, original_error, function_args, function_kwargs):
         """
-        Parse pybind11 TypeError and create a more readable error message that clearly
+        Parse pybind11/nanobind TypeError and create a more readable error message that clearly
         shows expected vs received types for each argument.
         """
         import re
