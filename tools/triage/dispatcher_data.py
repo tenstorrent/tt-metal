@@ -218,7 +218,7 @@ class DispatcherData:
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate, risc_name: str) -> ElfVariable:
-        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+        loc_mem_access = MemoryAccess.get_l1(location)
         if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
