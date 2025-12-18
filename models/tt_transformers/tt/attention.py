@@ -813,6 +813,14 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
+        print("SDPA input tensors:")
+        ttnn.set_printoptions(profile="full")
+        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[1, 1, :80, :4]}")
+        print(f"keys_BKSD: {keys_BKSD[1, 1, :80, :4]}")
+        print(f"values_BKSD: {values_BKSD[1, 1, :80, :4]}")
+        print(f"chunk_start_idx: {chunk_start_idx}")
+        print(f"page_table: {page_table}")
+
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
@@ -836,6 +844,9 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
+
+        print(f"attn_output_84SD: {attn_output_84SD[1, 1, :80, :4]}")
+        ttnn.set_printoptions(profile="short")
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)

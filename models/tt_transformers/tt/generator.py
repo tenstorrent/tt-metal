@@ -400,6 +400,18 @@ class Generator:
         num_cached_tokens: int = 0,
         **kwargs,
     ):
+        ttnn.set_printoptions(profile="full")
+        print("prefill_forward_single_user_text called with:")
+        print(f"tokens: {tokens}")
+        print(f"page_table: {page_table}")
+        print(f"user_id: {user_id}")
+        print(f"last_token_idx: {last_token_idx}")
+        print(f"kv_cache shape: {kv_cache.shape}")
+        print(f"model_id: {model_id}")
+        print(f"num_cached_tokens: {num_cached_tokens}")
+        print(f"kwargs: {kwargs}")
+        ttnn.set_printoptions(profile="short")
+
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
