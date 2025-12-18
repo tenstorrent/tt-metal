@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
@@ -1060,5 +1061,77 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
     EXPECT_THROW(
         { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
+}
+
+TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+
+    // Get mesh shape to compute expected coordinates
+    // t3k_mesh_graph_descriptor has device_topology { dims: [ 2, 4 ] } = 2 rows, 4 columns
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    MeshId mesh_id{0};
+    MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(mesh_shape[0], 2) << "Mesh should have 2 rows";
+    EXPECT_EQ(mesh_shape[1], 4) << "Mesh should have 4 columns";
+    EXPECT_EQ(mesh_shape.mesh_size(), 8) << "Mesh should have 8 chips total";
+
+    // Create a temporary directory for the output file
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "test_eth_coords";
+    std::filesystem::create_directories(temp_dir);
+
+    // Serialize coordinates to file
+    control_plane->serialize_eth_coordinates_to_file(temp_dir);
+
+    // Verify the file was created
+    std::filesystem::path output_file = temp_dir / "eth_coordinates.yaml";
+    EXPECT_TRUE(std::filesystem::exists(output_file)) << "Output file should exist: " << output_file;
+
+    // Read and verify the file contents
+    YAML::Node yaml_file = YAML::LoadFile(output_file.string());
+    EXPECT_TRUE(yaml_file["chips"]) << "File should contain 'chips' key";
+
+    const auto& chips_node = yaml_file["chips"];
+    EXPECT_TRUE(chips_node.IsMap()) << "'chips' should be a map";
+
+    // Verify that we have the correct number of chips
+    EXPECT_EQ(chips_node.size(), mesh_shape.mesh_size())
+        << "Should have " << mesh_shape.mesh_size() << " chips in the file";
+
+    // Verify coordinates for each chip match expected mesh coordinates
+    // For a 2x4 mesh, chip_id maps to coordinates as:
+    // chip_id = row * 4 + col, so row = chip_id / 4, col = chip_id % 4
+    for (ChipId chip_id = 0; chip_id < mesh_shape.mesh_size(); ++chip_id) {
+        EXPECT_TRUE(chips_node[chip_id]) << "Chip " << chip_id << " should exist in the file";
+
+        const auto& coord_array = chips_node[chip_id];
+        EXPECT_TRUE(coord_array.IsSequence()) << "Chip " << chip_id << " should have a sequence value";
+        EXPECT_EQ(coord_array.size(), 2) << "Chip " << chip_id << " should have 2 coordinates [row, col] for 2D mesh";
+
+        // Compute expected coordinates from chip_id
+        uint32_t expected_row = chip_id / mesh_shape[1];
+        uint32_t expected_col = chip_id % mesh_shape[1];
+
+        // Verify coordinates match
+        uint32_t actual_row = coord_array[0].as<uint32_t>();
+        uint32_t actual_col = coord_array[1].as<uint32_t>();
+
+        EXPECT_EQ(actual_row, expected_row)
+            << "Chip " << chip_id << " should have row coordinate " << expected_row << ", got " << actual_row;
+        EXPECT_EQ(actual_col, expected_col)
+            << "Chip " << chip_id << " should have col coordinate " << expected_col << ", got " << actual_col;
+
+        // Also verify using mesh_graph's chip_to_coordinate for consistency
+        MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(mesh_id, chip_id);
+        EXPECT_EQ(actual_row, expected_coord[0])
+            << "Chip " << chip_id << " row coordinate should match mesh_graph.chip_to_coordinate";
+        EXPECT_EQ(actual_col, expected_coord[1])
+            << "Chip " << chip_id << " col coordinate should match mesh_graph.chip_to_coordinate";
+    }
+
+    // Clean up
+    std::filesystem::remove_all(temp_dir);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests

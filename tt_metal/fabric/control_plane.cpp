@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iomanip>
 #include <iterator>
@@ -3027,6 +3028,49 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
+void ControlPlane::serialize_eth_coordinates_to_file(const std::filesystem::path& output_dir) const {
+    // Ensure output directory exists
+    std::filesystem::create_directories(output_dir);
+
+    // Build YAML structure with chips mapping chip_id to N-dimensional coordinates
+    YAML::Node chips_node;
+    chips_node = YAML::Node(YAML::NodeType::Map);
+
+    // Iterate through all fabric node IDs and get their mesh coordinates
+    for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        // Get the logical chip ID (chip_id within the fabric node)
+        ChipId logical_chip_id = fabric_node_id.chip_id;
+
+        // Get mesh coordinates from the mesh graph
+        MeshCoordinate mesh_coord = mesh_graph_->chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+
+        // Create array with N-dimensional coordinates
+        YAML::Node coord_array = YAML::Node(YAML::NodeType::Sequence);
+        for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
+            coord_array.push_back(mesh_coord[dim]);
+        }
+        chips_node[logical_chip_id] = coord_array;
+    }
+
+    // Create root YAML node
+    YAML::Node root;
+    root["chips"] = chips_node;
+
+    // Write to file
+    std::filesystem::path output_file = output_dir / "eth_coordinates.yaml";
+    std::ofstream out_file(output_file);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file.string());
+    }
+
+    YAML::Emitter emitter;
+    emitter << root;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_info(tt::LogFabric, "Serialized ethernet coordinates to file: {}", output_file.string());
 }
 
 ControlPlane::~ControlPlane() = default;
