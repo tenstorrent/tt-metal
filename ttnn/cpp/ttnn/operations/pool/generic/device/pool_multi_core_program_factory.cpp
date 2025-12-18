@@ -624,7 +624,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,                      // 44
         out_idx_cb_id};                 // 45
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
-    reader1_ct_args[0] -= 1;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
     std::string reader_kernel_fname =
@@ -724,7 +723,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             total_out_nhw_processed = core_i * max_out_nhw_per_core;
         }
         uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
-        std::vector<uint32_t> args = {out_nhw_this_core};
+        std::vector<uint32_t> args_reader = {out_nhw_this_core};
+        std::vector<uint32_t> args_compute = {out_nhw_this_core - 5};
 
         if (return_indices) {
             TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
@@ -733,11 +733,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
 
-            args.push_back((uint32_t)(start_row));
-            args.push_back((uint32_t)(start_col));
+            args_reader.push_back((uint32_t)(start_row));
+            args_compute.push_back((uint32_t)(start_row));
+            args_reader.push_back((uint32_t)(start_col));
+            args_compute.push_back((uint32_t)(start_col));
         }
-        SetRuntimeArgs(program, reader0_kernel, core, args);
-        SetRuntimeArgs(program, compute_kernel, core, args);
+        SetRuntimeArgs(program, reader0_kernel, core, args_reader);
+        SetRuntimeArgs(program, compute_kernel, core, args_compute);
     }
 
     auto temporary_size = calculate_total_cb_size(program);
