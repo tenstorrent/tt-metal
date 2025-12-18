@@ -55,6 +55,9 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeNOCMulticastNumDestsMismatch,
+    SanitizeNOCMulticastLoopbackRequired,
+    SanitizeNOCMulticastLoopbackNotPermitted,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -465,6 +468,164 @@ void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_
     }
 }
 
+// Test for multicast sanitization - configurable to test different error conditions
+void RunTestMulticast(
+    MeshWatcherFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    watcher_features_t test_type) {
+    if (fixture->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    Program program = Program();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Sender core is always (0, 0)
+    CoreCoord sender_core = {0, 0};
+    CoreCoord virtual_sender_core = device->worker_core_from_logical_core(sender_core);
+
+    // Set up DRAM buffer
+    uint32_t buffer_size = 2 * 1024;
+    distributed::DeviceLocalBufferConfig dram_local_config{
+        .page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig dram_buffer_config{.size = buffer_size};
+    auto dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_local_config, mesh_device.get());
+    uint32_t dram_buffer_addr = dram_buffer->address();
+
+    // Configure test based on type
+    CoreCoord mcast_start, mcast_end;
+    uint32_t num_dests;
+    bool use_loopback;
+    std::string expected_error;
+    std::string test_name;
+
+    switch (test_type) {
+        case SanitizeNOCMulticastNumDestsMismatch:
+            // Sender (0,0) IS in grid (0,0)-(1,1), using loopback kernel (correct), wrong num_dests
+            mcast_start = {0, 0};
+            mcast_end = {1, 1};
+            num_dests = 10;       // Wrong: should be 4
+            use_loopback = true;  // Correct: sender is in grid
+            expected_error = "(multicast num_dests does not match the rectangle grid size).";
+            test_name = "NumDestsMismatch";
+            break;
+
+        case SanitizeNOCMulticastLoopbackRequired:
+            // Sender (0,0) IS in grid (0,0)-(1,1), using non-loopback kernel - should error
+            mcast_start = {0, 0};
+            mcast_end = {1, 1};
+            num_dests = 4;         // Correct num_dests
+            use_loopback = false;  // Wrong: sender is in grid but not using loopback
+            expected_error =
+                "(sender is in multicast grid but loopback_src variant not used - this causes undefined behavior, "
+                "use noc_async_write_multicast_loopback_src instead).";
+            test_name = "LoopbackRequired";
+            break;
+
+        case SanitizeNOCMulticastLoopbackNotPermitted:
+            // Sender (0,0) is NOT in grid (1,1)-(2,2), using loopback kernel - should error
+            mcast_start = {1, 1};
+            mcast_end = {2, 2};
+            num_dests = 4;        // Correct num_dests
+            use_loopback = true;  // Wrong: sender is NOT in grid but using loopback
+            expected_error =
+                "(sender is not in multicast grid but loopback_src variant used - this has no effect but indicates "
+                "incorrect usage, use noc_async_write_multicast instead).";
+            test_name = "LoopbackNotPermitted";
+            break;
+
+        default: GTEST_FAIL() << "Unknown multicast test type"; return;
+    }
+
+    auto mcast_start_physical = mesh_device->worker_core_from_logical_core(mcast_start);
+    auto mcast_end_physical = mesh_device->worker_core_from_logical_core(mcast_end);
+
+    log_info(
+        LogTest,
+        "Running multicast {} test on device {} sender core {}...",
+        test_name,
+        device->id(),
+        virtual_sender_core.str());
+
+    uint32_t local_buffer_addr = 200 * 1024;
+    uint32_t dest_buffer_addr = 200 * 1024;
+
+    // Create multicast kernel with SIGNAL_COMPLETION_TO_DISPATCHER for fast dispatch hang detection
+    // Compile-time arg 0: use_loopback (1 = INCLUDE_SRC, 0 = EXCLUDE_SRC)
+    std::vector<uint32_t> compile_args = {use_loopback ? 1 : 0};
+    std::map<std::string, std::string> kernel_defines = {
+        {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
+    };
+    auto mcast_kernel = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/multicast_sanitize_test.cpp",
+        sender_core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = compile_args,
+            .defines = kernel_defines});
+
+    // Write data to DRAM buffer
+    std::vector<uint32_t> input_vec =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    distributed::WriteShard(cq, dram_buffer, input_vec, zero_coord);
+
+    // Set runtime args
+    // Note: kernel arg names say start/end but we pass end coords first, then start coords
+    // This is needed for proper NOC1 coordinate handling
+    tt_metal::SetRuntimeArgs(
+        program_,
+        mcast_kernel,
+        sender_core,
+        {dram_buffer_addr,
+         0,  // bank_id
+         buffer_size,
+         local_buffer_addr,
+         dest_buffer_addr,
+         mcast_end_physical.x,
+         mcast_end_physical.y,
+         mcast_start_physical.x,
+         mcast_start_physical.y,
+         num_dests});
+
+    log_info(
+        LogTest,
+        "Multicast grid: ({},{}) to ({},{}), num_dests={}, loopback={}",
+        mcast_start_physical.x,
+        mcast_start_physical.y,
+        mcast_end_physical.x,
+        mcast_end_physical.y,
+        num_dests,
+        use_loopback);
+
+    // Run the kernel, expect an exception
+    try {
+        fixture->RunProgram(mesh_device, workload);
+    } catch (std::runtime_error& e) {
+        std::string expected =
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
+        expected += MetalContext::instance().watcher_server()->log_file_name();
+        const std::string error = std::string(e.what());
+        log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+        EXPECT_TRUE(error.find(expected) != std::string::npos);
+    }
+
+    // Verify watcher reported the correct error
+    std::string exception;
+    do {
+        exception = MetalContext::instance().watcher_server()->exception_message();
+    } while (exception.empty());
+    log_info(LogTest, "Reported error: {}", exception);
+    EXPECT_TRUE(exception.find(expected_error) != std::string::npos);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitize) {
     CheckHostSanitization(this->devices_[0]);
 
@@ -601,6 +762,30 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastNumDestsMismatch) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestMulticast(fixture, mesh_device, SanitizeNOCMulticastNumDestsMismatch);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastLoopbackRequired) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestMulticast(fixture, mesh_device, SanitizeNOCMulticastLoopbackRequired);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastLoopbackNotPermitted) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestMulticast(fixture, mesh_device, SanitizeNOCMulticastLoopbackNotPermitted);
         },
         this->devices_[0]);
 }

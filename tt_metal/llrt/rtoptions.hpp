@@ -82,6 +82,7 @@ struct WatcherSettings {
     bool text_start = false;
     bool skip_logging = false;
     bool noc_sanitize_linked_transaction = false;
+    bool noc_sanitize_multicast = false;
     int interval_ms = 0;
 };
 
@@ -345,6 +346,8 @@ public:
     void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
         watcher_settings.noc_sanitize_linked_transaction = enabled;
     }
+    bool get_watcher_noc_sanitize_multicast() const { return watcher_settings.noc_sanitize_multicast; }
+    void set_watcher_noc_sanitize_multicast(bool enabled) { watcher_settings.noc_sanitize_multicast = enabled; }
     const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
