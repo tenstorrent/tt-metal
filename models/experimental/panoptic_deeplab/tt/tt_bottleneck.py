@@ -42,6 +42,8 @@ class TtBottleneck(LightweightModule):
         self.has_shortcut = has_shortcut
         self.block_id = block_id
         self.model_configs = model_configs
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         logger.debug(f"Initializing TtBottleneck {block_id} with TT CNN Builder API")
 
@@ -146,6 +148,12 @@ class TtBottleneck(LightweightModule):
         return conv_layer, output_shape
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.is_20_core:
+            return self.forward_20_cores(x)
+        else:
+            return self.forward_130_cores(x)
+
+    def forward_20_cores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 
         # Store input for residual connection
@@ -218,4 +226,47 @@ class TtBottleneck(LightweightModule):
             out = ttnn.move(out)
 
         logger.debug(f"TtBottleneck {self.block_id} forward pass complete, final output shape: {out.shape}")
+        return out
+
+    def forward_130_cores(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        logger.debug(f"TtBottleneck {self.block_id} forward_130_cores starting, input shape: {x.shape}")
+
+        # Store input for residual connection
+        # With 130 cores and more L1 memory, we can keep identity in L1 without DRAM copying
+        # The 130-core configs ensure proper memory management through sharding
+        identity = x
+
+        # Process shortcut if needed (BatchNorm is fused into shortcut Conv)
+        if self.has_shortcut:
+            logger.debug(f"TtBottleneck {self.block_id} processing shortcut convolution")
+            identity = self.shortcut(identity)
+            # Keep shortcut output in L1 - no DRAM movement needed with 130 cores
+            logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
+
+        # Main path: Conv1 + separate ReLU (BatchNorm fused into Conv1)
+        logger.debug(f"TtBottleneck {self.block_id} processing conv1 (1x1 reduction)")
+        out = self.conv1(x)
+        # Keep conv1 output in L1 - 130-core configs handle sharding properly
+        logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
+
+        # Conv2 + separate ReLU (BatchNorm fused into Conv2)
+        logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
+        out = self.conv2(out)
+        # Keep conv2 output in L1 - no DRAM movement needed
+        logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
+
+        # Conv3 (no ReLU yet, BatchNorm fused into Conv3)
+        logger.debug(f"TtBottleneck {self.block_id} processing conv3 (1x1 expansion)")
+        out = self.conv3(out)
+        # Keep conv3 output in L1 - 130-core memory allows this
+        logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
+
+        # Residual connection + ReLU
+        logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
+        # With 130-core configs, tensors should be properly sharded for direct addition
+        # No explicit resharding needed - configs handle this
+        out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+        # Keep final output in L1 - no movement to DRAM
+
+        logger.debug(f"TtBottleneck {self.block_id} forward_130_cores complete, final output shape: {out.shape}")
         return out

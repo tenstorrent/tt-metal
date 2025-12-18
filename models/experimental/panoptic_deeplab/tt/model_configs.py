@@ -26,11 +26,7 @@ class ModelOptimisations:
     and other convolution parameters on a per-layer basis.
     """
 
-    def __init__(
-        self,
-        conv_act_dtype=ttnn.bfloat8_b,
-        conv_w_dtype=ttnn.bfloat8_b,
-    ):
+    def __init__(self, conv_act_dtype=ttnn.bfloat8_b, conv_w_dtype=ttnn.bfloat8_b, device=None):
         """
         Initialize model optimization configurations.
 
@@ -38,6 +34,13 @@ class ModelOptimisations:
             conv_act_dtype: Default data type for convolution activations
             conv_w_dtype: Default data type for convolution weights
         """
+        # Default grid size (5x4)
+        self.grid_x = 5
+        self.grid_y = 4
+        if device is not None:
+            compute_grid = device.compute_with_storage_grid_size()
+            self.grid_x = compute_grid.x
+            self.grid_y = compute_grid.y
         self.conv_output_dtype = conv_act_dtype
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
@@ -179,8 +182,12 @@ class ModelOptimisations:
 
     def setup_resnet_backbone(self):
         """Setup ResNet50 backbone configurations (stem + res2-5 stages)."""
-        self._setup_stem()
-        self._setup_res2_stage()
+        if self.grid_x == 13 and self.grid_y == 10:
+            self._setup_stem_130_core()
+            self._setup_res2_stage_130_core()
+        else:
+            self._setup_stem()
+            self._setup_res2_stage()
         self._setup_res3_stage()
         self._setup_res4_stage()
         self._setup_res5_stage()
@@ -209,6 +216,41 @@ class ModelOptimisations:
             output_layout=ttnn.TILE_LAYOUT,
         )
 
+    def _setup_stem_130_core(self):
+        self.register_layer_override(
+            "stem.conv1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1024),
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            deallocate_activation=True,
+        )
+
+        self.register_layer_override(
+            "stem.conv2",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=512),
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            deallocate_activation=True,
+        )
+
+        self.register_layer_override(
+            "stem.conv3",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=512),
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            deallocate_activation=False,
+        )
+
+        self.register_layer_override(
+            "stem.maxpool",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+
     def _setup_res2_stage(self):
         """
         Res2 (128x256): 3 bottleneck blocks, 256 output channels
@@ -221,6 +263,23 @@ class ModelOptimisations:
             3,
             "conv2",
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
+        )
+
+    def _setup_res2_stage_130_core(self):
+        """
+        Res2 (128x256): 3 bottleneck blocks, 256 output channels - Optimized for 130 cores
+        - More L1 memory available, can use L1FullSliceStrategy and double buffering
+        - conv2: 3x3 convs need height sharding with L1 optimization
+        """
+        # Conv2: 3x3 spatial convolutions - main optimization target for res2
+        self._register_stage_blocks(
+            "res2",
+            3,
+            "conv2",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=256),  # 8 tiles
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
     def _setup_res3_stage(self):

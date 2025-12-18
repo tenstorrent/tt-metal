@@ -59,7 +59,7 @@ def create_panoptic_models(device, weights_path):
         train_size=train_size,
         weights_path=weights_path,
     )
-    pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
+    pytorch_model = pytorch_model.to(dtype=torch.float32)
     pytorch_model.eval()
 
     # Create TTNN parameters from the PyTorch model with loaded weights
@@ -77,6 +77,7 @@ def create_panoptic_models(device, weights_path):
     model_configs = ModelOptimisations(
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
+        device=device,
     )
     # Apply ResNet-specific configurations to match test_conv2d_panoptic
     model_configs.setup_resnet_backbone()
@@ -125,7 +126,7 @@ def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_g
 
     # Both models have ImageNet normalization fused into conv1 weights
     # so they both receive unnormalized input (no explicit normalization needed)
-    torch_input = torch.randn(batch_size, C, height, width, dtype=torch.bfloat16)
+    torch_input = torch.randn(batch_size, C, height, width, dtype=torch.float32)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
     ttnn_stem_output = ttnn_model.backbone.stem(ttnn_input)
@@ -177,7 +178,7 @@ def test_resnet_layer_pcc(
     layer_height = int(height * h_factor)
     layer_width = int(width * w_factor)
 
-    torch_layer_input = torch.randn(batch_size, in_channels, layer_height, layer_width, dtype=torch.bfloat16)
+    torch_layer_input = torch.randn(batch_size, in_channels, layer_height, layer_width, dtype=torch.float32)
     ttnn_layer_input = ttnn.from_torch(
         torch_layer_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
