@@ -192,6 +192,13 @@ class PreSDPA:
         # Grid: 8x12 = 96 cores (P150) or 8x11 = 88 cores (non-P150)
         matmul2_num_tiles_k = 48  # 1536 / 32 = 48 1x32 tiles
 
+        # Mcast2 parameters (broadcasts rmsnorm2 output from input core to all matmul2 cores)
+        # Reads from rmsnorm2_output_cb (2 tiles), writes to matmul2_in0 (48 1x32 tiles) with loopback
+        # Uses same grid and semaphores as first mcast
+        mcast2_data_size_bytes = 1536 * 2  # 1536 bfloat16 elements = 3072 bytes
+        mcast2_src_num_pages = rmsnorm2_num_tiles  # 2 tiles (rmsnorm2 output in 32x32 format)
+        mcast2_dst_num_pages = matmul2_num_tiles_k  # 48 pages (destination uses 1x32 tiles)
+
         # Calculate mcast page counts for source and destination CBs
         # Source CB (rmsnorm_output): uses RMSNorm tile format (32x32 or 16x32)
         mcast_src_num_pages = num_tiles
@@ -553,6 +560,19 @@ class PreSDPA:
         output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
 
         # ========================================================================
+        # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
+        # ========================================================================
+        # NCRISC sender: data_size_bytes, src_num_pages (grid/semaphores reused from mcast)
+        mcast2_ncrisc_named_compile_time_args = [
+            ("mcast2_data_size_bytes", mcast2_data_size_bytes),
+            ("mcast2_src_num_pages", mcast2_src_num_pages),
+        ]
+        # BRISC receiver: dst_num_pages (semaphore reused from mcast)
+        mcast2_brisc_named_compile_time_args = [
+            ("mcast2_dst_num_pages", mcast2_dst_num_pages),
+        ]
+
+        # ========================================================================
         # Semaphore descriptors
         # ========================================================================
 
@@ -585,13 +605,14 @@ class PreSDPA:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
             core_ranges=full_device_grid,
-            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender + rmsnorm2 + matmul2
+            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender + rmsnorm2 + matmul2 + mcast2
             ncrisc_named_compile_time_args=rmsnorm_reader_named_compile_time_args
             + mcast_sender_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_sender_named_compile_time_args
             + rmsnorm2_ncrisc_named_compile_time_args
-            + matmul2_ncrisc_named_compile_time_args,
+            + matmul2_ncrisc_named_compile_time_args
+            + mcast2_ncrisc_named_compile_time_args,
             # NCRISC common runtime args: epsilon + scalar + gather output address + scalar2
             ncrisc_common_runtime_args=[
                 epsilon_packed,
@@ -599,12 +620,13 @@ class PreSDPA:
                 output_tensor.buffer_address(),  # gather receiver data address
                 scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
             ],
-            # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver + matmul2
+            # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver + matmul2 + mcast2
             brisc_named_compile_time_args=rmsnorm_writer_named_compile_time_args
             + mcast_receiver_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_receiver_named_compile_time_args
-            + matmul2_brisc_named_compile_time_args,
+            + matmul2_brisc_named_compile_time_args
+            + mcast2_brisc_named_compile_time_args,
             # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2 + matmul2
             trisc_named_compile_time_args=rmsnorm_compute_named_compile_time_args
             + matmul_trisc_named_compile_time_args

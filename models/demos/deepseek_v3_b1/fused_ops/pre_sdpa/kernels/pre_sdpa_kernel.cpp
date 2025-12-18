@@ -99,6 +99,24 @@ KERNEL_ENTRY {
     constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
     constexpr uint32_t matmul2_num_tiles = get_named_compile_time_arg_val("matmul2_num_tiles");
 
+    // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
+    // Uses same grid and semaphores as first mcast
+    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
+    constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
+        mcast2_src_cb,  // Wait for rmsnorm2_output_cb
+        get_named_compile_time_arg_val("mcast2_src_num_pages"),
+        get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
+        get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
+    };
+
 // ============================================================================
 // BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: rmsnorm writer, mcast receiver, matmul writer, gather receiver
@@ -136,6 +154,14 @@ KERNEL_ENTRY {
 
     // Matmul2 writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
+
+    // Mcast2 receiver args (for matmul2 cores to receive matmul2 input from input core)
+    // Uses same semaphore as first mcast
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
+        get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
+        get_named_compile_time_arg_val("matmul2_in0"),
+        get_named_compile_time_arg_val("mcast2_dst_num_pages"),
+    };
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -192,6 +218,9 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_num_tiles"),
     };
+
+    // Mcast2 compute args (no-op for TRISC)
+    deepseek_b1_ops::Mcast::ComputeArgs mcast2_args{};
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
@@ -316,51 +345,28 @@ KERNEL_ENTRY {
     //   - Gamma: rmsnorm2_gamma_cb (2 tiles, padded from 1536 elements)
     //   - Scalars: reuses scalars_cb (same epsilon, different scalar)
     // ========================================================================
+    DPRINT << "-------- rmsnorm2 started --------" << ENDL();
     {
         DeviceZoneScopedN("RMSNORM2");
         rmsnorm(rmsnorm2_args);
     }
+    DPRINT << "-------- rmsnorm2 completed --------" << ENDL();
 
     // ========================================================================
-    // Copy RMSNorm2 output to matmul2 input CB (1x1536 with 1x32 tiles)
-    // RMSNorm2 output: 2 full 32x32 tiles (padded from 1536 elements)
-    // Matmul2 input: 48 1x32 tiles (1536 elements)
-    // Only runs on NCRISC on input core
+    // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
+    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
+    // Uses same grid and semaphores as first mcast
     // ========================================================================
-#if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_input_core) {
-        DeviceZoneScopedN("RMSNORM2_TO_MATMUL2_COPY");
-
-        constexpr uint32_t rmsnorm2_output_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
-        constexpr uint32_t matmul2_input_num_tiles = 48;         // 1536 / 32 = 48 1x32 tiles
-        constexpr uint32_t rmsnorm2_data_size_bytes = 1536 * 2;  // 1536 bfloat16 elements
-
-        // Wait for RMSNorm2 output (2 tiles)
-        cb_wait_front(rmsnorm2_output_cb, 2);
-
-        // Reserve space in matmul2 input cb (48 1x32 tiles)
-        cb_reserve_back(matmul2_in0, matmul2_input_num_tiles);
-
-        // Get source and destination addresses
-        uint32_t src_addr = get_read_ptr(rmsnorm2_output_cb);
-        uint32_t dst_addr = get_write_ptr(matmul2_in0);
-
-        // Copy rmsnorm2 output data to matmul2 input cb using local NOC read
-        uint64_t src_noc_addr = get_noc_addr(src_addr);
-        noc_async_read(src_noc_addr, dst_addr, rmsnorm2_data_size_bytes);
-        noc_async_read_barrier();
-
-        // Push the completed tiles to matmul2 input cb
-        cb_push_back(matmul2_in0, matmul2_input_num_tiles);
-
-        // Pop the rmsnorm2 output cb
-        cb_pop_front(rmsnorm2_output_cb, 2);
-    } else if constexpr (Core::is_matmul2_core) {
-        constexpr uint32_t matmul2_input_num_tiles = 48;
-        cb_reserve_back(matmul2_in0, matmul2_input_num_tiles);
-        cb_push_back(matmul2_in0, matmul2_input_num_tiles);
+    DPRINT << "-------- mcast 2 started --------" << ENDL();
+    {
+        DeviceZoneScopedN("MCAST2");
+        // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
+        // pop_src = true (rmsnorm2 output is consumed after mcast)
+        deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
+        mcast2(mcast2_args);
     }
-#endif
+    DPRINT << "-------- mcast 2 completed --------" << ENDL();
+
     // ========================================================================
     // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
     // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
