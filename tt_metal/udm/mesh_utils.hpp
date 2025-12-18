@@ -71,7 +71,7 @@ void adjust_shape_ranks(
  */
 struct GcoresInfo {
     std::vector<Gcore> gcores;  // Vector of gcores assigned to work
-    uint32_t num_cores;         // Number of cores
+    uint32_t num_cores{};       // Number of cores
 
     // Multi-dimensional partitioning info (all in page units)
     std::vector<int> partition_dims;                 // Which dimensions are partitioned (e.g., [1, 3])

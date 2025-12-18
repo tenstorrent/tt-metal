@@ -92,6 +92,7 @@ public:
 
     const tt::tt_metal::Shape& get_mesh_tensor_shape_in_pages() const {
         std::vector<uint32_t> shape_vec;
+        shape_vec.reserve(mesh_tensor_rank_);
         for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
             shape_vec.push_back(mesh_tensor_shape_in_pages_[i]);
         }
