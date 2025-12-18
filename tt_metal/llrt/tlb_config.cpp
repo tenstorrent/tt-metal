@@ -66,30 +66,36 @@ void configure_static_tlbs(
     }
 
     std::int32_t address = 0;
-    // Setup static TLBs for all worker cores.
-    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED)) {
-        // TODO
-        // Note: see issue #10107
-        // Strict is less performant than Posted, however, metal doesn't presently
-        // use this on a perf path and the launch_msg "kernel config" needs to
-        // arrive prior to the "go" message during device init and slow dispatch
-        // Revisit this when we have a more flexible UMD api
-        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
-    }
-    // Setup static TLBs for all eth cores
-    for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
-        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
-    }
 
-    if (arch == tt::ARCH::BLACKHOLE) {
-        // Setup static 4GB tlbs for DRAM cores.
-        uint32_t dram_addr = 0;
-        for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
-            tt::umd::CoreCoord dram_core =
-                tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
-            device_driver.configure_tlb(mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
+    try {
+        // Setup static TLBs for all worker cores.
+        for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED)) {
+            // TODO
+            // Note: see issue #10107
+            // Strict is less performant than Posted, however, metal doesn't presently
+            // use this on a perf path and the launch_msg "kernel config" needs to
+            // arrive prior to the "go" message during device init and slow dispatch
+            // Revisit this when we have a more flexible UMD api
+            device_driver.configure_tlb(
+                mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
         }
-    }
-}
+        // Setup static TLBs for all eth cores
+        for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
+            device_driver.configure_tlb(
+                mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
+        }
 
+        if (arch == tt::ARCH::BLACKHOLE) {
+            // Setup static 4GB tlbs for DRAM cores.
+            uint32_t dram_addr = 0;
+            for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
+                tt::umd::CoreCoord dram_core =
+                    tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
+                device_driver.configure_tlb(
+                    mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, tt::umd::tlb_data::Posted);
+            }
+        }
+    } catch (const std::exception& e) {
+        log_error(LogMetal, "Error configuring static TLBs: {}", e.what());
+    }
 }  // namespace ll_api
