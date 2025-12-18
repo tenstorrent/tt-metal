@@ -2527,9 +2527,11 @@ void py_module(nb::module_& mod) {
         R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc",
-        R"doc(BFLOAT16, FLOAT32, INT32)doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
         With INT32 inputs, round_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
         )doc");
 
     detail::bind_binary_composite_overload(
