@@ -3,7 +3,7 @@
 Utility script to compare two CSV files cell-by-cell.
 
 Example:
-    python tools/tracy/compare_csv.py path/to/first.csv path/to/second.csv
+    python tools/tracy/compare_full_op_report.py path/to/first.csv path/to/second.csv
 """
 
 import csv
