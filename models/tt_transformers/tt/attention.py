@@ -576,6 +576,8 @@ class Attention(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
+                # Synchronize device to ensure async all_gather completes before using the result
+                ttnn.synchronize_device(self.mesh_device)
 
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
