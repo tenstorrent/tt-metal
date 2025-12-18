@@ -436,8 +436,7 @@ public:
     uint32_t get_alignment(HalMemType memory_type) const;
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
-    uint32_t get_dma_alignment(
-        void) const;  // tt::tt_metal::Cluster& cluster, tt_cxy_pair& core, uint32_t size_in_bytes) const;
+    uint32_t get_dma_alignment(void) const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
