@@ -232,44 +232,44 @@ jobs:
             tests/nightly/t3000/ccl/test_send_recv_async.py \
             tests/nightly/t3000/ccl/test_moe_expert_token_remap.py \
             tests/nightly/t3000/ccl/test_apply_device_delay.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_abs.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_assign.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clip.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_concat.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_floor.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_frac.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_i0.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_max.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_min.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_neg.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_relu.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_round.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_sign.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_square.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_complex_tensor.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_abs.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_assign.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clip.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_concat.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_floor.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_frac.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_i0.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_max.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_min.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_neg.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_relu.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_round.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_sign.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_square.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/test_complex_tensor.py \
             tests/ttnn/unit_tests/operations/eltwise/test_eltwise_logical_and_.py \
             tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py \
             tests/ttnn/unit_tests/operations/eltwise/test_inplace.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_mul_bcast.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/test_mul_bcast.py \
             tests/ttnn/unit_tests/operations/eltwise/test_signbit.py \
             tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
             tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
@@ -363,14 +363,11 @@ jobs:
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
-            # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
-            if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
-              # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
-              # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
-            fi
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"

@@ -1060,6 +1060,13 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
 
+    if (profiler_state_manager == nullptr) {
+        log_warning(
+            tt::LogMetal,
+            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
+        return {};
+    }
+
     for (const auto& [device_id, device_programs_perf_analyses] :
          profiler_state_manager->device_programs_perf_analyses_map) {
         if (device_programs_perf_analyses.empty()) {
@@ -1084,6 +1091,13 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
+
+    if (profiler_state_manager == nullptr) {
+        log_warning(
+            tt::LogMetal,
+            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
+        return {};
+    }
 
     for (const auto& [device_id, device_programs_perf_analyses] :
          profiler_state_manager->device_programs_perf_analyses_map) {
