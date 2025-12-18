@@ -113,6 +113,8 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+        # Synchronize device to ensure async reduce_scatter completes before returning
+        ttnn.synchronize_device(mesh_device)
         input_tensor.deallocate(True)
         return reduced
 
@@ -256,6 +258,8 @@ def tt_all_gather(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+    # Synchronize device to ensure async all_gather completes before returning
+    ttnn.synchronize_device(mesh_device)
     input_tensor.deallocate(True)
     return gathered
 
