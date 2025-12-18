@@ -1367,10 +1367,6 @@ class SmolVLAVisionEncoder(nn.Module):
         head_dim = self.embed_dim // num_heads  # 64
         seq_len = 1024  # Fixed for 512x512 image
 
-        # Setup sharding config for attention
-        # Using height sharding to distribute attention across cores
-        core_grid = ttnn.CoreGrid(y=8, x=8)
-
         for layer_idx, layer_params in enumerate(self.tt_layer_params):
             residual = hidden_states
 
@@ -2754,7 +2750,6 @@ class SmolVLAForActionPrediction(nn.Module):
             logger.warning("No input_ids in inputs, using vision-only prefix")
             return projected_features
 
-        batch_size = projected_features.shape[0]
         vision_tokens = projected_features.shape[1]  # e.g., 64 after connector pooling
 
         # Get image token ID
@@ -3291,7 +3286,8 @@ class SmolVLAForActionPrediction(nn.Module):
                         try:
                             layer_num = int(parts[i + 1])
                             max_text_layer = max(max_text_layer, layer_num)
-                        except:
+                        except (ValueError, IndexError):
+                            # Skip non-integer layer indices
                             pass
 
         actual_text_layers = max_text_layer + 1 if max_text_layer >= 0 else None
@@ -3453,7 +3449,6 @@ class SmolVLAForActionPrediction(nn.Module):
 
         # Use K/V cache - already on TT when compute_vlm_kv_cache uses TT path
         vlm_kv_cache = None
-        cross_attn_context_cpu = None
 
         if self.ttnn_device is not None:
             vlm_kv_cache = {}
@@ -3482,12 +3477,10 @@ class SmolVLAForActionPrediction(nn.Module):
             # (This is a simplification - each layer should use its own K/V)
             if vlm_kv_cache_cpu:
                 first_layer_idx = min(vlm_kv_cache_cpu.keys())
-                cross_attn_context_cpu = vlm_kv_cache_cpu[first_layer_idx][0]  # Use K as context
                 logger.info(
-                    f"Using VLM K from layer {first_layer_idx} as cross-attn context: {cross_attn_context_cpu.shape}"
+                    f"Using VLM K from layer {first_layer_idx} as cross-attn context: {vlm_kv_cache_cpu[first_layer_idx][0].shape}"
                 )
             else:
-                cross_attn_context_cpu = None
                 logger.warning("No VLM K/V cache computed, using fallback")
 
         CHECKPOINTS.checkpoint("end_VLMKVCOMPUTE")
@@ -3508,8 +3501,6 @@ class SmolVLAForActionPrediction(nn.Module):
             if robot_state.dim() == 1:
                 robot_state = robot_state.unsqueeze(0)  # Add batch dim
             robot_state = robot_state.float()
-            # Project state to context space (960-dim) - stored for potential use
-            state_context = self.action_heads.project_state(robot_state)
 
         # Flow matching: integrate from t=0 to t=1
         dt = 1.0 / num_inference_steps
@@ -3767,7 +3758,6 @@ def test_smolvla_cpu_only(repo_id):
 
 if __name__ == "__main__":
     import argparse
-    import ttnn
 
     # Suppress verbose logging during test
     logging.basicConfig(level=logging.WARNING)

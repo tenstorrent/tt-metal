@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -739,8 +739,6 @@ class SmolVLAVisionEncoderOptimized:
         Returns:
             [batch, num_patches, hidden_size] vision features as TT tensor
         """
-        batch_size = pixel_values.shape[0]
-
         # Convert NCHW -> NHWC and pad channels 3 -> 4
         if pixel_values.shape[1] == 3:
             pixel_values_nhwc = pixel_values.permute(0, 2, 3, 1)  # [B, H, W, 3]
