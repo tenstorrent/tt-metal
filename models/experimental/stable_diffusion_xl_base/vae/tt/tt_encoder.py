@@ -88,9 +88,7 @@ class TtEncoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        # auto slicing reduces number of slices and makes slices take more space in L1 which causes out of memory error: not enough space to allocate L1_SMALL buffer
-        # setting slice_type to ttnn.Conv2dDRAMSliceHeight to avoid this issue
-        self.conv_in_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=0)
+        self.conv_in_slice_config = None
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="encoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="encoder.conv_out")
@@ -103,8 +101,10 @@ class TtEncoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        # auto slicing here causes CB to outgrow L1; setting slice_type to ttnn.Conv2dDRAMSliceHeight to avoid this issue
-        self.conv_out_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=0)
+        self.conv_out_slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=0,
+        )
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
