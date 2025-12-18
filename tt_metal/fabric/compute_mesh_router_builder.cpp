@@ -620,7 +620,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
         // Use Os (optimize for size) when VC1 is active to fit in code space
         // Use O3 (optimize for performance) otherwise
-        bool vc1_active = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
+        bool vc1_active = erisc_builder_->config.get_channel_spec().receiver_channels_per_vc[1] > 0;
         auto opt_level = vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
 
         // Create the kernel

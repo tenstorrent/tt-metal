@@ -101,7 +101,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
-        spec.topology,
+        topology_,
         options,
         num_sender_buffer_slots_per_vc,
         num_remote_sender_buffer_slots_per_vc,

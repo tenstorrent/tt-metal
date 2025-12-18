@@ -242,11 +242,11 @@ void EriscL1Layout::compute_layout(
     }
 
     receiver_downstream_addresses_.reserve(num_downstream_edms_);
-    for (size_t idx = 0; idx < num_downstream_edms_; ++idx) {
+    for (size_t ds_idx = 0; ds_idx < num_downstream_edms_; ++ds_idx) {
         constexpr size_t FIELD_SIZE = EriscL1Layout::FIELD_SIZE;
 
         size_t base = regions_[idx(L1Block::RECEIVER_DOWNSTREAM_CONTROL)].start_address;
-        size_t offset = idx * receiver_downstream_stride_;
+        size_t offset = ds_idx * receiver_downstream_stride_;
 
         // Calculate addresses sequentially (skip padding field at base + offset)
         size_t flow_control_sem = base + offset + FIELD_SIZE;

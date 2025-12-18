@@ -542,7 +542,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
     // 3. Multi-target receiver capacity limits
 
     // Verify that Z router VC1 has exactly 4 sender channels (for Z_TO_MESH)
-    EXPECT_EQ(z_router.channel_mapping.get_num_sender_channels_for_vc(1), 4);
+    EXPECT_EQ(z_router.spec.sender_channels_per_vc[1], 4);
 
     // Receiver channel 0 has 4 targets mapped to specific directions (N/E/S/W)
     auto z_targets = z_router.connection_mapping.get_downstream_targets(1, 0);

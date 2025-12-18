@@ -249,6 +249,7 @@ struct FabricEriscDatamoverConfig {
 
     // Accessors for component members
     const RouterNocConfig& get_noc_config() const { return noc_config_; }
+    RouterNocConfig& get_noc_config() { return noc_config_; }
     const MeshChannelSpec& get_channel_spec() const { return channel_spec_; }
     const EriscL1Layout& get_l1_layout() const { return l1_layout_; }
 

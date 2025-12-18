@@ -232,8 +232,9 @@ L1LayoutParams compute_l1_layout_params(size_t sender_txq_id, size_t receiver_tx
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     return L1LayoutParams{
-        .base_address = hal.get_erisc_l1_unreserved_base(),
-        .max_address = hal.get_erisc_l1_unreserved_base() + hal.get_erisc_l1_unreserved_size(),
+        .base_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
+        .max_address =
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base() + tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
         .enable_telemetry = rtoptions.get_enable_fabric_bw_telemetry() || hal.get_arch() == tt::ARCH::BLACKHOLE,
         .enable_code_profiling = rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd(),
         .enable_multi_txq = (sender_txq_id != receiver_txq_id),
@@ -246,9 +247,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes,
     Topology topology,
     FabricEriscDatamoverOptions options) :
-    channel_spec_(channel_spec),
-    topology(topology),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
+    topology(topology),
+    channel_spec_(channel_spec),
     l1_layout_([&]() {
         // Compute receiver_txq_id to determine enable_multi_txq
         size_t receiver_txq_id = 0;
@@ -300,7 +301,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     if (sender_counters.size > 0) {
         // Calculate size for buffer clear operations
         size_t num_words_per_counter =
-            tt::align(sizeof(uint32_t) * channel_spec_.get_total_sender_channels(), field_size);
+            tt::align(sizeof(uint32_t) * channel_spec_.get_total_sender_channels(), eth_word_l1_alignment);
         this->router_buffer_clear_size_words = num_words_per_counter;
     }
 
@@ -353,9 +354,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         min_buffer_size);
 
     // Channel buffer memory region
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& buffer_region = l1_layout_.get(L1Block::CHANNEL_BUFFERS);
-    this->max_l1_loading_size = hal.get_erisc_l1_unreserved_size() + hal.get_erisc_l1_unreserved_base();
+    this->max_l1_loading_size =
+        tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     this->available_buffer_memory_regions = {MemoryRegion(buffer_region.start_address, buffer_region.size)};
 
     // Compute available channel buffering space
@@ -1354,7 +1355,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     // Validate upstream VC1 usage
     if (upstream_vc_idx == 1) {
         TT_FATAL(
-            config.num_used_receiver_channels_per_vc[1] > 0,
+            config.get_channel_spec().receiver_channels_per_vc[1] > 0,
             "VC1 receiver channels not configured on upstream router.");
     }
 

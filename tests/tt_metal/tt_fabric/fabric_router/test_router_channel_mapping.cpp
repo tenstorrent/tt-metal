@@ -462,7 +462,7 @@ TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, nullptr);
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH);
 
-    auto all_mappings = mapping.get_all_sender_mappings();
+    auto all_mappings = mapping.get_all_sender_mappings(spec);
 
     // Mesh router with VC0 only: 4 channels
     EXPECT_EQ(all_mappings.size(), 4);
@@ -479,7 +479,7 @@ TEST_F(RouterChannelMappingTest, GetAllSenderMappings_ZRouter) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER);
 
-    auto all_mappings = mapping.get_all_sender_mappings();
+    auto all_mappings = mapping.get_all_sender_mappings(spec);
 
     // Z router: VC0 (4 channels) + VC1 (4 channels) = 8 total
     EXPECT_EQ(all_mappings.size(), 8);
