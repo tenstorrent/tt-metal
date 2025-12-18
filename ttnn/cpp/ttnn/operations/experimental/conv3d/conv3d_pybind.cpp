@@ -11,6 +11,7 @@
 #include <pybind11/stl.h>
 
 #include "conv3d.hpp"
+#include "prepare_conv3d_weights.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
 namespace ttnn::operations::experimental::conv3d::detail {
@@ -116,6 +117,53 @@ void py_bind_conv3d(py::module& module) {
     py_conv3d_config.def_readwrite("compute_with_storage_grid_size", &Conv3dConfig::compute_with_storage_grid_size, "");
 
     py_conv3d_config.def("__repr__", [](const Conv3dConfig& config) { return fmt::format("{}", config); });
+
+    // Bind prepare_conv3d_weights function
+    module.def(
+        "prepare_conv3d_weights",
+        prepare_conv3d_weights,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("conv_config"),
+        py::arg("alignment") = 16,
+        R"doc(
+        Prepares conv3d weight tensor for device execution.
+
+        Transforms PyTorch-style weight tensor [out_channels, in_channels, kD, kH, kW]
+        to the format expected by conv3d device operation.
+
+        Args:
+            weight_tensor (ttnn.Tensor): Weight tensor in PyTorch format [out_channels, in_channels, kD, kH, kW].
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            conv_config (ttnn.Conv3dConfig): Conv3d configuration containing C_in_block and other parameters.
+            alignment (int, optional): Channel alignment boundary. Defaults to 16.
+
+        Returns:
+            ttnn.Tensor: Prepared weight tensor in tile layout, shape [-1, out_channels].
+        )doc");
+
+    // Bind prepare_conv3d_bias function
+    module.def(
+        "prepare_conv3d_bias",
+        prepare_conv3d_bias,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("out_channels"),
+        R"doc(
+        Prepares conv3d bias tensor for device execution.
+
+        Reshapes bias to [1, out_channels] format and converts to tile layout.
+
+        Args:
+            bias_tensor (ttnn.Tensor): Bias tensor.
+            out_channels (int): Number of output channels.
+
+        Returns:
+            ttnn.Tensor: Prepared bias tensor in tile layout, shape [1, out_channels].
+        )doc");
 }
 
 }  // namespace ttnn::operations::experimental::conv3d::detail
