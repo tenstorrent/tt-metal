@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -60,7 +61,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     return y;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_expm1() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -70,7 +71,7 @@ inline void calculate_expm1() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void expm1_init() {
     sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
     sfpi::vConstIntPrgm1 = 0xf94ee7;

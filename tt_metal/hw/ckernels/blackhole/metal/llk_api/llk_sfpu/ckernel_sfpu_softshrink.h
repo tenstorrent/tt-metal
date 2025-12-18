@@ -6,10 +6,10 @@
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-
+#include "llk_defs.h"
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_softshrink(uint32_t param0) {
     // Softshrink(x) = x - λ if x > λ, x + λ if x < -λ, else 0
     // SFPU microcode

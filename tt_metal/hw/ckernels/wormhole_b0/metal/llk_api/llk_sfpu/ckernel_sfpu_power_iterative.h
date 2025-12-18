@@ -7,13 +7,14 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint exponent) {
 #pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {

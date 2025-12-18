@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -33,7 +34,7 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
     const vFloat zero = 0.0f;
     const vFloat one = 1.0f;
@@ -87,7 +88,7 @@ inline void calculate_comp(uint exponent_size_8) {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
@@ -140,7 +141,7 @@ inline void calculate_comp_int() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
@@ -161,7 +162,7 @@ inline void calculate_comp_uint16() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
     int scalar = -5;  // used for shift operation
     _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
@@ -174,7 +175,7 @@ inline void calculate_eqz_uint32() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
@@ -192,7 +193,7 @@ inline void calculate_nez_uint32() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
     // Convert both operands to two's complement format
     //
