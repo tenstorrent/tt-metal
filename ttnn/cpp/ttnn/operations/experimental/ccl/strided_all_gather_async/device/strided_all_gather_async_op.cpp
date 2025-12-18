@@ -98,7 +98,7 @@ StridedAllGatherAsync::invoke(
 
     return {
         operation_attributes_t{
-            ttnn::ccl::get_active_physical_devices(input_tensor),
+            {}, // not used downstream, so pass empty vector
             dim,
             num_links,
             num_devices,

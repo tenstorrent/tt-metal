@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -203,7 +204,7 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
         auto shard_col = i % global_buffer_shape.width();
         auto device_row = shard_row / shard_shape.height();
         auto device_col = shard_col / shard_shape.width();
-        if (mesh_device_->is_local(MeshCoordinate(device_row, device_col))) {
+        if (mesh_device_->impl().is_local(MeshCoordinate(device_row, device_col))) {
             EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
         }
     }

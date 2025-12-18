@@ -119,35 +119,35 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto* mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
+    auto *mesh_device = input_tensors[0].device();
+    const auto& mesh_view = mesh_device->get_view();
+    auto target_fabric_node_id = mesh_view.get_fabric_node_id(mesh_coordinate);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = {};
     if (this->all_gather_params.cluster_axis.has_value()) {
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
-        const auto& mesh_view = input_tensors[0].device()->get_view();
-        devices_to_use = (this->all_gather_params.cluster_axis.value() == 0)
-                             ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                             : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+        fabric_node_ids = (this->all_gather_params.cluster_axis.value() == 0)
+                              ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                              : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
     } else {
-        devices_to_use = this->all_gather_params.devices;
+        TT_FATAL(false, "Cluster axis not specified");
     }
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < this->all_gather_params.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
+        if (fabric_node_ids.at(i) == target_fabric_node_id) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (this->all_gather_params.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(this->all_gather_params.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(this->all_gather_params.ring_size - 1);
             }
             if (i != this->all_gather_params.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (this->all_gather_params.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -158,9 +158,9 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
         output_tensors[0],  // mm output tensor
         input_tensors[2],   // intermediate_tensor
         output_tensors[1],  // aggregated_tensor (now output)
-        target_device,
-        forward_device,
-        backward_device,
+        target_fabric_node_id,
+        forward_fabric_node_id,
+        backward_fabric_node_id,
         this->all_gather_params.dim,
         this->all_gather_params.num_links,
         this->all_gather_params.ring_size,
@@ -247,8 +247,6 @@ Tensor llama_all_gather_matmul_async_impl(
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     TT_FATAL(
         gather_dim >= -rank && gather_dim <= rank - 1,
         "Dimension input should be in between -{} and {}, but has {}",
@@ -292,7 +290,7 @@ Tensor llama_all_gather_matmul_async_impl(
             /*global_cb=*/global_cb});
 
     ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
-        ttnn::LlamaAllGatherMatmulAsync{all_gather_params, matmul_struct, devices};
+        ttnn::LlamaAllGatherMatmulAsync{all_gather_params, matmul_struct, {} /* devices, not used */};
     // return input_tensor;  // TODO: Implement the actual logic
     // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
     //     .at(0);

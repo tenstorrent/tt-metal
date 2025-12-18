@@ -77,27 +77,27 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    IDevice* target_device = mesh_device->get_device(mesh_coordinate);
+    tt::tt_fabric::FabricNodeId target_fabric_node_id = mesh_view.get_fabric_node_id(mesh_coordinate);
 
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids =
+        (operation_attributes.cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                                 : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (fabric_node_ids.at(i) == target_fabric_node_id) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(operation_attributes.ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(operation_attributes.ring_size - 1);
             }
             if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -111,8 +111,8 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     [[maybe_unused]] bool is_last_chip = ring_index == operation_attributes.ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
+        "DEBUG: fabric_node_id: {}, is_first_chip: {}, is_last_chip: {}",
+        target_fabric_node_id,
         is_first_chip,
         is_last_chip);
 
@@ -521,23 +521,15 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                target_device_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+                target_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

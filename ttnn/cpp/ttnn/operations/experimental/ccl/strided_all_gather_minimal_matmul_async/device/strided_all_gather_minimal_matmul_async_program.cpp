@@ -163,8 +163,7 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto* mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
+    auto* target_device = tensor_args.input_tensor.device();
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, attributes.strided_all_gather_async_struct.cluster_axis);

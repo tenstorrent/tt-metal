@@ -15,8 +15,8 @@ namespace tt::tt_metal {
     class MetalContext;
 
     namespace distributed {
-        class MeshDevice;
-        class MeshWorkloadImpl;
+    class MeshDeviceImpl;
+    class MeshWorkloadImpl;
     }
 }
 
@@ -42,7 +42,7 @@ struct ProgramData {
 };
 
 struct MeshDeviceData {
-    const distributed::MeshDevice* mesh_device = nullptr;
+    const distributed::MeshDeviceImpl* mesh_device = nullptr;
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
