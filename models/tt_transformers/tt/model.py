@@ -542,6 +542,7 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+            print(f"model.py: layer {i} output: {x}")
 
         if mode == "prefill" and get_last_token == -1:
             return x
@@ -550,15 +551,25 @@ class Transformer(LightweightModule):
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
+        print(f"model.py: x after slicing: {x}")
+
         # Output norm
         x = self.norm(x, mode=mode)
+
+        print(f"model.py: x after norm: {x}")
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
+        print(f"model.py: x after interleaved to sharded: {x}")
+
         x = self.lm_head(x)
+
+        print(f"model.py: x after lm head: {x}")
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        print(f"model.py: x after to layout: {x}")
         return x
