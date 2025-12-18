@@ -615,9 +615,8 @@ inline uint32_t Hal::get_dma_alignment(void) const {
     // DMA transfers are only available on Wormhole B0 devices today.
     switch (arch_) {
         case tt::ARCH::WORMHOLE_B0: return 4;
-        default:
-            // This branch should never be reached. Only Wormhole B0 devices support DMA transfers today.
-            return 1;
+        // Only Wormhole B0 devices support DMA transfers today.
+        default: return 1;
     }
 }
 
