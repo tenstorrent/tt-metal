@@ -130,6 +130,15 @@ def serialize_structured(object, warnings=[]):
         )
         warnings.append(type(object))
         return str(object)
+    elif isinstance(object, (dict, list)):
+        # Preserve JSON-native container types as-is; recursively serialize nested elements
+        if isinstance(object, dict):
+            return {k: serialize_structured(v, warnings) for k, v in object.items()}
+        else:
+            return [serialize_structured(item, warnings) for item in object]
+    elif isinstance(object, (str, int, float, bool, type(None))):
+        # Preserve JSON-native primitive types directly
+        return object
     else:
         return str(object)
 
