@@ -22,6 +22,7 @@
 KERNEL_ENTRY {
     // Use UnifiedCoreDescriptor for compile-time role checks
     using Core = pre_sdpa::UnifiedCoreDescriptor;
+    DPRINT << "-------- kernel started --------" << ENDL();
 
 // ============================================================================
 // NCRISC (Reader + Mcast Sender) - ReaderConfigDescriptor compiles as NCRISC
@@ -271,7 +272,7 @@ KERNEL_ENTRY {
         // pop_src = true (input is consumed after mcast)
         mcast(mcast_args);
     }
-    mcast.teardown(mcast_args);
+    // mcast.teardown(mcast_args);
 
     // ========================================================================
     // Matmul operation
@@ -287,6 +288,7 @@ KERNEL_ENTRY {
     // Gather: matmul cores (senders) -> input core (receiver)
     // NCRISC sends from matmul cores, BRISC receives on input core, TRISC no-op
     // ========================================================================
+    DPRINT << "-------- gather started --------" << ENDL();
     {
         DeviceZoneScopedN("GATHER");
         // pop_src = true (matmul output is consumed after gather)
@@ -299,6 +301,7 @@ KERNEL_ENTRY {
     // Gather dst cb has 1536 bytes (1.5 half tiles), pad to 2048 bytes (32x32 tile)
     // Only runs on BRISC on input core (where gather receiver runs)
     // ========================================================================
+    DPRINT << "-------- gather to rmsnorm2 hack started --------" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (Core::is_input_core) {
         DeviceZoneScopedN("GATHER_TO_RMSNORM_HACK");
@@ -365,9 +368,10 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("MCAST2");
         // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
         // pop_src = true (rmsnorm2 output is consumed after mcast)
-        // deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
-        // mcast2(mcast2_args);
+        deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
+        mcast2(mcast2_args);
     }
+    mcast.teardown(mcast2_args);
     DPRINT << "-------- mcast 2 completed --------" << ENDL();
 
     // ========================================================================

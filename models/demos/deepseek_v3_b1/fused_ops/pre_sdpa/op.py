@@ -276,8 +276,9 @@ class PreSDPA:
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_num_tiles", matmul2_num_tiles_k),
         ]
-        # BRISC: out
+        # BRISC: in0 (for mcast2 receiver), out
         matmul2_brisc_named_compile_time_args = [
+            ("matmul2_in0", matmul2_input_cb),
             ("matmul2_out", matmul2_output_cb),
         ]
         # TRISC: in0, in1, out, num_tiles
