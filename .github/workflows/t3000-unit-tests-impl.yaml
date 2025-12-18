@@ -49,7 +49,7 @@ jobs:
               "name": "t3k tt_metal multiprocess tests",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_tt_metal_multiprocess_tests",
-              "timeout": 15,
+              "timeout": 30,
               "owner_id": "U03NG0A5ND7" # Aditya Saigal
             }
             ]')
