@@ -15,15 +15,15 @@ benchmark_model_input_shapes = [
     # shape (b, nh, base_seq_len, joint_seq_len, d), parallel_config (rp_axis, rp_factor, up_axis, up_factor)
     [(1, 40, 32760, 0, 128), (0, 2, 1, 4)],
     [(1, 24, 44520, 118, 128), (0, 2, 1, 4)],
-    # [(1, 24, 4096, 512, 128), (0, 2, 1, 4)],
-    # [(1, 38, 4096, 333, 64), (0, 2, 1, 2)],
+    [(1, 24, 4096, 512, 128), (0, 2, 1, 4)],
+    [(1, 38, 4096, 333, 64), (0, 2, 1, 2)],
 ]
 
 benchmark_model_input_ids = [
     "wan_14b_480p",
     "mochi",
-    # "flux",
-    # "sd35",
+    "flux",
+    "sd35",
 ]
 
 
@@ -34,8 +34,6 @@ benchmark_model_input_ids = [
 )
 @pytest.mark.parametrize("q_chunk_size", [64, 128, 256], ids=["q64", "q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512], ids=["k64", "k128", "k256", "k512"])
-# @pytest.mark.parametrize("q_chunk_size", [64], ids=["q64"])
-# @pytest.mark.parametrize("k_chunk_size", [64], ids=["k64"])
 @pytest.mark.parametrize("n_iters, trace_enabled, skip_check", [(1, False, False)], ids=["no_trace"])
 @pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
 @pytest.mark.parametrize(
@@ -284,85 +282,88 @@ def test_ring_joint_sdpa_shapes(
     )
 
 
-# @pytest.mark.parametrize(
-#     "input_shape, parallel_config, chunk_sizes",
-#     # input_shape: (b, nh, base_seq_len, joint_seq_len, d)
-#     # parallel_config: (rp_axis, rp_factor, up_axis, up_factor)
-#     # chunk_sizes: (q_chunk_size, k_chunk_size)
-#     [
-#         [],
-#         [],
-#         [],
-#         [(1, 40, 32760, 0, 128), (0, 2, 1, 4), (...)],
-#     ],
-#     ids=[
-#         "sd35_2x2",
-#         "flux_2x4",
-#         "mochi_2x4",
-#         "wan_14b_480p_2x4",
-#     ]
-# )
-# @pytest.mark.parametrize(
-#     "device_params, all_gather_topology",
-#     [
-#         (
-#             {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-#             ttnn.Topology.Linear,
-#         ),
-#     ],
-#     indirect=["device_params"],
-#     ids=[
-#         "line",
-#     ],
-# )
-# @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
-# def test_ring_joint_sdpa_dit_t3k(
-#     mesh_device,
-#     input_shape,
-#     parallel_config,
-#     chunk_sizes,
-#     all_gather_topology,
-#     reset_seeds,
-# ):
-#     b, nh, base_seq_len, joint_seq_len, d = input_shape
-#     rp_axis, rp_factor, up_axis, up_factor = parallel_config
-#     q_chunk_size, k_chunk_size = chunk_sizes
+@pytest.mark.parametrize(
+    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    # input_shape: (b, nh, base_seq_len, joint_seq_len, d)
+    # parallel_config: (rp_axis, rp_factor, up_axis, up_factor)
+    # chunk_sizes: (q_chunk_size, k_chunk_size)
+    # expected_corretness: (min_pcc, max_mse)
+    [
+        [(1, 40, 32760, 0, 128), (0, 2, 1, 4), (256, 256), (0.9996, 5e-5)],
+        [(1, 24, 44520, 118, 128), (0, 2, 1, 4), (128, 512), (0.9995, 6e-5)],
+        [(1, 24, 4096, 512, 128), (0, 2, 1, 4), (128, 512), (0.9997, 2.2e-5)],
+        [(1, 38, 4096, 333, 64), (0, 2, 1, 2), (256, 512), (0.9997, 3.5e-5)],
+    ],
+    ids=[
+        "wan_14b_480p_2x4",
+        "mochi_2x4",
+        "flux_2x4",
+        "sd35_2x2",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+def test_ring_joint_sdpa_dit_t3k(
+    mesh_device,
+    input_shape,
+    parallel_config,
+    chunk_sizes,
+    expected_correctness,
+    all_gather_topology,
+    reset_seeds,
+):
+    b, nh, base_seq_len, joint_seq_len, d = input_shape
+    rp_axis, rp_factor, up_axis, up_factor = parallel_config
+    q_chunk_size, k_chunk_size = chunk_sizes
 
-#     # contants
-#     dtype = ttnn.bfloat16
-#     n_iters = 1
-#     trace_enabled = False
-#     skip_check = False
-#     num_links = 1
-#     pcc_threshold = 0.999
+    # contants
+    dtype = ttnn.bfloat16
+    n_iters = 1
+    trace_enabled = False
+    skip_check = False
+    num_links = 1
+    pcc_threshold, max_mse = expected_correctness
 
-#     mesh_device_shape = list(mesh_device.shape)
-#     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
 
-#     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-#     padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
 
-#     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-#     logger.debug(f"submesh: {submesh.shape}")
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
 
-#     run_ring_joint_sdpa(
-#         submesh,
-#         b,
-#         nh,
-#         base_seq_len,
-#         padded_seq_len,
-#         joint_seq_len,
-#         d,
-#         q_chunk_size,
-#         k_chunk_size,
-#         dtype,
-#         n_iters,
-#         trace_enabled,
-#         num_links,
-#         rp_axis,
-#         up_axis,
-#         all_gather_topology,
-#         skip_check,
-#         pcc_threshold,
-#     )
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+        max_mse=max_mse,
+    )
