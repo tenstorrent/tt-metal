@@ -156,3 +156,69 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+# Generate MGD library
+add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
+
+add_dependencies(
+    generate_mgd_lib
+    scaleout_generated_protos
+    fabric
+)
+
+target_include_directories(
+    generate_mgd_lib
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/generate_mgd
+)
+target_include_directories(
+    generate_mgd_lib
+    SYSTEM
+    PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
+
+target_link_libraries(
+    generate_mgd_lib
+    PUBLIC
+        scaleout_tools
+        protobuf::libprotobuf
+)
+
+# Generate MGD CLI tool (standalone, links against fabric for protobuf implementation)
+add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
+
+add_dependencies(
+    generate_mgd
+    scaleout_generated_protos
+    fabric
+)
+
+set_target_properties(
+    generate_mgd
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+target_include_directories(
+    generate_mgd
+    SYSTEM
+    PRIVATE
+        ${CMAKE_BINARY_DIR}/tools/scaleout
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
+
+target_sources(generate_mgd PRIVATE $<TARGET_OBJECTS:fabric>)
+
+target_link_libraries(
+    generate_mgd
+    PRIVATE
+        generate_mgd_lib
+        scaleout_tools
+        tt_metal
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
