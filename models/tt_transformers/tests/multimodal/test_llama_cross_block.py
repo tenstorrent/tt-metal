@@ -167,7 +167,9 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             cache_position=[layer_idx],
             full_text_row_masked_out_mask=full_text_mask,
             attention_mask=None,
-        )[0]
+        )[
+            0
+        ]  # 0 element is the actuall feature map/hidden state needed for comparison
 
         if mode == "prefill":
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
