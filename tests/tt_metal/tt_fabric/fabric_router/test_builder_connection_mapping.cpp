@@ -127,7 +127,8 @@ TEST_F(BuilderConnectionMappingTest, MeshRouter_ChannelAndConnectionMapping_Cons
     RouterVariant variant = RouterVariant::MESH;
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, nullptr);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(topology);
+    FabricRouterChannelMapping channel_mapping(topology, spec, has_tensix, variant, nullptr);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_mesh_router(topology, routing_dir, has_z);
@@ -157,7 +158,8 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
     auto intermesh_config = IntermeshVCConfig::full_mesh();
 
     // Phase 1: Channel mapping
-    FabricRouterChannelMapping channel_mapping(topology, has_tensix, variant, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(topology);
+    FabricRouterChannelMapping channel_mapping(topology, spec, has_tensix, variant, &intermesh_config);
 
     // Phase 2: Connection mapping
     RouterConnectionMapping conn_mapping = RouterConnectionMapping::for_z_router();

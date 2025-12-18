@@ -601,9 +601,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     // Initialize per-RISC channel servicing flags
     const auto& sender_counts =
-        actual_sender_channels_per_vc.value_or(config.get_channel_spec().get_sender_channels_per_vc());
+        actual_sender_channels_per_vc.value_or(config.get_channel_spec().get_max_sender_channels_per_vc());
     const auto& receiver_counts =
-        actual_receiver_channels_per_vc.value_or(config.get_channel_spec().get_receiver_channels_per_vc());
+        actual_receiver_channels_per_vc.value_or(config.get_channel_spec().get_max_receiver_channels_per_vc());
 
     // Populate sender channel connection info addresses from L1 layout
     for (size_t ch = 0; ch < config.get_channel_spec().get_total_sender_channels(); ++ch) {

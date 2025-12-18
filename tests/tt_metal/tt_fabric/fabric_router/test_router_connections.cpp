@@ -109,14 +109,17 @@ TEST_F(RouterConnectionsTest, MeshToMesh_VC0_Connection) {
     FabricNodeId device1(MeshId{0}, 1);
 
     // Create channel mappings for both routers
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping router0_mapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);
 
     FabricRouterChannelMapping router1_mapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);
@@ -221,10 +224,11 @@ TEST_F(RouterConnectionsTest, MeshToZ_VC0_Connection) {
     FabricNodeId device0(MeshId{0}, 0);
 
     // Mesh router (North direction)
-    FabricRouterChannelMapping mesh_mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+    auto mesh_spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mesh_mapping(Topology::Mesh, mesh_spec, false, RouterVariant::MESH, nullptr);
 
     // Z router
-    FabricRouterChannelMapping z_mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    FabricRouterChannelMapping z_mapping(Topology::Mesh, mesh_spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Verify Z router has 2 VCs
     EXPECT_EQ(z_mapping.get_num_mapped_virtual_channels(), 2);
@@ -311,10 +315,11 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
     FabricNodeId device0(MeshId{0}, 0);
 
     // Z router
-    FabricRouterChannelMapping z_mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping z_mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Mesh router
-    FabricRouterChannelMapping mesh_mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+    FabricRouterChannelMapping mesh_mapping(Topology::Mesh, spec, false, RouterVariant::MESH, nullptr);
 
     // Verify Z router VC1 has 4 sender channels
     EXPECT_EQ(z_mapping.get_num_mapped_sender_channels_for_vc(1), 4);
@@ -536,7 +541,8 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
     FabricNodeId device0(MeshId{0}, 0);
 
     // Z router channel mapping
-    FabricRouterChannelMapping z_mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping z_mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Verify Z router has correct VC1 layout
     EXPECT_EQ(z_mapping.get_num_mapped_virtual_channels(), 2);
@@ -554,7 +560,8 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
 
     for (size_t i = 0; i < 4; ++i) {
         // Create mesh router mapping
-        FabricRouterChannelMapping mesh_mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+        FabricRouterChannelMapping mesh_mapping(Topology::Mesh, spec, false, RouterVariant::MESH, nullptr);
 
         // Verify mesh router VC0 sender channel 2 exists
         EXPECT_GE(mesh_mapping.get_num_mapped_sender_channels_for_vc(0), 3);
@@ -1038,7 +1045,9 @@ TEST_F(RouterConnectionsTest, Phase2_ChannelMapping_And_ConnectionMapping_Consis
 
     // Create Z router channel mapping
     auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping z_channel_mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping z_channel_mapping(
+        Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Create Z router connection mapping
     auto z_conn_mapping = RouterConnectionMapping::for_z_router();

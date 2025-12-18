@@ -489,7 +489,6 @@ void ComputeMeshRouterBuilder::configure_local_connections(
     std::set<RoutingDirection> connected_targets;
 
     // Iterate through all VCs to find local connection targets
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     uint32_t num_vcs = channel_mapping_.get_num_mapped_virtual_channels();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {

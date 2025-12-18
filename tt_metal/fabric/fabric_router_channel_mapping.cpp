@@ -23,7 +23,7 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     initialize_mappings(spec);
 }
 
-void FabricRouterChannelMapping::initialize_mappings(const MeshChannelSpec& spec) {
+void FabricRouterChannelMapping::initialize_mappings(const MeshChannelSpec& /*spec*/) {
     initialize_vc0_mappings();
     initialize_vc1_mappings();
 }
@@ -147,15 +147,13 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 }
 
 std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings(
-    const MeshChannelSpec& spec) const {
+    const MeshChannelSpec& /*spec*/) const {
     std::vector<InternalSenderChannelMapping> result;
 
     // Iterate through VCs in order and flatten
-    for (uint32_t vc = 0; vc < spec.get_num_max_virtual_channels(); ++vc) {
-        // Use the appropriate channel count based on router variant
-        size_t num_channels = (variant_ == RouterVariant::Z_ROUTER)
-                                  ? spec.get_num_max_z_router_sender_channels_for_vc(vc)
-                                  : spec.get_num_max_sender_channels_for_vc(vc);
+    // Use the mapping's own state (not the spec's theoretical max)
+    for (uint32_t vc = 0; vc < get_num_mapped_virtual_channels(); ++vc) {
+        uint32_t num_channels = get_num_mapped_sender_channels_for_vc(vc);
 
         for (uint32_t ch_idx = 0; ch_idx < num_channels; ++ch_idx) {
             result.push_back(get_sender_mapping(vc, ch_idx));

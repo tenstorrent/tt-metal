@@ -75,6 +75,7 @@ protected:
             .spec = spec,
             .channel_mapping = FabricRouterChannelMapping(
                 Topology::Mesh,
+                spec,
                 false,  // No tensix
                 RouterVariant::MESH,
                 nullptr),  // No intermesh config for standard mesh routers
@@ -90,6 +91,7 @@ protected:
             .spec = spec,
             .channel_mapping = FabricRouterChannelMapping(
                 Topology::Mesh,
+                spec,
                 false,  // No tensix
                 RouterVariant::Z_ROUTER,
                 &intermesh_config),  // Z routers require intermesh config

@@ -73,8 +73,10 @@ protected:
 // ============ Basic Mesh Router Tests (Regression) ============
 
 TEST_F(RouterChannelMappingTest, MeshRouter_1D_Linear_VC0Only) {
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Linear);
     FabricRouterChannelMapping mapping(
         Topology::Linear,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
@@ -99,8 +101,10 @@ TEST_F(RouterChannelMappingTest, MeshRouter_1D_Linear_VC0Only) {
 }
 
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_Mesh_VC0Only) {
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
@@ -120,8 +124,10 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Mesh_VC0Only) {
 }
 
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_Torus_VC0Only) {
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Torus);
     FabricRouterChannelMapping mapping(
         Topology::Torus,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
@@ -134,9 +140,11 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_Torus_VC0Only) {
 
 TEST_F(RouterChannelMappingTest, ZRouter_Has2VirtualChannels) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,  // Z routers use 2D topology
-        false,           // no tensix
+        spec,
+        false,  // no tensix
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
 
@@ -146,8 +154,10 @@ TEST_F(RouterChannelMappingTest, ZRouter_Has2VirtualChannels) {
 
 TEST_F(RouterChannelMappingTest, ZRouter_VC0_Has4SenderChannels) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
@@ -165,8 +175,10 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC0_Has4SenderChannels) {
 
 TEST_F(RouterChannelMappingTest, ZRouter_VC1_Has4SenderChannels) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
@@ -177,8 +189,10 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC1_Has4SenderChannels) {
 
 TEST_F(RouterChannelMappingTest, ZRouter_VC1_SenderChannels_MapToErisc4Through7) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
@@ -193,8 +207,10 @@ TEST_F(RouterChannelMappingTest, ZRouter_VC1_SenderChannels_MapToErisc4Through7)
 
 TEST_F(RouterChannelMappingTest, ZRouterNoTensix_VC0_VC1_ReceiverChannel_MapsToErisc) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
@@ -215,8 +231,10 @@ TEST_F(RouterChannelMappingTest, ZRouterNoTensix_VC0_VC1_ReceiverChannel_MapsToE
 // ============ Mesh Router with Tensix Extension ============
 
 TEST_F(RouterChannelMappingTest, MeshRouter_WithTensix_VC0_MapsToTensix) {
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     FabricRouterChannelMapping mapping(
         Topology::Mesh,
+        spec,
         true,  // has tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
@@ -237,8 +255,13 @@ TEST_F(RouterChannelMappingTest, MeshRouter_WithTensix_VC0_MapsToTensix) {
 
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithoutIntermesh) {
     // Without intermesh config, VC1 should not be created
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH,
-                                       nullptr);  // No intermesh config
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(
+        Topology::Mesh,
+        spec,
+        false,
+        RouterVariant::MESH,
+        nullptr);  // No intermesh config
 
     EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 1);         // Only VC0
     EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), 0);  // VC1 not created
@@ -247,7 +270,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithoutIntermesh) {
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshEdgeOnly) {
     // With intermesh config (edge only), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::edge_only();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 2);         // VC0 + VC1
     EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), 3);  // VC1 created
@@ -261,7 +285,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshEdgeOnly) {
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMesh) {
     // With intermesh config (full mesh), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 2);         // VC0 + VC1
     EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), 3);  // VC1 created
@@ -270,7 +295,8 @@ TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMesh) {
 TEST_F(RouterChannelMappingTest, MeshRouter_2D_VC1_WithIntermeshFullMeshPassThrough) {
     // With intermesh config (full mesh with pass-through), VC1 should be created
     auto intermesh_config = IntermeshVCConfig::full_mesh_with_pass_through();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, &intermesh_config);
 
     EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 2);         // VC0 + VC1
     EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), 3);  // VC1 created
@@ -330,7 +356,8 @@ TEST_F(RouterChannelMappingTest, IntermeshVCConfig_AllModesCreateVC1WhenRequired
     };
 
     for (const auto& config : configs) {
-        FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, &config);
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+        FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, &config);
 
         EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 2)
             << "Mode " << static_cast<int>(config.mode) << " should enable VC1";
@@ -394,14 +421,16 @@ TEST_F(RouterChannelMappingTest, IntermeshVCConfig_ModeProgression) {
 // ============ Error Cases ============
 
 TEST_F(RouterChannelMappingTest, InvalidVC_ThrowsError) {
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, nullptr);
 
     // Accessing invalid VC should throw
     EXPECT_THROW(mapping.get_sender_mapping(5, 0), std::exception);
 }
 
 TEST_F(RouterChannelMappingTest, InvalidSenderChannel_ThrowsError) {
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, nullptr);
 
     // Accessing out-of-range sender channel should throw
     EXPECT_THROW(mapping.get_sender_mapping(0, 10), std::exception);
@@ -409,7 +438,8 @@ TEST_F(RouterChannelMappingTest, InvalidSenderChannel_ThrowsError) {
 
 TEST_F(RouterChannelMappingTest, InvalidReceiverChannel_ThrowsError) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Accessing invalid receiver channel should throw
     EXPECT_THROW(mapping.get_receiver_mapping(1, 5), std::exception);
@@ -419,7 +449,8 @@ TEST_F(RouterChannelMappingTest, InvalidReceiverChannel_ThrowsError) {
 
 TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
     // Verify complete channel layout for Z router
 
@@ -456,9 +487,10 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
 // ============ get_all_sender_mappings Tests ============
 
 TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::MESH, nullptr);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::MESH, nullptr);
 
-    auto all_mappings = mapping.get_all_sender_mappings();
+    auto all_mappings = mapping.get_all_sender_mappings(spec);
 
     // Mesh router with VC0 only: 4 channels
     EXPECT_EQ(all_mappings.size(), 4);
@@ -472,9 +504,10 @@ TEST_F(RouterChannelMappingTest, GetAllSenderMappings_MeshRouter) {
 
 TEST_F(RouterChannelMappingTest, GetAllSenderMappings_ZRouter) {
     auto intermesh_config = IntermeshVCConfig::full_mesh();
-    FabricRouterChannelMapping mapping(Topology::Mesh, false, RouterVariant::Z_ROUTER, &intermesh_config);
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
+    FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER, &intermesh_config);
 
-    auto all_mappings = mapping.get_all_sender_mappings();
+    auto all_mappings = mapping.get_all_sender_mappings(spec);
 
     // Z router: VC0 (4 channels) + VC1 (4 channels) = 8 total
     EXPECT_EQ(all_mappings.size(), 8);

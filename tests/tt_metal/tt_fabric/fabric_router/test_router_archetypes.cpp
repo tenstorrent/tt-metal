@@ -88,8 +88,10 @@ protected:
     RouterArchetype create_mesh_router_archetype(
         Topology topology, RoutingDirection direction, bool has_z, FabricNodeId node_id, uint8_t eth_chan = 0) {
         // Channel mapping
+        auto spec = MeshChannelSpec::create_for_compute_mesh(topology);
         FabricRouterChannelMapping channel_mapping(
             topology,
+            spec,
             false,  // no tensix for now
             RouterVariant::MESH,
             nullptr);
@@ -110,8 +112,10 @@ protected:
         static auto intermesh_config = IntermeshVCConfig::full_mesh();
 
         // Channel mapping
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
         FabricRouterChannelMapping channel_mapping(
             Topology::Mesh,
+            spec,
             false,  // no tensix
             RouterVariant::Z_ROUTER,
             &intermesh_config);

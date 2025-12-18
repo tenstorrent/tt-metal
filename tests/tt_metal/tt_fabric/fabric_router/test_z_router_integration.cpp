@@ -299,8 +299,10 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
 TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_VC0AndVC1) {
     // Verify Z router has 2 VCs with correct channel counts
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
@@ -316,8 +318,10 @@ TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_VC0AndVC1) {
 
 TEST_F(ZRouterIntegrationTest, ChannelMapping_MeshRouter_VC0Only) {
     // Verify standard mesh router has only VC0 when no intermesh config provided
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
@@ -332,8 +336,10 @@ TEST_F(ZRouterIntegrationTest, ChannelMapping_MeshRouter_VC0Only) {
 TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_InternalChannels) {
     // Verify Z router VC1 maps to correct internal erisc channels (4-7)
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
