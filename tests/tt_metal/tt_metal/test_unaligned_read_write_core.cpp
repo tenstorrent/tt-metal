@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,8 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
-// TODO: explain what test does
+// This test verifies that the slow dispatch path can perform device reads and writes when the page size is not a
+// multiple of the DMA alignment requirement.
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
