@@ -1,9 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import itertools
 import json
 import math
+import shutil
+import sys
+from datetime import datetime
+from glob import glob
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
@@ -14,7 +19,13 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    CacheFingerprint,
+    CacheMetadata,
+    CacheStatus,
+    CacheValidationResult,
+    SavedWeight,
+)
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
@@ -846,6 +857,350 @@ def _get_remove_dim_slices(
     return tuple(slices)
 
 
+# Cache fingerprinting system for robust cache validation
+
+
+class CacheFingerprintCalculator:
+    """Calculates fingerprints for cache validation"""
+
+    @staticmethod
+    def calculate_model_config_hash(hf_config) -> str:
+        """Calculate hash for model configuration that affects weight conversion"""
+        relevant_config = {
+            "num_hidden_layers": hf_config.num_hidden_layers,
+            "hidden_size": hf_config.hidden_size,
+            "intermediate_size": getattr(hf_config, "intermediate_size", None),
+            "num_attention_heads": getattr(hf_config, "num_attention_heads", None),
+            "num_key_value_heads": getattr(hf_config, "num_key_value_heads", None),
+            "vocab_size": getattr(hf_config, "vocab_size", None),
+            "max_position_embeddings": getattr(hf_config, "max_position_embeddings", None),
+            "rope_theta": getattr(hf_config, "rope_theta", None),
+            "rope_scaling": getattr(hf_config, "rope_scaling", None),
+            "quantization_config": getattr(hf_config, "quantization_config", None),
+            "first_k_dense_replace": getattr(hf_config, "first_k_dense_replace", None),
+        }
+        return hashlib.sha256(json.dumps(relevant_config, sort_keys=True).encode()).hexdigest()[:16]
+
+    @staticmethod
+    def calculate_ttnn_config_hash(ModuleClass, mesh_device: ttnn.MeshDevice) -> str:
+        """Calculate hash for TTNN configuration that affects tensor layout"""
+        ttnn_config = {
+            "mesh_shape": list(mesh_device.shape),
+            "dram_grid_size": list(mesh_device.dram_grid_size()),
+            "module_class": ModuleClass.__name__,
+            "tile_size": ttnn.TILE_SIZE,
+        }
+        return hashlib.sha256(json.dumps(ttnn_config, sort_keys=True).encode()).hexdigest()[:16]
+
+    @staticmethod
+    def calculate_system_config_hash() -> str:
+        """Calculate hash for system configuration"""
+        system_config = {
+            "ttnn_version": getattr(ttnn, "__version__", "unknown"),
+            "python_version": sys.version,
+        }
+        return hashlib.sha256(json.dumps(system_config, sort_keys=True).encode()).hexdigest()[:16]
+
+    @staticmethod
+    def calculate_weight_source_hash(random_weights: bool, model_path: str | None, single_layer: str | None) -> str:
+        """Calculate hash for weight source"""
+        if random_weights:
+            # For random weights, use config + single_layer as the seed
+            weight_source = {
+                "random_weights": True,
+                "single_layer": single_layer,
+                "seed": "deterministic",  # Could be made configurable
+            }
+        else:
+            # For real weights, use model path + modification times of safetensors files
+            if not model_path or not Path(model_path).exists():
+                raise ValueError(f"Model path does not exist: {model_path}")
+
+            safetensors_files = sorted(glob(f"{model_path}/*.safetensors"))
+            if not safetensors_files:
+                raise ValueError(f"No safetensors files found in {model_path}")
+
+            file_info = []
+            for file_path in safetensors_files:
+                stat = Path(file_path).stat()
+                file_info.append({"name": Path(file_path).name, "size": stat.st_size, "mtime": stat.st_mtime})
+
+            weight_source = {"random_weights": False, "model_path": str(Path(model_path).resolve()), "files": file_info}
+
+        return hashlib.sha256(json.dumps(weight_source, sort_keys=True).encode()).hexdigest()[:16]
+
+    @classmethod
+    def calculate_fingerprint(
+        cls,
+        ModuleClass,
+        hf_config,
+        mesh_device: ttnn.MeshDevice,
+        random_weights: bool,
+        model_path: str | None,
+        single_layer: str | None,
+    ) -> CacheFingerprint:
+        """Calculate complete fingerprint for cache validation"""
+        return CacheFingerprint(
+            model_config_hash=cls.calculate_model_config_hash(hf_config),
+            ttnn_config_hash=cls.calculate_ttnn_config_hash(ModuleClass, mesh_device),
+            system_config_hash=cls.calculate_system_config_hash(),
+            weight_source_hash=cls.calculate_weight_source_hash(random_weights, model_path, single_layer),
+        )
+
+
+class CacheManager:
+    """Manages cache operations and validation"""
+
+    def __init__(self, cache_root: Path):
+        self.cache_root = Path(cache_root)
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+
+    def get_cache_key(self, num_layers: int, mesh_shape: tuple[int, int]) -> str:
+        """Generate cache key from model configuration"""
+        return f"{num_layers}_layers/mesh_{mesh_shape[0]}x{mesh_shape[1]}"
+
+    def get_cache_dir(self, cache_key: str) -> Path:
+        """Get cache directory for a given key"""
+        return self.cache_root / cache_key
+
+    def validate_cache(self, cache_key: str, current_fingerprint: CacheFingerprint) -> CacheValidationResult:
+        """Validate cached weights against current fingerprint"""
+        cache_dir = self.get_cache_dir(cache_key)
+        metadata_path = cache_dir / "metadata.json"
+        config_path = cache_dir / "config.json"
+
+        # Check if cache exists
+        if not metadata_path.exists() or not config_path.exists():
+            return CacheValidationResult(
+                status=CacheStatus.NOT_FOUND,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=None,
+                message="Cache not found",
+            )
+
+        # Load cached metadata
+        try:
+            with open(metadata_path, "r") as f:
+                metadata_dict = json.load(f)
+            cached_metadata = CacheMetadata.from_dict(metadata_dict)
+            cached_fingerprint = cached_metadata.fingerprint
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            return CacheValidationResult(
+                status=CacheStatus.CORRUPTED,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=None,
+                message=f"Corrupted metadata: {e}",
+            )
+
+        # Check version compatibility
+        if cached_fingerprint.cache_version != current_fingerprint.cache_version:
+            return CacheValidationResult(
+                status=CacheStatus.VERSION_MISMATCH,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message=f"Version mismatch: cached={cached_fingerprint.cache_version}, current={current_fingerprint.cache_version}",
+            )
+
+        # Check fingerprint components
+        if cached_fingerprint.model_config_hash != current_fingerprint.model_config_hash:
+            return CacheValidationResult(
+                status=CacheStatus.INVALID_MODEL_CONFIG,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message="Model configuration changed",
+            )
+
+        if cached_fingerprint.ttnn_config_hash != current_fingerprint.ttnn_config_hash:
+            return CacheValidationResult(
+                status=CacheStatus.INVALID_TTNN_CONFIG,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message="TTNN configuration changed",
+            )
+
+        if cached_fingerprint.system_config_hash != current_fingerprint.system_config_hash:
+            return CacheValidationResult(
+                status=CacheStatus.INVALID_SYSTEM_CONFIG,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message="System configuration changed",
+            )
+
+        if cached_fingerprint.weight_source_hash != current_fingerprint.weight_source_hash:
+            return CacheValidationResult(
+                status=CacheStatus.INVALID_WEIGHT_SOURCE,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message="Weight source changed",
+            )
+
+        # Check if all weight files exist
+        try:
+            with open(config_path, "r") as f:
+                weight_config = json.load(f, object_hook=try_decode_saved_weight)
+
+            missing_files = []
+            if not self._check_weights_exist_and_convert(cache_dir, weight_config, missing_files):
+                return CacheValidationResult(
+                    status=CacheStatus.MISSING_FILES,
+                    current_fingerprint=current_fingerprint,
+                    cached_fingerprint=cached_fingerprint,
+                    message="Some weight files are missing",
+                    missing_files=missing_files,
+                )
+        except Exception as e:
+            return CacheValidationResult(
+                status=CacheStatus.CORRUPTED,
+                current_fingerprint=current_fingerprint,
+                cached_fingerprint=cached_fingerprint,
+                message=f"Error checking weight files: {e}",
+            )
+
+        # All checks passed
+        return CacheValidationResult(
+            status=CacheStatus.VALID,
+            current_fingerprint=current_fingerprint,
+            cached_fingerprint=cached_fingerprint,
+            message="Cache is valid",
+        )
+
+    def save_cache(self, cache_key: str, weight_config: WeightConfig, metadata: CacheMetadata):
+        """Save weight config and metadata to cache"""
+        cache_dir = self.get_cache_dir(cache_key)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save weight config (backward compatible)
+        config_path = cache_dir / "config.json"
+        with open(config_path, "w") as f:
+            json.dump(weight_config, f, cls=WeightConfigEncoder, indent=2)
+
+        # Save enhanced metadata
+        metadata_path = cache_dir / "metadata.json"
+        with open(metadata_path, "w") as f:
+            json.dump(metadata.to_dict(), f, indent=2)
+
+    def load_weight_config(self, cache_key: str) -> WeightConfig:
+        """Load weight config from cache"""
+        cache_dir = self.get_cache_dir(cache_key)
+        config_path = cache_dir / "config.json"
+
+        with open(config_path, "r") as f:
+            weight_config = json.load(f, object_hook=try_decode_saved_weight)
+
+        # Ensure paths are absolute
+        self._check_weights_exist_and_convert(cache_dir, weight_config)
+        return weight_config
+
+    def _check_weights_exist_and_convert(
+        self, root_path: Path, weight_config: WeightConfig, missing_files: list[Path] | None = None
+    ) -> bool:
+        """Enhanced version of existing function with missing file tracking"""
+        if isinstance(weight_config, dict):
+            entries = weight_config.values()
+        else:
+            entries = weight_config
+
+        all_exist = True
+        for entry in entries:
+            if entry is None:
+                continue
+            if isinstance(entry, SavedWeight):
+                if not entry.path.is_absolute():
+                    full_path = root_path / entry.path
+                    if full_path.exists() and entry.path.suffix == TENSOR_CACHE_EXTENSION:
+                        entry.path = full_path
+                    else:
+                        all_exist = False
+                        if missing_files is not None:
+                            missing_files.append(full_path)
+                elif not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
+                    all_exist = False
+                    if missing_files is not None:
+                        missing_files.append(entry.path)
+            elif not self._check_weights_exist_and_convert(root_path, entry, missing_files):
+                all_exist = False
+
+        return all_exist
+
+    def list_cached_models(self) -> list[dict[str, Any]]:
+        """List all cached models with their metadata"""
+        cached_models = []
+
+        for cache_dir in self.cache_root.rglob("metadata.json"):
+            try:
+                with open(cache_dir, "r") as f:
+                    metadata_dict = json.load(f)
+                metadata = CacheMetadata.from_dict(metadata_dict)
+
+                cached_models.append(
+                    {
+                        "cache_key": str(cache_dir.parent.relative_to(self.cache_root)),
+                        "metadata": metadata,
+                        "path": cache_dir.parent,
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to load metadata from {cache_dir}: {e}")
+
+        return cached_models
+
+    def cleanup_invalid_caches(self, current_fingerprint: CacheFingerprint) -> list[str]:
+        """Remove invalid caches and return list of removed cache keys"""
+        removed_caches = []
+        for model_info in self.list_cached_models():
+            cache_key = model_info["cache_key"]
+            validation_result = self.validate_cache(cache_key, current_fingerprint)
+
+            if validation_result.status != CacheStatus.VALID:
+                cache_dir = self.get_cache_dir(cache_key)
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                removed_caches.append(cache_key)
+                logger.info(f"Removed invalid cache: {cache_key} (reason: {validation_result.message})")
+
+        return removed_caches
+
+    def calculate_cache_size(self, cache_dir: Path) -> int:
+        """Calculate total size of cache directory in bytes"""
+        total_size = 0
+        for path in cache_dir.rglob("*"):
+            if path.is_file():
+                total_size += path.stat().st_size
+        return total_size
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get comprehensive cache statistics"""
+        models = self.list_cached_models()
+        total_size = sum(model["metadata"].cache_size_bytes or 0 for model in models)
+
+        stats = {
+            "total_models": len(models),
+            "total_size_bytes": total_size,
+            "total_size_human": self._format_bytes(total_size),
+            "models_by_mesh_shape": {},
+            "models_by_layer_count": {},
+        }
+
+        for model in models:
+            mesh_shape = tuple(model["metadata"].mesh_shape)
+            layer_count = model["metadata"].num_layers
+
+            stats["models_by_mesh_shape"][str(mesh_shape)] = stats["models_by_mesh_shape"].get(str(mesh_shape), 0) + 1
+            stats["models_by_layer_count"][str(layer_count)] = (
+                stats["models_by_layer_count"].get(str(layer_count), 0) + 1
+            )
+
+        return stats
+
+    @staticmethod
+    def _format_bytes(bytes_count: int) -> str:
+        """Format byte count in human readable format"""
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if bytes_count < 1024.0:
+                return f"{bytes_count:.1f} {unit}"
+            bytes_count /= 1024.0
+        return f"{bytes_count:.1f} PB"
+
+
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
@@ -858,7 +1213,11 @@ def get_weight_config(
     single_layer: str | None = None,
 ):
     """
+    Enhanced get_weight_config with automatic cache invalidation.
+
     Get weight configuration, either from cache or by converting weights.
+    Uses fingerprinting to automatically detect when cache should be invalidated
+    due to model configuration or TTNN configuration changes.
 
     Args:
         ModuleClass: The module class to convert weights for
@@ -879,26 +1238,32 @@ def get_weight_config(
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
-    weight_cache_path = (
-        weight_cache_path
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    # Calculate current fingerprint for cache validation
+    current_fingerprint = CacheFingerprintCalculator.calculate_fingerprint(
+        ModuleClass, hf_config, mesh_device, random_weights, model_path, single_layer
     )
-    config_path = weight_cache_path / "config.json"
-    weight_path = weight_cache_path / "weights"
-    for _ in range(1):
-        if force_recalculate:
-            break
-        if not config_path.exists():
-            break
-        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
-            break
-        logger.info(f"Using weights cached at {weight_cache_path}")
-        return weight_config
+
+    # Setup cache manager and determine cache key
+    cache_manager = CacheManager(weight_cache_path)
+    cache_key = cache_manager.get_cache_key(hf_config.num_hidden_layers, mesh_device.shape)
+    cache_dir = cache_manager.get_cache_dir(cache_key)
+
+    # Check cache validity (unless forced recalculation)
+    if not force_recalculate:
+        validation_result = cache_manager.validate_cache(cache_key, current_fingerprint)
+
+        if validation_result.status == CacheStatus.VALID:
+            logger.info(f"Using valid cached weights at {cache_dir}")
+            return cache_manager.load_weight_config(cache_key)
+        else:
+            logger.info(f"Cache invalid: {validation_result.message}")
+            if validation_result.status == CacheStatus.MISSING_FILES:
+                logger.info(f"Missing files: {[str(f) for f in validation_result.missing_files]}")
+
+    # Cache miss or forced recalculation - convert weights
+    logger.info(f"Converting and caching weights at {cache_dir}")
 
     # Only prepare state dicts if we need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
     if state_dicts is None:
         from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
 
@@ -910,12 +1275,26 @@ def get_weight_config(
         )
         state_dicts = (model_state,)
 
-    # Convert weights to TT tensors-on-disk and build weight_config
+    # Convert weights to TTNN format
     logger.info("Converting weights to TTNN SavedWeight format...")
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-    json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
-    _check_weights_exist_and_convert(weight_cache_path, weight_config)
-    logger.info("Converting weights to TTNN SavedWeight format...done")
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, cache_dir / "weights", mesh_device)
+
+    # Create enhanced cache metadata with fingerprint
+    metadata = CacheMetadata(
+        fingerprint=current_fingerprint,
+        created_at=datetime.now().isoformat(),
+        model_path=model_path,
+        random_weights=random_weights,
+        num_layers=hf_config.num_hidden_layers,
+        mesh_shape=tuple(mesh_device.shape),
+        single_layer=single_layer,
+        cache_size_bytes=cache_manager.calculate_cache_size(cache_dir),
+    )
+
+    # Save weight config and enhanced metadata
+    cache_manager.save_cache(cache_key, weight_config, metadata)
+    logger.info("Weight conversion and caching complete")
+
     return weight_config
 
 

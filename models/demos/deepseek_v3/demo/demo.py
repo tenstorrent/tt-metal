@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
+from models.demos.deepseek_v3.utils.config_helpers import CacheManager
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -107,6 +108,25 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable trace for decode forward pass",
     )
+
+    # Cache management commands (optional)
+    cache_group = p.add_argument_group("cache management")
+    cache_group.add_argument(
+        "--list-cache",
+        action="store_true",
+        help="List all cached models and exit",
+    )
+    cache_group.add_argument(
+        "--cache-stats",
+        action="store_true",
+        help="Show cache statistics and exit",
+    )
+    cache_group.add_argument(
+        "--cleanup-cache",
+        action="store_true",
+        help="Remove invalid caches and exit",
+    )
+
     return p
 
 
@@ -370,8 +390,58 @@ def run_demo(
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def handle_cache_management(args, cache_dir: Path) -> bool:
+    """
+    Handle cache management commands. Returns True if a cache command was processed, False otherwise.
+    """
+    if not any([args.list_cache, args.cache_stats, args.cleanup_cache]):
+        return False
+
+    cache_manager = CacheManager(cache_dir)
+
+    if args.list_cache:
+        models = cache_manager.list_cached_models()
+        print(f"\nFound {len(models)} cached models:")
+        if not models:
+            print("  No cached models found.")
+        else:
+            for model in models:
+                metadata = model["metadata"]
+                print(f"  {model['cache_key']}")
+                print(f"    Created: {metadata.created_at}")
+                print(f"    Layers: {metadata.num_layers}")
+                print(f"    Mesh: {metadata.mesh_shape}")
+                size_bytes = metadata.cache_size_bytes
+                if size_bytes:
+                    print(f"    Size: {cache_manager._format_bytes(size_bytes)}")
+                print(f"    Random weights: {metadata.random_weights}")
+                if metadata.model_path:
+                    print(f"    Model path: {metadata.model_path}")
+                print()
+
+    if args.cache_stats:
+        stats = cache_manager.get_cache_stats()
+        print(f"\nCache Statistics:")
+        print(f"  Total models: {stats['total_models']}")
+        print(f"  Total size: {stats['total_size_human']}")
+        if stats["models_by_mesh_shape"]:
+            print(f"  By mesh shape: {stats['models_by_mesh_shape']}")
+        if stats["models_by_layer_count"]:
+            print(f"  By layer count: {stats['models_by_layer_count']}")
+
+    if args.cleanup_cache:
+        print("Cache cleanup is not implemented in this command.")
+        print("Invalid caches are automatically cleaned up when running the demo.")
+
+    return True
+
+
 def main() -> None:
     args = create_parser().parse_args()
+
+    # Handle cache management commands
+    if handle_cache_management(args, Path(args.cache_dir)):
+        return  # Exit after handling cache command
 
     # Load prompts from JSON file if provided
     prompts_file_path = None

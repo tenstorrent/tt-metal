@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
+from enum import Enum
 from pathlib import Path
 from typing import Any, Union
 
@@ -343,3 +344,104 @@ class SparseMatmulConfig(OpConfigBase):
     output_tile: ttnn.Tile | None = None
     sparsity: ttnn.Tensor | None = None
     nnz: int | None = None
+
+
+# Cache-related dataclasses for robust caching system
+
+
+@dataclass(frozen=True)
+class CacheFingerprint:
+    """Immutable fingerprint for cache validation"""
+
+    model_config_hash: str  # Model configuration that affects conversion
+    ttnn_config_hash: str  # TTNN tensor configuration (dtype, layout)
+    system_config_hash: str  # System configuration (TTNN version, etc.)
+    weight_source_hash: str  # Weight source (HF model path + mtime or random seed)
+    cache_version: str = "1.0"  # Cache format version
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert to dictionary for JSON serialization"""
+        return {
+            "model_config_hash": self.model_config_hash,
+            "ttnn_config_hash": self.ttnn_config_hash,
+            "system_config_hash": self.system_config_hash,
+            "weight_source_hash": self.weight_source_hash,
+            "cache_version": self.cache_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> "CacheFingerprint":
+        """Create from dictionary for JSON deserialization"""
+        return cls(
+            model_config_hash=data["model_config_hash"],
+            ttnn_config_hash=data["ttnn_config_hash"],
+            system_config_hash=data["system_config_hash"],
+            weight_source_hash=data["weight_source_hash"],
+            cache_version=data.get("cache_version", "1.0"),
+        )
+
+
+@dataclass
+class CacheMetadata:
+    """Extended cache metadata with fingerprinting"""
+
+    fingerprint: CacheFingerprint
+    created_at: str
+    model_path: str | None
+    random_weights: bool
+    num_layers: int
+    mesh_shape: tuple[int, int]
+    single_layer: str | None = None
+    cache_size_bytes: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization"""
+        return {
+            "fingerprint": self.fingerprint.to_dict(),
+            "created_at": self.created_at,
+            "model_path": self.model_path,
+            "random_weights": self.random_weights,
+            "num_layers": self.num_layers,
+            "mesh_shape": list(self.mesh_shape),
+            "single_layer": self.single_layer,
+            "cache_size_bytes": self.cache_size_bytes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CacheMetadata":
+        """Create from dictionary for JSON deserialization"""
+        return cls(
+            fingerprint=CacheFingerprint.from_dict(data["fingerprint"]),
+            created_at=data["created_at"],
+            model_path=data.get("model_path"),
+            random_weights=data["random_weights"],
+            num_layers=data["num_layers"],
+            mesh_shape=tuple(data["mesh_shape"]),
+            single_layer=data.get("single_layer"),
+            cache_size_bytes=data.get("cache_size_bytes"),
+        )
+
+
+class CacheStatus(Enum):
+    """Status of cache validation"""
+
+    VALID = "valid"
+    INVALID_MODEL_CONFIG = "invalid_model_config"
+    INVALID_TTNN_CONFIG = "invalid_ttnn_config"
+    INVALID_SYSTEM_CONFIG = "invalid_system_config"
+    INVALID_WEIGHT_SOURCE = "invalid_weight_source"
+    MISSING_FILES = "missing_files"
+    CORRUPTED = "corrupted"
+    NOT_FOUND = "not_found"
+    VERSION_MISMATCH = "version_mismatch"
+
+
+@dataclass
+class CacheValidationResult:
+    """Result of cache validation"""
+
+    status: CacheStatus
+    current_fingerprint: CacheFingerprint
+    cached_fingerprint: CacheFingerprint | None
+    message: str
+    missing_files: list[Path] = field(default_factory=list)
