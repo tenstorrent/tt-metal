@@ -127,7 +127,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
