@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -25,7 +25,7 @@ struct ExecuteAllGatherMatmulAsync {
         const std::optional<MemoryConfig>& ag_memory_config = std::nullopt,
         const std::optional<MemoryConfig>& mm_memory_config = std::nullopt,
         std::optional<size_t> num_preferred_links = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
@@ -41,4 +41,5 @@ constexpr auto llama_all_gather_matmul_async = ttnn::register_operation<
     ttnn::operations::experimental::ccl::ExecuteAllGatherMatmulAsync>();
 
 }  // namespace experimental
+
 }  // namespace ttnn
