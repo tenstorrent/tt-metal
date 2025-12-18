@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-SmolVLA nightly CI test - runs PCC verification for 1-step inference.
 
-This test validates that TT implementation matches CPU within expected precision tolerances.
-"""
+import os
 
 import numpy as np
 import torch
@@ -13,7 +10,6 @@ from PIL import Image
 
 
 def compute_pcc(x: np.ndarray, y: np.ndarray) -> float:
-    """Compute Pearson Correlation Coefficient between two arrays."""
     x_flat = torch.as_tensor(x).flatten().float()
     y_flat = torch.as_tensor(y).flatten().float()
     x_centered = x_flat - x_flat.mean()
@@ -24,7 +20,6 @@ def compute_pcc(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def create_test_image(size: int = 512, seed: int = 42) -> Image.Image:
-    """Create a deterministic test image."""
     np.random.seed(seed)
     img_array = np.zeros((size, size, 3), dtype=np.uint8)
     img_array[:, :, 0] = np.tile(np.linspace(50, 200, size), (size, 1)).astype(np.uint8)
@@ -33,66 +28,42 @@ def create_test_image(size: int = 512, seed: int = 42) -> Image.Image:
     return Image.fromarray(img_array)
 
 
-def test_smolvla_pcc(device):
-    """
-    Run SmolVLA PCC verification test.
+def get_model_path(model_location_generator=None):
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        return "lerobot/smolvla_base"
+    else:
+        return str(model_location_generator("vla-models/smolvla_base", model_subdir="", download_if_ci_v2=True))
 
-    Tests 1-step inference PCC between CPU and TT implementations.
-    PCC threshold: 0.90 (expected for bfloat8_b precision)
-    """
-    import ttnn
+
+def test_smolvla_pcc(device, model_location_generator):
     from models.experimental.smolvla.tt.smol_vla import SmolVLAForActionPrediction
 
-    logger.info("Running SmolVLA PCC test")
+    model_weights_path = get_model_path(model_location_generator)
 
-    try:
-        # Load CPU model
-        logger.info("Loading CPU model...")
-        model_cpu = SmolVLAForActionPrediction.from_pretrained("lerobot/smolvla_base", ttnn_device=None)
-        model_cpu.processor.image_processor.do_image_splitting = False
-        model_cpu.eval()
+    model_cpu = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=None)
+    model_cpu.processor.image_processor.do_image_splitting = False
+    model_cpu.eval()
 
-        # Load TT model (use the device fixture)
-        logger.info("Loading TT model...")
-        model_tt = SmolVLAForActionPrediction.from_pretrained("lerobot/smolvla_base", ttnn_device=device)
-        model_tt.processor.image_processor.do_image_splitting = False
-        model_tt.eval()
+    model_tt = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=device)
+    model_tt.processor.image_processor.do_image_splitting = False
+    model_tt.eval()
 
-        # Create test inputs
-        img = create_test_image()
-        instruction = "pick up the red block"
+    img = create_test_image()
+    instruction = "pick up the red block"
 
-        # Run CPU inference
-        logger.info("Running CPU inference...")
-        torch.manual_seed(42)
-        np.random.seed(42)
-        actions_cpu = model_cpu.predict_action(
-            images=[img], instruction=instruction, num_inference_steps=1, action_dim=6
-        )
+    torch.manual_seed(42)
+    np.random.seed(42)
+    actions_cpu = model_cpu.predict_action(images=[img], instruction=instruction, num_inference_steps=1, action_dim=6)
 
-        # Run TT inference
-        logger.info("Running TT inference...")
-        torch.manual_seed(42)
-        np.random.seed(42)
-        actions_tt = model_tt.predict_action(images=[img], instruction=instruction, num_inference_steps=1, action_dim=6)
+    torch.manual_seed(42)
+    np.random.seed(42)
+    actions_tt = model_tt.predict_action(images=[img], instruction=instruction, num_inference_steps=1, action_dim=6)
 
-        # Compute PCC
-        actions_cpu_np = np.asarray(actions_cpu)
-        actions_tt_np = np.asarray(actions_tt)
-        pcc = compute_pcc(actions_cpu_np, actions_tt_np)
+    actions_cpu_np = np.asarray(actions_cpu)
+    actions_tt_np = np.asarray(actions_tt)
+    pcc = compute_pcc(actions_cpu_np, actions_tt_np)
 
-        logger.info(f"1-Step Inference PCC: {pcc:.4f}")
-        logger.info(
-            f"CPU output: [{actions_cpu_np[0,0]:.4f}, {actions_cpu_np[0,1]:.4f}, {actions_cpu_np[0,2]:.4f}, ...]"
-        )
-        logger.info(f"TT output:  [{actions_tt_np[0,0]:.4f}, {actions_tt_np[0,1]:.4f}, {actions_tt_np[0,2]:.4f}, ...]")
+    logger.info(f"PCC: {pcc:.4f}")
 
-        # Assert PCC threshold
-        PCC_THRESHOLD = 0.90
-        assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.4f} below threshold {PCC_THRESHOLD}"
-
-        logger.info("SmolVLA PCC test PASSED")
-
-    except Exception as e:
-        logger.error(f"SmolVLA PCC test failed: {e}")
-        raise
+    PCC_THRESHOLD = 0.90
+    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.4f} below threshold {PCC_THRESHOLD}"
