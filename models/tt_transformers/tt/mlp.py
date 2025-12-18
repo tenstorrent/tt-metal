@@ -182,6 +182,8 @@ class MLP(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
+                # Synchronize device to ensure async reduce_scatter completes before using the results
+                ttnn.synchronize_device(self.mesh_device)
             else:
                 w1_out = tt_all_reduce(
                     w1_out,
@@ -235,6 +237,8 @@ class MLP(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            # Synchronize device to ensure async all_gather completes before using the result
+            ttnn.synchronize_device(self.mesh_device)
 
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
