@@ -5,29 +5,15 @@
 import pytest
 import torch
 import ttnn
+import os
 
 from ....utils.check import assert_quality
 from ....models.vae import vae_sd35
 from ....parallel.manager import CCLManager
 from ....parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
-from time import time
 from loguru import logger
-
-vae_shapes = [
-    # [1, 128, 128, 512],
-    # [1, 256, 256, 512],
-    # [1, 512, 512, 512],
-    # [1, 512, 512, 256],
-    # [1, 1024, 1024, 256],
-    # [1, 1024, 1024, 128],
-    # more optimal reahaped versions
-    [1, 1, 128 * 128, 512],
-    [1, 1, 256 * 256, 512],
-    [1, 1, 512 * 512, 512],
-    [1, 1, 512 * 512, 256],
-    [1, 1, 1024 * 1024, 256],
-    [1, 1, 1024 * 1024, 128],
-]
+from .test_performance_sd35 import get_expected_metrics
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py
@@ -618,11 +604,18 @@ def test_sd35_vae_vae_decoder(
         torch_output = torch_model(torch_input)
 
     tt_out = tt_model(tt_input_tensor)
-
+    ttnn.synchronize_device(submesh_device)
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.99_000)
 
-    start = time()
-    tt_out = tt_model(tt_input_tensor)
-    ttnn.synchronize_device(submesh_device)
-    logger.info(f"VAE Time taken: {time() - start}")
+    if os.environ.get("DIT_UNIT_TEST"):
+        benchmark_profiler = BenchmarkProfiler()
+        with benchmark_profiler("vae_decoding", iteration=0):
+            tt_out = tt_model(tt_input_tensor)
+        ttnn.synchronize_device(submesh_device)
+        vae_decoding_time = benchmark_profiler.get_duration("vae_decoding", 0)
+        logger.info(f"VAE Time taken: {vae_decoding_time}")
+        expected_vae_decoding_time = get_expected_metrics(mesh_device)["vae_decoding_time"]
+        assert (
+            vae_decoding_time <= expected_vae_decoding_time
+        ), f"VAE run time {vae_decoding_time} is greater than expected {expected_vae_decoding_time}"

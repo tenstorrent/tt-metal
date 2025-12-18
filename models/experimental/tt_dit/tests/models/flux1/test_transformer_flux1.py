@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # import diffusers.models.transformers.transformer_flux as reference
+import os
 import diffusers as reference
 import pytest
 import torch
@@ -175,6 +176,10 @@ def test_single_transformer_block(
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
         pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
@@ -209,6 +214,7 @@ def test_transformer(
     prompt_seq_len: int,
     id: str,
     model_location_generator,
+    dit_unit_test: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
@@ -216,14 +222,17 @@ def test_transformer(
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
-    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
-    torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
+    if dit_unit_test:
+        torch_model = reference.FluxTransformer2DModel(num_layers=1, num_single_layers=1)
+    else:
+        model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+        torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 
     head_dim = torch_model.config.attention_head_dim
     num_heads = torch_model.config.num_attention_heads
-    in_channels = torch_model.in_channels
+    in_channels = torch_model.config.in_channels
     joint_attention_dim = torch_model.config.joint_attention_dim
     pooled_projection_dim = torch_model.config.pooled_projection_dim
     with_guidance_embeds = torch_model.config.guidance_embeds
