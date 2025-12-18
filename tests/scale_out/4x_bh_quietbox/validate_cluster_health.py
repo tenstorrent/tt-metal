@@ -34,7 +34,7 @@ MAX_RETRIES = 10  # Maximum number of attempts before giving up
 VALIDATION_CMD = (
     "./build/tools/scaleout/run_cluster_validation --hard-fail "
     "--factory-descriptor-path tests/scale_out/4x_bh_quietbox/factory_system_descriptors/"
-    "factory_system_descriptor_4x_bh_quietbox.textproto"
+    "factory_system_descriptor_2x_bh_quietbox.textproto"
 )
 
 
