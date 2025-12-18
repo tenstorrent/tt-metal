@@ -817,8 +817,8 @@ class Attention(LightweightModule):
 
         print("SDPA input tensors:")
         ttnn.set_printoptions(profile="full")
-        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, :80, :4]}")
-        print(f"page_table: {page_table}")
+        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, :8, :4]}")
+        print(f"q_heads_1QSD_8b: {q_heads_1QSD_8b[0, 0, -8:, :4]}")
         # print(f"keys_BKSD first page: {keys_BKSD[1293, 0, :, :4]}")
         # print(f"values_BKSD first page: {values_BKSD[1293, 0, :, :4]}")
         # print(f"keys_BKSD second page: {keys_BKSD[64, 0, :, :4]}")
@@ -849,7 +849,8 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
-        print(f"attn_output_84SD: {attn_output_84SD[0, 0, :80, :4]}")
+        print(f"attn_output_84SD: {attn_output_84SD[0, 0, :8, :4]}")
+        print(f"attn_output_84SD: {attn_output_84SD[0, 0, -8:, :4]}")
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
@@ -917,7 +918,8 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
-        print(f"Attention.py: returning output_11SH: {output_11SH[0, 0, :80, :4]}")
+        print(f"Attention.py: returning output_11SH: {output_11SH[0, 0, :8, :4]}")
+        print(f"Attention.py: returning output_11SH: {output_11SH[0, 0, -8:, :4]}")
         ttnn.set_printoptions(profile="short")
         return output_11SH
 

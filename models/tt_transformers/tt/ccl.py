@@ -316,6 +316,8 @@ def tt_sharded_distributed_rmsnorm(
         num_workers_per_link=2,
         num_buffers_per_channel=2,
     )
+    # Synchronize device to ensure async all_gather completes before using the result
+    ttnn.synchronize_device(mesh_device)
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
