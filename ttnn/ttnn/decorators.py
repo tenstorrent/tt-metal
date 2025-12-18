@@ -658,7 +658,6 @@ class FastOperation:
 
         # Check for extra positional arguments
         if len(received_arg_types) > len(positional_params):
-            num_extra = len(received_arg_types) - len(positional_params)
             for i in range(len(positional_params), len(received_arg_types)):
                 arg_type = received_arg_types[i]
                 preview = str(function_args[i])[:30]
@@ -711,9 +710,9 @@ class FastOperation:
         except TypeError as e:
             # Enhance pybind11/nanobind error messages to make argument type mismatches clearer
             error_msg = str(e)
-            # Debug: print original error
-            # print(f"DEBUG: Original error:\n{error_msg}\n{'='*60}")
-            if "incompatible function arguments" in error_msg and ("Invoked with:" in error_msg or "Invoked with types:" in error_msg):
+            if "incompatible function arguments" in error_msg and (
+                "Invoked with:" in error_msg or "Invoked with types:" in error_msg
+            ):
                 enhanced_msg = self._enhance_type_error_message(error_msg, function_args, function_kwargs)
                 raise TypeError(enhanced_msg) from e
             else:
