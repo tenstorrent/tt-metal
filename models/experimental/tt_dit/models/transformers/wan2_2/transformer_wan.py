@@ -439,10 +439,10 @@ class WanTransformer3DModel:
         rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
 
         rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
         rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
 
         trans_mat = get_rot_transformation_mat()
@@ -509,9 +509,7 @@ class WanTransformer3DModel:
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
 
-        spatial = pad_vision_seq_parallel(
-            spatial, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
-        )
+        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
         logger.info(f"spatial input after padding: {spatial.shape}")
 
         spatial = bf16_tensor(
