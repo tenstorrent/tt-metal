@@ -1314,7 +1314,7 @@ class ModelArgs:
                     "attn_agmm": {"num_links": 4, "chunks_per_sync": 1, "num_workers_per_link": 1},
                     "mlp_rs": {
                         "num_links": 4,
-                        "chunks_per_sync": 128,
+                        "chunks_per_sync": 1,
                         "num_workers_per_link": 1,
                         "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
                     },
