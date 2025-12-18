@@ -750,6 +750,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     increment_sizeB = tt::align(packed_data_sizeB, this->l1_alignment);
     uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
     for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
+        TT_ASSERT(data_collection[i].first != nullptr);
         this->memcpy(
             (char*)this->cmd_region + this->cmd_write_offsetB, data_collection[i].first, data_collection[i].second);
         this->cmd_write_offsetB += increment_sizeB;
@@ -828,6 +829,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
         uint32_t offset = 0;
         for (const auto& data : data_collection[i]) {
+            TT_ASSERT(std::get<0>(data) != nullptr);
             this->memcpy(
                 (char*)this->cmd_region + this->cmd_write_offsetB + offset, std::get<0>(data), std::get<1>(data));
             offset += std::get<2>(data);
