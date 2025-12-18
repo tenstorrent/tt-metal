@@ -181,7 +181,7 @@ This guide documents the common patterns, bugfixes, and differences observed dur
 |----------|----------|-------|
 | `namespace py = pybind11;` | `namespace nb = nanobind;` | Namespace alias |
 | `PYBIND11_MODULE(name, m)` | `NB_MODULE(name, m)` | Module macro |
-| `py::module_` | `nb::module_` | Note the underscore |
+| `py::module` | `nb::module_` | Note the underscore |
 | `py::module::import("json")` | `nb::module_::import_("json")` | Note trailing underscore in `import_` |
 | `py::function` / `py::object` / `py::handle` | `nb::callable` / `nb::object` / `nb::handle` | Object types |
 | `.def_readwrite(...)` | `.def_rw(...)` | Read-write member |
