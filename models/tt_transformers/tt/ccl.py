@@ -142,6 +142,8 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+        # Synchronize device to ensure async all_gather completes before using the result
+        ttnn.synchronize_device(mesh_device)
 
         if sharded:
             gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -173,6 +175,8 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+        # Synchronize device to ensure async reduce_scatter completes before using the result
+        ttnn.synchronize_device(mesh_device)
 
         reduced_tensor = ttnn.experimental.all_gather_async(
             reduced_tensor,
@@ -188,6 +192,8 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
+        # Synchronize device to ensure async all_gather completes before using the result
+        ttnn.synchronize_device(mesh_device)
 
     # Reshape the reduced tensor to the original shape
     reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
