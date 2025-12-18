@@ -504,6 +504,35 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     }
 }
 
+void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
+    // This check assumes all chips have the same size of eth core L1 memory.
+#if defined(COMPILE_FOR_ERISC)
+    constexpr uint32_t l1_overflow_addr = MEM_ETH_SIZE;
+    if (src_addr + len <= src_addr || src_addr + len > l1_overflow_addr) {
+        debug_sanitize_post_addr_and_hang(
+            0,  // unused (not a noc transaction)
+            0,  // unused (not a noc transaction)
+            src_addr,
+            len,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeEthSrcL1AddrOverflow);
+    }
+    if (dst_addr + len <= dst_addr || dst_addr + len > l1_overflow_addr) {
+        debug_sanitize_post_addr_and_hang(
+            0,  // unused (not a noc transaction)
+            0,  // unused (not a noc transaction)
+            dst_addr,
+            len,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeEthDestL1AddrOverflow);
+    }
+#endif
+}
+
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id, read_cmd_buf)                                       \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
@@ -599,6 +628,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast) \
     debug_sanitize_check_linked_transactions(noc_id, 0, 0, 0, multicast, DEBUG_SANITIZE_NOC_WRITE);
 #define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
+#define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
@@ -642,5 +672,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast)
 
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
+#define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
 
 #endif  // WATCHER_ENABLED
