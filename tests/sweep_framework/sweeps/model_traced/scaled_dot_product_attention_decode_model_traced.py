@@ -12,8 +12,48 @@ from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 TIMEOUT = 60
 
+
+# Unit test helper functions for proper tensor generation and attention handling
+def nearest_n(x, n):
+    """Round up to nearest multiple of n"""
+    return ((x + n - 1) // n) * n
+
+
+def nearest_pow_2(x):
+    """Round up to nearest power of 2"""
+    if x < 1:
+        raise ValueError("x must be >= 1")
+    import math
+
+    power = math.ceil(math.log2(x))
+    return 1 << power
+
+
+def fa_rand(*shape):
+    """
+    Flash attention random tensor generator - creates realistic attention patterns
+    with Gaussian distribution + sparse outliers for numerical stability testing.
+    This matches the unit test's tensor generation approach.
+    """
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli
+
+
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_product_attention_decode", all_cases=False)
+
+
+def mesh_device_fixture():
+    """
+    Device fixture with DispatchCoreConfig to maximize available compute cores.
+    Required for operations needing large compute grids (e.g., 8x8 = 64 cores).
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    yield (device, "Wormhole with DispatchCoreConfig")
+    ttnn.close_device(device)
+
 
 parameters = {
     "model_traced_sample": {
@@ -47,20 +87,28 @@ def run(
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     scale=None,  # Extracted from arg8
-    k_chunk_size=None,  # Extracted from arg9
+    sliding_window_size=None,  # Extracted from arg9
     is_causal=None,  # Extracted from arg3
+    program_config_compute_grid=None,  # Extracted from arg11
+    program_config_q_chunk_size=None,  # Extracted from arg11
+    program_config_k_chunk_size=None,  # Extracted from arg11
+    compute_kernel_config_math_fidelity=None,  # Extracted from arg12
+    compute_kernel_config_math_approx_mode=None,  # Extracted from arg12
+    compute_kernel_config_fp32_dest_acc_en=None,  # Extracted from arg12
+    compute_kernel_config_packer_l1_acc=None,  # Extracted from arg12
     *,
     device,
     **kwargs,  # Accept any extra parameters
 ) -> list:
-    torch.manual_seed(0)
+    torch.manual_seed(1234)  # Match unit test seed
 
     # Handle both sample suite (tuple/list) and model_traced suite (dict with keys for multi-input ops)
     if isinstance(input_shape, dict):
-        # Multi-input operation - extract individual shapes for Q, K, V
+        # Multi-input operation - extract individual shapes for Q, K, V, and cur_pos
         shape_q = tuple(input_shape.get("input_a", (1, 8, 1, 64)))
         shape_k = tuple(input_shape.get("input_b", (1, 8, 2048, 64)))
         shape_v = tuple(input_shape.get("input_c", shape_k))
+        shape_cur_pos = tuple(input_shape.get("input_d", (1,)))  # cur_pos tensor
     else:
         # Convert list to tuple if needed
         shape_q = tuple(input_shape) if isinstance(input_shape, list) else input_shape
@@ -69,66 +117,121 @@ def run(
         # For decode, K and V have accumulated cache, use 2048 as default cache size
         shape_k = (b, nh, 2048, d)
         shape_v = shape_k
+        shape_cur_pos = (1,)  # Default cur_pos for sample
 
-    # Extract dimensions
-    b, nh_q, sq, d = shape_q
-    _, nh_kv, s_kv, _ = shape_k
+    # Extract dimensions following unit test pattern
+    # Q shape: [1, b, nh_q, d]
+    # K/V shape: [b, nh_kv, s_kv, d]
+    _, b, nh_q, d = shape_q
+    b_k, nh_kv, s_kv, _ = shape_k
 
-    # Tensor creation with correct shapes
-    torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(shape_q)
-    torch_k = gen_func_with_cast_tt(
-        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_b_dtype or input_a_dtype
-    )(shape_k)
-    torch_v = gen_func_with_cast_tt(
-        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_c_dtype or input_a_dtype
-    )(shape_v)
+    # Use unit test's fa_rand() for realistic attention patterns
+    # This creates Gaussian + sparse outliers instead of uniform random
+    Q = fa_rand(1, b, nh_q, d)
+    K = fa_rand(b, nh_kv, s_kv, d)
+    V = fa_rand(b, nh_kv, s_kv, d)
 
-    # For torch reference, handle GQA (Grouped Query Attention) if num_kv_heads < num_q_heads
-    if nh_kv < nh_q:
-        # Repeat K, V to match number of Q heads
-        K_repeated = torch.cat(
-            [torch_k[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1
-        )
-        V_repeated = torch.cat(
-            [torch_v[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1
-        )
+    # Current position (decode uses last position in cache)
+    cur_pos = s_kv - 1
+    start_indices = [cur_pos] * b
+
+    # Get k_chunk_size from config or calculate it
+    if program_config_k_chunk_size is not None:
+        k_chunk_size = int(program_config_k_chunk_size)
     else:
-        K_repeated = torch_k
-        V_repeated = torch_v
+        # Fallback calculation matching unit test
+        if cur_pos <= 32:
+            k_chunk_size = 32
+        elif cur_pos <= 64:
+            k_chunk_size = 32
+        elif cur_pos <= 128:
+            k_chunk_size = 32
+        elif cur_pos <= 1024:
+            k_chunk_size = 128
+        else:
+            k_chunk_size = 512
+        # Find maximum power of 2 divisor of s_kv
+        for i in range(1, s_kv):
+            if s_kv % (2 ** (i + 1)) != 0:
+                break
+        k_chunk_size = min(k_chunk_size, 2**i)
 
-    torch_output = torch.nn.functional.scaled_dot_product_attention(
-        torch_q.to(torch.bfloat16),
-        K_repeated.to(torch.bfloat16),
-        V_repeated.to(torch.bfloat16),
-        attn_mask=None,
-        dropout_p=0.0,
-        is_causal=True,  # Decode is causal
+    # Calculate padded_layer_len (unit test uses this for K/V slicing)
+    padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
+
+    # Calculate padded_num_heads for attention mask
+    padded_num_heads = nearest_pow_2(nearest_n(nh_q, n=32))
+
+    # PyTorch reference - EXACTLY following unit test pattern
+    # Create explicit attention mask (unit test approach)
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
+    # Prepare Q, K, V for PyTorch SDPA
+    Q_slice = Q[:, :, :nh_q, :].permute(1, 2, 0, 3)  # [1, b, nh_q, d] -> [b, nh_q, 1, d]
+
+    # Slice K, V to padded_layer_len BEFORE GQA expansion (unit test approach)
+    K_slice = K[:, :, :padded_layer_len, :]  # [b, nh_kv, padded_layer_len, d]
+    V_slice = V[:, :, :padded_layer_len, :]  # [b, nh_kv, padded_layer_len, d]
+
+    # GQA: Expand K, V heads to match Q heads if needed
+    if nh_kv < nh_q and nh_q % nh_kv == 0:
+        K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
+        V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
+
+    attn_mask_slice = attn_mask[:, :nh_q, :, :]  # [b, nh_q, 1, padded_layer_len]
+
+    # Compute scale
+    compute_scale = d**-0.5 if scale is None else float(scale)
+
+    # PyTorch SDPA with explicit mask (unit test uses is_causal=False with explicit mask)
+    torch_output_ref = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice,
+        K_slice,
+        V_slice,
+        attn_mask=attn_mask_slice,
+        scale=compute_scale,
+        is_causal=False,  # Use explicit mask instead of implicit causal
+    )  # [b, nh_q, 1, d]
+
+    # Reshape to match TTNN output format: [b, nh_q, 1, d] -> [1, b, nh_q, d]
+    torch_output = torch_output_ref.squeeze(2).unsqueeze(0)
+
+    # Create TTNN tensors using unit test approach
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    # Q tensor: slice to actual heads (unit test does this)
+    tt_Q = ttnn.as_tensor(
+        Q[:, :, :nh_q],
+        device=device,
+        dtype=input_a_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_memcfg,
     )
 
-    # Create TTNN tensors
-    q_tensor = ttnn.from_torch(
-        torch_q, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
-    )
-    k_tensor = ttnn.from_torch(
-        torch_k,
+    # K, V tensors
+    tt_K = ttnn.as_tensor(
+        K,
+        device=device,
         dtype=input_b_dtype or input_a_dtype,
-        layout=input_b_layout or ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_memcfg,
     )
-    v_tensor = ttnn.from_torch(
-        torch_v,
+    tt_V = ttnn.as_tensor(
+        V,
+        device=device,
         dtype=input_c_dtype or input_a_dtype,
-        layout=input_c_layout or ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_c_memory_config or input_a_memory_config,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_memcfg,
     )
+
+    # Create cur_pos tensor
+    torch_cur_pos = torch.tensor(start_indices, dtype=torch.int32)
+    cur_pos_tensor = ttnn.Tensor(torch_cur_pos, ttnn.int32).to(device)
 
     # Op call - uses extracted parameters from traced configs
-    # Key parameters:
-    # - scale: attention scale factor (extracted from arg8)
-    # - k_chunk_size: chunk size for K processing (extracted from arg9, bypasses auto-calculation)
-    # - is_causal: whether to use causal masking (extracted from arg3, default True for decode)
     start_time = start_measuring_time()
     try:
         # Parse is_causal parameter (default to True for decode)
@@ -142,23 +245,73 @@ def run(
         # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
         output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
+        # Build program_config if parameters are provided (from arg11)
+        program_config = None
+        if all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
+            # Parse compute_grid if it's a list/tuple
+            if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
+                grid = tuple(program_config_compute_grid)
+            else:
+                grid = (8, 8)  # Default fallback
+
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=int(program_config_q_chunk_size),
+                k_chunk_size=int(program_config_k_chunk_size),
+                exp_approx_mode=False,  # Default
+            )
+
+        # Build compute_kernel_config if parameters are provided (from arg12)
+        compute_kernel_config = None
+        if compute_kernel_config_math_fidelity is not None:
+            # Map string fidelity to enum
+            math_fidelity_map = {
+                "HiFi4": ttnn.MathFidelity.HiFi4,
+                "HiFi3": ttnn.MathFidelity.HiFi3,
+                "HiFi2": ttnn.MathFidelity.HiFi2,
+                "LoFi": ttnn.MathFidelity.LoFi,
+            }
+            fidelity = math_fidelity_map.get(compute_kernel_config_math_fidelity, ttnn.MathFidelity.HiFi2)
+
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=fidelity,
+                math_approx_mode=bool(compute_kernel_config_math_approx_mode)
+                if compute_kernel_config_math_approx_mode is not None
+                else False,
+                fp32_dest_acc_en=bool(compute_kernel_config_fp32_dest_acc_en)
+                if compute_kernel_config_fp32_dest_acc_en is not None
+                else False,
+                packer_l1_acc=bool(compute_kernel_config_packer_l1_acc)
+                if compute_kernel_config_packer_l1_acc is not None
+                else False,
+            )
+
         # Build operation arguments
-        op_kwargs = {"is_causal": is_causal_flag, "memory_config": output_mem_cfg}
+        op_kwargs = {
+            "is_causal": is_causal_flag,
+            "memory_config": output_mem_cfg,
+            "cur_pos_tensor": cur_pos_tensor,
+        }
 
         # Add optional parameters if extracted from traced config
-        if scale is not None:
-            op_kwargs["scale"] = float(scale)
+        op_kwargs["scale"] = compute_scale
 
-        if k_chunk_size is not None and k_chunk_size != "nullopt":
-            # This is critical! Using extracted k_chunk_size bypasses automatic calculation
-            # that was causing the k_chunk_size < 32 constraint violation
-            try:
-                op_kwargs["k_chunk_size"] = int(k_chunk_size)
-            except (ValueError, TypeError):
-                pass  # Skip if conversion fails
+        if sliding_window_size is not None:
+            op_kwargs["sliding_window_size"] = int(sliding_window_size)
 
-        output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(q_tensor, k_tensor, v_tensor, **op_kwargs)
+        if program_config is not None:
+            op_kwargs["program_config"] = program_config
+
+        if compute_kernel_config is not None:
+            op_kwargs["compute_kernel_config"] = compute_kernel_config
+
+        output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
         output_tensor = ttnn.to_torch(output_tensor)
+
+        # Slice output to match Q heads (following unit test pattern)
+        # Output shape: [1, b, ?, d] - slice to [1, b, nh_q, d]
+        output_tensor = output_tensor[:, :, :nh_q, :]
+
         e2e_perf = stop_measuring_time(start_time)
 
         # Comparison - decode operation typically has slightly lower accuracy

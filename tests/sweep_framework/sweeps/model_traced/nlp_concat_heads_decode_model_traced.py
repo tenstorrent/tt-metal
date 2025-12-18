@@ -69,13 +69,13 @@ def run(
 
     # Proper torch reference from test_nlp_concat_heads_decode.py (line 95)
     # Input shape: [1, batch, padded_heads, head_dim]
-    # Output shape: [1, 1, batch, head_dim * n_local_heads]
-    # The operation takes first n_local_heads from padded_heads dimension and concatenates them
+    # Output shape: [1, 1, batch, head_dim * num_heads]
+    # The operation takes first num_heads from padded_heads dimension and concatenates them
 
     if len(shape) == 4:
         _, batch, padded_heads, head_dim = shape
         # Take first num_heads from the padded_heads dimension and reshape
-        # Input: (1, 32, 32(8), 128) -> Output: (1, 1, 32, 1024) where 1024 = 128 * 8
+        # Input: (1, batch, padded_heads, head_dim) -> Output: (1, 1, batch, head_dim * num_heads)
         torch_output_tensor = torch_input_tensor_a[:, :, :num_heads, :].reshape(1, 1, batch, head_dim * num_heads)
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
@@ -102,6 +102,12 @@ def run(
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Unpad the output - TTNN output may be padded to tile size (32)
+    # We need to extract only the actual batch size
+    if len(shape) == 4:
+        _, batch, _, _ = shape
+        output_tensor = output_tensor[:, :, :batch, :]
 
     # Check with PCC - using standard threshold
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

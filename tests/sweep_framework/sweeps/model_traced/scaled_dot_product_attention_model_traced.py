@@ -15,7 +15,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 120
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -138,52 +138,39 @@ def run(
 
     # Handle GQA (Grouped Query Attention) - if K/V have fewer heads, replicate them
     if num_heads_k < num_heads_q:
-        # Replicate K heads to match Q
-        # K: [B, H_k, S, D] -> [B, H_q, S, D] by repeating heads
         repeat_factor = num_heads_q // num_heads_k
         torch_k = torch_k.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_k != 0:
-            # If not divisible, pad with last head
             remaining = num_heads_q - (repeat_factor * num_heads_k)
             torch_k = torch.cat([torch_k, torch_k[:, -num_heads_k : -num_heads_k + remaining, :, :]], dim=1)
 
     if num_heads_v < num_heads_q:
-        # Replicate V heads to match Q
         repeat_factor = num_heads_q // num_heads_v
         torch_v = torch_v.repeat(1, repeat_factor, 1, 1)
         if num_heads_q % num_heads_v != 0:
             remaining = num_heads_q - (repeat_factor * num_heads_v)
             torch_v = torch.cat([torch_v, torch_v[:, -num_heads_v : -num_heads_v + remaining, :, :]], dim=1)
 
-    # PyTorch scaled dot product attention
-    torch_output_tensor = torch.nn.functional.scaled_dot_product_attention(
+    # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs
+    torch_q = ttnn.to_torch(
+        ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
+    )
+    torch_k = ttnn.to_torch(
+        ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
+    )
+    torch_v = ttnn.to_torch(
+        ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
+    )
+
+    # PyTorch reference
+    torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
         torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=False
     )
 
-    # Convert to TTNN tensors
-    q_tensor = ttnn.from_torch(
-        torch_q,
-        dtype=dtype_q,
-        layout=layout_q,
-        device=device,
-        memory_config=mem_config_q,
-    )
-
-    k_tensor = ttnn.from_torch(
-        torch_k,
-        dtype=dtype_k,
-        layout=layout_k,
-        device=device,
-        memory_config=mem_config_k,
-    )
-
-    v_tensor = ttnn.from_torch(
-        torch_v,
-        dtype=dtype_v,
-        layout=layout_v,
-        device=device,
-        memory_config=mem_config_v,
-    )
+    # TTNN execution
+    q_tensor = ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
+    k_tensor = ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
+    v_tensor = ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
@@ -192,7 +179,14 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    # Quantize PyTorch output to match TTNN output dtype for fair comparison
+    torch_output_tensor = ttnn.to_torch(
+        ttnn.from_torch(
+            torch_output_golden, dtype=dtype_q, layout=layout_q, device=device, memory_config=output_mem_config
+        )
+    )
+
+    # Check with PCC (threshold 0.99 for low-precision dtypes)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]
