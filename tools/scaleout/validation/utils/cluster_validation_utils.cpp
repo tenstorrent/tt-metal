@@ -1420,9 +1420,13 @@ tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
         auto src = connection.first;
         auto dst = connection.second;
         auto src_asic_id = physical_system_descriptor.get_asic_id(
-            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+            src.hostname,
+            tt::tt_metal::TrayID(*src.tray_id),
+            tt::tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
-            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+            dst.hostname,
+            tt::tt_metal::TrayID(*dst.tray_id),
+            tt::tt_metal::ASICLocation(dst.asic_channel.asic_location));
         if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
