@@ -192,10 +192,6 @@ JointSDPADeviceOperation::invoke(
     const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
-
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
