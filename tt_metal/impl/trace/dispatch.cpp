@@ -227,9 +227,13 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
     // Min size is bounded by NOC transfer efficiency
     // Max size is bounded by Prefetcher CmdDatQ size
     constexpr uint32_t kExecBufPageMin = 1024;
-    constexpr uint32_t kExecBufPageMax = 4096;
+    constexpr uint32_t kExecBufPageMax = 8192;
+    // If the trace buffer is large enough, use the max page size to get maxium performance.
+    if (buf_size / (num_banks * kExecBufPageMax) > 2) {
+        return kExecBufPageMax;
+    }
     // The algorithm below currently minimizes the amount of wasted space due to
-    // padding. TODO: Tune for performance.
+    // padding.
     std::vector<uint32_t> candidates;
     candidates.reserve(__builtin_clz(kExecBufPageMin) - __builtin_clz(kExecBufPageMax) + 1);
     for (uint32_t size = 1; size <= kExecBufPageMax; size <<= 1) {
