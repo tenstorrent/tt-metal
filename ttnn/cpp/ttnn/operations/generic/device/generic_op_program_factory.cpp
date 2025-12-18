@@ -13,12 +13,28 @@
 namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
 
-GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
+GenericOpDeviceOperation::GenericMeshProgram::cached_mesh_workload_t
+GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, mesh_shared_variables_t> mesh_shared_variables;
+
+    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
+        auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
+        mesh_workload.add_program(mesh_coord_range, std::move(cached_program.program));
+        mesh_shared_variables[mesh_coord_range] = mesh_shared_variables_t{std::move(cached_program.shared_variables)};
+    }
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(mesh_shared_variables)};
+}
+
+GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOperation::GenericMeshProgram::create_at(
+    const tt::tt_metal::ProgramDescriptor& program_descriptor,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
-    Program program{operation_attributes};
-
+    Program program{program_descriptor};
     shared_variables_t shared_vars;
 
     auto cbs = program.circular_buffers();
@@ -26,27 +42,23 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
     for (const auto& cb : cbs) {
         shared_vars.cb_handles.push_back(static_cast<tt::tt_metal::CBHandle>(cb->id()));
     }
-    shared_vars.num_kernel_handles = operation_attributes.kernels.size();
+    shared_vars.num_kernel_handles = program_descriptor.kernels.size();
 
     return {std::move(program), std::move(shared_vars)};
 }
 
-void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-
+void override_program_runtime_arguments(
+    Program& program,
+    GenericOpDeviceOperation::GenericMeshProgram::shared_variables_t& shared_vars,
+    const ProgramDescriptor& program_descriptor) {
     // Update kernel runtime args.
     TT_ASSERT(
-        shared_vars.num_kernel_handles == operation_attributes.kernels.size(),
+        shared_vars.num_kernel_handles == program_descriptor.kernels.size(),
         "Number of kernel handles mismatch: cached {} vs new program {}",
         shared_vars.num_kernel_handles,
-        operation_attributes.kernels.size());
+        program_descriptor.kernels.size());
     for (size_t kernel_handle = 0; kernel_handle < shared_vars.num_kernel_handles; ++kernel_handle) {
-        const auto& kernel_desc = operation_attributes.kernels[kernel_handle];
+        const auto& kernel_desc = program_descriptor.kernels[kernel_handle];
 
         for (const auto& [core_coord, runtime_arg] : kernel_desc.runtime_args) {
             if (!runtime_arg.empty()) {
@@ -74,8 +86,8 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     }
 
     // Update circular buffer config.
-    for (size_t cb_idx = 0; cb_idx < operation_attributes.cbs.size(); ++cb_idx) {
-        const auto& cb_desc = operation_attributes.cbs[cb_idx];
+    for (size_t cb_idx = 0; cb_idx < program_descriptor.cbs.size(); ++cb_idx) {
+        const auto& cb_desc = program_descriptor.cbs[cb_idx];
         auto cb_handle = shared_vars.cb_handles[cb_idx];
         const CircularBufferConfig& cb_config = GetCircularBufferConfig(program, cb_handle);
 
@@ -98,4 +110,18 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     }
 }
 
+void GenericOpDeviceOperation::GenericMeshProgram::override_runtime_arguments(
+    cached_mesh_workload_t& cached_mesh_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/) {
+    for (auto& [mesh_coord_range, program] : cached_mesh_workload.workload.get_programs()) {
+        auto& shared_vars = cached_mesh_workload.shared_variables.at(mesh_coord_range);
+        for ([[maybe_unused]] const auto& mesh_coord : mesh_coord_range) {
+            auto& program_shared_vars = shared_vars.program_shared_variables;
+            override_program_runtime_arguments(
+                program, program_shared_vars, operation_attributes.mesh_programs.at(mesh_coord_range));
+        }
+    }
+}
 }  // namespace ttnn::operations::generic

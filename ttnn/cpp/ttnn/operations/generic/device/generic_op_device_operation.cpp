@@ -12,7 +12,7 @@ namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return GenericProgram{};
+    return GenericMeshProgram{};
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
@@ -33,10 +33,9 @@ GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create
     return tensor_args.output_tensor;
 }
 
-tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    if (operation_attributes.custom_program_hash) {
-        return *operation_attributes.custom_program_hash;
+tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    if (program_descriptor.custom_program_hash) {
+        return *program_descriptor.custom_program_hash;
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
@@ -84,16 +83,30 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     };
 
     size_t hash = 0;
-    for (const auto& kernel : operation_attributes.kernels) {
+    for (const auto& kernel : program_descriptor.kernels) {
         ttsl::hash::hash_combine(hash, hash_kernel(kernel));
     }
-    for (const auto& cb : operation_attributes.cbs) {
+    for (const auto& cb : program_descriptor.cbs) {
         ttsl::hash::hash_combine(hash, hash_circular_buffer(cb));
     }
-    for (const auto& semaphore : operation_attributes.semaphores) {
+    for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
     }
     return hash;
+}
+
+tt::stl::hash::hash_t compute_mesh_program_descriptor_hash(
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    size_t hash = 0;
+    // for (const auto& mesh_program : mesh_program_descriptor.mesh_programs) {
+    //     ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(mesh_program.second));
+    // }
+    return hash;
+}
+
+tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return compute_mesh_program_descriptor_hash(operation_attributes);
 }
 
 }  // namespace ttnn::operations::generic

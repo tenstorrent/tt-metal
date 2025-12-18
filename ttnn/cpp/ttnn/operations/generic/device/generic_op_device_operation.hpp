@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -14,7 +15,7 @@
 namespace ttnn::operations::generic {
 
 struct GenericOpDeviceOperation {
-    using operation_attributes_t = tt::tt_metal::ProgramDescriptor;
+    using operation_attributes_t = tt::tt_metal::experimental::MeshProgramDescriptor;
 
     using tensor_return_value_t = Tensor;
 
@@ -26,26 +27,38 @@ struct GenericOpDeviceOperation {
         const Tensor& output_tensor;
     };
 
-    struct GenericProgram {
+    struct GenericMeshProgram {
         struct shared_variables_t {
             uint32_t num_kernel_handles{};
             std::vector<tt::tt_metal::CBHandle> cb_handles;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
+        struct mesh_shared_variables_t {
+            shared_variables_t program_shared_variables;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<mesh_shared_variables_t>;
+
+        static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static cached_program_t create_at(
+            const tt::tt_metal::ProgramDescriptor& program_descriptor,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            cached_mesh_workload_t& cached_mesh_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<GenericProgram>;
+    using program_factory_t = std::variant<GenericMeshProgram>;
 
     // Mandatory methods
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -59,8 +72,6 @@ struct GenericOpDeviceOperation {
 
     // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-
-    // Validate the operation when it reuses a program. Usually will have less checks
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Note: will either compute a program hash, or simply return user provided custom program hash
