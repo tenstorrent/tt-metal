@@ -639,8 +639,7 @@ class Generator:
             else:
                 tt_log_probs_cpu = None
 
-            tt_out_cpu = tt_out.cpu()
-            return tt_out_cpu, tt_log_probs_cpu
+            return tt_out.cpu(), tt_log_probs_cpu
 
         logits, log_probs, read_event = self.model.process_output_decode(tt_out)
         return (logits, log_probs), [read_event]

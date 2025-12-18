@@ -88,7 +88,6 @@ class LogProbsCalculator:
 
         if self.mesh_device.get_num_devices() == 32:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
-            print(f"mesh_shape: {self.cluster_shape}")
             assert self.cluster_shape == [8, 4], "Cluster shape must be (8, 4) for 32 devices"
         elif self.mesh_device.get_num_devices() == 8:
             mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
