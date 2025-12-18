@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <compile_time_args.h>
-#include <debug/dprint.h>
 
 #include <cstdint>
 
@@ -20,24 +19,15 @@ void kernel_main() {
     constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;  // Output: grad_Q
 
     // Get compile-time arguments
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
-    constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key/value width in tiles
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
-    constexpr uint32_t block_size = get_compile_time_arg_val(3);       // block size
-    constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_query);
-    const DataFormat data_format = get_dataformat(cb_grad_query);
 
     // TensorAccessor definitions
-    constexpr auto grad_query_args = TensorAccessorArgs<6>();
+    constexpr auto grad_query_args = TensorAccessorArgs<1>();
 
     // Create TensorAccessor generator for output gradient
     const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
-
-    const uint32_t num_of_groups = q_heads / heads_per_group;
-    const uint32_t onetile = 1U;
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {

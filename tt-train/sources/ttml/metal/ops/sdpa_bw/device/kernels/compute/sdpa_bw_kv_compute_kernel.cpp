@@ -27,21 +27,18 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "debug/dprint.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block
-constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query(d/TILE_W)
-constexpr uint32_t kWt = get_compile_time_arg_val(3);              // num tile in inner dim in key and value (d/TILE_W)
-constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
-constexpr uint32_t q_heads = get_compile_time_arg_val(5);          // number of heads in query
-constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);  // number of heads per group
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) - sdpa scaler factor
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (used in update_grad_value)
+constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim (qWt == kWt == vWt)
+constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
+constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // number of heads per group
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;         // Attention output from forward pass
@@ -187,7 +184,6 @@ void MAIN {
             }
         }
 
-        // cb_wait_front(alias_cb_prev_grad_value, tiles_per_row);
         pack_result(alias_cb_prev_grad_value, cb_grad_value, tiles_per_row);
 
         pack_result(alias_cb_prev_grad_key, cb_grad_key, tiles_per_row);

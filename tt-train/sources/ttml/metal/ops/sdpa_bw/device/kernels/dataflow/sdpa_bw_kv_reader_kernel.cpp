@@ -9,8 +9,6 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 template <typename AddrGen>
@@ -59,13 +57,11 @@ void kernel_main() {
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
     constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key/value width in tiles
     constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
-    constexpr uint32_t block_size = get_compile_time_arg_val(3);       // block size
-    constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
-    constexpr uint32_t num_of_batches = get_compile_time_arg_val(6);   // num of batches
+    constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // number of query heads
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_output_args = TensorAccessorArgs<7>();
+    constexpr auto grad_output_args = TensorAccessorArgs<5>();
     constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -77,11 +73,6 @@ void kernel_main() {
     constexpr uint32_t num_of_interm_tiles = 2U;
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
-    const DataFormat data_format = get_dataformat(cb_grad_output);
-
-    // [DEBUG]: Use fp32 for intermediates to improve numerical stability
-    // const uint32_t precise_tile_bytes = get_tile_size(cb_intermediates);
-    // const DataFormat precise_data_format = get_dataformat(cb_intermediates);
 
     // Create TensorAccessor generators
     const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
@@ -90,9 +81,6 @@ void kernel_main() {
     const auto key_address_generator = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value_address_generator = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto mask_address_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
-    // [DEBUG]: Use fp32 for intermediates to improve numerical stability
-    // const auto intermediates_address_generator =
-    //     TensorAccessor(intermediates_args, intermediates_addr, precise_tile_bytes);
     const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
 
     // generate_matmul_row_reduce_tile(cb_matmul_reduce);            // generate tile for matmul row reduce
@@ -100,18 +88,11 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    DPRINT << "SDPA BW KV: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row
-           << ", qWt=" << qWt << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads=" << q_heads
-           << ", heads_per_group=" << heads_per_group << ", num_of_batches=" << num_of_batches << ENDL();
-
     // process rows of K and V assigned to this core
     // stream rows from Q, dO, O(for all heads associated with this group of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         uint32_t global_row_idx = start_row + i;
         uint32_t kv_start_idx = global_row_idx * kWt;
-
-        // DPRINT << "Reader: Processing row " << i << ", global_row_idx=" << global_row_idx
-        //        << ", kv_start_idx=" << kv_start_idx << ENDL();
 
         read_row(kv_start_idx, kWt, cb_key, key_address_generator, tile_bytes);
         read_row(kv_start_idx, kWt, cb_value, value_address_generator, tile_bytes);
@@ -122,9 +103,6 @@ void kernel_main() {
         // the index of the first head in Q associated with this group of K and V
         uint32_t first_q_head_idx = group_idx * heads_per_group;
         uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
-
-        // DPRINT << "Reader: batch_idx=" << batch_idx << ", group_idx=" << group_idx
-        //        << ", first_q_head_idx=" << first_q_head_idx << ", q_offset=" << q_offset << ENDL();
 
         // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
         // For KV kernel, we read column (global_row_idx % Ht) from each row h of the mask
@@ -139,8 +117,6 @@ void kernel_main() {
             for (uint32_t h = 0; h < Ht; ++h) {
                 uint32_t q_start_idx = q_offset + (q_head_idx * Ht + h) * qWt;
                 read_row(q_start_idx, qWt, cb_query, query_address_generator, tile_bytes);
-                read_row(q_start_idx, qWt, cb_grad_output, grad_output_address_generator, tile_bytes);
-                read_row(q_start_idx, qWt, cb_attn_output, attn_output_address_generator, tile_bytes);
 
                 // read one tile of attn_mask for current row of K and V
                 // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
@@ -154,19 +130,15 @@ void kernel_main() {
                 // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
                 // 1/sum_exp In future we can think about optimizing this by sharing logsumexp only
                 uint32_t intermediates_idx = intermediates_offset + h * num_of_interm_tiles;
-                // [DEBUG]: Use fp32 for intermediates to improve numerical stability
-                // read_row(
-                //     intermediates_idx,
-                //     num_of_interm_tiles,
-                //     cb_intermediates,
-                //     intermediates_address_generator,
-                //     precise_tile_bytes);
                 read_row(
                     intermediates_idx,
                     num_of_interm_tiles,
                     cb_intermediates,
                     intermediates_address_generator,
                     tile_bytes);
+
+                read_row(q_start_idx, qWt, cb_grad_output, grad_output_address_generator, tile_bytes);
+                read_row(q_start_idx, qWt, cb_attn_output, attn_output_address_generator, tile_bytes);
             }
             // update offset for intermediates only (mask is (1,1,S,S) - same for all heads)
             intermediates_offset += Ht * num_of_interm_tiles;  // jump to the head in intermediates
