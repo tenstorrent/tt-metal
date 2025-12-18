@@ -4,7 +4,7 @@
 
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather/layernorm_post_all_gather_device_operation.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
@@ -41,18 +41,18 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
             DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
     } else {
-        return ttnn::prim::layernorm_post_all_gather(
-            input_tensor,
-            stats,
-            weight,
-            bias,
-            LayerNormDistributedType::RMSNORM,
-            epsilon,
-            memory_config.value_or(input_tensor.memory_config()),
-            kernel_config_val,
-            dtype,
-            use_2d_core_grid,
-            distributed_program_config);
+        return tt::tt_metal::operation::run(
+                   LayerNormPostAllGather{
+                       .norm_type = LayerNormDistributedType::RMSNORM,
+                       .eps = epsilon,
+                       .memory_config = memory_config.value_or(input_tensor.memory_config()),
+                       .compute_kernel_config = kernel_config_val,
+                       .dtype = dtype,
+                       .use_2d_core_grid = use_2d_core_grid,
+                       .program_config = distributed_program_config},
+                   {input_tensor, stats},
+                   {weight, bias})
+            .at(0);
     }
 }
 
