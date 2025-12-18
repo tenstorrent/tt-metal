@@ -1,20 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_pybind.hpp"
+#include "matmul_reduce_scatter_async_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::ccl::detail {
+namespace ttnn::operations::experimental::ccl {
+
+namespace detail {
 
 template <typename ccl_operation_t>
 void bind_matmul_reduce_scatter_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -97,9 +99,7 @@ void bind_matmul_reduce_scatter_async(pybind11::module& module, const ccl_operat
             py::arg("core_grid") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::ccl::detail
-
-namespace ttnn::operations::experimental::ccl {
+}  // namespace detail
 
 void py_bind_matmul_reduce_scatter_async(pybind11::module& module) {
     detail::bind_matmul_reduce_scatter_async(
