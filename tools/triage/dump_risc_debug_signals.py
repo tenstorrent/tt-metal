@@ -14,7 +14,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, run_script
+from triage import ScriptConfig, collection_serializer, triage_field, run_script
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -29,14 +29,14 @@ script_config = ScriptConfig(
 
 
 @dataclass
-class DumpDebugBus:
-    debug_signal_names: str = triage_field("Debug Signals")
-    debug_signal_values: str = triage_field("Values")
+class DumpDebugBusSignals:
+    names: list[str] = triage_field("Debug Signals", collection_serializer("\n"))
+    values: list[str] = triage_field("Values", collection_serializer("\n"))
 
 
 def dump_risc_debug_signals(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
-) -> DumpDebugBus | None:
+) -> DumpDebugBusSignals | None:
     """
     Try to halt a RISC core. If successful, return None.
     If it throws an exception, collect and return debug bus signals.
@@ -45,17 +45,13 @@ def dump_risc_debug_signals(
 
     try:
         risc_debug = noc_block.get_risc_debug(risc_name)
-        with risc_debug.ensure_halted():
-            pass
-
+        # Try to halt the core
+        risc_debug.halt()
+        # If halt was successful, return None
         return None
     except:
-        # Halt failed, collect debug bus signals
+        # If halt failed, collect debug bus signals
         debug_bus = noc_block.debug_bus
-
-        debug_signal_names = ""
-        debug_signal_values = ""
-
         if debug_bus is not None:
             # Filter groups that match the pattern risc_name*
             matching_groups = [group_name for group_name in debug_bus.group_names if group_name.startswith(risc_name)]
@@ -65,7 +61,6 @@ def dump_risc_debug_signals(
                 dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
                 firmware_elf = elfs_cache[dispatcher_core_data.firmware_path]
                 firmware_text_address = firmware_elf.elf.get_section_by_name(".text")["sh_addr"]
-
                 # Make sure that l1 address we are using is in the first 1MiB of the L1 cache (required for reading groups)
                 assert firmware_text_address < 0x100000
 
@@ -75,31 +70,24 @@ def dump_risc_debug_signals(
                 l1_address = firmware_text_address
 
                 # Collect all signals from all matching groups
-                signal_names = []
-                signal_values = []
-
+                signal_names_str: list[str] = []
+                signal_values_hex: list[str] = []
                 for group_name in sorted(matching_groups):
                     # Read the signal group
                     group_sample = debug_bus.read_signal_group(group_name, l1_address)
-
                     # Iterate through all signals in the group
                     for signal_name in sorted(group_sample.keys()):
-                        signal_names.append(f"{signal_name[len(risc_name)+1:]}")
-                        signal_values.append(f"{hex(group_sample[signal_name])}")
-
-                if signal_names:
-                    debug_signal_names = "\n".join(signal_names)
-                    debug_signal_values = "\n".join(signal_values)
+                        signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
+                        signal_values_hex.append(f"{hex(group_sample[signal_name])}")
 
         # Restoring the original data
         write_words_to_device(location, firmware_text_address, original_data)
-
         # Verifying that the original data was restored
         assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
-        return DumpDebugBus(
-            debug_signal_names=debug_signal_names,
-            debug_signal_values=debug_signal_values,
+        return DumpDebugBusSignals(
+            names=signal_names_str,
+            values=signal_values_hex,
         )
 
 
