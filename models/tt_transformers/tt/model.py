@@ -542,7 +542,7 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
-            print(f"model.py: layer {i} output: {x}")
+            print(f"model.py: layer{i} output: {x}")
 
         if mode == "prefill" and get_last_token == -1:
             return x
