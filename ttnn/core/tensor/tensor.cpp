@@ -791,19 +791,23 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
-        // const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-        //     tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-        //     tensor_spec.data_type() == convert_to_data_type<T>();
+        // if unsupported data type and user provided data type, convert on host and then move to device if
+        // provided.
+        TensorLayout tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
+
+        const bool pydata_borrowable = layout == Layout::ROW_MAJOR &&
+                                       tensor_layout.compute_physical_shape(tensor_shape) ==
+                                           tensor_layout.compute_logical_2d_shape(tensor_shape) &&
+                                       src_dtype == convert_to_data_type<T>();
 
         const Layout host_construct_layout =
             src_dtype == DataType::BFLOAT8_B || src_dtype == DataType::BFLOAT4_B ? Layout::TILE : layout;
 
-        if (exec_on_device && can_construct_on_device) {
+        if (exec_on_device && can_construct_on_device && pydata_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
-        // TODO: T=float but dtype can be bfloat8_b or bfloat4_b
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
             TensorSpec(

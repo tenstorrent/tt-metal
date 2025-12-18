@@ -445,7 +445,9 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         return to_host_buffer(ptr, numel, cont_tensor);
 
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
-        if (target_dtype == DataType::BFLOAT16) {  // TODO: Don't create temporary tensor for bfloat16
+        // numpy does not support bfloat16, so if the conversion explicitly requests this type,
+        // the mapping should happen through intermediate torch tensor.
+        if (target_dtype == DataType::BFLOAT16) {
             return convert_py_tensor_to_host_buffer(torch.attr("from_numpy")(py_tensor), target_dtype);
         }
 
@@ -788,10 +790,6 @@ void pytensor_module(py::module& m_tensor) {
                           std::optional<ttnn::QueueId> cq_id,
                           std::optional<float> pad_value,
                           const distributed::TensorToMesh* mesh_mapper) {
-                // introduce default pad value if not provided as default argument?
-                // if unsupported data type and user provided data type, convert on host and then move to device if
-                // provided.
-
                 auto src_dtype = CMAKE_UNIQUE_NAMESPACE::get_py_tensor_type_info(py_tensor);
                 auto dst_dtype = CMAKE_UNIQUE_NAMESPACE::get_target_type(data_type, py_tensor);
 
