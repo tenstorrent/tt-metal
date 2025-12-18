@@ -181,6 +181,30 @@ FORCE_INLINE void fabric_multicast_metadata_write(
     noc_async_writes_flushed();
 }
 
+// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
+template <uint32_t PositiveDistance, uint32_t NegativeDistance>
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc(
+    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* fabric_connection_pos,
+    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* fabric_connection_neg,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint64_t semaphore_noc_addr) {
+    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
+
+    tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+        fabric_connection_pos,
+        packet_header,
+        cmd_header,
+        static_cast<uint8_t>(1),
+        static_cast<uint8_t>(PositiveDistance));
+
+    tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+        fabric_connection_neg,
+        packet_header,
+        cmd_header,
+        static_cast<uint8_t>(1),
+        static_cast<uint8_t>(NegativeDistance));
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -313,16 +337,14 @@ void kernel_main() {
 
     // Send initialization semaphore to configured targets for synchronization
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     constexpr uint32_t positive_distance = dispatch_index % 2 == 0 ? (dispatch_devices - 1) / 2 : dispatch_devices / 2;
     constexpr uint32_t negative_distance = (dispatch_devices - 1) - positive_distance;
+    detail::fabric_multicast_bidirectional_atomic_inc<positive_distance, negative_distance>(
+        &fabric_connections[eth_chan_directions::EAST],
+        &fabric_connections[eth_chan_directions::WEST],
+        metadata_packet_header,
+        init_noc_semaphore_addr);
+
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
@@ -374,22 +396,14 @@ void kernel_main() {
         cb_pop_front(scores_tensor_cb_id, max_indices_pages_per_packet);
     }
 
-    DPRINT << "Before global sem send" << ENDL();
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_address);
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        num_devices>(
-        fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
-    DPRINT << "After global sem send, before barrier" << ENDL();
+    detail::fabric_multicast_bidirectional_atomic_inc<positive_distance, negative_distance>(
+        &fabric_connections[eth_chan_directions::EAST],
+        &fabric_connections[eth_chan_directions::WEST],
+        metadata_packet_header,
+        global_noc_semaphore_addr);
     noc_async_write_barrier();
-    DPRINT << "After barrier, before sem wait" << ENDL();
     noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices - 1);
-    DPRINT << "After sem wait" << ENDL();
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 
     close_direction_connections(directions, fabric_connections);
