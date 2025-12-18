@@ -89,11 +89,11 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' ||
-        inputs.run_t3k_profiler ||
-        inputs.run_galaxy_profiler ||
-        inputs.run_blackhole_profiler ||
-        inputs.run_n300_profiler ||
-        inputs.run_n150_profiler
+        github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true ||
+        github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true ||
+        github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true ||
+        github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true ||
+        github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true
       }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -105,7 +105,11 @@ jobs:
       version: "22.04"
 
   t3k-profiler-tests:
-    if: ${{ github.event_name != 'push' && inputs.run_t3k_profiler }}
+    if: >-
+      ${{
+        github.event_name != 'push' &&
+        (github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true)
+      }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
@@ -117,7 +121,11 @@ jobs:
       test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
 
   galaxy-profiler-tests:
-    if: ${{ github.event_name != 'push' && inputs.run_galaxy_profiler }}
+    if: >-
+      ${{
+        github.event_name != 'push' &&
+        (github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true)
+      }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
@@ -129,7 +137,11 @@ jobs:
       test-script: ./tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh
 
   blackhole-profiler:
-    if: ${{ github.event_name != 'push' && inputs.run_blackhole_profiler }}
+    if: >-
+      ${{
+        github.event_name != 'push' &&
+        (github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true)
+      }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -139,12 +151,16 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
+      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
+      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
 
   n300-profiler:
-    if: ${{ github.event_name != 'push' && inputs.run_n300_profiler }}
+    if: >-
+      ${{
+        github.event_name != 'push' &&
+        (github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true)
+      }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -154,12 +170,16 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
+      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
+      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
 
   n150-profiler:
-    if: ${{ github.event_name == 'push' || inputs.run_n150_profiler }}
+    if: >-
+      ${{
+        github.event_name == 'push' ||
+        (github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true)
+      }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -169,6 +189,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
+      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
+      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
