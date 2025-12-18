@@ -289,8 +289,6 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
     const PhysicalSize& shape,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape) {
-    ZoneScoped;
-
     const size_t H = shape[0];
     const size_t W = shape[1];
     const size_t batch_size = H * W;
