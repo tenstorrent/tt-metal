@@ -11,6 +11,7 @@ This module provides the TTNN-accelerated EfficientDet D0 model for object detec
 import ttnn
 from typing import Tuple, List
 
+from models.tt_cnn.tt.builder import HeightShardedStrategyConfiguration
 from models.experimental.efficientdetd0.tt.efficientnetb0 import TtEfficientNet
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
 from models.experimental.efficientdetd0.tt.regressor import TtRegressor
@@ -151,7 +152,7 @@ class TtEfficientDetBackbone:
                 epsilon=BIFPN_EPSILON,
                 attention=USE_ATTENTION,
                 use_p8=USE_P8,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
                 deallocate_activation=True,
             )
             bifpn_layers.append(bifpn)

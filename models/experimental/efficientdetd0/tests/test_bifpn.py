@@ -13,6 +13,7 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
     infer_torch_module_args,
 )
+from models.tt_cnn.tt.builder import HeightShardedStrategyConfiguration
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.experimental.efficientdetd0.tt.bifpn import TtBiFPN
@@ -102,7 +103,7 @@ def test_bifpn(
         epsilon=1e-4,
         attention=attention,
         use_p8=False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
         deallocate_activation=True,
     )
 

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.tt_cnn.tt.builder import BlockShardedStrategyConfiguration
 from models.experimental.efficientdetd0.tt.utils import TtSeparableConvBlock
 
 
@@ -21,8 +22,8 @@ class TtRegressor:
                 TtSeparableConvBlock(
                     device=device,
                     parameters=parameters.conv_list[j][i],
-                    shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     module_args=module_args.conv_list[j][i],
+                    sharding_strategy=BlockShardedStrategyConfiguration(reshard_if_not_optimal=True),
                     deallocate_activation=True,
                 )
                 for i in range(num_layers)
@@ -34,8 +35,8 @@ class TtRegressor:
             TtSeparableConvBlock(
                 device=device,
                 parameters=parameters.header_list[j],
-                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 module_args=module_args.header[j],
+                sharding_strategy=BlockShardedStrategyConfiguration(reshard_if_not_optimal=True),
                 deallocate_activation=True,
             )
             for j in range(pyramid_levels)

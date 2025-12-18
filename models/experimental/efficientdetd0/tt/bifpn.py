@@ -9,8 +9,14 @@ from models.experimental.efficientdetd0.tt.utils import (
     TtSeparableConvBlock,
     TtMaxPool2dDynamicSamePadding,
     TtConv2dDynamicSamePadding,
+    generate_conv_configuration_from_args,
+    generate_maxpool_configuration_from_args,
+    generate_upsample_configuration_from_args,
 )
-from models.tt_cnn.tt.builder import TtUpsample
+from models.tt_cnn.tt.builder import (
+    TtUpsample,
+    HeightShardedStrategyConfiguration,
+)
 
 
 def compute_fast_attention_weights(weight, epsilon, three_weights):
@@ -46,7 +52,7 @@ class TtBiFPN:
         epsilon: float = 1e-4,
         attention: bool = True,
         use_p8: bool = False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
         deallocate_activation: bool = False,
     ):
         """
@@ -59,158 +65,198 @@ class TtBiFPN:
             epsilon: Small constant for numerical stability in weighted attention
             attention: Whether to use fast weighted attention
             use_p8: Whether to use P8 pyramid level
-            shard_layout: Memory layout for sharding
+            sharding_strategy: Memory layout for sharding
             deallocate_activation: Whether to deallocate intermediate activations
         """
         self.device = device
         self.epsilon = epsilon
         self.attention = attention
         self.first_time = first_time
-        self.shard_layout = shard_layout
+        self.sharding_strategy = sharding_strategy
 
         # Initialize separable conv blocks for upsampling path
         self.conv6_up = TtSeparableConvBlock(
-            device, parameters.conv6_up, shard_layout, module_args.conv6_up, deallocate_activation=True
+            device=device,
+            parameters=parameters.conv6_up,
+            module_args=module_args.conv6_up,
+            sharding_strategy=sharding_strategy,
+            deallocate_activation=True,
         )
         self.conv5_up = TtSeparableConvBlock(
-            device, parameters.conv5_up, shard_layout, module_args.conv5_up, deallocate_activation=True
+            device=device,
+            parameters=parameters.conv5_up,
+            module_args=module_args.conv5_up,
+            sharding_strategy=sharding_strategy,
+            deallocate_activation=True,
         )
         self.conv4_up = TtSeparableConvBlock(
-            device, parameters.conv4_up, shard_layout, module_args.conv4_up, deallocate_activation=True
+            device=device,
+            parameters=parameters.conv4_up,
+            module_args=module_args.conv4_up,
+            sharding_strategy=sharding_strategy,
+            deallocate_activation=True,
         )
         self.conv3_up = TtSeparableConvBlock(
-            device, parameters.conv3_up, shard_layout, module_args.conv3_up, deallocate_activation=True
+            device=device,
+            parameters=parameters.conv3_up,
+            module_args=module_args.conv3_up,
+            sharding_strategy=sharding_strategy,
+            deallocate_activation=True,
         )
 
         # Initialize separable conv blocks for downsampling path
         self.conv4_down = TtSeparableConvBlock(
             device,
-            parameters.conv4_down,
-            shard_layout,
-            module_args.conv4_down,
+            parameters=parameters.conv4_down,
+            module_args=module_args.conv4_down,
+            sharding_strategy=sharding_strategy,
             deallocate_activation=True,
         )
         self.conv5_down = TtSeparableConvBlock(
             device,
-            parameters.conv5_down,
-            shard_layout,
-            module_args.conv5_down,
+            parameters=parameters.conv5_down,
+            module_args=module_args.conv5_down,
+            sharding_strategy=sharding_strategy,
             deallocate_activation=True,
         )
         self.conv6_down = TtSeparableConvBlock(
             device,
-            parameters.conv6_down,
-            shard_layout,
-            module_args.conv6_down,
+            parameters=parameters.conv6_down,
+            module_args=module_args.conv6_down,
+            sharding_strategy=sharding_strategy,
             deallocate_activation=True,
         )
         self.conv7_down = TtSeparableConvBlock(
             device,
-            parameters.conv7_down,
-            shard_layout,
-            module_args.conv7_down,
+            parameters=parameters.conv7_down,
+            module_args=module_args.conv7_down,
+            sharding_strategy=sharding_strategy,
             deallocate_activation=True,
         )
 
         # Initialize Upsample layers
         self.p6_upsample = TtUpsample(
-            configuration=UpsampleConfiguration.from_model_args(module_args.p6_upsample),
+            configuration=generate_upsample_configuration_from_args(module_args.p6_upsample),
             device=device,
         )
         self.p5_upsample = TtUpsample(
-            configuration=UpsampleConfiguration.from_model_args(module_args.p5_upsample),
+            configuration=generate_upsample_configuration_from_args(module_args.p5_upsample),
             device=device,
         )
         self.p4_upsample = TtUpsample(
-            configuration=UpsampleConfiguration.from_model_args(module_args.p4_upsample),
+            configuration=generate_upsample_configuration_from_args(module_args.p4_upsample),
             device=device,
         )
         self.p3_upsample = TtUpsample(
-            configuration=UpsampleConfiguration.from_model_args(module_args.p3_upsample),
+            configuration=generate_upsample_configuration_from_args(module_args.p3_upsample),
             device=device,
         )
 
         # Initialize maxpool layers for downsampling
         self.p4_downsample = TtMaxPool2dDynamicSamePadding(
-            device,
-            module_args.p4_downsample,
-            deallocate_activation=False,
+            configuration=generate_maxpool_configuration_from_args(
+                maxpool2d_args=module_args.p4_downsample,
+                output_layout=ttnn.TILE_LAYOUT,
+            ),
+            device=device,
         )
         self.p5_downsample = TtMaxPool2dDynamicSamePadding(
-            device,
-            module_args.p5_downsample,
-            deallocate_activation=False,
+            configuration=generate_maxpool_configuration_from_args(
+                maxpool2d_args=module_args.p5_downsample,
+                output_layout=ttnn.TILE_LAYOUT,
+            ),
+            device=device,
         )
         self.p6_downsample = TtMaxPool2dDynamicSamePadding(
-            device,
-            module_args.p6_downsample,
-            deallocate_activation=False,
+            configuration=generate_maxpool_configuration_from_args(
+                maxpool2d_args=module_args.p6_downsample,
+                output_layout=ttnn.TILE_LAYOUT,
+            ),
+            device=device,
         )
         self.p7_downsample = TtMaxPool2dDynamicSamePadding(
-            device,
-            module_args.p7_downsample,
-            deallocate_activation=False,
+            configuration=generate_maxpool_configuration_from_args(
+                maxpool2d_args=module_args.p7_downsample,
+                output_layout=ttnn.TILE_LAYOUT,
+            ),
+            device=device,
         )
 
         # Initialize channel reduction layers for first_time
         if self.first_time:
             self.p3_down_channel = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p3_down_channel[0],
-                shard_layout,
-                module_args.p3_down_channel[0],
-                deallocate_activation=deallocate_activation,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p3_down_channel[0],
+                    parameters_dict=parameters.p3_down_channel[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=deallocate_activation,
+                ),
+                device=device,
             )
             self.p4_down_channel = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p4_down_channel[0],
-                shard_layout,
-                module_args.p4_down_channel[0],
-                deallocate_activation=False,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p4_down_channel[0],
+                    parameters_dict=parameters.p4_down_channel[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=False,
+                ),
+                device=device,
             )
             self.p5_down_channel = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p5_down_channel[0],
-                shard_layout,
-                module_args.p5_down_channel[0],
-                deallocate_activation=False,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p5_down_channel[0],
+                    parameters_dict=parameters.p5_down_channel[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=False,
+                ),
+                device=device,
             )
 
             # P5 to P6 conversion (conv + maxpool)
             self.p5_to_p6_conv = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p5_to_p6[0],
-                shard_layout,
-                module_args.p5_to_p6[0],
-                deallocate_activation=False,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p5_to_p6[0],
+                    parameters_dict=parameters.p5_to_p6[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=False,
+                ),
+                device=device,
             )
             self.p5_to_p6_pool = TtMaxPool2dDynamicSamePadding(
-                device,
-                module_args.p5_to_p6[2],
-                deallocate_activation=False,
+                configuration=generate_maxpool_configuration_from_args(
+                    maxpool2d_args=module_args.p5_to_p6[2],
+                    output_layout=ttnn.TILE_LAYOUT,
+                ),
+                device=device,
             )
 
             # P6 to P7 conversion (maxpool only)
             self.p6_to_p7 = TtMaxPool2dDynamicSamePadding(
-                device,
-                module_args.p6_to_p7[0],
-                deallocate_activation=False,
+                configuration=generate_maxpool_configuration_from_args(
+                    maxpool2d_args=module_args.p6_to_p7[0],
+                    output_layout=ttnn.TILE_LAYOUT,
+                ),
+                device=device,
             )
 
             # Additional channel reduction for bottom-up path
             self.p4_down_channel_2 = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p4_down_channel_2[0],
-                shard_layout,
-                module_args.p4_down_channel_2[0],
-                deallocate_activation=deallocate_activation,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p4_down_channel_2[0],
+                    parameters_dict=parameters.p4_down_channel_2[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=deallocate_activation,
+                ),
+                device=device,
             )
             self.p5_down_channel_2 = TtConv2dDynamicSamePadding(
-                device,
-                parameters.p5_down_channel_2[0],
-                shard_layout,
-                module_args.p5_down_channel_2[0],
-                deallocate_activation=deallocate_activation,
+                configuration=generate_conv_configuration_from_args(
+                    conv2d_args=module_args.p5_down_channel_2[0],
+                    parameters_dict=parameters.p5_down_channel_2[0],
+                    sharding_strategy=sharding_strategy,
+                    deallocate_activation=deallocate_activation,
+                ),
+                device=device,
             )
 
         # Store attention weights as TTNN tensors
