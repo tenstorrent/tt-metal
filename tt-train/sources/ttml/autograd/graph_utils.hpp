@@ -48,8 +48,7 @@ bool any_requires_grad(Tensors&&... tensors) {
 }
 
 template <typename... Tensors>
-std::optional<NodeId> add_backward_node_checked(
-    GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
+std::optional<NodeId> add_backward_node(GradFunction&& grad_function, const TensorPtr& output, Tensors&&... tensors) {
     static_assert(core::are_same_type<Tensors...>(), "All nodes must have the same type!");
 
     // Check if any input tensor requires gradients

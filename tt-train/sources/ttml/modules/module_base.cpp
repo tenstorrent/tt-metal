@@ -37,7 +37,7 @@ void ModuleBase::override_tensor(const autograd::TensorPtr& tensor_ptr, const st
     }
 }
 
-void ModuleBase::override_module(const ModuleBasePtr& module_ptr, const std::string& name) {
+void ModuleBase::override_module(const std::string& name, const ModuleBasePtr& module_ptr) {
     if (auto it = m_named_modules.find(name); it != m_named_modules.end()) {
         it->second = module_ptr;
     } else {
@@ -53,16 +53,28 @@ const std::string& ModuleBase::get_name() const {
     return m_name;
 }
 
-const std::map<std::string, ModuleBasePtr>& ModuleBase::get_named_modules() const {
+const std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() const {
     return m_named_modules;
 }
 
-std::map<std::string, ModuleBasePtr>& ModuleBase::get_named_modules() {
+std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() {
     return m_named_modules;
 }
 
-const std::map<std::string, autograd::TensorPtr>& ModuleBase::get_named_tensors() const {
+const std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() const {
     return m_named_tensors;
+}
+
+std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() {
+    return m_named_tensors;
+}
+
+std::shared_ptr<ModuleBase> ModuleBase::get_module(const std::string& name) const {
+    auto it = m_named_modules.find(name);
+    if (it == m_named_modules.end()) {
+        throw std::logic_error(fmt::format("Module with name '{}' not found", name));
+    }
+    return it->second;
 }
 
 serialization::NamedParameters ModuleBase::parameters() const {

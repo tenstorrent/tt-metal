@@ -71,7 +71,7 @@ autograd::TensorPtr layernorm_moreh(
         beta->add_grad(res[2].value());
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
 
     return out;
 }
@@ -98,7 +98,7 @@ autograd::TensorPtr layernorm(
         beta->add_grad(res[2].value());
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor, gamma, beta));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta));
 
     return out;
 }
@@ -198,7 +198,7 @@ autograd::TensorPtr composite_layernorm(
         beta->add_grad(dbeta);
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, tensor, gamma, beta));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta));
 
     return out;
 }

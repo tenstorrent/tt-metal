@@ -62,7 +62,7 @@ autograd::TensorPtr memory_efficient_runner(
         input->add_grad(input_detached->get_grad());
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, input));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, input));
     return out;
 }
 

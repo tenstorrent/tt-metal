@@ -116,7 +116,7 @@ autograd::TensorPtr linear_op(
         }
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, weight, tensor, bias));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

@@ -45,26 +45,14 @@ public:
 
     [[nodiscard]] const std::string& get_name() const;
     [[nodiscard]] serialization::NamedParameters parameters() const;
-    [[nodiscard]] const std::map<std::string, ModuleBasePtr>& get_named_modules() const;
-    [[nodiscard]] std::map<std::string, ModuleBasePtr>& get_named_modules();
-    [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& get_named_tensors() const;
+    [[nodiscard]] const std::map<std::string, ModuleBasePtr>& named_modules() const;
+    [[nodiscard]] std::map<std::string, ModuleBasePtr>& named_modules();
+    [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& named_tensors() const;
+    [[nodiscard]] std::map<std::string, autograd::TensorPtr>& named_tensors();
+    [[nodiscard]] std::shared_ptr<ModuleBase> get_module(const std::string& name) const;
 
-    void override_module(const ModuleBasePtr& module_ptr, const std::string& name);
+    void override_module(const std::string& name, const ModuleBasePtr& module_ptr);
 
-    // Get a submodule by name, cast to the expected type
-    // This is used to get a module by name from m_named_modules map, so that LoRA can override this module with a LoRA
-    template <typename T = ModuleBase>
-    [[nodiscard]] std::shared_ptr<T> get_module(const std::string& name) const {
-        auto it = m_named_modules.find(name);
-        if (it == m_named_modules.end()) {
-            throw std::logic_error(fmt::format("Module with name '{}' not found", name));
-        }
-        auto typed = std::dynamic_pointer_cast<T>(it->second);
-        if (!typed) {
-            throw std::logic_error(fmt::format("Module '{}' cannot be cast to requested type", name));
-        }
-        return typed;
-    }
     void train();
     void eval();
     void set_run_mode(RunMode mode);

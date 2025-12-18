@@ -58,7 +58,7 @@ ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& i
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
 
@@ -93,7 +93,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
             b->add_grad(out->get_grad());
         }
     };
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a, b));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }
@@ -109,7 +109,7 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
         b->add_grad(ttnn::neg(out->get_grad()));
     };
 
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a, b));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }
@@ -127,7 +127,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         a->add_grad(a_grad);
         b->add_grad(b_grad);
     };
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a, b));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }
@@ -139,7 +139,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
 
         a->add_grad(a_grad);
     };
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a));
 
     return out;
 }
@@ -153,7 +153,7 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
         a->add_grad(res[0].value());
         b->add_grad(res[1].value());
     };
-    out->set_node(autograd::add_backward_node_checked(std::move(grad), out, a, b));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }

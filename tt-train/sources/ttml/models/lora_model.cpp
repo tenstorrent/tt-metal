@@ -59,7 +59,7 @@ void LoraModel::replace_linear_modules_recursive(ttml::modules::ModuleBase* modu
     }
 
     // Get all named modules from current module
-    auto& named_modules = module->get_named_modules();
+    auto& named_modules = module->named_modules();
 
     // We need to collect replacements first to avoid modifying while iterating
     std::vector<std::pair<std::string, std::shared_ptr<ttml::modules::ModuleBase>>> replacements;
@@ -75,7 +75,7 @@ void LoraModel::replace_linear_modules_recursive(ttml::modules::ModuleBase* modu
             auto weight = linear_layer->get_weight();
 
             // Get bias from the linear layer's named tensors if it exists
-            auto& tensors = linear_layer->get_named_tensors();
+            auto& tensors = linear_layer->named_tensors();
             auto bias_it = tensors.find("bias");
 
             // Create LoRALayerConfig from LoRAConfig
@@ -113,7 +113,7 @@ void LoraModel::replace_linear_modules_recursive(ttml::modules::ModuleBase* modu
 
     // Apply replacements
     for (const auto& [module_name, lora_layer] : replacements) {
-        module->override_module(lora_layer, module_name);
+        module->override_module(module_name, lora_layer);
     }
 }
 
