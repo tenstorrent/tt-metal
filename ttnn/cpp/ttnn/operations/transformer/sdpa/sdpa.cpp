@@ -7,7 +7,7 @@
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -97,24 +97,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
     SDPAProgramConfig program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
-                                     ? input_tensor_q.device()->arch()
-                                     : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
-
-    auto results = tt::tt_metal::operation::run(
-        JointScaledDotProductAttention{
-            .joint_strategy = joint_strategy,
-            .scale = scale,
-            .output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            .program_config = std::move(program_config),
-            .compute_kernel_config = kernel_config_val},
-        {input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v},
-        {},
-        {});
-
-    return {results.at(0), results.at(1)};
+    auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        joint_strategy,
+        program_config,
+        scale,
+        compute_kernel_config);
+    return {output_tensors.output, output_tensors.joint_output};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
