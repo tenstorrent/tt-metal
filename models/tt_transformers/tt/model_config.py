@@ -18,6 +18,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0, neares
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
@@ -156,7 +157,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -538,7 +539,6 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -575,10 +575,9 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (
-            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
-            and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
+        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
+            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -1264,9 +1263,7 @@ class ModelArgs:
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
             if self.is_multimodal:
-                self.VISION_MAX_MM_SEQ = (
-                    self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
-                )
+                self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1305,19 +1302,20 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = 8192
+        DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
-            # e.g. "Llama-3.1-8B": 4096
+            # Qwen3-32B hangs at 8192, so we cap at 4096
+            "Qwen3-32B": 4096,
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
-
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_seq_len
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -1338,28 +1336,32 @@ class ModelArgs:
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
+            "N150": [128],
+            "N300": [128, 1024],
+            "T3K": [128, 1024],
+            "TG": [128, 1024],
+            "P150": [128, 1024],
+            "P300": [128, 1024],
+            "P150x4": [128, 1024],
+            "P150x8": [128, 1024],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
             "Llama-3.1-8B": {
-                "P100": [128, 256, 512, 1024],
-                "N150": [128, 256, 512, 1024],
-                "N300": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P100": [128, 1024],
+                "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.1-70B": {
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
-                "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
-                "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
             },
         }
 
@@ -1369,12 +1371,12 @@ class ModelArgs:
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # No supported sequence lengths found, return empty list
         return []
@@ -1528,12 +1530,7 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        # Gemma3 specific params
-        is_gemma3 = "gemma-3" in self.base_model_name.lower()
-        if is_gemma3:
-            self.rms_norm_add_unit_offset = True
-
-            self.embed_scale = self.dim**0.5
+        return
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -1595,9 +1592,9 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
-                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -2268,7 +2265,6 @@ class ModelArgs:
         # Mapping of base model names to their known tokenizer paths
         # These are the original models that have proper tokenizers
         base_model_tokenizer_mapping = {
-            "gemma-3-4b-it": "google/gemma-3-4b-it",
             "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
             "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
             "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",

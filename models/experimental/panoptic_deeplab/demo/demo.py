@@ -13,7 +13,6 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
     fuse_conv_bn_parameters,
 )
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_resnet_dtype_config
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import (
@@ -28,7 +27,9 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     create_deeplab_v3plus_visualization,
     save_predictions,
     preprocess_input_params,
+    skip_if_not_blackhole_20_or_130_cores,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def run_panoptic_deeplab_demo(
@@ -146,6 +147,50 @@ def run_panoptic_deeplab_demo(
     logger.info("Running TTNN inference...")
     ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
 
+    # Validate outputs with PCC and relative error checks
+    logger.info("Validating outputs with PCC and relative error checks...")
+    logger.info("=" * 80)
+    logger.info(f"Validation Results for {os.path.basename(image_path)} ({model_category}):")
+    logger.info("=" * 80)
+
+    # Check semantic output with PCC and relative errors
+    check_ttnn_output(
+        layer_name="semantic",
+        pytorch_output=pytorch_semantic_logits,
+        ttnn_output=ttnn_semantic_logits,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.958,
+        exp_abs_err=1.769,
+        exp_rel_err=0.150,
+    )
+
+    # Check instance outputs (only for PANOPTIC_DEEPLAB)
+    if model_category == PANOPTIC_DEEPLAB:
+        check_ttnn_output(
+            layer_name="center",
+            pytorch_output=pytorch_center_logits,
+            ttnn_output=ttnn_center_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.980,
+            exp_abs_err=0.006,
+            exp_rel_err=21.08,
+        )
+
+        check_ttnn_output(
+            layer_name="offset",
+            pytorch_output=pytorch_offset_logits,
+            ttnn_output=ttnn_offset_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.984,
+            exp_abs_err=9.630,
+            exp_rel_err=1.675,
+        )
+
+    logger.info("=" * 80)
+
     # Process TTNN results
     logger.info("Processing TTNN results...")
 
@@ -248,7 +293,8 @@ def run_panoptic_deeplab_demo(
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
 def test_panoptic_deeplab_demo(device, output_dir, model_category, model_location_generator):
-    skip_if_not_blackhole_20_cores(device)
+    skip_if_not_blackhole_20_or_130_cores(device)
+
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
