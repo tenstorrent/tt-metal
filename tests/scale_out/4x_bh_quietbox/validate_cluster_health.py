@@ -17,9 +17,9 @@ from pathlib import Path
 from loguru import logger
 
 # MPI Configuration
-MPI_HOSTS = "10.140.20.237,10.140.20.239,10.140.20.238,10.140.20.240"
-RANKFILE = "tests/scale_out/4x_bh_quietbox/rankfile/4x4.txt"
-RANK_BINDING = "tests/scale_out/4x_bh_quietbox/rank_bindings/4x4.yaml"
+MPI_HOSTS = "10.140.64.23,10.140.64.24"
+RANKFILE = "tests/scale_out/4x_bh_quietbox/rankfile/2x4.txt"
+RANK_BINDING = "tests/scale_out/4x_bh_quietbox/rank_bindings/2x4.yaml"
 
 MPI_COMMON_ARGS = (
     f"--allow-run-as-root --tag-output --host {MPI_HOSTS} "
