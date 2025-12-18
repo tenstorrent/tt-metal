@@ -102,6 +102,16 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
 }
 
+ALWI void sub_tiles_transpA_bcastB_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWSUB,
+          BroadcastType::COL,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1, /*transpose*/ 1)));
+}
+
 ALWI void sub_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
@@ -396,6 +406,12 @@ ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::SCALAR, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+}
+
+ALWI void sub_tiles_transpA_bcastB_cols_init_short(uint32_t icb0, uint32_t icb1) {
+    MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::COL, MATH_FIDELITY>()));
+    // FIXME: API Update needed in compute kernel?
+    UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1, /*transpose*/ 1)));
 }
 
 }  // namespace ckernel
