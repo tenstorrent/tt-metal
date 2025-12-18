@@ -10,7 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn/types.hpp"
 
 class MemoryUtilsTest : public ::testing::Test {
@@ -147,32 +147,32 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     auto q = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto k = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
     auto v = ttnn::Tensor::from_vector(data_kqv, spec_kqv, device);
+    auto q_tensor = ttml::autograd::create_tensor(q);
+    auto k_tensor = ttml::autograd::create_tensor(k);
+    auto v_tensor = ttml::autograd::create_tensor(v);
 
     auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
     auto add_result = ttnn::add(tensor1, tensor2);           // (1, 1, 128, 32) + (1, 1, 128, 32) = (1, 1, 128, 32)
     auto mul_result = ttnn::multiply(tensor2, 2.0F);         // (1, 1, 128, 32) * 2.0 = (1, 1, 128, 32)
     auto matmul_result = ttnn::matmul(mul_result, tensor3);  // (1, 1, 128, 32) @ (1, 1, 32, 128) = (1, 1, 128, 128)
-    auto sdpa_result = ttnn::transformer::scaled_dot_product_attention(
-        q, k, v);  // (1, 6, 256, 64) @ (1, 6, 256, 64) @ (1, 6, 256, 64) = (1, 6, 256, 64)
+    auto sdpa_result = ttml::ops::scaled_dot_product_attention(
+        q_tensor, k_tensor, v_tensor);  // (1, 6, 256, 64) @ (1, 6, 256, 64) @ (1, 6, 256, 64) = (1, 6, 256, 64)
 
     ttml::utils::MemoryUsageTracker::end_capture();
 
     size_t expected_size = 0;
     size_t expected_peak_size = 0;
-    expected_size += compute_tensor_size(add_result);
-    expected_size += compute_tensor_size(mul_result);
-    expected_size += compute_tensor_size(matmul_result);
-    expected_size += compute_tensor_size(sdpa_result);
 
     // tensor 2 is converted to row major + to_layout for some reason allocated additional 4096 bytes
     // TODO: Trace those extra allocations. 99% those are programs caches + intermediate tensors.
     expected_peak_size = compute_tensor_size(add_result) + compute_tensor_size(tensor2) + 4096;
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
-    expected_peak_size += compute_tensor_size(sdpa_result) + 36864;
+    expected_peak_size +=
+        compute_tensor_size(sdpa_result->get_value()) + 1828864;  // All the intermediate tensors / activations
 
-    expected_size = expected_peak_size;
+    expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
     EXPECT_FALSE(dram_usage.peak.empty());
