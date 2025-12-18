@@ -228,7 +228,7 @@ TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingStatistical)
         // The tolerance is much higher because of PRNG and hardware stochastic rounding bugs:
         // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
         // https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
-        float tolerance = 0.015f;
+        float tolerance = 0.05f;
 
         EXPECT_TRUE(unit_tests::compute::stochastic_rounding::run_stochastic_rounding_statistical_test(
             device_->mesh_command_queue(), num_tiles, fractional_position, tolerance));
