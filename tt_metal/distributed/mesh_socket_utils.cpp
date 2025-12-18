@@ -287,7 +287,7 @@ void write_socket_configs(
 
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
-        auto recv_mesh_id = peer_descriptor.config.receiver_mesh_id;
+        auto recv_mesh_id = local_descriptor.config.receiver_mesh_id;  // TODO: Send this over the wire
         const auto local_coord_range = control_plane.get_coord_range(
             tt_fabric::MeshId{local_descriptor.config.sender_mesh_id}, tt_fabric::MeshScope::LOCAL);
         const auto sender_total_size_bytes =
@@ -348,7 +348,8 @@ void write_socket_configs(
                         recv_fabric_node_id,
                         fabric_config,
                         SocketEndpoint::SENDER);
-
+                    std::cout << "DOWNSTREAM MESH ID: " << *downstream_mesh_id
+                              << " DOWNSTREAM CHIP ID: " << downstream_chip_id << std::endl;
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
                         enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
@@ -361,7 +362,7 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        auto sender_mesh_id = peer_descriptor.config.sender_mesh_id;
+        auto sender_mesh_id = local_descriptor.config.sender_mesh_id;  // TODO: Send this over the wire
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
@@ -382,12 +383,12 @@ void write_socket_configs(
                 auto sender_fabric_node_id = tt_fabric::FabricNodeId(
                     tt_fabric::MeshId{sender_mesh_id},
                     mesh_graph.coordinate_to_chip(tt_fabric::MeshId{sender_mesh_id}, sender_device_coord));
-                std::cout << "Locally derived fabric node id: " << sender_fabric_node_id
-                          << " Fabric Node ID in peer descriptor: "
-                          << tt_fabric::FabricNodeId(
-                                 tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]},
-                                 peer_descriptor.chip_ids[conn_idx])
-                          << std::endl;
+                // std::cout << "Locally derived fabric node id: " << sender_fabric_node_id
+                //           << " Fabric Node ID in peer descriptor: "
+                //           << tt_fabric::FabricNodeId(
+                //                  tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]},
+                //                  peer_descriptor.chip_ids[conn_idx])
+                //           << std::endl;
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
@@ -460,11 +461,11 @@ void forward_descriptor_to_peer(
     // Send size of serialized descriptor first, so that the peer knows the amount of data to expect
     int descriptor_size_bytes = serialized_local_desc.size();
     for (const auto& peer_rank : peer_ranks) {
-        if (socket_endpoint_type == SocketEndpoint::SENDER) {
-            std::cout << "Forward sender descriptor to: " << *peer_rank << std::endl;
-        } else {
-            std::cout << "Forward receiver descriptor to: " << *peer_rank << std::endl;
-        }
+        // if (socket_endpoint_type == SocketEndpoint::SENDER) {
+        //     std::cout << "Forward sender descriptor to: " << *peer_rank << std::endl;
+        // } else {
+        //     std::cout << "Forward receiver descriptor to: " << *peer_rank << std::endl;
+        // }
         context->send(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&descriptor_size_bytes), sizeof(descriptor_size_bytes)),

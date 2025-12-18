@@ -234,6 +234,14 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
         .sender_core = {MeshCoordinate(3, 3), sender_logical_coord_1},
         .receiver_core = {MeshCoordinate(3, 3), recv_logical_coord_1}};
 
+    tt_metal::distributed::SocketConnection socket_connection_2 = {
+        .sender_core = {MeshCoordinate(3, 1), sender_logical_coord_0},
+        .receiver_core = {MeshCoordinate(3, 1), recv_logical_coord_0}};
+
+    tt_metal::distributed::SocketConnection socket_connection_3 = {
+        .sender_core = {MeshCoordinate(1, 3), sender_logical_coord_1},
+        .receiver_core = {MeshCoordinate(1, 3), recv_logical_coord_1}};
+
     tt_metal::distributed::SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = tt_metal::BufferType::L1,
         .fifo_size = 1024,
@@ -243,17 +251,20 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
     uint32_t recv_mesh_id = 1;
 
     tt_metal::distributed::SocketConfig socket_config(
-        {socket_connection_0, socket_connection_1}, socket_mem_config, sender_mesh_id, recv_mesh_id);
+        {socket_connection_0, socket_connection_1, socket_connection_2, socket_connection_3},
+        socket_mem_config,
+        sender_mesh_id,
+        recv_mesh_id);
 
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
     if (*local_mesh_binding[0] == sender_mesh_id) {
-        std::cout << "Creating sender socket" << std::endl;
         auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+        test_socket_send_recv_big_mesh(mesh_device_, send_socket, 1024, 64, 20, std::nullopt);
     } else {
-        std::cout << "Creating receiver socket" << std::endl;
         auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+        test_socket_send_recv_big_mesh(mesh_device_, recv_socket, 1024, 64, 20, std::nullopt);
     }
     distributed_context.barrier();
 }

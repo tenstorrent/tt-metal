@@ -62,15 +62,15 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     // Allocate config buffers on both the sender and receiver meshes (even if the current host does not open a
     // connection)
     if (is_sender) {
-        std::cout << "Creating sender buffer on Mesh ID: " << config.sender_mesh_id << " Host Rank ID: "
-                  << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
-                  << std::endl;
+        // std::cout << "Creating sender buffer on Mesh ID: " << config.sender_mesh_id << " Host Rank ID: "
+        //   << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
+        //   << std::endl;
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
     } else {
-        std::cout << "Creating receiver buffer on Mesh ID: " << config.receiver_mesh_id << " Host Rank ID: "
-                  << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
-                  << std::endl;
+        // std::cout << "Creating receiver buffer on Mesh ID: " << config.receiver_mesh_id << " Host Rank ID: "
+        //           << *tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding()
+        //           << std::endl;
         socket_endpoint_type_ = SocketEndpoint::RECEIVER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
         data_buffer_ = create_socket_data_buffer(device, config);
