@@ -40,10 +40,6 @@ void RotateDeviceOperation::validate_inputs(
     // Buffer allocated
     TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated in buffers on device");
 
-    // Interleaved memory
-    TT_FATAL(
-        !input.memory_config().is_sharded(), "Input tensor must be DRAM interleaved, sharded memory not supported");
-
     // Expand parameter
     TT_FATAL(
         !operation_attributes.expand,

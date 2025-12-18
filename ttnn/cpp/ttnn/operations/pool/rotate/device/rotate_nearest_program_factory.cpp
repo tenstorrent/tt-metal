@@ -256,9 +256,7 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
         // Update reader kernel runtime arguments
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();  // input_buffer_address
-            // runtime_args[1] = num_sticks (unchanged)
-            // runtime_args[2] = start_stick_id (unchanged)
+            runtime_args[0] = src_buffer->address();                           // input_buffer_address
             runtime_args[3] = static_cast<uint32_t>(float_to_q16(cos_angle));  // cos_angle (Q16.16)
             runtime_args[4] = static_cast<uint32_t>(float_to_q16(sin_angle));  // sin_angle (Q16.16)
             runtime_args[5] = static_cast<uint32_t>(float_to_q16(center_x));   // center_x (Q16.16)
@@ -270,8 +268,6 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();  // output_buffer_address
-            // runtime_args[1] = num_sticks (unchanged)
-            // runtime_args[2] = start_stick_id (unchanged)
         }
     }
 }
