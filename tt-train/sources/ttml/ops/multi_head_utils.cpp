@@ -43,7 +43,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     };
 
     // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node_checked(std::move(grad_q), out_q, qkv);
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qkv);
     out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     // Only add sync nodes if out_q has a node (i.e., gradients are needed)
@@ -81,7 +81,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
         x->add_grad(grad_result);
     };
 
-    out->set_node(ttml::autograd::add_backward_node_checked(std::move(grad), out, x));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, x));
 
     return out;
 }
@@ -119,7 +119,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     };
 
     // grad_q function depends on gradients of q, k and v
-    auto q_node = autograd::add_backward_node_checked(std::move(grad_q), out_q, qs, kvs);
+    auto q_node = autograd::add_backward_node(std::move(grad_q), out_q, qs, kvs);
     out_q->set_node(q_node);
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     // Only add sync nodes if out_q has a node (i.e., gradients are needed)
