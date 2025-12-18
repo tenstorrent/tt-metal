@@ -54,6 +54,7 @@ class TT_CCL:
         self.is_qwen = is_qwen
 
         # Double buffered on each axis
+        self.reduce_scatter_semaphore_handles = [[], []]
         self.gather_semaphore_handles = [[], []]
         self.barrier_semaphore_handles = [[], []]
         if mode == "prefill":
@@ -65,6 +66,10 @@ class TT_CCL:
             for _ in range(self.num_cbs):
                 self.barrier_semaphore_handles[i].append(
                     ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                )
+
+                self.reduce_scatter_semaphore_handles[i].append(
+                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
 
                 if self.use_ring_ag_prefill:
@@ -95,6 +100,7 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
+        self.reduce_scatter_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
         if mode == "decode":
@@ -121,12 +127,19 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
+        self.reduce_scatter_semaphore_idx = [0, 0]
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
+
+    def get_and_cycle_reduce_scatter_semaphore_handles(self, cluster_axis):
+        semaphore_index = cluster_axis
+        current_idx = self.reduce_scatter_semaphore_idx[semaphore_index]
+        self.reduce_scatter_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
+        return self.reduce_scatter_semaphore_handles[semaphore_index][current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
@@ -273,6 +286,7 @@ class TT_CCL:
                 torch.zeros((1, 1, self.max_batch_size, 3584)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
+                # dtype=ttnn.bfloat16,
                 dtype=ttnn.bfloat8_b,
                 memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -282,6 +296,7 @@ class TT_CCL:
                 torch.zeros((1, 1, self.max_batch_size, 3200)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
+                # dtype=ttnn.bfloat16,
                 dtype=ttnn.bfloat8_b,
                 memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -402,13 +417,13 @@ class TT_CCL:
                     torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
+                    # dtype=ttnn.bfloat16,
                     dtype=ttnn.bfloat8_b,
                     memory_config=buffer_mem_cfg,
                     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
                 )
             )
             persistent_buffers[cluster_axis].append(tt_buffer)
-
         return persistent_buffers
 
     def get_decode_rs_create_heads_buffers(self):
@@ -944,26 +959,41 @@ class TT_CCL:
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
         else:
-            persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
-                self.reduce_scatter_buffer_idx[cluster_axis]
-            ]
-            ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+            # persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+            #     self.reduce_scatter_buffer_idx[cluster_axis]
+            # ]
+            # ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+            #     input_tensor_mesh,
+            #     persistent_interim_buffer,
+            #     dim,
+            #     self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            #     self.worker_sub_device_id,
+            #     cluster_axis=1,
+            #     mesh_device=self.mesh_device,
+            #     num_links=num_links,
+            #     memory_config=memory_config,
+            #     topology=self.model_config["CCL_TOPOLOGY"],
+            #     use_noc1_only=use_noc1_only,
+            # )
+
+            # breakpoint()
+            ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
                 input_tensor_mesh,
-                persistent_interim_buffer,
-                dim,
-                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-                self.worker_sub_device_id,
-                cluster_axis=1,
-                mesh_device=self.mesh_device,
-                num_links=num_links,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=self.get_and_cycle_reduce_scatter_semaphore_handles(cluster_axis),
+                barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=1,
                 memory_config=memory_config,
                 topology=self.model_config["CCL_TOPOLOGY"],
-                use_noc1_only=use_noc1_only,
+                # intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=1,
             )
-            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-            self.reduce_scatter_buffer_idx[cluster_axis] = (
-                self.reduce_scatter_buffer_idx[cluster_axis] + 1
-            ) % self.num_cbs
+
+            # self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            # self.reduce_scatter_buffer_idx[cluster_axis] = (
+            #     self.reduce_scatter_buffer_idx[cluster_axis] + 1
+            # ) % self.num_cbs
 
         return ttnn_tensor_out
 

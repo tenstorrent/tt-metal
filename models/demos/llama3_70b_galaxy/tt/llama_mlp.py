@@ -158,6 +158,7 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
+            # dtype=ttnn.bfloat16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -215,6 +216,7 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
+            # dtype=ttnn.bfloat16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -262,6 +264,7 @@ class TtLlamaMLP(LightweightModule):
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            # dtype=ttnn.bfloat16,
             dtype=ttnn.bfloat8_b,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
