@@ -506,15 +506,15 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
                 std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
             std::iota(src_vec.begin(), src_vec.end(), i);
             std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
-            std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
-            std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
+            std::vector<distributed::ShardDataTransfer> input_shards = {};
+            std::vector<distributed::ShardDataTransfer> output_shards = {};
 
             for (const auto& coord : coord_range) {
-                input_shards.push_back({coord, src_vec.data()});
+                input_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
             }
             for (const auto& coord : coord_range) {
                 dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
-                output_shards.push_back({coord, dst_vec[coord].data()});
+                output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
             }
 
             mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
@@ -567,15 +567,15 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                         std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
                     std::iota(src_vec.begin(), src_vec.end(), i);
                     std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
-                    std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
-                    std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
+                    std::vector<distributed::ShardDataTransfer> input_shards = {};
+                    std::vector<distributed::ShardDataTransfer> output_shards = {};
 
                     for (const auto& coord : coord_range) {
-                        input_shards.push_back({coord, src_vec.data()});
+                        input_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
                     }
                     for (const auto& coord : coord_range) {
                         dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
-                        output_shards.push_back({coord, dst_vec[coord].data()});
+                        output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
                     }
 
                     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
@@ -616,11 +616,9 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     std::iota(src.begin(), src.end(), 0);
 
     distributed::MeshCoordinate coord(0, 0);
-    auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = coord,
-        .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .region = BufferRegion(0, bytes_per_device),
-    };
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                              .region(BufferRegion(0, bytes_per_device));
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
@@ -674,11 +672,9 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     std::iota(src.begin(), src.end(), 0);
 
     distributed::MeshCoordinate coord(0, 0);
-    auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = coord,
-        .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .region = BufferRegion(0, bytes_per_device),
-    };
+    auto write_transfer = distributed::ShardDataTransfer{coord}
+                              .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                              .region(BufferRegion(0, bytes_per_device));
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
@@ -736,11 +732,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     std::iota(src.begin(), src.end(), 0);
 
     distributed::MeshCoordinate coord(0, 0);
-    auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = coord,
-        .host_data = src.data(),
-        .region = BufferRegion(0, bytes_per_device),
-    };
+    auto write_transfer =
+        distributed::ShardDataTransfer{coord}.host_data(src.data()).region(BufferRegion(0, bytes_per_device));
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     constexpr size_t unaligned_shift = 3;
@@ -760,11 +753,9 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     std::shared_ptr<experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
     // Read back using enqueue_read_shards with pinned_memory populated
-    auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = coord,
-        .host_data = static_cast<void*>(dst_ptr_unaligned),
-        .region = BufferRegion(0, bytes_per_device),
-    };
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst_ptr_unaligned))
+                             .region(BufferRegion(0, bytes_per_device));
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
     std::vector<uint8_t> dst_aligned(dst_ptr_unaligned, dst_ptr_unaligned + bytes_per_device);
