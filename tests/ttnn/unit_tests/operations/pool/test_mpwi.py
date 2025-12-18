@@ -69,6 +69,64 @@ def test_mpwi_20_core_C_dims(device, in_c):
         # Contains following parameters
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
         # DILATION / MULTI-BATCH CASES
+        [2, 16, 130, 130, 2, 2, 1, 1, 1, 1, 1, 1, False],
+        [3, 16, 80, 80, 2, 2, 1, 1, 1, 1, 1, 1, False],
+        [4, 16, 50, 60, 2, 2, 1, 1, 1, 1, 1, 1, False],
+        [2, 48, 120, 120, 4, 4, 1, 1, 2, 2, 1, 1, False],
+        [3, 48, 70, 70, 4, 4, 1, 1, 2, 2, 1, 1, False],
+        [4, 48, 40, 50, 4, 4, 1, 1, 2, 2, 1, 1, False],
+        [2, 64, 110, 110, 4, 8, 1, 1, 2, 4, 1, 1, False],
+        [3, 64, 60, 60, 4, 8, 1, 1, 2, 4, 1, 1, False],
+        [4, 64, 30, 40, 4, 8, 1, 1, 2, 4, 1, 1, False],
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+
+    run_max_pool2d_with_indices(
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ttnn_dtype,
+        device,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        memory_config=None,
+        run_twice=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_spec",
+    [
+        # Contains following parameters
+        # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+        # DILATION / MULTI-BATCH CASES
         [2, 40, 100, 100, 3, 3, 2, 2, 0, 1, 2, 2, True],
         [3, 56, 85, 85, 3, 3, 3, 3, 1, 0, 2, 2, False],
         [4, 24, 56, 64, 3, 3, 2, 1, 1, 1, 3, 2, True],
