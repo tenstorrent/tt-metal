@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -13,9 +11,8 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
-from models.demos.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import get_model_config, run_module_forward
+from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -50,17 +47,10 @@ def test_forward_pass(
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 
-    # Setup: Convert weights and get weight_config
-    weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    # Setup: Get weight_config using the helper function
+    weight_config = get_test_weight_config(
+        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=True
     )
-
-    weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), weight_cache_path, mesh_device)
-    _check_weights_exist_and_convert(weight_cache_path, weight_config)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(
