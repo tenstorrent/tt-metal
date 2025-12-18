@@ -446,34 +446,37 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     const auto& allocator = device->allocator();
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
-    TT_ASSERT(buffer.aligned_page_size() >= aligned_page_size);  // Check that we don't write to the end of the buffer
+    const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
+    const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
+    const size_t remainder_bytes = page_size - aligned_bytes;
+    TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
-        std::span<const std::uint8_t> page;
-        std::vector<uint8_t> aligned_page_buffer;
-        if (aligned_page_size > page_size) {
-            aligned_page_buffer.resize(aligned_page_size, 0);
-            // Copy only the valid data, pad the rest with zeros
-            std::memcpy(aligned_page_buffer.data(), host_buffer.data() + data_index, page_size);
-            page = std::span<const std::uint8_t>(aligned_page_buffer.data(), aligned_page_size);
-        } else {
-            page = std::span<const std::uint8_t>(host_buffer.data() + data_index, page_size);
-        }
-        if (buffer.is_l1()) {
-            auto absolute_address =
-                buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size());
-            auto core_coordinates =
-                device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-            MetalContext::instance().get_cluster().write_core(device->id(), core_coordinates, page, absolute_address);
-        } else {
-            auto bank_local_address = buffer.address() + (mapped_page.device_page * buffer.aligned_page_size());
-            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
-        }
+        auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
+            if (size_in_bytes == 0) {
+                return;
+            }
+            std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
+            if (buffer.is_l1()) {
+                auto absolute_address =
+                    buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                auto core_coordinates =
+                    device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+                MetalContext::instance().get_cluster().write_core(
+                    device->id(), core_coordinates, page, absolute_address);
+            } else {
+                auto bank_local_address =
+                    buffer.address() + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
+            }
+        };
+
+        write_chunk(0, aligned_bytes);
+        write_chunk(aligned_bytes, remainder_bytes);
     }
 }
 
