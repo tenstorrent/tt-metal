@@ -8,6 +8,9 @@
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include <ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 
+// Maximum number of sticks to process per batch for optimal NOC utilization
+constexpr uint32_t MAX_BATCH_SIZE = 5;
+
 void kernel_main() {
     // Runtime arguments
     uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -33,7 +36,8 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<10>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
-    constexpr uint32_t batch_size = num_cb_pages / 2 < 5 ? num_cb_pages / 2 : 5;
+    // Batch size is limited by available CB pages or MAX_BATCH_SIZE, whichever is smaller
+    constexpr uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
     uint32_t fill_stick_addr = 0;
     if constexpr (!fill_is_zero) {

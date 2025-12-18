@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <dataflow_api.h>
 
+// Maximum number of sticks to process per batch for optimal NOC utilization
+constexpr uint32_t MAX_BATCH_SIZE = 5;
+
 void kernel_main() {
     // Runtime arguments
     uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -17,7 +20,8 @@ void kernel_main() {
     constexpr uint32_t num_cb_pages = get_compile_time_arg_val(2);
     constexpr auto dst_args = TensorAccessorArgs<3>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr, output_stick_nbytes);
-    constexpr uint32_t batch_size = num_cb_pages / 2 < 5 ? num_cb_pages / 2 : 5;
+    // Batch size is limited by half the CB pages (double-buffered) or MAX_BATCH_SIZE, whichever is smaller
+    constexpr uint32_t batch_size = num_cb_pages / 2 < MAX_BATCH_SIZE ? num_cb_pages / 2 : MAX_BATCH_SIZE;
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_batch =

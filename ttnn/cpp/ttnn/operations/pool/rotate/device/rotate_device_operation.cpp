@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::rotate {
-using namespace tt::tt_metal;
 
 RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -77,9 +76,9 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
 
     return TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             input.dtype(),
-            PageConfig(Layout::ROW_MAJOR),
+            tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
             operation_attributes.memory_config,
             output_shape,
             output_padded));
