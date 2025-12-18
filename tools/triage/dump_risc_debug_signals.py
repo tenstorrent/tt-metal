@@ -29,14 +29,14 @@ script_config = ScriptConfig(
 
 
 @dataclass
-class HaltFailureData:
+class DumpDebugBus:
     debug_signal_names: str = triage_field("Debug Signals")
     debug_signal_values: str = triage_field("Values")
 
 
 def dump_risc_debug_signals(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
-) -> HaltFailureData | None:
+) -> DumpDebugBus | None:
     """
     Try to halt a RISC core. If successful, return None.
     If it throws an exception, collect and return debug bus signals.
@@ -45,20 +45,12 @@ def dump_risc_debug_signals(
 
     try:
         risc_debug = noc_block.get_risc_debug(risc_name)
-
-        was_halted = risc_debug.is_halted()
-
-        # Try to halt the core
-        risc_debug.halt()
-        # If halt succeeded, we continue core if it was not already halted
-        if not was_halted:
-            risc_debug.cont()
+        with risc_debug.ensure_halted():
+            pass
 
         return None
-
     except:
         # Halt failed, collect debug bus signals
-        # Get debug bus from noc_block
         debug_bus = noc_block.debug_bus
 
         debug_signal_names = ""
@@ -83,8 +75,8 @@ def dump_risc_debug_signals(
                 l1_address = firmware_text_address
 
                 # Collect all signals from all matching groups
-                all_signal_names = []
-                all_signal_values = []
+                signal_names = []
+                signal_values = []
 
                 for group_name in sorted(matching_groups):
                     # Read the signal group
@@ -92,12 +84,12 @@ def dump_risc_debug_signals(
 
                     # Iterate through all signals in the group
                     for signal_name in sorted(group_sample.keys()):
-                        all_signal_names.append(f"{signal_name[len(risc_name)+1:]}")
-                        all_signal_values.append(f"{hex(group_sample[signal_name])}")
+                        signal_names.append(f"{signal_name[len(risc_name)+1:]}")
+                        signal_values.append(f"{hex(group_sample[signal_name])}")
 
-                if all_signal_names:
-                    debug_signal_names = "\n".join(all_signal_names)
-                    debug_signal_values = "\n".join(all_signal_values)
+                if signal_names:
+                    debug_signal_names = "\n".join(signal_names)
+                    debug_signal_values = "\n".join(signal_values)
 
         # Restoring the original data
         write_words_to_device(location, firmware_text_address, original_data)
@@ -105,7 +97,7 @@ def dump_risc_debug_signals(
         # Verifying that the original data was restored
         assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
-        return HaltFailureData(
+        return DumpDebugBus(
             debug_signal_names=debug_signal_names,
             debug_signal_values=debug_signal_values,
         )
