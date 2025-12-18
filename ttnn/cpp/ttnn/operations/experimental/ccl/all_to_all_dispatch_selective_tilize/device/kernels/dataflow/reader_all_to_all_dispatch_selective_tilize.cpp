@@ -8,10 +8,40 @@
 
 using namespace ttnn::operations::ccl::common;
 
+void print_tile_rows(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = false,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = start_row; r < end_row; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
+    constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -34,6 +64,7 @@ void kernel_main() {
 
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
+    constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -72,4 +103,40 @@ void kernel_main() {
         TensorAccessor(input_scores_args, input_scores_tensor_address, indices_page_size);
     const auto output_scores_addr_gen =
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+
+    // read in the indices tensor
+    for (uint32_t indices_page = indices_start; indices_page < indices_end;
+         indices_page += max_indices_pages_per_packet) {
+        uint32_t pages_left = indices_end - indices_page;
+        uint32_t pages_to_read = std::min(max_indices_pages_per_packet, pages_left);
+        cb_reserve_back(
+            indices_tensor_cb_id,
+            max_indices_pages_per_packet);  // always reserve the max number of pages so writer logic is simpler
+        for (uint32_t i = 0; i < pages_to_read; i++) {
+            noc_async_read_page(
+                indices_page + i,
+                indices_addr_gen,
+                get_write_ptr(indices_tensor_cb_id) + i * aligned_indices_page_size);
+        }
+        noc_async_read_barrier();
+        cb_push_back(indices_tensor_cb_id, max_indices_pages_per_packet);
+    }
+
+    // read in the input scores tensor
+    for (uint32_t input_scores_page = indices_start; input_scores_page < indices_end;
+         input_scores_page += max_indices_pages_per_packet) {
+        uint32_t pages_left = indices_end - input_scores_page;
+        uint32_t pages_to_read = std::min(max_indices_pages_per_packet, pages_left);
+        cb_reserve_back(
+            scores_tensor_cb_id,
+            max_indices_pages_per_packet);  // always reserve the max number of pages so writer logic is simpler
+        for (uint32_t i = 0; i < pages_to_read; i++) {
+            noc_async_read_page(
+                input_scores_page + i,
+                input_scores_addr_gen,
+                get_write_ptr(scores_tensor_cb_id) + i * aligned_indices_page_size);
+        }
+        noc_async_read_barrier();
+        cb_push_back(scores_tensor_cb_id, max_indices_pages_per_packet);
+    }
 }

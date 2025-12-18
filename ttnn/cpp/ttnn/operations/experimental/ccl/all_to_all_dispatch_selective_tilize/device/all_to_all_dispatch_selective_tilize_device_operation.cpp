@@ -65,33 +65,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t AllToAllDisp
 
     // final batch in the metadata tensor
     uint32_t tokens_per_device = input_shape[0] * input_shape[1] * input_shape[2];
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     auto output_shape = ttnn::Shape({dispatch_devices, tokens_per_device, hidden_size});
-    // metadata and scores are logically the shape of the below, in tiled format.
-    // auto metadata_shape = ttnn::Shape({dispatch_devices, height_tiles, tile_height, selected_experts_k});
-    // auto scores_shape = ttnn::Shape({dispatch_devices, height_tiles, tile_height, selected_experts_k});
-
-    // However, we want to send as many pages in each packet as possible
-    // the buffer shape will thus be:
-    // {dispatch_devices, packets, fabric_max_packet_size/element_size}
-    uint32_t indices_pages = indices_tensor.buffer()->num_pages();
-    uint32_t scores_pages = scores_tensor.buffer()->num_pages();
-
-    uint32_t indices_page_size = indices_tensor.buffer()->aligned_page_size();
-    uint32_t scores_page_size = scores_tensor.buffer()->aligned_page_size();
-
-    uint32_t indices_packets = tt::div_up(indices_pages, fabric_max_packet_size / indices_page_size);
-    uint32_t scores_packets = tt::div_up(scores_pages, fabric_max_packet_size / scores_page_size);
-    uint32_t total_padded_elements = (indices_pages * indices_page_size) / indices_tensor.element_size();
-    uint32_t padded_elements_per_page = indices_page_size / indices_tensor.element_size();
-    uint32_t max_elements_per_packet =
-        ((fabric_max_packet_size / indices_tensor.element_size()) / padded_elements_per_page) *
-        padded_elements_per_page;
-    uint32_t elements_per_packet = std::min(max_elements_per_packet, total_padded_elements);
-
-    auto metadata_shape = ttnn::Shape({dispatch_devices, indices_packets, elements_per_packet});
-    auto gathered_scores_shape = ttnn::Shape({dispatch_devices, scores_packets, elements_per_packet});
+    auto metadata_shape = ttnn::Shape({dispatch_devices, tokens_per_device, indices_shape[-1]});
+    auto gathered_scores_shape = ttnn::Shape({dispatch_devices, tokens_per_device, scores_shape[-1]});
 
     // ttnn::MemoryConfig l1_memory_config =
     // ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};

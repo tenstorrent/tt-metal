@@ -227,7 +227,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t num_cores = worker_core_range_set.num_cores();
     uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
     uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
-    uint32_t max_indices_pages_per_packet = tt::div_up(fabric_max_packet_size, aligned_indices_page_size);
+    uint32_t max_indices_pages_per_packet = fabric_max_packet_size / aligned_indices_page_size;
 
     // split each token of H=7168 (hidden size) into subtoken_units_of_work subtokens, and have each core send part of
     // the token
@@ -266,7 +266,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         sender_core_grid,
         aligned_indices_page_size,
-        2 * max_indices_pages_per_packet,
+        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
         indices_data_format);
 
     // Store entire scores tensor in a circular buffer
@@ -275,7 +275,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         sender_core_grid,
         aligned_indices_page_size,
-        2 * max_indices_pages_per_packet,  // scores tensor is the same size as the indices tensor
+        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
         scores_data_format);
 
     // Store entire mapping tensor in a circular buffer
@@ -309,6 +309,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     log_debug(tt::LogOp, "dest_chip_id: {}", ::ttnn::operations::ccl::common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", ::ttnn::operations::ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ::ttnn::operations::ccl::common::stringify(directions));
+    uint32_t num_connections =
+        std::count_if(directions.begin(), directions.end(), [](bool direction) { return direction; });
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"input_tensor_cb_id", input_tensor_cb_id},
@@ -316,6 +318,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"mapping_tensor_cb_id", mapping_tensor_cb_id},
         {"packet_header_cb_id", packet_header_cb_id},
         {"send_preparation_buffer_id", send_preparation_buffer_id},
+        {"scores_tensor_cb_id", scores_tensor_cb_id},
 
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
@@ -356,6 +359,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"dram_alignment", dram_alignment},
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
+        {"max_indices_pages_per_packet", max_indices_pages_per_packet},
+        {"num_connections", num_connections},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -384,6 +389,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"DEST_CHIP_ID", ::ttnn::operations::ccl::common::stringify(dest_chip_id)},
         {"DEST_MESH_ID", ::ttnn::operations::ccl::common::stringify(dest_mesh_id)},
         {"DIRECTIONS", ::ttnn::operations::ccl::common::stringify(directions)}};
+
+    // sum directions that are true using std::count_if
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -417,8 +424,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t subtoken_offset = 0;
     uint32_t indices_start = 0;
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
-        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
-
         if (subtoken_cores_group_1.contains(sender_cores.at(i))) {
             reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
             uint32_t subtoken_size = subtoken_units_per_core_g1 * subtoken_bytes_aligned;
@@ -448,6 +453,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
                 std::min(indices_start + indices_units_per_core_g2, indices_pages);
             indices_start = reader_runtime_args.at(indices_end_idx);
         }
+
+        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
 
         for (const auto& neighbor_coordinate : neighbors) {
             tt::tt_fabric::append_fabric_connection_rt_args(

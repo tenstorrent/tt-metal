@@ -8,6 +8,37 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
+void print_tile_rows(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = false,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = start_row; r < end_row; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 namespace detail {
 
@@ -29,6 +60,103 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
+/**
+ * Configure packet headers for multicast scatter/unicast page writes.
+ * This sets up both scatter (2 pages per packet) and unicast (1 page) headers.
+ *
+ * Call this once before using fabric_multicast_pages_with_scatter.
+ *
+ * @param fabric_connection The fabric connection manager
+ * @param scatter_route_id Pre-allocated packet header index for scatter writes
+ * @param unicast_route_id Pre-allocated packet header index for unicast writes
+ * @param starts Array of start distances in hops for each connection [forward, backward, ...]
+ * @param ranges Array of multicast ranges for each connection [forward, backward, ...]
+ * @param page_size Size of each page in bytes
+ */
+inline void fabric_multicast_pages_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection,
+    uint32_t scatter_route_id,
+    uint32_t unicast_route_id,
+    uint8_t* starts,
+    uint8_t* ranges,
+    uint32_t page_size) {
+    using namespace tt::tt_fabric::linear::experimental;
+
+    // Configure scatter write headers: 2 pages per packet, each chunk is page_size
+    fabric_multicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        fabric_connection,
+        scatter_route_id,
+        starts,
+        ranges,
+        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
+        page_size * 2);
+
+    // Configure unicast write headers: 1 page per packet
+    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        fabric_connection, unicast_route_id, starts, ranges, nullptr, page_size);
+}
+
+/**
+ * Send M pages via fabric multicast using scatter write for efficiency.
+ * Pages are sent in pairs using scatter write. If M is odd, the last page
+ * is sent via simple unicast.
+ *
+ * Prerequisites:
+ * - Call fabric_multicast_pages_set_state() first to configure headers
+ *
+ * @param fabric_connection The fabric connection manager
+ * @param scatter_route_id Pre-allocated packet header index for scatter writes
+ * @param unicast_route_id Pre-allocated packet header index for unicast writes
+ * @param output_addrgen Address generator for output tensor
+ * @param l1_base_address Base L1 address where data starts
+ * @param start_page Starting page index in output tensor
+ * @param page_size Size of each page in bytes
+ * @param num_pages Number of pages to send (M)
+ */
+template <typename AddrGenType>
+inline void fabric_multicast_pages_with_scatter(
+    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection,
+    uint32_t scatter_route_id,
+    uint32_t unicast_route_id,
+    AddrGenType& output_addrgen,
+    uint32_t l1_base_address,
+    uint32_t start_page,
+    uint32_t page_size,
+    uint32_t num_pages) {
+    using namespace tt::tt_fabric::linear;
+    using namespace tt::tt_fabric::linear::experimental;
+
+    uint32_t pages_sent = 0;
+    uint32_t current_l1_addr = l1_base_address;
+    uint32_t current_page = start_page;
+
+    // Send pairs of pages using scatter write for efficiency
+    while (pages_sent + 2 <= num_pages) {
+        auto noc_address0 = addrgen_detail::get_noc_address(output_addrgen, current_page, 0);
+        auto noc_address1 = addrgen_detail::get_noc_address(output_addrgen, current_page + 1, 0);
+
+        fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+            fabric_connection,
+            scatter_route_id,
+            current_l1_addr,
+            NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+
+        current_l1_addr += page_size * 2;
+        current_page += 2;
+        pages_sent += 2;
+    }
+
+    // Send remaining page via unicast if odd number of pages
+    if (pages_sent < num_pages) {
+        auto noc_address = addrgen_detail::get_noc_address(output_addrgen, current_page, 0);
+
+        fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+            fabric_connection, unicast_route_id, current_l1_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+    }
+    noc_async_writes_flushed();
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -39,6 +167,7 @@ void kernel_main() {
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t send_preparation_buffer_cb_id = get_named_compile_time_arg_val("send_preparation_buffer_id");
+    constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -76,6 +205,8 @@ void kernel_main() {
     constexpr uint32_t alignment = get_named_compile_time_arg_val("l1_alignment");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
+    constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
+    constexpr uint32_t num_connections = get_named_compile_time_arg_val("num_connections");
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -140,7 +271,9 @@ void kernel_main() {
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -162,4 +295,27 @@ void kernel_main() {
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     close_direction_connections(directions, fabric_connections);
+
+    // Write out the indices tensor
+    for (uint32_t indices_page = indices_start; indices_page < indices_end;
+         indices_page += max_indices_pages_per_packet) {
+        uint32_t pages_left = indices_end - indices_page;
+        uint32_t pages_to_write = std::min(max_indices_pages_per_packet, pages_left);
+
+        cb_wait_front(indices_tensor_cb_id, max_indices_pages_per_packet);
+
+        uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+        // fabric write the indices tensor
+        cb_pop_front(indices_tensor_cb_id, max_indices_pages_per_packet);
+    }
+
+    for (uint32_t input_scores_page = indices_start; input_scores_page < indices_end;
+         input_scores_page += max_indices_pages_per_packet) {
+        uint32_t pages_left = indices_end - input_scores_page;
+        uint32_t pages_to_write = std::min(max_indices_pages_per_packet, pages_left);
+        cb_wait_front(scores_tensor_cb_id, max_indices_pages_per_packet);
+        uint32_t base_input_scores_addr = get_read_ptr(scores_tensor_cb_id);
+        // fabric write
+        cb_pop_front(scores_tensor_cb_id, max_indices_pages_per_packet);
+    }
 }
