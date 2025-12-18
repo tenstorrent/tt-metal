@@ -20,7 +20,10 @@ on:
         required: false
         type: boolean
         default: false
-
+      scheduled:
+        required: false
+        type: boolean
+        default: false
 jobs:
   galaxy-nightly-tests:
     if: ${{ inputs.blackhole == false }}
