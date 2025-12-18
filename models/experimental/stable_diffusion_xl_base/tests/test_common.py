@@ -152,50 +152,58 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
 
 def normalize_prompt_for_text_encoder(
     prompt: Union[str, List[str]],
-    num_devices: int,
-    use_cfg_parallel: bool,
+    tensor_parallel: int,
+    data_parallel: int,
 ) -> List[str]:
     """
-    Normalizes prompt input to match device requirements.
+    Normalizes prompt input to match device requirements for tensor and data parallelism.
 
     Args:
         prompt: Single prompt string or list of prompts
-        num_devices: Total number of devices available
-        use_cfg_parallel: Whether CFG parallelism is enabled (TP=2)
+        tensor_parallel: Tensor parallel factor (1 or 2)
+        data_parallel: Data parallel factor (number of data parallel devices)
 
     Returns:
-        List of prompts matching device requirements
+        List of prompts with length equal to tensor_parallel * data_parallel
 
     Prompt handling rules:
     - String inputs are converted to single-element lists
-    - Prompt list length must be either 1 or equal to num_devices
-    - If cfg_parallel is enabled (TP=2): prompts are padded with empty strings to match device count
-    - If cfg_parallel is disabled (DP>=1): a single prompt is broadcasted to all devices
+    - If prompt list length is 1: pad with (tensor_parallel-1) empty strings, then broadcast data_parallel times
+    - If prompt list length equals data_parallel: pad each prompt with (tensor_parallel-1) empty strings
+    - If prompt list length equals tensor_parallel * data_parallel: use as-is
+    - Otherwise: raise ValueError
 
     Raises:
-        ValueError: If prompt list length is invalid
+        ValueError: If prompt list length doesn't match expected values (1, data_parallel, or tensor_parallel * data_parallel)
+        AssertionError: If tensor_parallel is not 1 or 2
     """
+    assert tensor_parallel in [1, 2], f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+
     # Convert string to list
     prompt_list = [prompt] if isinstance(prompt, str) else prompt
 
     num_prompts = len(prompt_list)
 
-    # Validate prompt count
-    if num_prompts != 1 and num_prompts != num_devices:
+    # Handle prompt distribution based on parallelism mode
+    if len(prompt_list) == 1:
+        # pad tensor_parallel-1 times, broadcast data_parallel times
+        prompt_list = (prompt_list + [""] * (tensor_parallel - 1)) * data_parallel
+    elif len(prompt_list) == data_parallel:
+        # pad tensor_parallel-1 times for each data_parallel prompt, broadcast data_parallel times
+        new_prompt_list = []
+        for p in prompt_list:
+            p = p if isinstance(p, list) else [p]
+            new_prompt_list += p + [""] * (tensor_parallel - 1)
+        prompt_list = new_prompt_list
+
+    elif len(prompt_list) == data_parallel * tensor_parallel:
+        # do nothing, already correct
+        pass
+    else:
         raise ValueError(
-            f"Prompt list length must be 1 or equal to number of devices ({num_devices}), "
+            f"Prompt list length must be 1, or match data parallel {data_parallel} devices, or equal to total number of devices ({tensor_parallel * data_parallel}), "
             f"but got {num_prompts} prompts"
         )
-
-    # Handle prompt distribution based on parallelism mode
-    if use_cfg_parallel:
-        # CFG parallel: pad with empty strings if needed
-        if num_prompts < num_devices:
-            prompt_list = prompt_list + [""] * (num_devices - num_prompts)
-    else:
-        # Data parallel: broadcast single prompt to all devices
-        if num_prompts == 1:
-            prompt_list = prompt_list * num_devices
 
     return prompt_list
 
@@ -265,10 +273,13 @@ def batch_encode_prompt_on_device(
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
 
-    prompt = prompt = normalize_prompt_for_text_encoder(prompt, ttnn_device.get_num_devices(), use_cfg_parallel)
+    tensor_parallel = determine_tensor_parallel(ttnn_device, use_cfg_parallel)
+    data_parallel = determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+    prompt = normalize_prompt_for_text_encoder(prompt, tensor_parallel, data_parallel)
     num_prompts = len(prompt)
     prompt_2 = prompt_2 or prompt
-    prompt_2 = normalize_prompt_for_text_encoder(prompt_2, ttnn_device.get_num_devices(), use_cfg_parallel)
+    prompt_2 = normalize_prompt_for_text_encoder(prompt_2, tensor_parallel, data_parallel)
 
     assert len(prompt) == ttnn_device.get_num_devices(), "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
@@ -383,12 +394,8 @@ def batch_encode_prompt_on_device(
         negative_prompt_2 = negative_prompt_2 or negative_prompt
 
         # normalize str to list
-        negative_prompt = normalize_prompt_for_text_encoder(
-            negative_prompt, ttnn_device.get_num_devices(), use_cfg_parallel
-        )
-        negative_prompt_2 = normalize_prompt_for_text_encoder(
-            negative_prompt_2, ttnn_device.get_num_devices(), use_cfg_parallel
-        )
+        negative_prompt = normalize_prompt_for_text_encoder(negative_prompt, tensor_parallel, data_parallel)
+        negative_prompt_2 = normalize_prompt_for_text_encoder(negative_prompt_2, tensor_parallel, data_parallel)
 
         uncond_tokens: List[str]
         if prompt is not None and type(prompt) is not type(negative_prompt):
