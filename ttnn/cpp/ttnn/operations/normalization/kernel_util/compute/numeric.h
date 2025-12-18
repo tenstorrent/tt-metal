@@ -15,6 +15,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
+#include <tt-metalium/constants.hpp>
 #include <type_traits>
 #include <array>
 
@@ -26,7 +28,6 @@ namespace norm::kernel_util::compute::numeric {
 namespace detail {
 
 constexpr uint32_t dst0 = 0;
-constexpr uint32_t scaler_tile_idx = 0;
 
 /**
  * @brief Convenience no-op function
@@ -55,6 +56,7 @@ inline void accumulate_compute_loop(
     uint32_t cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
+    bool last_tile_partial,
     AdditionalCBs... cb_additional) {
     static_assert(
         (std::conjunction_v<std::is_same<AdditionalCBs, uint32_t>...>), "All additional CBs must be uint32_t");
@@ -62,7 +64,7 @@ inline void accumulate_compute_loop(
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
-    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
+    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](uint32_t cb) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
@@ -70,8 +72,10 @@ inline void accumulate_compute_loop(
             const uint32_t num_tiles_to_wait = num_previous_tiles + curr_block_size;
             cb_wait_front(cb, num_tiles_to_wait);
             for (auto j : block.local()) {
+                // If it's the last tile and it's partial, use the second tile in cb_scalar
+                const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                    cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
+                    cb, cb_scalar, num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
                 cb_pop_front(cb, curr_block_size);
@@ -106,6 +110,7 @@ inline void accumulate_compute_loop(
  * @param cb_out Output CB to store the accumulated value
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
+ * @param N Number of entries in the set
  * @param epilogue Optional functor to call after the accumulation before tile registers
  * are committed and packed
  * @param additional_cbs Optional additional input CBs to accumulate
@@ -142,15 +147,18 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
+    uint32_t N,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
-    cb_wait_front(cb_scalar, 1);
+    const auto last_tile_partial = N % tt::constants::TILE_WIDTH > 0;
+    const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
+    cb_wait_front(cb_scalar, num_scaler_tiles_needed);
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<FLOAT32_REDUCTION, input_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, additional_cbs...);
+        cb_in, cb_scalar, cb_out, num_tiles, block_size, last_tile_partial, additional_cbs...);
 
     epilogue();
 
@@ -174,8 +182,7 @@ inline void row_wise_accumulate_with_epilogue(
  * @param cb_in Input CB to compute mean of
  * @param cb_scalar CB containing a scalar reduce tile of 1's
  * @param cb_out Output CB to store the mean
- * @param one_over_N Inverse of the number of entries in the
- * mean (1/N) encoded as a uint32_t
+ * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
@@ -189,10 +196,10 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
-    uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
+    uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t N, uint32_t num_tiles, uint32_t block_size) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
-            detail::scale_dest(detail::dst0, one_over_N);
+        cb_in, cb_scalar, cb_out, num_tiles, block_size, N, [N]() {
+            detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N));
         });
 }
 
@@ -203,8 +210,7 @@ inline void row_wise_mean(
  * @param cb_in1 Additional input CB to accumulate
  * @param cb_scalar CB containing a scalar reduce tile of 1's
  * @param cb_out Output CB to store the mean
- * @param one_over_N Inverse of the number of entries in the
- * mean (1/N) encoded as a uint32_t
+ * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
@@ -222,7 +228,7 @@ inline void row_wise_mean_with_pre_add(
     uint32_t cb_in1,
     uint32_t cb_scalar,
     uint32_t cb_out,
-    uint32_t one_over_N,
+    uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
@@ -231,7 +237,8 @@ inline void row_wise_mean_with_pre_add(
         cb_out,
         num_tiles,
         block_size,
-        [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); },
+        N,
+        [N]() { detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N)); },
         cb_in1);
 }
 }  // namespace norm::kernel_util::compute::numeric

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file noc_addr_utils.h
- * @brief Utility functions to compute NOC addresses for
- *        remote reading and multicasting for the sharded
- *        layernorm reader kernels.
+ * @file layernorm_dataflow_utils.h
+ * @brief Utility functions for the layernorm dataflow kernels.
  */
 
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
 
 namespace norm::layernorm::device::kernels::dataflow {
 
@@ -177,4 +176,5 @@ inline void read_block_to_cb(
     noc_async_read_barrier();
     cb_push_back(cb_id, block.full_block_size());
 }
+
 }  // namespace norm::layernorm::device::kernels::dataflow

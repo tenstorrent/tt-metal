@@ -358,11 +358,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    union {
-        float f;
-        uint32_t u;
-    } winv{};
-    winv.f = 1.0f / W;
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
@@ -373,7 +368,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     } else {
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
-        compute_args.push_back(winv.u);
         compute_args.push_back(W);
     }
 
@@ -420,6 +414,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         CreateCircularBuffer(program, all_cores, cb_intermed1_config);
     }
     if (!use_welford) {
+        // Scaler for reduce
         CircularBufferConfig cb_in2_config =
             CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
                 .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
@@ -525,20 +520,20 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 
         uint32_t tile_offset = curr_row * Wt;
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
-            core,
-            {a_addr,
-             num_tile_rows_per_core,
-             Wt,
-             tile_offset,
-             packed_one_value,
-             e.u,  // 0-5
-             gamma_dram_addr,
-             beta_dram_addr,
-             b_dram_addr}  // 6-8
-        );
+        std::vector<uint32_t> reader_runtime_args = {
+            a_addr,
+            num_tile_rows_per_core,
+            Wt,
+            tile_offset,
+            packed_one_value,
+            e.u,  // 0-5
+            gamma_dram_addr,
+            beta_dram_addr,
+            b_dram_addr};
+        if (!(use_welford && large_tensor_needed)) {
+            reader_runtime_args.push_back(W);
+        }
+        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
         SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
         SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, Wt, num_tile_rows_per_core, tile_offset});
         curr_row += num_tile_rows_per_core;

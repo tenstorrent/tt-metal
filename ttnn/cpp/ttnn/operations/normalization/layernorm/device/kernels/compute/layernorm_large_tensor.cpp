@@ -16,7 +16,6 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "layernorm_compute_utils.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -24,7 +23,7 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
-namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -36,8 +35,7 @@ void MAIN {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t one_over_W = get_compile_time_arg_val(7);
-    constexpr uint32_t W = get_compile_time_arg_val(8);
+    constexpr uint32_t W = get_compile_time_arg_val(7);
 
     constexpr uint32_t onetile = 1;
 
@@ -84,10 +82,10 @@ void MAIN {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
+            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, blk);
 #else
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
+            cb_in, cb_scaler, cb_ex, W, Wt, blk);
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -95,6 +93,7 @@ void MAIN {
         // Var(X) = ∑(x-E[x])^2
         //         -----------
         //              n
+        const bool last_tile_is_partial = W % tt::constants::TILE_WIDTH > 0;
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             cb_wait_front(cb_in, block.full_block_size());
@@ -151,7 +150,8 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
             reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
             for (auto i : block.local()) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler0, dst0);
+                const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 
             cb_pop_front(cb_xmm2, block.size());
@@ -161,7 +161,7 @@ void MAIN {
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
-                mul_unary_tile(dst0, one_over_W);
+                mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
             }
 
             reduce_uninit<FLOAT32_REDUCTION>();
@@ -174,13 +174,6 @@ void MAIN {
             tile_regs_release();
             cb_push_back(pack_cb, onetile);
         }
-
-#ifndef RMSNORM
-        // Account for any over-accumulation that might
-        // have been done if the last tile is only partially-filled
-        constexpr uint32_t extra_cols = Wt * tt::constants::TILE_WIDTH - W;
-        layernorm_compute_utils::adjust_variance_for_overaccumulation<W, extra_cols>(cb_ex2, cb_ex);
-#endif
 
         // End of
         // Var Calculation

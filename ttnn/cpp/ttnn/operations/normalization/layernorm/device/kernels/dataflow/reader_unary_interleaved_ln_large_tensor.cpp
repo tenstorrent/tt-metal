@@ -7,6 +7,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -20,6 +21,7 @@ void kernel_main() {
     uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
+    uint32_t W = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
     constexpr uint32_t cb_id_gamma = 5;
@@ -51,9 +53,14 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     {
+        // Scaler(s) for reduce
         constexpr uint32_t cb_in_2 = 2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
+        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if (partial_last_tile_cols > 0) {
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+        }
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);

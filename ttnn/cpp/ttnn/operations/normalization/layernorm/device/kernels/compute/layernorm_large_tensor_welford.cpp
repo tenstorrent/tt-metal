@@ -16,12 +16,11 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "layernorm_compute_utils.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 namespace generic = norm::kernel_util::generic;
-namespace layernorm_compute_utils = norm::layernorm::device::kernels::compute;
+
 namespace NAMESPACE {
 
 template <
