@@ -17,8 +17,8 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
     // Create the mesh channel spec for this fabric (single source of truth for channel structure)
-    mesh_channel_spec_ = MeshChannelSpec::create_for_compute_mesh(
-        fabric_context_.get_fabric_topology(), intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr);
+    // Spec now always represents MAX capacity - intermesh_config moved to mapping constructor
+    mesh_channel_spec_ = MeshChannelSpec::create_for_compute_mesh(fabric_context_.get_fabric_topology());
 
     // Create configs using computed max
     router_config_ = create_edm_config();
@@ -46,12 +46,22 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .direction = direction,
     };
 
+    // Extract per-VC channel counts from mesh channel spec
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {0, 0};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {0, 0};
+    for (size_t vc = 0; vc < mesh_channel_spec_.get_num_max_virtual_channels(); ++vc) {
+        sender_channels_per_vc[vc] = mesh_channel_spec_.get_num_max_sender_channels_for_vc(vc);
+        receiver_channels_per_vc[vc] = mesh_channel_spec_.get_num_max_receiver_channels_for_vc(vc);
+    }
+
     // Use the stored mesh channel spec (single source of truth)
     return std::make_unique<FabricEriscDatamoverConfig>(
         mesh_channel_spec_,
         fabric_context_.get_fabric_channel_buffer_size_bytes(),
         fabric_context_.get_fabric_topology(),
-        edm_options);
+        edm_options,
+        sender_channels_per_vc,
+        receiver_channels_per_vc);
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(

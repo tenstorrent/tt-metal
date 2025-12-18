@@ -220,7 +220,9 @@ struct FabricEriscDatamoverConfig {
         const MeshChannelSpec& channel_spec,
         std::size_t channel_buffer_size_bytes,
         Topology topology,
-        FabricEriscDatamoverOptions options);
+        FabricEriscDatamoverOptions options,
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -228,6 +230,11 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
     std::size_t num_riscv_cores = 0;
+
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {
+        0, 0};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {
+        0, 0};  // Per-VC receiver channel counts
 
     Topology topology = Topology::Linear;
 

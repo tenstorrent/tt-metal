@@ -11,14 +11,21 @@
 namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
-    Topology topology, const MeshChannelSpec& spec, bool downstream_is_tensix_builder, RouterVariant variant) :
-    topology_(topology), downstream_is_tensix_builder_(downstream_is_tensix_builder), variant_(variant) {
+    Topology topology,
+    const MeshChannelSpec& spec,
+    bool downstream_is_tensix_builder,
+    RouterVariant variant,
+    const IntermeshVCConfig* intermesh_config) :
+    topology_(topology),
+    downstream_is_tensix_builder_(downstream_is_tensix_builder),
+    variant_(variant),
+    intermesh_vc_config_(intermesh_config) {
     initialize_mappings(spec);
 }
 
 void FabricRouterChannelMapping::initialize_mappings(const MeshChannelSpec& spec) {
     initialize_vc0_mappings();
-    initialize_vc1_mappings(spec);
+    initialize_vc1_mappings();
 }
 
 void FabricRouterChannelMapping::initialize_vc0_mappings() {
@@ -56,7 +63,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     receiver_channel_map_[LogicalReceiverChannelKey{0, 0}] = InternalReceiverChannelMapping{BuilderType::ERISC, 0};
 }
 
-void FabricRouterChannelMapping::initialize_vc1_mappings(const MeshChannelSpec& spec) {
+void FabricRouterChannelMapping::initialize_vc1_mappings() {
     const bool is_2d = is_2D_topology(topology_);
     if (!is_2d) {
         // VC1 (intermesh) only exists for 2D topologies and Z routers
@@ -64,27 +71,23 @@ void FabricRouterChannelMapping::initialize_vc1_mappings(const MeshChannelSpec& 
     }
 
     if (is_z_router()) {
-        // Z routers exist only for intermesh connectivity
-        TT_FATAL(spec.has_vc(1), "Z router requires VC1 for Z traffic");
+        // Z routers exist only for intermesh connectivity - validate config
         TT_FATAL(
-            spec.get_z_router_sender_channel_count_for_vc(0) == builder_config::num_sender_channels_z_router_vc0,
-            "Z router VC0 sender channel count mismatch: spec has {}, expected {}",
-            spec.get_z_router_sender_channel_count_for_vc(0),
-            builder_config::num_sender_channels_z_router_vc0);
+            intermesh_vc_config_ != nullptr,
+            "Z router requires intermesh VC config (Z routers only exist for intermesh connectivity)");
         TT_FATAL(
-            spec.get_z_router_sender_channel_count_for_vc(1) == builder_config::num_sender_channels_z_router_vc1,
-            "Z router VC1 sender channel count mismatch: spec has {}, expected {}",
-            spec.get_z_router_sender_channel_count_for_vc(1),
-            builder_config::num_sender_channels_z_router_vc1);
+            intermesh_vc_config_->requires_vc1,
+            "Z router requires intermesh VC to be enabled (requires_vc1 must be true)");
 
         // Z Router VC1 layout:
         // - Sender channels 0-3: Map to erisc internal channels 4-7 (Z→mesh traffic)
         // - Receiver channel 0: Maps to erisc internal channel 1 (mesh→Z traffic)
 
+        constexpr uint32_t z_router_vc1_sender_count = builder_config::num_sender_channels_z_router_vc1;
         constexpr uint32_t z_router_vc1_base_sender_channel = builder_config::num_sender_channels_z_router_vc0;
         constexpr uint32_t z_router_vc1_receiver_channel = 1;
 
-        for (uint32_t i = 0; i < spec.get_z_router_sender_channel_count_for_vc(1); ++i) {
+        for (uint32_t i = 0; i < z_router_vc1_sender_count; ++i) {
             sender_channel_map_[LogicalSenderChannelKey{1, i}] =
                 InternalSenderChannelMapping{BuilderType::ERISC, z_router_vc1_base_sender_channel + i};
         }
@@ -92,13 +95,23 @@ void FabricRouterChannelMapping::initialize_vc1_mappings(const MeshChannelSpec& 
         receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
             InternalReceiverChannelMapping{BuilderType::ERISC, z_router_vc1_receiver_channel};
     } else {
-        // Standard mesh router VC1: create if spec has VC1
-        if (spec.has_vc(1)) {
+        // Standard mesh router VC1: create if intermesh VC is required
+        // Both inter-mesh and intra-mesh routers have VC1
+        if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
+            // Determine sender count based on intermesh router type
+            // XY intermesh: 3 sender channels (mesh directions only)
+            // Z intermesh: 4 sender channels (3 mesh directions + Z)
+            uint32_t mesh_vc1_sender_count = builder_config::num_downstream_edms_2d_vc1;  // default 3
+
+            if (intermesh_vc_config_->router_type == IntermeshRouterType::Z_INTERMESH) {
+                mesh_vc1_sender_count = 4;  // 3 mesh directions + Z
+            }
+
             constexpr uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
-            // Create sender channels from spec
-            for (uint32_t i = 0; i < spec.get_sender_channel_count_for_vc(1); ++i) {
+            // Create sender channels (3 or 4 depending on router type)
+            for (uint32_t i = 0; i < mesh_vc1_sender_count; ++i) {
                 sender_channel_map_[LogicalSenderChannelKey{1, i}] =
                     InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc1_base_sender_channel + i};
             }
@@ -108,7 +121,7 @@ void FabricRouterChannelMapping::initialize_vc1_mappings(const MeshChannelSpec& 
             receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
                 InternalReceiverChannelMapping{BuilderType::ERISC, mesh_vc1_receiver_channel};
         }
-        // If VC1 not present in spec, don't create VC1 mappings
+        // If intermesh VC not required, don't create VC1 mappings
     }
 }
 
@@ -138,10 +151,11 @@ std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_se
     std::vector<InternalSenderChannelMapping> result;
 
     // Iterate through VCs in order and flatten
-    for (uint32_t vc = 0; vc < spec.get_num_vcs(); ++vc) {
+    for (uint32_t vc = 0; vc < spec.get_num_max_virtual_channels(); ++vc) {
         // Use the appropriate channel count based on router variant
-        size_t num_channels = (variant_ == RouterVariant::Z_ROUTER) ? spec.get_z_router_sender_channel_count_for_vc(vc)
-                                                                    : spec.get_sender_channel_count_for_vc(vc);
+        size_t num_channels = (variant_ == RouterVariant::Z_ROUTER)
+                                  ? spec.get_num_max_z_router_sender_channels_for_vc(vc)
+                                  : spec.get_num_max_sender_channels_for_vc(vc);
 
         for (uint32_t ch_idx = 0; ch_idx < num_channels; ++ch_idx) {
             result.push_back(get_sender_mapping(vc, ch_idx));
@@ -149,6 +163,63 @@ std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_se
     }
 
     return result;
+}
+
+uint32_t FabricRouterChannelMapping::get_num_mapped_virtual_channels() const {
+    // Z routers always have 2 VCs: VC0 (mesh traffic) and VC1 (Z traffic)
+    if (is_z_router()) {
+        return 2;
+    }
+
+    // Check if intermesh VC is required (all routers get VC1 when enabled)
+    if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) {
+        return 2;  // Both inter-mesh and intra-mesh routers have VC0 + VC1
+    }
+
+    return 1;  // VC0 only (single-mesh or 1D)
+}
+
+uint32_t FabricRouterChannelMapping::get_num_mapped_sender_channels_for_vc(uint32_t vc) const {
+    constexpr uint32_t vc1_index = 1;
+    constexpr uint32_t no_channels = 0;
+
+    switch (vc) {
+        case 0:  // VC0
+            return builder_config::get_num_used_sender_channel_count(get_topology());
+        case 1:  // VC1
+            if (is_z_router()) {
+                return builder_config::num_sender_channels_z_router_vc1;
+            } else if (is_2D_topology(topology_)) {
+                // Check if VC1 mappings were actually created in initialize_vc1_mappings()
+                // Count how many sender channels exist for VC1
+                LogicalSenderChannelKey test_key{vc1_index, 0};
+                if (sender_channel_map_.find(test_key) == sender_channel_map_.end()) {
+                    return no_channels;  // VC1 not enabled (no mappings created)
+                }
+
+                // Count actual sender channels (3 for XY intermesh, 4 for Z intermesh)
+                uint32_t count = 0;
+                for (uint32_t i = 0; i < builder_config::num_downstream_edms_2d_vc1_with_z; ++i) {
+                    if (sender_channel_map_.find(LogicalSenderChannelKey{vc1_index, i}) != sender_channel_map_.end()) {
+                        count++;
+                    } else {
+                        break;  // Channels are created sequentially, so stop at first missing
+                    }
+                }
+                return count;
+            }
+            return no_channels;  // 1D topologies don't have VC1
+        default: return no_channels;
+    }
+}
+
+uint32_t FabricRouterChannelMapping::get_num_mapped_receiver_channels_for_vc(uint32_t vc) const {
+    // Check if we have a receiver mapping for this VC
+    LogicalReceiverChannelKey test_key{vc, 0};
+    if (receiver_channel_map_.find(test_key) != receiver_channel_map_.end()) {
+        return 1;  // One receiver channel per VC when enabled
+    }
+    return 0;
 }
 
 }  // namespace tt::tt_fabric

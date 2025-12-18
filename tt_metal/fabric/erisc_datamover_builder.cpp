@@ -246,8 +246,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     const MeshChannelSpec& channel_spec,
     std::size_t channel_buffer_size_bytes,
     Topology topology,
-    FabricEriscDatamoverOptions options) :
+    FabricEriscDatamoverOptions options,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
     channel_buffer_size_bytes(channel_buffer_size_bytes),
+    num_used_sender_channels_per_vc(sender_channels_per_vc),
+    num_used_receiver_channels_per_vc(receiver_channels_per_vc),
     topology(topology),
     channel_spec_(channel_spec),
     l1_layout_([&]() {
@@ -371,8 +375,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // Create the single static pool allocator with per-VC channel distribution
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
-        channel_spec_,
         options,
+        this->num_used_sender_channels_per_vc,
+        this->num_used_receiver_channels_per_vc,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
@@ -873,7 +878,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Determine NUM_VCS: 2 if VC1 runtime args are being passed, otherwise 1
     // VC1 runtime args are passed when VC1 is configured (both inter-mesh and intra-mesh have VC1)
-    bool needs_vc1 = config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0;
+    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
 
     // Get the VC1 downstream EDM count (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
@@ -1063,7 +1068,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     // Pack VC1 runtime args if VC1 is configured
     // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
-    bool needs_vc1 = config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0;
+    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
     }
@@ -1355,7 +1360,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     // Validate upstream VC1 usage
     if (upstream_vc_idx == 1) {
         TT_FATAL(
-            config.get_channel_spec().get_receiver_channel_count_for_vc(1) > 0,
+            config.num_used_receiver_channels_per_vc[1] > 0,
             "VC1 receiver channels not configured on upstream router.");
     }
 

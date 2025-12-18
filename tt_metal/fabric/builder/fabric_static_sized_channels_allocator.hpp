@@ -31,8 +31,9 @@ class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
     FabricStaticSizedChannelsAllocator(
         Topology topology,
-        const MeshChannelSpec& spec,
         const FabricEriscDatamoverOptions& options,
+        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
+        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
         size_t channel_buffer_size_bytes,
         size_t available_channel_buffering_space,
         const std::vector<MemoryRegion>& memory_regions);
