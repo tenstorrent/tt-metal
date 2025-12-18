@@ -23,6 +23,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/filesystem.h>
 
 #include "small_vector_caster.hpp"
 #include "tools/profiler/op_profiler.hpp"
@@ -136,8 +137,7 @@ void py_device_module_types(nb::module_& m_device) {
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
         .def_ro("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
         .def_ro("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
-        .def_ro(
-            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_ro("total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
         .def_ro("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
