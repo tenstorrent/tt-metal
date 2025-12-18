@@ -396,7 +396,7 @@ def test_reduce_scatter_async_ring(
     [
         (True, False),
     ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+    ids=["barrier_without_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
