@@ -210,7 +210,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 return self.get_tile_size(datatype_to_dataformat_converter(dtype));
             },
             nb::arg("dtype"),
-            "Get tile size in bytes for the given data type");
+            "Get tile size in bytes for the given data type")
+        .def(nb::self == nb::self);
 
     auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
