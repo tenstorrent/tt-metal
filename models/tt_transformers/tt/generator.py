@@ -406,7 +406,6 @@ class Generator:
         print(f"page_table: {page_table}")
         print(f"user_id: {user_id}")
         print(f"last_token_idx: {last_token_idx}")
-        print(f"kv_cache shape: {kv_cache.shape}")
         print(f"model_id: {model_id}")
         print(f"num_cached_tokens: {num_cached_tokens}")
         print(f"kwargs: {kwargs}")
