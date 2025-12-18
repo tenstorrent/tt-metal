@@ -167,7 +167,7 @@ TEST_F(BuilderConnectionMappingTest, ZRouter_ChannelAndConnectionMapping_Consist
 
     // Verify VC1 consistency
     EXPECT_EQ(spec.num_vcs, 2);
-    uint32_t vc1_senders = spec.sender_channels_per_vc[1];
+    uint32_t vc1_senders = spec.sender_channels_z_router_per_vc[1];
     EXPECT_EQ(vc1_senders, 4);
 
     // VC1 receiver channel 0 should have 4 targets

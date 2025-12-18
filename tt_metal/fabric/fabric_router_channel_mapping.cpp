@@ -139,7 +139,11 @@ std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_se
 
     // Iterate through VCs in order and flatten
     for (uint32_t vc = 0; vc < spec.num_vcs; ++vc) {
-        for (uint32_t ch_idx = 0; ch_idx < spec.sender_channels_per_vc[vc]; ++ch_idx) {
+        // Use the appropriate channel count based on router variant
+        size_t num_channels = (variant_ == RouterVariant::Z_ROUTER) ? spec.sender_channels_z_router_per_vc[vc]
+                                                                    : spec.sender_channels_per_vc[vc];
+
+        for (uint32_t ch_idx = 0; ch_idx < num_channels; ++ch_idx) {
             result.push_back(get_sender_mapping(vc, ch_idx));
         }
     }

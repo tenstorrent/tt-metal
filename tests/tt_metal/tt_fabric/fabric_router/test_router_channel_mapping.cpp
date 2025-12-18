@@ -176,7 +176,7 @@ TEST_F(MeshChannelSpecTest, ZRouter_VC1_Has4Senders) {
     auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh, &intermesh_config);
 
     // VC1 should have 4 sender channels (Z→mesh, one per direction)
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 4);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
 }
 
 TEST_F(RouterChannelMappingTest, ZRouter_VC1_SenderChannels_MapToErisc4Through7) {
@@ -198,8 +198,8 @@ TEST_F(RouterChannelMappingTest, ZRouterNoTensix_VC0_VC1_ReceiverChannel_MapsToE
     FabricRouterChannelMapping mapping(Topology::Mesh, spec, false, RouterVariant::Z_ROUTER);
 
     EXPECT_EQ(spec.num_vcs, 2);
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 4);
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 4);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[0], 4);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
 
     // VC0 receiver channel should still map to erisc receiver 0
     for (auto vc = 0; vc < 2; ++vc) {
@@ -427,7 +427,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     // Verify complete channel layout for Z router
 
     // VC0: 4 sender channels → erisc 0-3
-    EXPECT_EQ(spec.sender_channels_per_vc[0], 4);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[0], 4);
     for (uint32_t i = 0; i < 4; ++i) {
         auto s = mapping.get_sender_mapping(0, i);
         EXPECT_EQ(s.builder_type, BuilderType::ERISC);
@@ -440,7 +440,7 @@ TEST_F(RouterChannelMappingTest, ZRouter_CompleteChannelLayout) {
     EXPECT_EQ(vc0_r.internal_receiver_channel_id, 0);
 
     // VC1: 4 sender channels → erisc 4-7
-    EXPECT_EQ(spec.sender_channels_per_vc[1], 4);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], 4);
     for (uint32_t i = 0; i < 4; ++i) {
         auto s = mapping.get_sender_mapping(1, i);
         EXPECT_EQ(s.builder_type, BuilderType::ERISC);

@@ -310,10 +310,10 @@ TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_VC0AndVC1) {
     EXPECT_EQ(spec.num_vcs, 2) << "Z router should have 2 VCs";
 
     // VC0: Standard mesh forwarding (4 channels for 2D)
-    EXPECT_EQ(spec.sender_channels_per_vc[0], builder_config::num_sender_channels_z_router_vc0);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[0], builder_config::num_sender_channels_z_router_vc0);
 
     // VC1: Z-specific traffic (4 channels for N/E/S/W)
-    EXPECT_EQ(spec.sender_channels_per_vc[1], builder_config::num_sender_channels_z_router_vc1);
+    EXPECT_EQ(spec.sender_channels_z_router_per_vc[1], builder_config::num_sender_channels_z_router_vc1);
 }
 
 TEST_F(ZRouterIntegrationTest, ChannelMapping_MeshRouter_VC0Only) {

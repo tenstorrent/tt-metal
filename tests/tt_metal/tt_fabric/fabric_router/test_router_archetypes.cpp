@@ -225,7 +225,7 @@ TEST_F(RouterArchetypesTest, CreateZRouterArchetype) {
     EXPECT_TRUE(router.channel_mapping.is_z_router());
 
     // Verify VC1 has 4 sender channels
-    EXPECT_EQ(router.spec.sender_channels_per_vc[1], 4);
+    EXPECT_EQ(router.spec.sender_channels_z_router_per_vc[1], 4);
 
     // Verify connection mapping: receiver channel 0 on VC1 has 4 Z_TO_MESH targets
     EXPECT_EQ(router.connection_mapping.get_total_sender_count(), 4);
@@ -542,7 +542,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
     // 3. Multi-target receiver capacity limits
 
     // Verify that Z router VC1 has exactly 4 sender channels (for Z_TO_MESH)
-    EXPECT_EQ(z_router.spec.sender_channels_per_vc[1], 4);
+    EXPECT_EQ(z_router.spec.sender_channels_z_router_per_vc[1], 4);
 
     // Receiver channel 0 has 4 targets mapped to specific directions (N/E/S/W)
     auto z_targets = z_router.connection_mapping.get_downstream_targets(1, 0);
@@ -874,7 +874,7 @@ TEST_F(RouterArchetypesTest, Archetype_ChannelMapping_ConnectionMapping_Consiste
         FabricNodeId(MeshId{0}, 100));
 
     // VC1 receiver channel 0 should have 4 targets
-    uint32_t vc1_senders = z_router.spec.sender_channels_per_vc[1];
+    uint32_t vc1_senders = z_router.spec.sender_channels_z_router_per_vc[1];
     EXPECT_EQ(vc1_senders, 4);
 
     EXPECT_TRUE(z_router.connection_mapping.has_targets(1, 0))
