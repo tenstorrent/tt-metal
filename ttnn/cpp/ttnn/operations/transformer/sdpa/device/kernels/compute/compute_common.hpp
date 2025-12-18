@@ -34,6 +34,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
 }
 #include "compute_kernel_api/transpose_wh.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ckernel_mutex_guard.h"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -288,7 +289,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
-    exp_tile_init<true, true, scale_fp32>();
+    {
+        ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+        exp_tile_init<true, true, scale_fp32>();
+    }
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
@@ -351,7 +355,10 @@ void sub_exp_block_bcast_rows_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Postcondition: in1_cb has rows produced
     sub_bcast_rows_init_short(in0_cb, in1_cb);
 
-    exp_tile_init<true, true, scale_fp32>();
+    {
+        ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+        exp_tile_init<true, true, scale_fp32>();
+    }
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
@@ -364,7 +371,10 @@ void sub_exp_block_bcast_rows_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true, true>(j);
+                {
+                    ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+                    exp_tile<true, true>(j);
+                }
                 in0_index++;
             }
             tile_regs_commit();
@@ -1028,12 +1038,15 @@ void matmul_reduce_blocks(
     const uint32_t total_reduce_tiles = N;
     cb_reserve_back(reduce_out_cb, total_reduce_tiles);
 
+    PACK((t6_mutex_acquire(mutex::SFPU)));
     sfpu_reduce_max_sdpa_init();
+    PACK((t6_mutex_release(mutex::SFPU)));
 
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
         // Initialize reduce once per column (before processing any row blocks)
         // sfpu_reduce_max_load_initial_values();
+        PACK((t6_mutex_acquire(mutex::SFPU)));
         sfpu_reduce_max_prologue();
 
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
@@ -1079,6 +1092,7 @@ void matmul_reduce_blocks(
             // Only finalize and pack after processing all row blocks for this column
             if (in0_subblock == (in0_num_subblocks - 1)) {
                 sfpu_reduce_max_col_epilogue();
+                PACK((t6_mutex_release(mutex::SFPU)));
                 // Epilogue always writes result to dst[0], so pack from dst[0]
                 pack_tile<true>(0, reduce_out_cb, out_col_offset++);
                 pack_tile<true>(1, reduce_out_cb, out_col_offset);

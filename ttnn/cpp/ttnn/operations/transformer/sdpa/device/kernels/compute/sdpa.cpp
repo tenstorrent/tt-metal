@@ -190,16 +190,16 @@ void MAIN {
                     reconfig_data_format(alias_cur_max, alias_prev_max);
 
                     cb_wait_front(alias_cur_max, Sq_chunk_t);
-                    UNPACK(DPRINT << "alias_cur_max: " << ENDL();)
-                    UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 6, true);)
+                    // UNPACK(DPRINT << "alias_cur_max: " << ENDL();)
+                    // UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 6, true);)
 
                     if (k_chunk > 0) {
-                        UNPACK(DPRINT << "alias_prev_max: " << ENDL();)
-                        UNPACK(tt::compute::common::print_tile_rows(alias_prev_max, 1, 6, true);)
+                        // UNPACK(DPRINT << "alias_prev_max: " << ENDL();)
+                        // UNPACK(tt::compute::common::print_tile_rows(alias_prev_max, 1, 6, true);)
                         max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
                         cb_wait_front(alias_cur_max, Sq_chunk_t);
-                        UNPACK(DPRINT << "alias_cur_max after max_block_inplace: " << ENDL();)
-                        UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 6, true);)
+                        // UNPACK(DPRINT << "alias_cur_max after max_block_inplace: " << ENDL();)
+                        // UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 6, true);)
                     }
 
                     /**
