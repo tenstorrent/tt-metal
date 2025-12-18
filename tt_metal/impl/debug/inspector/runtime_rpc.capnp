@@ -7,7 +7,7 @@
 @0xd9769c4def840384;
 
 using Cxx = import "/capnp/c++.capnp";
-using Rpc = import "rpc.capnp";
+using Rpc = import "inspector_rpc.capnp";
 $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state

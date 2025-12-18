@@ -161,7 +161,7 @@ STD_HEADERS = {
     "wctype.h",
     "unistd.h",
     # Inspector RPC auto generated header by capnp
-    "rpc.capnp.h",
+    "inspector_rpc.capnp.h",
 }
 
 # Regex patterns

@@ -140,7 +140,7 @@ TT_ADD_INSPECTOR_RPC_SUPPORT(
     impl
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector
     CAPNP_SCHEMAS
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc.capnp
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
     RPC_CHANNEL_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
@@ -163,7 +163,7 @@ target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCE
 
 # Generate Inspector RPC stub file
 set(TRIAGE_INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
-set(TRIAGE_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/rpc.capnp)
+set(TRIAGE_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/inspector_rpc.capnp)
 set(TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/runtime_rpc.capnp)
 set(TRIAGE_TTNN_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/ttnn_rpc.capnp)
 add_custom_command(

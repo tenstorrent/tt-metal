@@ -6,7 +6,7 @@
 
 // Before including this file, make sure to compile capnp generated files from rpc.capnp
 // and add directory of generated files to include path.
-#include <rpc.capnp.h>
+#include <inspector_rpc.capnp.h>
 #include <string>
 
 namespace tt::tt_metal {

@@ -47,7 +47,7 @@ TT_ADD_INSPECTOR_RPC_SUPPORT(
     ttnn_core
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/core/inspector
     CAPNP_SCHEMAS
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/rpc.capnp
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp
     RPC_CHANNEL_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp

@@ -7,7 +7,7 @@
 @0xba5d498ab9873a11;
 
 using Cxx = import "/capnp/c++.capnp";
-using Rpc = import "rpc.capnp";
+using Rpc = import "inspector_rpc.capnp";
 $Cxx.namespace("ttnn::inspector::rpc");
 
 # Inspector RPC interface for querying TTNN runtime state

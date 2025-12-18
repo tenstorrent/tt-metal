@@ -4,7 +4,7 @@
 
 #include "ttnn/inspector/inspector.hpp"
 #include "core/inspector/ttnn_rpc_channel_generated.hpp"
-#include "tt-metalium/inspector.hpp"
+#include "tt-metalium/experimental/inspector.hpp"
 
 namespace ttnn::inspector {
 

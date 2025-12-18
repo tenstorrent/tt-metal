@@ -15,15 +15,36 @@ function(TT_ADD_INSPECTOR_RPC_SUPPORT TARGET_NAME)
     if(NOT ARG_OUTPUT_DIR)
         set(ARG_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     endif()
+    file(MAKE_DIRECTORY ${ARG_OUTPUT_DIR})
 
     set(CAPNPC_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     file(MAKE_DIRECTORY ${CAPNPC_OUTPUT_DIR})
 
     set(GENERATED_SOURCES)
     set(GENERATED_HEADERS)
+    set(COPIED_CAPNP_SCHEMAS)
 
     # Generate C++ sources from Cap'n Proto schemas
     foreach(SCHEMA ${ARG_CAPNP_SCHEMAS})
+        get_filename_component(SCHEMA_NAME ${SCHEMA} NAME_WE)
+        set(COPIED_SCHEMA ${ARG_OUTPUT_DIR}/${SCHEMA_NAME}.capnp)
+        add_custom_command(
+            OUTPUT
+                ${COPIED_SCHEMA}
+            COMMAND
+                ${CMAKE_COMMAND} -E copy ${SCHEMA} ${COPIED_SCHEMA}
+            DEPENDS
+                ${SCHEMA}
+            COMMENT "Copying Cap'n Proto schema ${SCHEMA} to ${COPIED_SCHEMA}"
+        )
+        if(NOT EXISTS "${COPIED_SCHEMA}")
+            file(COPY_FILE ${SCHEMA} ${COPIED_SCHEMA})
+        endif()
+        list(APPEND COPIED_CAPNP_SCHEMAS ${COPIED_SCHEMA})
+    endforeach()
+    set(ORIGINAL_CMAKE_CURRENT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+    set(CMAKE_CURRENT_SOURCE_DIR ${CAPNPC_OUTPUT_DIR})
+    foreach(SCHEMA ${COPIED_CAPNP_SCHEMAS})
         get_filename_component(SCHEMA_NAME ${SCHEMA} NAME_WE)
         capnp_generate_cpp(
             GENERATED_${SCHEMA_NAME}_SOURCES
@@ -33,6 +54,7 @@ function(TT_ADD_INSPECTOR_RPC_SUPPORT TARGET_NAME)
         list(APPEND GENERATED_SOURCES ${GENERATED_${SCHEMA_NAME}_SOURCES})
         list(APPEND GENERATED_HEADERS ${GENERATED_${SCHEMA_NAME}_HEADER})
     endforeach()
+    set(CMAKE_CURRENT_SOURCE_DIR ${ORIGINAL_CMAKE_CURRENT_SOURCE_DIR})
 
     # Generate Inspector RPC callbacks server implementation
     foreach(SCHEMA ${ARG_RPC_CHANNEL_SCHEMAS})
