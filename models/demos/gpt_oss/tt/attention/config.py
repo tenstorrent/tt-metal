@@ -15,6 +15,8 @@ class AttentionConfig:
     num_kv_heads: int
     head_dim: int
     max_seq_len: int
+    max_local_batch_size: int
+
     sliding_window: int | None = None
     scaling: float | None = None  # Computed if None
 

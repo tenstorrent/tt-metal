@@ -44,7 +44,8 @@ def decode_forward(
     Returns:
         Attention output [batch, 1, hidden_size]
     """
-    batch_size, seq_len, hidden_size = hidden_states.shape
+    # batch_size, seq_len, hidden_size = hidden_states.shape
+    _, seq_len, batch_size, hidden_size = hidden_states.shape
 
     # Validate decode mode
     if seq_len != 1:
@@ -121,8 +122,10 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=height_sharded_mem_config,
+            # memory_config=height_sharded_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
@@ -146,16 +149,19 @@ def decode_forward(
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
+
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
     tt_out = ttnn.reshape(
         tt_out,
-        (batch_size, seq_len, hidden_size),
-        (batch_size, 32, hidden_size),
+        (1, 1, batch_size, hidden_size),
+        (1, 1, 32, hidden_size),
     )
+    # tt_out = ttnn.unsqueeze(tt_out, 0)
 
     # Tensor parallel allreduce
+    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out
