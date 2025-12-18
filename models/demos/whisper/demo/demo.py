@@ -773,7 +773,7 @@ def test_demo_for_conditional_generation(
     if (
         is_ci_env
         and model_repo == "distil-whisper/distil-large-v3"
-        and batch_size_per_device == 2
+        and batch_size_per_device == 1
         and mesh_device.get_num_devices() == available_devices
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
