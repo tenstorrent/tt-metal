@@ -26,7 +26,7 @@ on:
         default: false
 jobs:
   galaxy-nightly-tests:
-    if: ${{ inputs.blackhole == false }}
+    if: ${{ inputs.blackhole == false || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
