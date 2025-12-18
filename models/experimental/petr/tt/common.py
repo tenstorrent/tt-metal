@@ -72,7 +72,6 @@ class Conv:
         input_width = input_tensor.shape[2]
         input_channels = input_tensor.shape[3]
 
-        # Ensure input is in L1
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():

@@ -114,7 +114,7 @@ Note: In the current demo, the calibration needs to be corrected. Since we do no
 
 ## Performance
 ### Single Device (BS=1):
-- end-2-end perf is `2.26` FPS
+- end-2-end perf is `2.36` FPS
 
 To run perf test:
 ```

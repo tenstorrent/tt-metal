@@ -182,8 +182,6 @@ class ttnn_osa_module:
 
         x = ttnn.concat(output_tensor, dim=3)
 
-        for y in output:
-            ttnn.deallocate(y)
         if self.module_name != "OSA2_1":
             x = self.conv_concat(device, x)
         else:
@@ -362,12 +360,9 @@ class ttnn_VoVNetCP:
         x = self.stem_conv2(device, x)
 
         # Stem conv 3
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.stem_conv3(device, x)
 
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         stage2 = self.stage2(device, x)
-        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         stage3 = self.stage3(device, stage2)
         stage4 = self.stage4(device, stage3)
         stage5 = self.stage5(device, stage4)
