@@ -60,11 +60,11 @@ add_custom_command(
         ${TTNN_INSPECTOR_RPC_GENERATED_HEADER}
         ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/generate_rpc_channel.py ${TTNN_INSPECTOR_RPC_CAPNP}
+        python3 ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py ${TTNN_INSPECTOR_RPC_CAPNP}
         ${TTNN_INSPECTOR_RPC_GENERATED_HEADER} ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE}
     DEPENDS
         ${TTNN_INSPECTOR_RPC_CAPNP}
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/generate_rpc_channel.py
+        ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py
     COMMENT "Generating RPC server implementation for ${TTNN_INSPECTOR_RPC_CAPNP}"
 )
 list(APPEND IMPL_SRC ${TTNN_INSPECTOR_RPC_GENERATED_SOURCE})

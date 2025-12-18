@@ -135,11 +135,11 @@ add_custom_command(
         ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER}
         ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_channel.py ${RUNTIME_INSPECTOR_RPC_CAPNP}
+        python3 ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py ${RUNTIME_INSPECTOR_RPC_CAPNP}
         ${RUNTIME_INSPECTOR_RPC_GENERATED_HEADER} ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE}
     DEPENDS
         ${RUNTIME_INSPECTOR_RPC_CAPNP}
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_channel.py
+        ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_channel.py
     COMMENT "Generating RPC server implementation for ${RUNTIME_INSPECTOR_RPC_CAPNP}"
 )
 list(APPEND IMPL_SRC ${RUNTIME_INSPECTOR_RPC_GENERATED_SOURCE})
@@ -220,13 +220,13 @@ add_custom_command(
     OUTPUT
         ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
     COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
+        python3 ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_stub.py ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
         ${TRIAGE_INSPECTOR_RPC_CAPNP} ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP} ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
     DEPENDS
         ${TRIAGE_INSPECTOR_RPC_CAPNP}
         ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}
         ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rpc_stub.py
+        ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_stub.py
     COMMENT
         "Generating RPC stub for ${TRIAGE_INSPECTOR_RPC_CAPNP}, ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}, ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}"
 )
