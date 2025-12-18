@@ -171,8 +171,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
     // For large values (e.g. |x| > 89), some intermediate values can overflow
     // To avoid this, we check the value of the input using two thresholds.
     //
-    // These thresholds are applied after scaling x by 1/log(2)
-    // If it were applied before scaling, they would be -88 and 89 respectively
+    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
+    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
     constexpr float OVERFLOW_THRESHOLD = 128.0f;
     constexpr float UNDERFLOW_THRESHOLD = -127.0f;
 
