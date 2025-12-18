@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/sdpa_pybind.hpp"
+#include "sdpa_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "sdpa.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 namespace ttnn::operations::transformer {
 
