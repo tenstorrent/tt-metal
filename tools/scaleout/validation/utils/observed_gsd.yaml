@@ -1,0 +1,78 @@
+$ cat  /home/ttuser/james/tt-metal/cluster_validation_logs/20251218_154457/global_system_descriptor_0.yaml
+compute_node_specs:
+  bh-qbae-04:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000422016
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000416640
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000419840
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000418304
+  bh-qbae-03:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000419680
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000419648
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000418944
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000422560
+local_eth_connections:
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 10}, {host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 10}]
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 8}, {host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 8}]
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 7}, {host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 7}]
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 5}, {host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 5}]
+  - [{host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 7}, {host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 7}]
+  - [{host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 5}, {host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 5}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 10}, {host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 10}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 8}, {host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 8}]
+  - [{host_name: bh-qbae-03, tray_id: 3, asic_location: 0, chan_id: 10}, {host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 10}]
+  - [{host_name: bh-qbae-03, tray_id: 3, asic_location: 0, chan_id: 7}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 7}]
+  - [{host_name: bh-qbae-03, tray_id: 3, asic_location: 0, chan_id: 5}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 5}]
+  - [{host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 7}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 7}]
+  - [{host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 5}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 5}]
+  - [{host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 10}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 10}]
+  - [{host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 8}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 8}]
+global_eth_connections:
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 9}, {host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 9}]
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 6}, {host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 6}]
+  - [{host_name: bh-qbae-04, tray_id: 1, asic_location: 0, chan_id: 4}, {host_name: bh-qbae-03, tray_id: 1, asic_location: 0, chan_id: 4}]
+  - [{host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 11}, {host_name: bh-qbae-03, tray_id: 3, asic_location: 0, chan_id: 11}]
+  - [{host_name: bh-qbae-04, tray_id: 3, asic_location: 0, chan_id: 6}, {host_name: bh-qbae-03, tray_id: 3, asic_location: 0, chan_id: 6}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 11}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 11}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 9}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 9}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 6}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 6}]
+  - [{host_name: bh-qbae-04, tray_id: 4, asic_location: 0, chan_id: 4}, {host_name: bh-qbae-03, tray_id: 4, asic_location: 0, chan_id: 4}]
+  - [{host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 11}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 11}]
+  - [{host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 9}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 9}]
+  - [{host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 6}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 6}]
+  - [{host_name: bh-qbae-04, tray_id: 2, asic_location: 0, chan_id: 4}, {host_name: bh-qbae-03, tray_id: 2, asic_location: 0, chan_id: 4}]
