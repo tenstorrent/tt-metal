@@ -107,12 +107,16 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     // Determine actual number of CB pages: min of (max work per core, L1 capacity)
     const uint32_t max_sticks_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
-    num_cb_pages = num_cb_pages * NEAREST_BUFFERING_FACTOR;
 
     // CB_0: Output CB for communication between reader and writer
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
-        tt::CBIndex::c_0, program, all_cores, output_cb_page_size, num_cb_pages, output_cb_data_format);
+        tt::CBIndex::c_0,
+        program,
+        all_cores,
+        output_cb_page_size,
+        num_cb_pages * NEAREST_BUFFERING_FACTOR,
+        output_cb_data_format);
 
     // Check if fill value is zero (can use zero_out_page instead of fill CB)
     const bool fill_is_zero = (fill_value_bf16 == 0);
