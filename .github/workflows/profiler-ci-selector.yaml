@@ -1,6 +1,15 @@
 name: "Profiler CI"
+run-name: >-
+  ${{
+    github.event_name == 'push' &&
+    'Profiler CI (push → N150)' ||
+    'Profiler CI'
+  }}
 
 on:
+  push:
+    branches:
+      - mo/34706_profiler_ci
   workflow_dispatch:
     inputs:
       run_t3k_profiler:
@@ -79,6 +88,7 @@ jobs:
   build-artifact-profiler:
     if: >-
       ${{
+        github.event_name == 'push' ||
         inputs.run_t3k_profiler ||
         inputs.run_galaxy_profiler ||
         inputs.run_blackhole_profiler ||
@@ -95,7 +105,7 @@ jobs:
       version: "22.04"
 
   t3k-profiler-tests:
-    if: ${{ inputs.run_t3k_profiler }}
+    if: ${{ github.event_name != 'push' && inputs.run_t3k_profiler }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
@@ -107,7 +117,7 @@ jobs:
       test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
 
   galaxy-profiler-tests:
-    if: ${{ inputs.run_galaxy_profiler }}
+    if: ${{ github.event_name != 'push' && inputs.run_galaxy_profiler }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
@@ -119,7 +129,7 @@ jobs:
       test-script: ./tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh
 
   blackhole-profiler:
-    if: ${{ inputs.run_blackhole_profiler }}
+    if: ${{ github.event_name != 'push' && inputs.run_blackhole_profiler }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -134,7 +144,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
 
   n300-profiler:
-    if: ${{ inputs.run_n300_profiler }}
+    if: ${{ github.event_name != 'push' && inputs.run_n300_profiler }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -149,7 +159,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
 
   n150-profiler:
-    if: ${{ inputs.run_n150_profiler }}
+    if: ${{ github.event_name == 'push' || inputs.run_n150_profiler }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
