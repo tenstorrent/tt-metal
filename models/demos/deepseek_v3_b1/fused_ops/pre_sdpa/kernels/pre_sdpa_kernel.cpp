@@ -91,6 +91,14 @@ KERNEL_ENTRY {
         get_arg_val<uint32_t>(3),  // scalar2 (1/sqrt(1536))
     };
 
+    // Matmul2 reader args (NCRISC is no-op)
+    deepseek_b1_ops::Matmul::ReaderArgs matmul2_args{};
+
+    // Matmul2 CB indices and parameters from named compile-time args
+    constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
+    constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
+    constexpr uint32_t matmul2_num_tiles = get_named_compile_time_arg_val("matmul2_num_tiles");
+
 // ============================================================================
 // BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: rmsnorm writer, mcast receiver, matmul writer, gather receiver
@@ -125,6 +133,9 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("gather_dst_cb"),
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };
+
+    // Matmul2 writer args (BRISC is no-op)
+    deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -173,6 +184,14 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("rmsnorm_epsilon_index"),
         get_named_compile_time_arg_val("rmsnorm_scalar_index"),
     };
+
+    // Matmul2 compute args (from compile-time args)
+    deepseek_b1_ops::Matmul::ComputeArgs matmul2_args{
+        get_named_compile_time_arg_val("matmul2_in0"),
+        get_named_compile_time_arg_val("matmul2_in1"),
+        get_named_compile_time_arg_val("matmul2_out"),
+        get_named_compile_time_arg_val("matmul2_num_tiles"),
+    };
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
@@ -195,6 +214,10 @@ KERNEL_ENTRY {
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t matmul_num_tiles = get_named_compile_time_arg_val("matmul_num_tiles");
         deepseek_b1_ops::setup_sharded_buffer(matmul_in1, matmul_num_tiles);
+    }
+    if constexpr (Core::is_matmul2_core) {
+        // Matmul2 weights (on all cores in main grid, 4 tiles per core)
+        deepseek_b1_ops::setup_sharded_buffer(matmul2_in1, matmul2_num_tiles);
     }
 #endif
 
@@ -297,5 +320,60 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("RMSNORM2");
         rmsnorm(rmsnorm2_args);
     }
+
+    // ========================================================================
+    // Copy RMSNorm2 output to matmul2 input CB (1x1536 with 1x32 tiles)
+    // RMSNorm2 output: 2 full 32x32 tiles (padded from 1536 elements)
+    // Matmul2 input: 48 1x32 tiles (1536 elements)
+    // Only runs on NCRISC on input core
+    // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (Core::is_input_core) {
+        DeviceZoneScopedN("RMSNORM2_TO_MATMUL2_COPY");
+
+        constexpr uint32_t rmsnorm2_output_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
+        constexpr uint32_t matmul2_input_num_tiles = 48;         // 1536 / 32 = 48 1x32 tiles
+        constexpr uint32_t rmsnorm2_data_size_bytes = 1536 * 2;  // 1536 bfloat16 elements
+
+        // Wait for RMSNorm2 output (2 tiles)
+        cb_wait_front(rmsnorm2_output_cb, 2);
+
+        // Reserve space in matmul2 input cb (48 1x32 tiles)
+        cb_reserve_back(matmul2_in0, matmul2_input_num_tiles);
+
+        // Get source and destination addresses
+        uint32_t src_addr = get_read_ptr(rmsnorm2_output_cb);
+        uint32_t dst_addr = get_write_ptr(matmul2_in0);
+
+        // Copy rmsnorm2 output data to matmul2 input cb using local NOC read
+        uint64_t src_noc_addr = get_noc_addr(src_addr);
+        noc_async_read(src_noc_addr, dst_addr, rmsnorm2_data_size_bytes);
+        noc_async_read_barrier();
+
+        // Push the completed tiles to matmul2 input cb
+        cb_push_back(matmul2_in0, matmul2_input_num_tiles);
+
+        // Pop the rmsnorm2 output cb
+        cb_pop_front(rmsnorm2_output_cb, 2);
+    } else if constexpr (Core::is_matmul2_core) {
+        constexpr uint32_t matmul2_input_num_tiles = 48;
+        cb_reserve_back(matmul2_in0, matmul2_input_num_tiles);
+        cb_push_back(matmul2_in0, matmul2_input_num_tiles);
+    }
+#endif
+    // ========================================================================
+    // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
+    // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
+    // Each core computes 1x4 output tiles (4 1x32 tiles)
+    // Note: matmul micro-op only supports 1 tile width, called as-is for now
+    // ========================================================================
+    {
+        DeviceZoneScopedN("MATMUL2");
+        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        // Note: Using main grid (all cores) instead of just matmul cores
+        deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
+        matmul2(matmul2_args);
+    }
+    DPRINT << "-------- matmul 2 completed --------" << ENDL();
 }
 KERNEL_END

@@ -21,6 +21,7 @@ struct UnifiedCoreDescriptor {
     // Compile-time role flags from UnifiedCompileTimeCoreDescriptor
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
+    static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
 
     // Compute linear index within a grid defined by start/end coordinates (static - no instance needed)
     // RowMajor=true:  index = rel_y * grid_width + rel_x  (iterate x first, then y)

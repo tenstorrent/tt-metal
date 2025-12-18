@@ -26,6 +26,15 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     shape = (1, 7168)
     matmul_weights_shape = (7168, 1536)
 
+    # Matmul2 weights shape: 1536 x (num_cores * 4 * 32)
+    # Uses device grid: 8x12 = 96 cores (P150) or 8x11 = 88 cores (non-P150)
+    device_grid_size = device.compute_with_storage_grid_size()
+    matmul2_grid_x = device_grid_size.x  # 12 for P150, 11 for non-P150
+    matmul2_grid_y = 8
+    matmul2_num_cores = matmul2_grid_x * matmul2_grid_y  # 96 or 88
+    matmul2_width = matmul2_num_cores * 4 * 32  # 12288 or 11264
+    matmul2_weights_shape = (1536, matmul2_width)
+
     tile = ttnn.Tile([1, 32])
 
     # RMSNorm2 parameters (1536 elements padded to 2 full 32x32 tiles = 2048)
@@ -91,6 +100,29 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         memory_config=matmul_mem_config,
     )
 
+    # Create matmul2 weights tensor - width sharded on device grid (8x12 or 8x11), 4 tiles per core
+    torch_matmul2_weights = torch.randn(matmul2_weights_shape, dtype=torch.bfloat16)
+    matmul2_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1)
+    )  # (0,0) to (11,7) or (10,7)
+    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)  # (1536, 128)
+    matmul2_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({matmul2_grid}),
+        matmul2_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    matmul2_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul2_shard_spec
+    )
+
+    ttnn_matmul2_weights = ttnn.from_torch(
+        torch_matmul2_weights,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=matmul2_mem_config,
+    )
+
     # Create RMSNorm2 gamma tensor sharded on same core (2 full 32x32 tiles)
     rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -140,6 +172,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         ttnn_gamma,
         ttnn_matmul_weights,
         ttnn_rmsnorm2_gamma,
+        ttnn_matmul2_weights,
         ttnn_output,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
