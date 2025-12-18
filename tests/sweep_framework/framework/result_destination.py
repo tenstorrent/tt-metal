@@ -402,7 +402,19 @@ class FileResultDestination(ResultDestination):
                 op_params=None,
                 git_sha=git_hash,
                 status=mapped_status,
-                card_type="n/a",
+                # Propagate device architecture (wormhole_b0/blackhole) captured at run-level into each test record.
+                # Prefer any per-test field if present; otherwise fall back to run metadata.
+                card_type=str(
+                    raw.get("card_type")
+                    or raw.get("device")
+                    or header.get("card_type")
+                    or header.get("device")
+                    or run_context.get("card_type")
+                    or run_context.get("device")
+                    or (self._run_metadata.get("device") if self._run_metadata else None)
+                    or (self._run_metadata.get("card_type") if self._run_metadata else None)
+                    or "unknown"
+                ),
                 backend="n/a",
                 data_source="ttnn op test",
                 input_hash=raw.get("input_hash"),
