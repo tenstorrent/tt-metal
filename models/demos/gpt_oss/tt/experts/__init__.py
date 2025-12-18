@@ -119,25 +119,30 @@ class Experts:
             ),
         )
 
-    def __call__(self, hidden_states, routing_weights):
+    def __call__(
+        self,
+        hidden_states,
+        topk_expert_weights: ttnn.Tensor,
+        is_decode: bool = True,
+        topk_expert_indices: ttnn.Tensor = None,
+    ):
         """
         Forward pass - automatically dispatches to decode or prefill.
 
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
-            routing_weights: Router output [seq_len, num_experts]
+            topk_expert_weights: Sparse router scores output [seq_len, num_experts]
+            is_decode: Decode mode
+            topk_expert_indices: Top-k expert indices per token (unused in this version of experts)
 
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         # Determine mode based on sequence length
-        seq_len = hidden_states.shape[1]
-        is_decode = seq_len == 1
-
         if is_decode:
             return decode_forward(
                 hidden_states=hidden_states,
-                routing_weights=routing_weights,
+                routing_weights=topk_expert_weights,
                 weights=self.weights,
                 config=self.config,
                 mesh_config=self.mesh_config,
@@ -148,7 +153,7 @@ class Experts:
         else:
             return prefill_forward(
                 hidden_states=hidden_states,
-                routing_weights=routing_weights,
+                routing_weights=topk_expert_weights,
                 weights=self.weights,
                 config=self.config,
                 mesh_config=self.mesh_config,

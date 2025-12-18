@@ -33,11 +33,154 @@ from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+    get_padded_prefill_len,
+    preprocess_inputs_prefill,
+    sample_host,
+)
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
+
+
+class GPTOSSGenerator(Generator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        model_id_warmup=None,
+        **kwargs,
+    ):
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        else:
+            # Only paged attention is supported for prefill
+            enable_trace = False
+
+        # self.warmup_prefill_traces(
+        #     page_table,
+        #     kv_cache,
+        #     enable_trace,
+        # )
+
+        batch_size, batch_seq_len = tokens.shape
+        max_batch_size_per_model = self.model_args[0].max_batch_size
+        max_batch_per_mesh_row = max_batch_size_per_model // self.mesh_device.shape[0]
+
+        # Each model expected to run the same model, safe to use 1st vocab size
+        output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
+
+        if empty_slots is None:
+            empty_slots = list(range(batch_size))
+
+        out_list = []
+        for idx, user_id in enumerate(empty_slots):
+            # if model_id is not None, it means that prefill is called from warmup_prefill_traces
+            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            seq_len = int(prompt_lens[idx])
+            last_token_idx = seq_len - 1
+            prefill_seq_len = get_padded_prefill_len(seq_len)
+            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+
+            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
+
+            # Extracting data for the current user
+            # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
+            prefill_ids = torch.cat(
+                [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            )
+
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
+
+            logger.info(
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
+            )
+
+            page_table_user = (
+                self._get_prefill_user_page_table(
+                    page_table,
+                    kv_cache[model_id],
+                    seq_len,
+                    trace_enabled=enable_trace_current_prompt,
+                    prefill_seq_len=prefill_seq_len,
+                )
+                if page_table is not None
+                else None
+            )
+            new_page_table_user = -1 * torch.ones_like(page_table_user)
+            new_page_table_user[user_id] = page_table_user[user_id]
+
+            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+
+            # Check if 'pixel_values' exists and index it safely
+            if local_kwargs.get("pixel_values", None) is not None:
+                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
+                if "image_grid_thw" in local_kwargs:
+                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
+            if enable_trace_current_prompt:
+                logits = self._easy_trace_prefill(
+                    prefill_ids,
+                    page_table=new_page_table_user,
+                    user_id=user_id % max_batch_per_mesh_row,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    prefill_seq_len=prefill_seq_len,
+                    **local_kwargs,
+                )
+            else:
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=new_page_table_user,
+                    user_id=user_id % max_batch_per_mesh_row,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    **local_kwargs,
+                )
+            if enable_trace_current_prompt:
+                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+                # We need to do this here, because we can't do this part in forward() if we have trace enabled
+                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
+            if self.data_parallel > 1:
+                out_list.append(logits)
+            else:
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    logits, last_token_idx=(last_token_idx % 32)
+                )
+                del logits
+
+        # Process the logits after all the prefill are done in data parallel mode
+        if self.data_parallel > 1:
+            for idx, out in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
+                last_token_idx = seq_len - 1
+                user_id = empty_slots[idx]
+                model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx % 32)
+                )
+
+        logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        return output_logits
 
 
 def prepare_gpt_oss_generator_args(
@@ -86,15 +229,19 @@ def prepare_gpt_oss_generator_args(
         tt_kv_cache.append(tt_kv_cache_i)
 
     # Page table will be created using tt-transformers infrastructure after input preprocessing
-    page_table = (
-        create_tt_page_table(
-            global_batch_size,
-            data_parallel,
-            paged_attention_config,
-        )
+    page_tables = (
+        [
+            create_tt_page_table(
+                global_batch_size // mesh_device.shape[0],
+                data_parallel,
+                paged_attention_config,
+            )
+            for _ in range(mesh_device.shape[0])
+        ]
         if paged_attention
         else None
     )
+    page_table = torch.concat(page_tables, dim=0) if page_tables else None
 
     # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[0].tokenizer
@@ -152,6 +299,18 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
         ),
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            128,  # batch_size
+            1,  # repeat_batches
+            8 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,
+            False,
+        ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
         #     1,  # data_parallel
@@ -207,6 +366,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_128",
         "prefill_1k",
         "prefill_4k",
+        "batch128"
         # "prefill_8k",
         # "prefill_16k",
         # "prefill_32k",
@@ -285,7 +445,8 @@ def test_gpt_oss_demo(
     )
 
     # Create generator (match tt-transformers pattern)
-    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    # generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    generator = GPTOSSGenerator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 

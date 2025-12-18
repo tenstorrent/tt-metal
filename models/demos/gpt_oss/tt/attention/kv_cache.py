@@ -37,14 +37,19 @@ def init_kv_cache(
     if paged_attention_config:
         # Paged attention cache shape: [max_num_blocks, num_kv_heads, block_size, head_dim]
         cache_shape = [
-            paged_attention_config.max_num_blocks,
-            config.num_kv_heads,
+            paged_attention_config.max_num_blocks * mesh_device.shape[0],
+            config.num_kv_heads // mesh_device.shape[1],
             paged_attention_config.block_size,
             config.head_dim,
         ]
     else:
         # Standard cache shape: [batch_size, num_kv_heads, max_seq_len, head_dim]
-        cache_shape = [1, config.num_kv_heads, config.max_seq_len, config.head_dim]
+        cache_shape = [
+            config.max_local_batch_size * mesh_device.shape[0],
+            config.num_kv_heads // mesh_device.shape[1],
+            config.max_seq_len,
+            config.head_dim,
+        ]
 
     # Create K cache
     k_cache = ttnn.as_tensor(
@@ -52,7 +57,9 @@ def init_kv_cache(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
-        mesh_mapper=mesh_config.sequence_parallel(mesh_device),
+        # mesh_mapper=mesh_config.sequence_parallel(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
+        # mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -63,7 +70,9 @@ def init_kv_cache(
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
-        mesh_mapper=mesh_config.sequence_parallel(mesh_device),
+        # mesh_mapper=mesh_config.sequence_parallel(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None)),
+        # mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -71,12 +80,13 @@ def init_kv_cache(
     return [k_cache, v_cache]
 
 
-def get_kv_memory_config(mesh_device, num_local_kv_heads: int, head_dim: int):
+def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_heads: int, head_dim: int):
     """
     Get sharded memory config for KV tensors in decode mode.
 
     Args:
         mesh_device: TTNN mesh device
+        max_local_batch_size: Maximum local batch size per device
         num_local_kv_heads: Number of KV heads per device
         head_dim: Head dimension
 
@@ -85,11 +95,11 @@ def get_kv_memory_config(mesh_device, num_local_kv_heads: int, head_dim: int):
     """
     grid_size = mesh_device.compute_with_storage_grid_size()
 
-    # KV tensors should be [1, num_local_kv_heads, 1, head_dim] for decode
-    kv_shape = (1, num_local_kv_heads, 1, head_dim)
+    # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
+    kv_shape = (1, max_local_batch_size, num_local_kv_heads, head_dim)
     kv_shard_height = nearest_y(kv_shape[1], ttnn.TILE_SIZE)  # height = num_local_kv_heads
     kv_shard_width = kv_shape[3]  # width = head_dim
-    kv_num_cores = kv_shape[2]  # cores = 1 (sequence length for decode)
+    kv_num_cores = kv_shape[1]  # cores = 1 (sequence length for decode)
 
     kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
 

@@ -88,10 +88,14 @@ class Attention:
                 tensor_cache_path=tensor_cache_path,
             )
             self.layer_past = self.kv_cache  # For tt-transformers compatibility
+        else:
+            self.kv_cache = None
+            self.layer_past = None
 
         # Get KV memory config for decode mode
         self.kv_mem_cfg = get_kv_memory_config(
             mesh_device,
+            config.max_local_batch_size,
             mesh_config.shard_size(config.num_kv_heads),
             config.head_dim,
         )
@@ -103,7 +107,9 @@ class Attention:
         self.head_dim = config.head_dim
         self.scaling = config.scaling
 
-    def __call__(self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None):
+    def __call__(
+        self, hidden_states, rope_mats, position_idx=None, page_table=None, kv_cache=None, is_decode=True, user_id=0
+    ):
         """
         Forward pass - automatically dispatches to decode or prefill.
 
@@ -113,14 +119,17 @@ class Attention:
             position_idx: Position index for KV cache update
             page_table: Page table for paged attention (optional)
             kv_cache: External KV cache (optional, uses internal if not provided)
+            is_decode: Whether this is decode mode (default: True)
+            user_id: User/batch index for KV cache fill in prefill mode (default: 0)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
         """
-        batch_size, seq_len, hidden_size = hidden_states.shape
+        # batch_size, seq_len, hidden_size = hidden_states.shape
 
         # Determine mode based on sequence length
-        is_decode = seq_len == 1
+        # is_decode = seq_len == 1
+        # is_decode = True
 
         # Use provided kv_cache or internal cache
         cache = kv_cache if kv_cache is not None else self.kv_cache
@@ -149,6 +158,7 @@ class Attention:
             return prefill_forward(
                 hidden_states=hidden_states,
                 rope_mats=rope_mats,
+                user_id=user_id,
                 weights=self.weights,
                 kv_cache=cache,
                 config=self.config,
