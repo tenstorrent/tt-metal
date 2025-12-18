@@ -240,9 +240,6 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -336,7 +333,7 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
@@ -358,7 +355,7 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -370,6 +367,12 @@ class WanCausalConv3d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -637,9 +640,6 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -711,7 +711,7 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -733,7 +733,7 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -745,6 +745,12 @@ class WanConv2d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -1196,3 +1202,13 @@ class WanDecoder:
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
         return (output_BCTHW, new_logical_h)
+
+
+def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
+    """
+    Neighbor pad can use no more links than the product of the upper dimensions of the input tensor.
+    """
+    upper_dims = 1
+    for i in range(dim):
+        upper_dims *= input_tensor.shape[i]
+    return min(upper_dims, ccl_manager.num_links)

@@ -68,6 +68,8 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {

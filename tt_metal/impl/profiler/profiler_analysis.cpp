@@ -98,7 +98,9 @@ bool experimental::ProgramExecutionUID::operator<(const experimental::ProgramExe
 
 bool experimental::ProgramAnalysisData::operator==(const experimental::ProgramAnalysisData& other) const {
     return this->program_execution_uid == other.program_execution_uid &&
-           this->program_analyses_results == other.program_analyses_results;
+           this->program_analyses_results == other.program_analyses_results &&
+           this->core_count == other.core_count &&
+           this->num_available_cores == other.num_available_cores;
 }
 
 bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAnalysisData& other) const {
@@ -228,7 +230,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
             const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
-                .device_id = marker.chip_id,
+                .device_id = static_cast<ChipId>(marker.chip_id),
                 .device_arch = device_arch,
                 .program_name = marker.op_name,
                 .num_fw_cores = 0,

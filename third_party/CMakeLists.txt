@@ -13,7 +13,15 @@ add_compile_options(-Wno-unused-variable)
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+endif()
+
+############################################################################################################################
+# hwloc
+############################################################################################################################
+find_library(HWLOC_LIBRARY NAMES hwloc)
+if(NOT HWLOC_LIBRARY)
+    message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
 
 ############################################################################################################################
@@ -197,6 +205,20 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+
+############################################################################################################################
+# nanobind : https://github.com/wjakob/nanobind
+############################################################################################################################
+
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json

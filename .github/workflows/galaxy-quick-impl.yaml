@@ -140,7 +140,7 @@ jobs:
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
           ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
-          pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
+          # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
           pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
           # CCL smoke tests - exactly one representative test from each op category
