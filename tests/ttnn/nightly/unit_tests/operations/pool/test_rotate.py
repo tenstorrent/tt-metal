@@ -139,7 +139,7 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle):
 )
 @pytest.mark.parametrize(
     "fill_value",
-    [0.0],  # Only test default fill value for now
+    [0.0, 1.0, -1.0, 0.5],
 )
 def test_rotate_with_fill_value(device, input_shape, fill_value):
     """Test rotation with different fill values for out-of-bounds areas"""

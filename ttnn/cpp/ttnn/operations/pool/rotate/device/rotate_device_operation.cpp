@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotate_device_operation.hpp"
+#include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+#include <ttnn/tensor/types.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::rotate {
-using namespace tt;
 using namespace tt::tt_metal;
 
 RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
