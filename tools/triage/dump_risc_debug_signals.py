@@ -46,7 +46,8 @@ def dump_risc_debug_signals(
     try:
         risc_debug = noc_block.get_risc_debug(risc_name)
         # Try to halt the core
-        risc_debug.halt()
+        with risc_debug.ensure_halted():
+            pass
         # If halt was successful, return None
         return None
     except:
