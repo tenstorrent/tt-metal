@@ -233,91 +233,87 @@ def run(
 
     # Op call - uses extracted parameters from traced configs
     start_time = start_measuring_time()
-    try:
-        # Parse is_causal parameter (default to True for decode)
-        is_causal_flag = True
-        if is_causal is not None:
-            if isinstance(is_causal, str):
-                is_causal_flag = is_causal.lower() in ["true", "1", "yes"]
-            else:
-                is_causal_flag = bool(is_causal)
 
-        # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
-        output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    # Parse is_causal parameter (default to True for decode)
+    is_causal_flag = True
+    if is_causal is not None:
+        if isinstance(is_causal, str):
+            is_causal_flag = is_causal.lower() in ["true", "1", "yes"]
+        else:
+            is_causal_flag = bool(is_causal)
 
-        # Build program_config if parameters are provided (from arg11)
-        program_config = None
-        if all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
-            # Parse compute_grid if it's a list/tuple
-            if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
-                grid = tuple(program_config_compute_grid)
-            else:
-                grid = (8, 8)  # Default fallback
+    # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
+    output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
-            program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid,
-                q_chunk_size=int(program_config_q_chunk_size),
-                k_chunk_size=int(program_config_k_chunk_size),
-                exp_approx_mode=False,  # Default
-            )
+    # Build program_config if parameters are provided (from arg11)
+    program_config = None
+    if all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
+        # Parse compute_grid if it's a list/tuple
+        if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
+            grid = tuple(program_config_compute_grid)
+        else:
+            grid = (8, 8)  # Default fallback
 
-        # Build compute_kernel_config if parameters are provided (from arg12)
-        compute_kernel_config = None
-        if compute_kernel_config_math_fidelity is not None:
-            # Map string fidelity to enum
-            math_fidelity_map = {
-                "HiFi4": ttnn.MathFidelity.HiFi4,
-                "HiFi3": ttnn.MathFidelity.HiFi3,
-                "HiFi2": ttnn.MathFidelity.HiFi2,
-                "LoFi": ttnn.MathFidelity.LoFi,
-            }
-            fidelity = math_fidelity_map.get(compute_kernel_config_math_fidelity, ttnn.MathFidelity.HiFi2)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=int(program_config_q_chunk_size),
+            k_chunk_size=int(program_config_k_chunk_size),
+            exp_approx_mode=False,  # Default
+        )
 
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=fidelity,
-                math_approx_mode=bool(compute_kernel_config_math_approx_mode)
-                if compute_kernel_config_math_approx_mode is not None
-                else False,
-                fp32_dest_acc_en=bool(compute_kernel_config_fp32_dest_acc_en)
-                if compute_kernel_config_fp32_dest_acc_en is not None
-                else False,
-                packer_l1_acc=bool(compute_kernel_config_packer_l1_acc)
-                if compute_kernel_config_packer_l1_acc is not None
-                else False,
-            )
-
-        # Build operation arguments
-        op_kwargs = {
-            "is_causal": is_causal_flag,
-            "memory_config": output_mem_cfg,
-            "cur_pos_tensor": cur_pos_tensor,
+    # Build compute_kernel_config if parameters are provided (from arg12)
+    compute_kernel_config = None
+    if compute_kernel_config_math_fidelity is not None:
+        # Map string fidelity to enum
+        math_fidelity_map = {
+            "HiFi4": ttnn.MathFidelity.HiFi4,
+            "HiFi3": ttnn.MathFidelity.HiFi3,
+            "HiFi2": ttnn.MathFidelity.HiFi2,
+            "LoFi": ttnn.MathFidelity.LoFi,
         }
+        fidelity = math_fidelity_map.get(compute_kernel_config_math_fidelity, ttnn.MathFidelity.HiFi2)
 
-        # Add optional parameters if extracted from traced config
-        op_kwargs["scale"] = compute_scale
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=fidelity,
+            math_approx_mode=bool(compute_kernel_config_math_approx_mode)
+            if compute_kernel_config_math_approx_mode is not None
+            else False,
+            fp32_dest_acc_en=bool(compute_kernel_config_fp32_dest_acc_en)
+            if compute_kernel_config_fp32_dest_acc_en is not None
+            else False,
+            packer_l1_acc=bool(compute_kernel_config_packer_l1_acc)
+            if compute_kernel_config_packer_l1_acc is not None
+            else False,
+        )
 
-        if sliding_window_size is not None:
-            op_kwargs["sliding_window_size"] = int(sliding_window_size)
+    # Build operation arguments
+    op_kwargs = {
+        "is_causal": is_causal_flag,
+        "memory_config": output_mem_cfg,
+        "cur_pos_tensor": cur_pos_tensor,
+    }
 
-        if program_config is not None:
-            op_kwargs["program_config"] = program_config
+    # Add optional parameters if extracted from traced config
+    op_kwargs["scale"] = compute_scale
 
-        if compute_kernel_config is not None:
-            op_kwargs["compute_kernel_config"] = compute_kernel_config
+    if sliding_window_size is not None:
+        op_kwargs["sliding_window_size"] = int(sliding_window_size)
 
-        output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
-        output_tensor = ttnn.to_torch(output_tensor)
+    if program_config is not None:
+        op_kwargs["program_config"] = program_config
 
-        # Slice output to match Q heads (following unit test pattern)
-        # Output shape: [1, b, ?, d] - slice to [1, b, nh_q, d]
-        output_tensor = output_tensor[:, :, :nh_q, :]
+    if compute_kernel_config is not None:
+        op_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        e2e_perf = stop_measuring_time(start_time)
+    # Run TTNN operation
+    output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-        # Comparison - decode operation typically has slightly lower accuracy
-        return [check_with_pcc(torch_output, output_tensor, 0.98), e2e_perf]
-    except Exception as e:
-        e2e_perf = stop_measuring_time(start_time)
-        # If operation fails, return failure with error message
-        # With extracted k_chunk_size, constraint violations should be avoided
-        return [(False, f"Operation failed: {str(e)}"), e2e_perf]
+    # Slice output to match Q heads (following unit test pattern)
+    # Output shape: [1, b, ?, d] - slice to [1, b, nh_q, d]
+    output_tensor = output_tensor[:, :, :nh_q, :]
+
+    e2e_perf = stop_measuring_time(start_time)
+
+    # Comparison - decode operation with unit test approach achieves high accuracy
+    return [check_with_pcc(torch_output, output_tensor, 0.99), e2e_perf]
