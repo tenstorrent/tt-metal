@@ -143,9 +143,9 @@ def test_wan_transformer_block(
     rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
     rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
 
-    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=256, num_devices=sp_factor)
-    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=256, num_devices=sp_factor)
-    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=256, num_devices=sp_factor)
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
 
     # Sequence fractured spatial
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})

@@ -254,13 +254,13 @@ def get_padded_vision_seq_len(N, num_devices):
     return padded_seq_len
 
 
-def pad_vision_seq_parallel(tensor, chunk_size_lcm, num_devices):
+def pad_vision_seq_parallel(tensor, num_devices):
     """
     Sequence parallelism shards the vision tensor in dim2.
     dim2 must be divisible by tile size and num_devices.
     """
     seq_len = tensor.shape[2]
-    padded_seq_len = get_padded_vision_seq_len(seq_len, chunk_size_lcm, num_devices)
+    padded_seq_len = get_padded_vision_seq_len(seq_len, num_devices)
     pad_len = padded_seq_len - seq_len
 
     # Pad the sequence length dimension (dim2) on the right
