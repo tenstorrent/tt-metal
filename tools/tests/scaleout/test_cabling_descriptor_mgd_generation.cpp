@@ -3,13 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
-
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <ranges>
-#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -77,8 +74,17 @@ void check_mesh_device_count(const MeshGraphDescriptor& desc, uint32_t mesh_id, 
     FAIL() << "Mesh " << mesh_id << " not found";
 }
 
-void check_architecture(const MeshGraphDescriptor& desc, [[maybe_unused]] std::string_view expected_arch) {
+void check_architecture(const MeshGraphDescriptor& desc, std::string_view expected_arch) {
+    EXPECT_FALSE(expected_arch.empty()) << "Expected architecture string must not be empty";
     EXPECT_GT(desc.all_meshes().size(), 0) << "No meshes found";
+
+    // Verify all meshes have the expected architecture
+    for (const auto mesh_id : desc.all_meshes()) {
+        const auto& inst = desc.get_instance(mesh_id);
+        const auto& arch_str = proto::Architecture_Name(inst.arch);
+        EXPECT_EQ(arch_str, expected_arch)
+            << "Mesh " << inst.local_id << " has architecture " << arch_str << " but expected " << expected_arch;
+    }
 }
 
 void check_intermesh_connection_exists(

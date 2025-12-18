@@ -5,16 +5,11 @@
 #include "generate_mgd.hpp"
 
 #include <algorithm>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <set>
-#include <sstream>
 #include <string_view>
-#include <unistd.h>
-
-#include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/text_format.h>
 
 #include "protobuf/cluster_config.pb.h"
@@ -114,7 +109,24 @@ std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> compu
         if (connection.first.host_id == connection.second.host_id) {
             continue;
         }
-        intermesh_connections[hostnames[*connection.first.host_id]][hostnames[*connection.second.host_id]]++;
+
+        // Validate host_id is within bounds of hostnames vector
+        uint32_t first_host_id = *connection.first.host_id;
+        uint32_t second_host_id = *connection.second.host_id;
+
+        if (first_host_id >= hostnames.size()) {
+            throw std::runtime_error(
+                "Invalid host_id in connection: " + std::to_string(first_host_id) + " exceeds hostnames size " +
+                std::to_string(hostnames.size()));
+        }
+
+        if (second_host_id >= hostnames.size()) {
+            throw std::runtime_error(
+                "Invalid host_id in connection: " + std::to_string(second_host_id) + " exceeds hostnames size " +
+                std::to_string(hostnames.size()));
+        }
+
+        intermesh_connections[hostnames[first_host_id]][hostnames[second_host_id]]++;
     }
 
     return intermesh_connections;
@@ -264,8 +276,27 @@ static tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_impl(
         for (const auto& [dst_host, count] : conn) {
             // Parse mesh ID from hostname (format: "M{id}")
             // Since hostnames are generated as "M0", "M1", etc., we can extract the ID
-            int src_idx = std::stoi(src_host.substr(1));
-            int dst_idx = std::stoi(dst_host.substr(1));
+            int src_idx = 0;
+            int dst_idx = 0;
+
+            try {
+                src_idx = std::stoi(src_host.substr(1));
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(
+                    "Failed to parse source hostname '" + src_host + "': invalid format (expected 'M{id}')");
+            } catch (const std::out_of_range& e) {
+                throw std::runtime_error("Failed to parse source hostname '" + src_host + "': mesh ID out of range");
+            }
+
+            try {
+                dst_idx = std::stoi(dst_host.substr(1));
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(
+                    "Failed to parse destination hostname '" + dst_host + "': invalid format (expected 'M{id}')");
+            } catch (const std::out_of_range& e) {
+                throw std::runtime_error(
+                    "Failed to parse destination hostname '" + dst_host + "': mesh ID out of range");
+            }
 
             auto* connection = graph_desc->add_connections();
 
