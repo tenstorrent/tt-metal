@@ -24,6 +24,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
+constexpr uint32_t NUM_TILES_DEST = 8;
 
 // Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
 static uint16_t nearest_float_to_bfloat16(float value) {
@@ -97,12 +98,13 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         tt::round_up(output_stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
 
     // Calculate max CB pages based on available L1 memory
-    const uint32_t available_l1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Due to nothing else taking L1 in this data movement op, let's assume
+    // that it is okay to use 16KB of L1 for this CB allocation and calculate accordingly
+    const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
     const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;
     const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_stick_nbytes;
 
-    // Determine actual number of CB pages: min of (max work per core, L1 capacity), at least MIN_CB_PAGES
+    // Determine actual number of CB pages: min of (max work per core, L1 capacity)
     const uint32_t max_sticks_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
     num_cb_pages = num_cb_pages * NEAREST_BUFFERING_FACTOR;
@@ -120,18 +122,20 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         input_height,                // ct_arg[3]: input_height
         input_width,                 // ct_arg[4]: input_width
         input_channels,              // ct_arg[5]: input_channels
+        num_cb_pages,                // ct_arg[6]: num_cb_pages
     };
 
-    // Append tensor accessor args for input tensor
+    // Append tensor accessor args for input tensor (starts at ct_arg[7])
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     // Writer compile-time arguments (RISCV_1)
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,              // ct_arg[0]: output_cb_index
         aligned_output_stick_nbytes,  // ct_arg[1]: aligned_output_stick_nbytes
+        num_cb_pages,                 // ct_arg[2]: num_cb_pages
     };
 
-    // Append tensor accessor args for output tensor
+    // Append tensor accessor args for output tensor (starts at ct_arg[3])
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Create reader kernel (RISCV_0)
