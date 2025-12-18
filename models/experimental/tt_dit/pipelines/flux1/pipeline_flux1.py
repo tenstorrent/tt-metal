@@ -334,8 +334,8 @@ class Flux1Pipeline:
         num_inference_steps: int,
         seed: int,
         traced: bool = True,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ):
         return self(
             width=width,
@@ -347,8 +347,8 @@ class Flux1Pipeline:
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=traced,
-            timer=timer,
-            timer_iteration=timer_iteration,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(
@@ -367,8 +367,8 @@ class Flux1Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int = 0,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> list[Image.Image]:
         prompt_count = len(prompt_1)
 
@@ -377,7 +377,7 @@ class Flux1Pipeline:
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
 
-        with timer("total", timer_iteration) if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             assert height % (self._vae_scale_factor * self._patch_size) == 0
             assert width % (self._vae_scale_factor * self._patch_size) == 0
 
@@ -390,7 +390,7 @@ class Flux1Pipeline:
 
             logger.info("encoding prompts...")
 
-            with timer("encoder", timer_iteration) if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
@@ -399,8 +399,8 @@ class Flux1Pipeline:
                     num_images_per_prompt=num_images_per_prompt,
                     cfg_enabled=cfg_enabled,
                     clip_skip=clip_skip,
-                    timer=timer,
-                    timer_iteration=timer_iteration,
+                    profiler=profiler,
+                    profiler_iteration=profiler_iteration,
                 )
                 _, prompt_sequence_length, _ = prompt_embeds.shape
 
@@ -591,9 +591,9 @@ class Flux1Pipeline:
 
             logger.info("denoising...")
 
-            with timer("denoising", timer_iteration) if timer else nullcontext():
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
-                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                         sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
                         tt_timestep_list = []
@@ -640,7 +640,7 @@ class Flux1Pipeline:
 
             logger.info("decoding image...")
 
-            with timer("vae", timer_iteration) if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
@@ -859,12 +859,12 @@ class Flux1Pipeline:
         prompt_2: list[str],
         num_images_per_prompt: int,
         clip_skip: int = 0,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             prompt_1_embeds, pooled_prompt_1_embeds = _get_clip_prompt_embeds(
                 prompts=prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -875,7 +875,7 @@ class Flux1Pipeline:
                 clip_skip=clip_skip,
             )
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_prompt_embeds = _get_t5_prompt_embeds(
                 prompts=prompt_2,
                 text_encoder=self._t5_text_encoder,
@@ -902,16 +902,16 @@ class Flux1Pipeline:
         num_images_per_prompt: int,
         cfg_enabled: bool,
         clip_skip: int = 0,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         prompt_embeds, pooled_prompt_embeds = self._encode_prompts_partial(
             prompt_1=prompt_1,
             prompt_2=prompt_2,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
-            timer=timer,
-            timer_iteration=timer_iteration,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
         if not cfg_enabled:
@@ -922,8 +922,8 @@ class Flux1Pipeline:
             prompt_2=negative_prompt_2,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
-            timer=timer,
-            timer_iteration=timer_iteration,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
