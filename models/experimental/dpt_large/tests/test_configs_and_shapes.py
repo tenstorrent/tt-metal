@@ -5,9 +5,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from models.experimental.dpt_large.config import DPTLargeConfig
-from models.experimental.dpt_large.reassembly import DPTReassembly
-from models.experimental.dpt_large.vit_backbone import ViTBackboneOutputs
+from models.experimental.dpt_large.tt.config import DPTLargeConfig
+from models.experimental.dpt_large.tt.reassembly import DPTReassembly
+from models.experimental.dpt_large.tt.vit_backbone import ViTBackboneOutputs
 
 
 def test_reassembly_shapes():

@@ -12,9 +12,9 @@ from typing import List
 import numpy as np
 from PIL import Image
 
-from .config import DPTLargeConfig
-from .eval_utils import dump_pcc_report, evaluate_tt_vs_cpu, zero_shot_eval
-from .pipeline import DPTTTPipeline
+from ..tt.config import DPTLargeConfig
+from ..tt.eval_utils import dump_pcc_report, evaluate_tt_vs_cpu, zero_shot_eval
+from ..tt.pipeline import DPTTTPipeline
 
 
 def _collect_images(args) -> List[str]:
@@ -105,6 +105,25 @@ def main():
 
     depth = outputs[-1]
 
+    latency_ms_mean = float(np.mean(timings))
+    latency_ms_std = float(np.std(timings))
+    fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
+    perf = dict(
+        latency_ms_mean=latency_ms_mean,
+        latency_ms_std=latency_ms_std,
+        total_ms=latency_ms_mean,
+        fps=fps,
+        device=args.device,
+        dtype="bfloat16",
+        input_h=args.height,
+        input_w=args.width,
+        batch_size=1,
+        modules=["backbone", "reassembly", "fusion_head"],
+    )
+    # Attach last per-stage timing breakdown from the TT pipeline when available.
+    if use_tt and getattr(tt_pipeline, "last_perf", None) is not None:
+        perf["stage_breakdown_ms"] = tt_pipeline.last_perf
+
     if args.dump_depth:
         Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
         np.save(args.dump_depth, depth)
@@ -113,23 +132,6 @@ def main():
         _save_depth_color(depth, args.dump_depth_color)
 
     if args.dump_perf:
-        latency_ms_mean = float(np.mean(timings))
-        latency_ms_std = float(np.std(timings))
-        fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
-        perf = dict(
-            latency_ms_mean=latency_ms_mean,
-            latency_ms_std=latency_ms_std,
-            fps=fps,
-            device=args.device,
-            dtype="bfloat16",
-            input_h=args.height,
-            input_w=args.width,
-            batch_size=1,
-            modules=["backbone", "reassembly", "fusion_head"],
-        )
-        # Attach last per-stage timing breakdown from the TT pipeline when available.
-        if use_tt and getattr(tt_pipeline, "last_perf", None) is not None:
-            perf["stage_breakdown_ms"] = tt_pipeline.last_perf
         Path(args.dump_perf).parent.mkdir(parents=True, exist_ok=True)
         Path(args.dump_perf).write_text(json.dumps(perf, indent=2))
 

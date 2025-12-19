@@ -14,7 +14,7 @@ import torch
 import ttnn
 from transformers import DPTForDepthEstimation
 
-from tt_optimized_encoder import create_optimized_encoder
+from models.experimental.dpt_large.tt.tt_optimized_encoder import create_optimized_encoder
 
 
 def compute_pcc(a, b):

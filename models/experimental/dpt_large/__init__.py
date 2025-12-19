@@ -5,18 +5,14 @@
 TTNN DPT-Large (MiDaS 3.0) experimental implementation.
 
 Modules are organized as:
-    - config.py: model + TT specific configuration helpers
-    - fallback.py: HF/CPU reference pipeline
-    - vit_backbone.py: ViT-L backbone utilities (TT + CPU stubs)
-    - reassembly.py, fusion_head.py: decoder / head pieces
-    - pipeline.py: end-to-end wrapper
-    - weights.py: weight loading / conversion helpers
-    - runner.py: CLI entrypoint
+    - tt/: implementation modules
+    - demo/: runnable scripts
+    - tests/: unit/e2e tests
 """
 
-from .config import DPTLargeConfig
-from .fallback import DPTFallbackPipeline, run_depth_cpu
-from .pipeline import DPTTTPipeline, run_depth
+from .tt.config import DPTLargeConfig
+from .tt.fallback import DPTFallbackPipeline, run_depth_cpu
+from .tt.pipeline import DPTTTPipeline, run_depth
 
 __all__ = [
     "DPTLargeConfig",
