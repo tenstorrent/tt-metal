@@ -342,7 +342,10 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     }
     this->initialize_active_devices();
 
-    this->wait_for_fabric_router_sync(this->get_fabric_router_sync_timeout_ms());
+    if (has_flag(
+            tt::tt_metal::MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        this->wait_for_fabric_router_sync(this->get_fabric_router_sync_timeout_ms());
+    }
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -375,6 +378,9 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
         }));
     }
 
+    if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        return;
+    }
     // Sequentially execute fabric configuration on all devices
     // Empirically TG hung when this is also parallelized
     for (const auto& event : events) {
@@ -391,12 +397,25 @@ void DeviceManager::initialize_active_devices() {
     // Activate fabric (must be before FD)
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        log_info(tt::LogMetal, "Initializing Fabric");
-        tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
+        if (has_flag(
+                tt::tt_metal::MetalContext::instance().get_fabric_manager(),
+                tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            log_info(tt::LogMetal, "Initializing Fabric");
+            tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
-        // Initialize fabric on mmio device
-        init_fabric(active_devices);
-        log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+            // Initialize fabric on mmio device
+            init_fabric(active_devices);
+            log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+        } else if (has_flag(
+                       tt::tt_metal::MetalContext::instance().get_fabric_manager(),
+                       tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+            log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
+            for (auto* dev : active_devices) {
+                dev->compile_fabric();
+            }
+        } else {
+            log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
+        }
     }
 
     // Activate FD kernels
@@ -896,56 +915,64 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev_id);
     }
 
-    // Terminate fabric routers
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        const auto& fabric_context = control_plane.get_fabric_context();
-        const auto& builder_ctx = fabric_context.get_builder_context();
-        auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
-        std::vector<uint32_t> termination_signal(1, signal);
+    // Terminate fabric routers if not using fabric manager
+    if (has_flag(
+            tt::tt_metal::MetalContext::instance().get_fabric_manager(),
+            tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+        const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+            const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+            const auto& fabric_context = control_plane.get_fabric_context();
+            const auto& builder_ctx = fabric_context.get_builder_context();
+            auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
+            std::vector<uint32_t> termination_signal(1, signal);
 
-        // Terminate fabric tensix configs (mux cores) if enabled
-        // TODO: issue #26855, move the termination process to device
-        bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
-        if (tensix_config_enabled) {
-            const auto& tensix_config = builder_ctx.get_tensix_config();
+            // Terminate fabric tensix configs (mux cores) if enabled
+            // TODO: issue #26855, move the termination process to device
+            bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                         tt::tt_fabric::FabricTensixConfig::DISABLED;
+            if (tensix_config_enabled) {
+                const auto& tensix_config = builder_ctx.get_tensix_config();
+
+                for (const auto& dev : this->get_all_active_devices()) {
+                    if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                        continue;
+                    }
+
+                    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
+                    const auto& active_fabric_eth_channels =
+                        control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+                    for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                        auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
+                        auto [tensix_termination_address, tensix_signal] =
+                            tensix_config.get_termination_address_and_signal(core_id);
+                        std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                        auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                        tt_metal::detail::WriteToDeviceL1(
+                            dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+                    }
+
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev->id());
+                }
+            }
 
             for (const auto& dev : this->get_all_active_devices()) {
                 if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                     continue;
                 }
 
-                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-                const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
-                const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
-                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
-                    auto [tensix_termination_address, tensix_signal] =
-                        tensix_config.get_termination_address_and_signal(core_id);
-                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
-                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
-
-                    tt_metal::detail::WriteToDeviceL1(
-                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
-                }
-
-                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev->id());
+                auto master_router_logical_core =
+                    tt::tt_metal::MetalContext::instance()
+                        .get_cluster()
+                        .get_soc_desc(dev->id())
+                        .get_eth_core_for_channel(
+                            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+                tt_metal::detail::WriteToDeviceL1(
+                    dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
             }
-        }
-
-        for (const auto& dev : this->get_all_active_devices()) {
-            if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
-                continue;
-            }
-
-            auto master_router_logical_core =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(dev->id()).get_eth_core_for_channel(
-                    builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
-            tt_metal::detail::WriteToDeviceL1(
-                dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
     }
 

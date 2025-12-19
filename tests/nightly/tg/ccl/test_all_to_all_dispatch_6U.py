@@ -41,8 +41,14 @@ from tracy import signpost
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
         },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
     ],
-    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
+    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d", "fabric_manager_enabled_1d_line"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])

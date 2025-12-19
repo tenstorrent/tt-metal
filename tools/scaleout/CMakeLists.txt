@@ -7,6 +7,12 @@ add_executable(
     validation/utils/cluster_validation_utils.cpp
 )
 
+add_executable(
+    run_fabric_manager
+    fabric_manager/run_fabric_manager.cpp
+    fabric_manager/utils/fabric_manager_utils.cpp
+)
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
@@ -60,6 +66,10 @@ target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT:
 target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+target_include_directories(run_fabric_manager PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+target_include_directories(run_fabric_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(run_fabric_manager SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 target_link_libraries(
     scaleout_tools
     PUBLIC
@@ -88,6 +98,16 @@ target_link_libraries(
         protobuf::libprotobuf
         tt_metal
         cxxopts::cxxopts
+)
+
+# Separate binary to get functional coverage for CI. End user fabric manager tool is productized at https://github.com/tenstorrent/tt-fabric-manager
+target_link_libraries(
+    run_fabric_manager
+    PRIVATE
+        TT::ScaleoutTools
+        enchantum::enchantum
+        protobuf::libprotobuf
+        tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)

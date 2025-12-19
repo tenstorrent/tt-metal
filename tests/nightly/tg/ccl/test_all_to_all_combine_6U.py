@@ -31,8 +31,26 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
     ],
-    ids=["fabric_2d", "fabric_1d_line", "fabric_1d_ring"],
+    ids=[
+        "fabric_2d",
+        "fabric_1d_line",
+        "fabric_1d_ring",
+        "fabric_manager_enabled_2d",
+        "fabric_manager_enabled_1d_line",
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
