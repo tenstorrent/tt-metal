@@ -8,7 +8,7 @@
 #pragma once
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #endif
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // This kernel is used to read untilized src0 data from DRAM and copy it to L1 in tilized layout.
 // For layout transformation, it uses a list of source addresses (a vector in L1 written by the host) to perform

@@ -10,7 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_debug.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -594,8 +594,7 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
 // clang-format on
 template <int num_rows = 9, ckernel::DataLayout layout = ckernel::DataLayout::TILE, int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
-    // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
-    static_assert(num_rows <= 9, "num_rows must be <= 9");
+    static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows, ITERATIONS, layout>(
         idst, idst_idx)));
 }

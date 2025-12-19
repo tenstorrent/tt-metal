@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
 using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
