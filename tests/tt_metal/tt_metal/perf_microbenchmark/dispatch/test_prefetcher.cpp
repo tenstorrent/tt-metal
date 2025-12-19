@@ -1166,7 +1166,7 @@ protected:
         // Random length (bytes), aligned to L1, capped by remaining
         uint32_t data_size_bytes = payload_generator_->get_rand<uint32_t>(l1_alignment_, avail_bytes);
         data_size_bytes = tt::align(data_size_bytes, l1_alignment_);
-        data_size_bytes = std::min(data_size_bytes, std::min(avail_bytes, remaining_bytes));
+        data_size_bytes = std::min({data_size_bytes, avail_bytes, remaining_bytes});
         if (data_size_bytes == 0 || data_size_bytes > avail_bytes) {
             return std::nullopt;
         }
@@ -1937,7 +1937,7 @@ TEST_P(RandomTestFixture, RandomTest) {
             //     CoreRange single_worker_range = {worker_core, worker_core};
             //     auto result = gen_random_linear_read_cmd(device_data, worker_core, noc_xy, remaining_bytes);
             //     if(result.has_value()){
-            //         const HostMemDeviceCommand& cmd = *result;
+            //         HostMemDeviceCommand& cmd = *result;
             //         commands_per_iteration.push_back(std::move(cmd));
             //     }
             //     break;
@@ -1947,7 +1947,7 @@ TEST_P(RandomTestFixture, RandomTest) {
                 auto result =
                     gen_random_dram_paged_cmd(device_data, worker_core, single_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
-                    const HostMemDeviceCommand& cmd = *result;
+                    HostMemDeviceCommand& cmd = *result;
                     commands_per_iteration.push_back(std::move(cmd));
                 }
                 break;
@@ -1957,7 +1957,7 @@ TEST_P(RandomTestFixture, RandomTest) {
                 CoreRange multi_worker_range = {worker_core, last_worker};
                 auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                 if (result.has_value()) {
-                    const HostMemDeviceCommand& cmd = *result;
+                    HostMemDeviceCommand& cmd = *result;
                     commands_per_iteration.push_back(std::move(cmd));
                 }
                 break;
