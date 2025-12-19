@@ -678,35 +678,13 @@ class MasterConfigLoader:
                         if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
                             # interleaved_to_sharded has output memory config in arg1
                             for arg in config:
-                                if isinstance(arg, dict) and "UnparsedElement" in arg:
-                                    element_info = arg["UnparsedElement"].get("element_info", "")
-                                    if "MemoryConfig" in element_info:
+                                if isinstance(arg, dict) and "arg1" in arg:
+                                    if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
                                         try:
-                                            # Apply regex fixes for C++ style formats (same as extract_tensor_config)
-                                            fixed_json_str = element_info
-                                            # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
-                                            fixed_json_str = re.sub(
-                                                r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str
+                                            output_mem_config = self.parse_memory_config(
+                                                arg["arg1"]["MemoryConfig"], tensor_config.shape
                                             )
-                                            # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
-                                            fixed_json_str = re.sub(
-                                                r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}',
-                                                r'"grid":[\1]',
-                                                fixed_json_str,
-                                            )
-                                            # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
-                                            fixed_json_str = re.sub(
-                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
-                                                r"\1, \2",
-                                                fixed_json_str,
-                                            )
-
-                                            parsed = json.loads(fixed_json_str)
-                                            if "arg1" in parsed and "MemoryConfig" in parsed["arg1"]:
-                                                output_mem_config = self.parse_memory_config(
-                                                    parsed["arg1"]["MemoryConfig"], tensor_config.shape
-                                                )
-                                                break
+                                            break
                                         except Exception as e:
                                             # If parsing fails, continue to next arg or use default
                                             pass
@@ -2732,42 +2710,13 @@ class MasterConfigLoader:
             return None
 
     def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
-        """Extract tensor configuration from argument data"""
+        """Extract tensor configuration from argument data
+
+        Note: UnparsedElements are now fixed by the tracer's post-processing,
+        so this method only handles already-clean data structures.
+        """
         if not isinstance(arg_data, dict):
             return None
-
-        # Handle UnparsedElement by parsing its element_info string
-        if "UnparsedElement" in arg_data:
-            unparsed_data = arg_data["UnparsedElement"]
-            element_info = unparsed_data.get("element_info", "")
-
-            if element_info and element_info.startswith("{"):
-                try:
-                    # Apply regex fixes for C++ style formats
-                    fixed_json_str = element_info
-                    # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
-                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-                    # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
-                    # This handles CoreRangeSet structures with multiple ranges
-                    fixed_json_str = re.sub(
-                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
-                    )
-                    # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
-                    # Using a more specific pattern to handle coordinate objects
-                    fixed_json_str = re.sub(
-                        r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})', r"\1, \2", fixed_json_str
-                    )
-
-                    # Parse the fixed JSON
-                    parsed_data = json.loads(fixed_json_str)
-
-                    # Extract arg0 (first argument) which contains the tensor
-                    for key, value in parsed_data.items():
-                        if isinstance(value, dict) and "Tensor" in value:
-                            arg_data = value
-                            break
-                except Exception as e:
-                    return None
 
         # Handle nested structure like {arg0: {Tensor: ...}} or {arg1: {Tensor: ...}}
         # Check if any of the keys are argument names (arg0, arg1, etc.)

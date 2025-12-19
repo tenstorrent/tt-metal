@@ -257,8 +257,8 @@ class OperationParameterExtractors:
                         tensor_shapes.append(tensor_config.shape)
                         break
 
-            # Extract from arg1 (weight tensor) - this might be UnparsedElement
-            # In the traced config, arg1 might be in a dict with "arg1" key, or directly as UnparsedElement
+            # Extract from arg1 (weight tensor)
+            # In the traced config, arg1 might be in a dict with "arg1" key
             for arg in config:
                 if isinstance(arg, dict):
                     # Case 1: {"arg1": {...}}
@@ -267,7 +267,7 @@ class OperationParameterExtractors:
                         if tensor_config:
                             tensor_shapes.append(tensor_config.shape)
                             break
-                    # Case 2: {"UnparsedElement": {...}} - this might be arg1
+                    # Case 2: String-encoded tensor vector (e.g., concat operation)
                     elif "UnparsedElement" in arg:
                         tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                         if tensor_config:
@@ -692,11 +692,15 @@ class OperationParameterExtractors:
 
     @staticmethod
     def extract_tensor_config(arg_data: Dict) -> Optional[TensorConfig]:
-        """Extract tensor configuration from argument data"""
+        """Extract tensor configuration from argument data
+
+        Note: Most UnparsedElements are now fixed by the tracer's post-processing.
+        This method only handles string-encoded tensor vectors (e.g., concat operations).
+        """
         if not isinstance(arg_data, dict):
             return None
 
-        # Handle UnparsedElement by parsing its element_info string
+        # Handle string-encoded tensor vectors (e.g., concat operation's arg0)
         if "UnparsedElement" in arg_data:
             unparsed_data = arg_data["UnparsedElement"]
             element_info = unparsed_data.get("element_info", "")
@@ -722,53 +726,12 @@ class OperationParameterExtractors:
                                 layout = "Layout::TILE"
                             if shape and dtype and layout and memory_config:
                                 return TensorConfig(shape, dtype, layout, memory_config)
-
-                    # Apply regex fixes for C++ style formats
-                    fixed_json_str = element_info
-
-                    # Step 1: Fix grid ranges INSIDE arrays FIRST (most common issue in matmul)
-                    # Pattern: [{"x":0,"y":0} - {"x":7,"y":1}] -> [{"x":0,"y":0}, {"x":7,"y":1}]
-                    fixed_json_str = re.sub(
-                        r'\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]', r"[\1, \2]", fixed_json_str
-                    )
-
-                    # Step 2: Fix grid ranges outside arrays: {"x":0,"y":0} - {"x":7,"y":1} -> {"x":0,"y":0}, {"x":7,"y":1}
-                    fixed_json_str = re.sub(
-                        r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})', r"\1, \2", fixed_json_str
-                    )
-
-                    # Step 3: Fix C++ style braces in values like "{32, 32}" -> "[32, 64]" (for shape strings)
-                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-
-                    # Step 4: Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
-                    fixed_json_str = re.sub(
-                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
-                    )
-
-                    # Parse the fixed JSON
-                    try:
-                        parsed_data = json.loads(fixed_json_str)
-                    except json.JSONDecodeError as e:
-                        # If still failing, try more aggressive fixes
-                        # Handle nested grid arrays that might have been missed
-                        fixed_json_str = re.sub(
-                            r'"grid":\s*\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]',
-                            r'"grid":[\1, \2]',
-                            fixed_json_str,
-                        )
-                        try:
-                            parsed_data = json.loads(fixed_json_str)
-                        except json.JSONDecodeError:
-                            # Last resort: return None if we can't parse
-                            return None
-
-                    # Extract tensor from arg0, arg1, etc. (first argument that contains Tensor)
-                    for key, value in parsed_data.items():
-                        if isinstance(value, dict) and "Tensor" in value:
-                            arg_data = value
-                            break
                 except Exception:
                     return None
+
+            # If it's an UnparsedElement but not a tensor vector, return None
+            # (should not happen with post-processed data)
+            return None
 
         # Handle nested structure like {arg0: {Tensor: ...}} or {arg1: {Tensor: ...}}
         if "Tensor" not in arg_data:
@@ -1171,7 +1134,7 @@ class OperationParameterExtractors:
                             if tensor_config:
                                 input_configs.append(tensor_config)
                         elif "UnparsedElement" in arg:
-                            # Handle UnparsedElement case (e.g., arg0)
+                            # Handle string-encoded tensor vectors
                             tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                             if tensor_config:
                                 input_configs.append(tensor_config)
@@ -1384,7 +1347,6 @@ class OperationParameterExtractors:
     def _extract_all_gather_async_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for all_gather_async operation
 
-        Handles UnparsedElement errors by extracting from element_info using regex.
         Extracts:
         - Input tensor config from arg0
         - Output memory config from arg5
@@ -1397,7 +1359,7 @@ class OperationParameterExtractors:
         try:
             params = {}
 
-            # Extract input tensor config from arg0 (handles UnparsedElement)
+            # Extract input tensor config from arg0
             input_shape = None
             input_dtype = None
             input_memory_config = None
@@ -1413,50 +1375,14 @@ class OperationParameterExtractors:
                             input_dtype = tensor_config.dtype.replace("DataType::", "")
                             input_memory_config = tensor_config.memory_config
                     elif "UnparsedElement" in arg0:
-                        # UnparsedElement case - extract from element_info using regex
-                        unparsed = arg0["UnparsedElement"]
-                        element_info = unparsed.get("element_info", "")
-
-                        # Try to use extract_tensor_config first (it handles UnparsedElement)
+                        # String-encoded tensor vector (should be rare, mostly for concat)
                         tensor_config = OperationParameterExtractors.extract_tensor_config(arg0)
                         if tensor_config:
                             input_shape = tensor_config.shape
                             input_dtype = tensor_config.dtype.replace("DataType::", "")
                             input_memory_config = tensor_config.memory_config
-                        else:
-                            # Fallback to regex extraction
-                            shape_match = re.search(r'"logical_shape":\[([^\]]+)\]', element_info)
-                            if shape_match:
-                                try:
-                                    input_shape = json.loads("[" + shape_match.group(1) + "]")
-                                except:
-                                    pass
 
-                            dtype_match = re.search(r'"dtype":"DataType::([^"]+)"', element_info)
-                            if dtype_match:
-                                input_dtype = dtype_match.group(1)
-
-                            # Extract memory config
-                            if "memory_config" in element_info:
-                                mem_layout_match = re.search(
-                                    r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info
-                                )
-                                buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
-
-                                input_memory_config = {}
-                                if mem_layout_match:
-                                    input_memory_config["memory_layout"] = mem_layout_match.group(1)
-                                if buffer_type_match:
-                                    input_memory_config["buffer_type"] = buffer_type_match.group(1)
-
-                                # Extract shard_spec if present
-                                if "shard_spec" in element_info and "nullopt" not in element_info:
-                                    shard_match = re.search(r'"shard_spec":\{([^}]+)\}', element_info)
-                                    if shard_match:
-                                        shard_info = shard_match.group(1)
-                                        input_memory_config["shard_spec"] = shard_info
-
-            # Extract output memory config from arg5 (handles UnparsedElement)
+            # Extract output memory config from arg5
             output_memory_config = None
 
             if len(config) > 5:
@@ -1489,60 +1415,9 @@ class OperationParameterExtractors:
                                         if buffer_type_match:
                                             output_memory_config["buffer_type"] = buffer_type_match.group(1)
                     elif "UnparsedElement" in arg5:
-                        # UnparsedElement case - extract from element_info
-                        unparsed = arg5["UnparsedElement"]
-                        element_info = unparsed.get("element_info", "")
-
-                        if "MemoryConfig" in element_info:
-                            mem_layout_match = re.search(r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info)
-                            buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
-
-                            output_memory_config = {}
-                            if mem_layout_match:
-                                output_memory_config["memory_layout"] = mem_layout_match.group(1)
-                            if buffer_type_match:
-                                output_memory_config["buffer_type"] = buffer_type_match.group(1)
-
-                            # Extract shard_spec if present - handle nested braces
-                            # Check for shard_spec specifically, not just absence of nullopt
-                            shard_spec_start = element_info.find('"shard_spec":{')
-                            if shard_spec_start != -1 and element_info.find('"shard_spec":"std::nullopt"') == -1:
-                                # Find shard_spec start
-                                shard_start = element_info.find('"shard_spec":{')
-                                if shard_start != -1:
-                                    # Find matching closing brace
-                                    brace_count = 0
-                                    start_pos = shard_start + len('"shard_spec":{')
-                                    shard_spec_str = None
-                                    for i in range(start_pos, len(element_info)):
-                                        if element_info[i] == "{":
-                                            brace_count += 1
-                                        elif element_info[i] == "}":
-                                            if brace_count == 0:
-                                                shard_spec_str = element_info[
-                                                    shard_start + len('"shard_spec":') : i + 1
-                                                ]
-                                                break
-                                            brace_count -= 1
-
-                                    if shard_spec_str:
-                                        try:
-                                            # Fix the " - " syntax in grid coordinates
-                                            fixed_shard = re.sub(
-                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
-                                                r"[\1, \2]",
-                                                shard_spec_str,
-                                            )
-                                            # Fix shape format "{32, 64}" -> "[32, 64]"
-                                            fixed_shard = re.sub(
-                                                r'"shape":"\{(\d+),\s*(\d+)\}"', r'"shape":[\1, \2]', fixed_shard
-                                            )
-                                            # Parse as JSON
-                                            shard_spec_dict = json.loads(fixed_shard)
-                                            output_memory_config["shard_spec"] = shard_spec_dict
-                                        except Exception as e:
-                                            # Fallback: store as string for parse_memory_config to handle
-                                            output_memory_config["shard_spec"] = shard_spec_str
+                        # String-encoded data (should not happen with post-processed data)
+                        # Skip it as the data should be clean
+                        pass
 
             # Extract dim from arg2
             dim = OperationParameterExtractors._extract_int_parameter(config, "arg2")
@@ -2121,7 +1996,7 @@ def _extract_sdpa_decode_params(config: List) -> Optional[Dict]:
                         if tensor_config:
                             input_configs.append(tensor_config)
                     elif "UnparsedElement" in arg_elem:
-                        # Try to extract from UnparsedElement
+                        # Try to extract from string-encoded tensor vector
                         tensor_config = OperationParameterExtractors.extract_tensor_config(arg_elem)
                         if tensor_config:
                             input_configs.append(tensor_config)
