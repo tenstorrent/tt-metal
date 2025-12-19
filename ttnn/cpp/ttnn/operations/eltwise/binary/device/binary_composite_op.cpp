@@ -201,24 +201,78 @@ Tensor ExecuteDiv::invoke(
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = round_mode.has_value();
+    const bool is_int32 = input.dtype() == DataType::INT32;
+
+    if (is_int32) {
+        TT_FATAL(
+            ((use_legacy == false || use_legacy == std::nullopt) && !fast_and_approximate_mode),
+            "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
+            use_legacy,
+            fast_and_approximate_mode);
+        // fast_and_approximate_mode is not supported for integer division yet.
+
+        if (round_mode == "floor") {
+            return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
+                input,
+                value,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                std::nullopt,
+                sub_core_grids);
+        } else if (round_mode == "trunc") {
+            return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
+                input,
+                value,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                std::nullopt,
+                sub_core_grids);
+        } else {
+            // round_mode = None
+            TT_FATAL(
+                (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
+                "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+                "ttnn.float32");
+            return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+                input,
+                value,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                std::nullopt,  // use_legacy
+                std::nullopt,  // fast_and_approximate_mode
+                sub_core_grids);
+        }
+    }
+
     if (!(use_legacy ? *use_legacy
                      : (has_legacy_only_args ||
                         binary::is_legacy_only(
                             input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(
-            !has_legacy_only_args,
-            "round_mode is not valid when passing use_legacy=false in div (tensor-scalar); binary_ng does not "
-            "support round_mode for scalar operations yet");
-        return BinaryOperation<BinaryOpType::DIV>::invoke(
+        TT_FATAL(!has_legacy_only_args, "round_mode is not valid when use_legacy parameter is false");
+
+        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input,
             value,
-            output_dtype,
+            std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,
             lhs_activations,
             rhs_activations,
             use_legacy,
+            fast_and_approximate_mode,
             sub_core_grids);
     }
 
@@ -226,28 +280,30 @@ Tensor ExecuteDiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     if (output_tensor.has_value()) {
-        ttnn::multiply(
+        ttnn::divide(
             input,
-            (1.0f / value),
+            value,
             std::nullopt,
             output_mem_config,
             output_tensor,
+            post_activations,
             lhs_activations,
             rhs_activations,
-            post_activations,
-            use_legacy,
+            std::nullopt,
+            fast_and_approximate_mode,
             sub_core_grids);
     } else {
-        output_tensor = ttnn::multiply(
+        output_tensor = ttnn::divide(
             input,
-            (1.0f / value),
+            value,
             std::nullopt,
             output_mem_config,
             output_tensor,
+            post_activations,
             lhs_activations,
             rhs_activations,
-            post_activations,
-            use_legacy,
+            std::nullopt,
+            fast_and_approximate_mode,
             sub_core_grids);
     }
 
