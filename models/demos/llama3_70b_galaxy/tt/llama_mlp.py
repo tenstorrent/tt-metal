@@ -7,12 +7,76 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
-from models.common.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.common.utility_functions import comp_pcc, comp_allclose
 
 import os
+
+
+def compare_per_device(ttnn_tensor, torch_expected, mesh_device, op_name, is_input=False):
+    """
+    Compare ttnn tensor against torch expected value device-by-device.
+    Prints PCC for each device.
+
+    Args:
+        ttnn_tensor: The ttnn tensor distributed across devices
+        torch_expected: The expected torch tensor (full, will be sliced per device)
+        mesh_device: The mesh device
+        op_name: Name of the operation for logging
+        is_input: Whether this is an input tensor (for logging purposes)
+    """
+    device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+    tensor_type = "input" if is_input else "output"
+
+    print(f"\n{'='*60}")
+    print(f"PCC Comparison for {op_name} ({tensor_type})")
+    print(f"{'='*60}")
+
+    for device_idx, device_tensor in enumerate(device_tensors):
+        # Convert device tensor to torch
+        device_torch = ttnn.to_torch(device_tensor)
+
+        # Get the corresponding slice from torch_expected based on device index
+        # The slicing depends on how the tensor is distributed across devices
+        num_devices = len(device_tensors)
+
+        # Determine which dimension is sharded and slice accordingly
+        if torch_expected.shape == device_torch.shape:
+            # No sharding, full tensor on each device
+            expected_slice = torch_expected
+        else:
+            # Try to match shapes by finding the sharded dimension
+            for dim in range(len(torch_expected.shape)):
+                if torch_expected.shape[dim] != device_torch.shape[dim]:
+                    # This dimension is sharded
+                    shard_size = device_torch.shape[dim]
+                    start_idx = device_idx * shard_size
+                    end_idx = start_idx + shard_size
+                    expected_slice = torch.narrow(torch_expected, dim, start_idx, shard_size)
+                    break
+            else:
+                expected_slice = torch_expected
+
+        # Ensure shapes match for comparison
+        if expected_slice.shape != device_torch.shape:
+            print(f"  Device {device_idx}: Shape mismatch - expected {expected_slice.shape}, got {device_torch.shape}")
+            continue
+
+        # Compute PCC
+        passing, pcc_message = comp_pcc(expected_slice, device_torch)
+        allclose_result = comp_allclose(expected_slice, device_torch)
+        status = "✓ PASS" if passing else "✗ FAIL"
+        print(f"  Device {device_idx}: {status} | PCC: {pcc_message} | {allclose_result}")
+
+    print(f"{'='*60}\n")
+
+
+def run_torch_linear(input_torch, weight_torch, has_silu=False):
+    """Run torch equivalent of linear operation."""
+    # weight_torch is expected to be in shape [..., in_features, out_features] (already transposed)
+    result = torch.matmul(input_torch.float(), weight_torch.float())
+    if has_silu:
+        result = torch.nn.functional.silu(result)
+    return result
 
 
 def pad_to_next_multiple(tensor):
@@ -101,7 +165,7 @@ class TtLlamaMLP(LightweightModule):
 
         # sharded
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat16, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
@@ -119,6 +183,7 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
+        # if tt_ccl.mode == "decode" and not tt_ccl.is_qwen:
         if tt_ccl.mode == "decode":
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
@@ -132,25 +197,13 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        # w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-        #     x,
-        #     self.w1,
-        #     self.w3,
-        #     cluster_axis=1,
-        #     num_links=self.model_config["GALAXY_NUM_LINKS"],
-        #     RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-        #     compute_kernel_config=self.args.compute_kernel_config_lofi
-        #     if self.four_bit_mlp
-        #     else self.args.compute_kernel_config_hifi2,
-        #     dtype=ttnn.bfloat8_b,
-        #     program_config=pc_1_3,
-        #     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-        #     global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-        #     sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-        #     use_noc1_only=False,
-        # )
+        debug_pcc = os.environ.get("DEBUG_PCC") == "1"
 
-        # ttnn.deallocate(x)
+        # ========== W1 Linear ==========
+        # Convert inputs to torch before operation for per-device comparison
+        if debug_pcc:
+            x_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(x)]
+            w1_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(self.w1)]
 
         w1_out = ttnn.linear(
             x,
@@ -161,31 +214,35 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+            core_grid=None,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        # debug pcc
-        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
-            ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
-            # convert to torch
-            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
-            comp_out = ttnn.to_torch(w1_out, mesh_composer=mesh_composer).sum(0)
-            comp_out = torch.permute(comp_out, (1, 0, 2))
-            passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
-            # save x and self.w1
-            mesh_composer2d = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=[8, 4])
-            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer2d)
-            torch_w1 = ttnn.to_torch(self.w1, mesh_composer=mesh_composer2d)
-            if self.layer_num == 2:
-                torch.save(torch_x, "models/demos/llama3_70b_galaxy/tests/w1_in.pt")
-                torch.save(torch_w1, "models/demos/llama3_70b_galaxy/tests/w1_weight.pt")
-                torch.save(ref_after_w1, "models/demos/llama3_70b_galaxy/tests/ref_after_w1.pt")
-                torch.save(comp_out, "models/demos/llama3_70b_galaxy/tests/comp_out.pt")
-            print(f"W1 out PCC: {pcc_message}")
-            print(comp_allclose(ref_after_w1, comp_out))
-            print()
+        # Per-device PCC comparison for W1
+        if debug_pcc:
+            w1_out_device_tensors = ttnn.get_device_tensors(w1_out)
+            print(f"\n{'='*80}")
+            print(f"W1 LINEAR - Per-Device PCC Comparison (Layer {self.layer_num})")
+            print(f"{'='*80}")
+            for device_idx, (x_torch, w1_torch, w1_out_tt) in enumerate(
+                zip(x_torch_tensors, w1_torch_tensors, w1_out_device_tensors)
+            ):
+                # Compute torch reference for this device
+                w1_out_torch = torch.matmul(x_torch.float(), w1_torch.float())
+                # Convert ttnn output to torch
+                w1_out_tt_torch = ttnn.to_torch(w1_out_tt)
+
+                # Input PCC
+                print(f"  Device {device_idx}:")
+                print(f"    Input shape: {x_torch.shape}, Weight shape: {w1_torch.shape}")
+                print(f"    Output shapes - Torch: {w1_out_torch.shape}, TTNN: {w1_out_tt_torch.shape}")
+
+                # Output PCC
+                passing, pcc_message = comp_pcc(w1_out_torch, w1_out_tt_torch)
+                allclose_result = comp_allclose(w1_out_torch, w1_out_tt_torch)
+                status = "✓ PASS" if passing else "✗ FAIL"
+                print(f"    Output PCC: {status} | {pcc_message} | {allclose_result}")
 
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out,
@@ -196,18 +253,10 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # debug pcc
-        if self.reference_model is not None:
-            ref_after_w1 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w1
-            # convert to torch
-            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
-            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
-            comp_out = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)[:, :, :, :]
-            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
-            passing, pcc_message = comp_pcc(ref_after_w1, comp_out)
-            print(f"W1 reduced PCC: {pcc_message}")
-            print(comp_allclose(ref_after_w1, comp_out))
-            print()
+        # ========== W3 Linear ==========
+        # Convert inputs to torch before operation for per-device comparison
+        if debug_pcc:
+            w3_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(self.w3)]
 
         w3_out = ttnn.linear(
             x,
@@ -224,17 +273,29 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        # debug pcc
-        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
-            ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
-            # convert to torch
-            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
-            comp_out = ttnn.to_torch(w3_out, mesh_composer=mesh_composer).sum(0)
-            comp_out = torch.permute(comp_out, (1, 0, 2))
-            passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
-            print(f"W3 out PCC: {pcc_message}")
-            print(comp_allclose(ref_after_w3, comp_out))
-            print()
+        # Per-device PCC comparison for W3
+        if debug_pcc:
+            w3_out_device_tensors = ttnn.get_device_tensors(w3_out)
+            print(f"\n{'='*80}")
+            print(f"W3 LINEAR - Per-Device PCC Comparison (Layer {self.layer_num})")
+            print(f"{'='*80}")
+            for device_idx, (x_torch, w3_torch, w3_out_tt) in enumerate(
+                zip(x_torch_tensors, w3_torch_tensors, w3_out_device_tensors)
+            ):
+                # Compute torch reference for this device
+                w3_out_torch = torch.matmul(x_torch.float(), w3_torch.float())
+                # Convert ttnn output to torch
+                w3_out_tt_torch = ttnn.to_torch(w3_out_tt)
+
+                print(f"  Device {device_idx}:")
+                print(f"    Input shape: {x_torch.shape}, Weight shape: {w3_torch.shape}")
+                print(f"    Output shapes - Torch: {w3_out_torch.shape}, TTNN: {w3_out_tt_torch.shape}")
+
+                # Output PCC
+                passing, pcc_message = comp_pcc(w3_out_torch, w3_out_tt_torch)
+                allclose_result = comp_allclose(w3_out_torch, w3_out_tt_torch)
+                status = "✓ PASS" if passing else "✗ FAIL"
+                print(f"    Output PCC: {status} | {pcc_message} | {allclose_result}")
 
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
@@ -245,18 +306,10 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w3_out)
 
-        # debug pcc
-        if self.reference_model is not None:
-            ref_after_w3 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w3
-            # convert to torch
-            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
-            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
-            comp_out = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)[:, :, :, :]
-            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
-            passing, pcc_message = comp_pcc(ref_after_w3, comp_out)
-            print(f"W3 reduced PCC: {pcc_message}")
-            print(comp_allclose(ref_after_w3, comp_out))
-            print()
+        # ========== SiLU(W1) * W3 ==========
+        if debug_pcc:
+            w1_reduced_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(w1_out_reduced)]
+            w3_reduced_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(w3_out_reduced)]
 
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
@@ -266,18 +319,29 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        # debug pcc
-        if self.reference_model is not None:
-            ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
-            # convert to torch
-            composer_cfg = ttnn.MeshComposerConfig(dims=[3, 0], mesh_shape_override=ttnn.MeshShape(32, 1))
-            mesh_composer = ttnn.create_mesh_composer(self.mesh_device, composer_cfg)
-            comp_out = ttnn.to_torch(ff1ff3, mesh_composer=mesh_composer)[:, :, :, :]
-            comp_out = torch.permute(comp_out, (0, 2, 1, 3)).squeeze(0)
-            passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
-            print(f"After mul PCC: {pcc_message}")
-            print(comp_allclose(ref_after_mul, comp_out))
-            print()
+        # Per-device PCC comparison for SiLU * mul
+        if debug_pcc:
+            ff1ff3_device_tensors = ttnn.get_device_tensors(ff1ff3)
+            print(f"\n{'='*80}")
+            print(f"SiLU(W1) * W3 - Per-Device PCC Comparison (Layer {self.layer_num})")
+            print(f"{'='*80}")
+            for device_idx, (w1_red_torch, w3_red_torch, ff1ff3_tt) in enumerate(
+                zip(w1_reduced_torch_tensors, w3_reduced_torch_tensors, ff1ff3_device_tensors)
+            ):
+                # Compute torch reference: SiLU(w1_reduced) * w3_reduced
+                ff1ff3_torch = torch.nn.functional.silu(w1_red_torch.float()) * w3_red_torch.float()
+                # Convert ttnn output to torch
+                ff1ff3_tt_torch = ttnn.to_torch(ff1ff3_tt)
+
+                print(f"  Device {device_idx}:")
+                print(f"    W1_reduced shape: {w1_red_torch.shape}, W3_reduced shape: {w3_red_torch.shape}")
+                print(f"    Output shapes - Torch: {ff1ff3_torch.shape}, TTNN: {ff1ff3_tt_torch.shape}")
+
+                # Output PCC
+                passing, pcc_message = comp_pcc(ff1ff3_torch, ff1ff3_tt_torch)
+                allclose_result = comp_allclose(ff1ff3_torch, ff1ff3_tt_torch)
+                status = "✓ PASS" if passing else "✗ FAIL"
+                print(f"    Output PCC: {status} | {pcc_message} | {allclose_result}")
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
@@ -292,20 +356,12 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
-        # debug pcc
-        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
-            ref_after_mul = self.reference_model.layers[self.layer_num].feed_forward.ref_after_mul
-            # convert to torch
-            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=[8, 4])
-            comp_out = ttnn.to_torch(w2_in, mesh_composer=mesh_composer)[:1, :, :, :]
-            comp_out = comp_out.squeeze(0)
-            comp_out = torch.permute(comp_out, (1, 0, 2))
-            passing, pcc_message = comp_pcc(ref_after_mul, comp_out)
-            print(f"All gather out PCC: {pcc_message}")
-            print(comp_allclose(ref_after_mul, comp_out))
-            print()
-
         ttnn.deallocate(ff1ff3)
+
+        # ========== W2 Linear ==========
+        if debug_pcc:
+            w2_in_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(w2_in)]
+            w2_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(self.w2)]
 
         w2_out = ttnn.linear(
             w2_in,
@@ -319,17 +375,29 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        # debug pcc
-        if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":
-            ref_after_w2 = self.reference_model.layers[self.layer_num].feed_forward.ref_after_w2
-            # convert to torch
-            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
-            comp_out = ttnn.to_torch(w2_out, mesh_composer=mesh_composer).sum(0)
-            comp_out = torch.permute(comp_out, (1, 0, 2))
-            passing, pcc_message = comp_pcc(ref_after_w2, comp_out)
-            print(f"W2 out PCC: {pcc_message}")
-            print(comp_allclose(ref_after_w2, comp_out))
-            print()
+        # Per-device PCC comparison for W2
+        if debug_pcc:
+            w2_out_device_tensors = ttnn.get_device_tensors(w2_out)
+            print(f"\n{'='*80}")
+            print(f"W2 LINEAR - Per-Device PCC Comparison (Layer {self.layer_num})")
+            print(f"{'='*80}")
+            for device_idx, (w2_in_torch, w2_torch, w2_out_tt) in enumerate(
+                zip(w2_in_torch_tensors, w2_torch_tensors, w2_out_device_tensors)
+            ):
+                # Compute torch reference for this device
+                w2_out_torch = torch.matmul(w2_in_torch.float(), w2_torch.float())
+                # Convert ttnn output to torch
+                w2_out_tt_torch = ttnn.to_torch(w2_out_tt)
+
+                print(f"  Device {device_idx}:")
+                print(f"    Input shape: {w2_in_torch.shape}, Weight shape: {w2_torch.shape}")
+                print(f"    Output shapes - Torch: {w2_out_torch.shape}, TTNN: {w2_out_tt_torch.shape}")
+
+                # Output PCC
+                passing, pcc_message = comp_pcc(w2_out_torch, w2_out_tt_torch)
+                allclose_result = comp_allclose(w2_out_torch, w2_out_tt_torch)
+                status = "✓ PASS" if passing else "✗ FAIL"
+                print(f"    Output PCC: {status} | {pcc_message} | {allclose_result}")
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
@@ -337,6 +405,7 @@ class TtLlamaMLP(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(w2_out)
 

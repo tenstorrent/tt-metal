@@ -310,6 +310,7 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
+        # if tt_ccl.mode == "decode" and not tt_ccl.is_qwen:
         if tt_ccl.mode == "decode":
             self.prefetcher_setup.insert_tensor(self.wqkv)
             self.prefetcher_setup.insert_tensor(self.wo)
@@ -319,7 +320,6 @@ class TtLlamaAttention(LightweightModule):
         """
         Generates empty KV cache and pushed to device memory
         """
-
         if self.paged_attention_config:
             cache_k = torch.zeros(
                 (
@@ -358,7 +358,7 @@ class TtLlamaAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -557,6 +557,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
+            dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(dense_out_ttnn)
 

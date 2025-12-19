@@ -292,8 +292,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
     uint32_t q_tiles = PNHt * DHt;
-    uint32_t k_tiles = Sk_chunk_t_cb_size * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t_cb_size * DHt;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt;  // double buffer
     uint32_t qk_tiles = PNHt * Sk_chunk_t_cb_size;
     uint32_t out_im_tiles = PNHt * vDHt;
     uint32_t out0_t = PNHt * vDHt;

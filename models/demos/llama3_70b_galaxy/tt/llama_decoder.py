@@ -280,7 +280,7 @@ class TtTransformerBlock(LightweightModule):
             print()
 
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat8_b)
 
             # debug pcc
             if self.reference_model is not None and os.environ.get("DEBUG_PCC") == "1":

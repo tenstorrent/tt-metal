@@ -145,6 +145,7 @@ class TtTransformer(LightweightModule):
             if mode == "decode":
                 self.switch_mode("decode")
         elif mode == "decode":
+            # if not self.args.is_qwen:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -663,6 +664,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
+        # if mode == "decode" and not self.args.is_qwen:
         if mode == "decode":
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
@@ -692,6 +694,7 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
+        # if mode == "decode" and not self.args.is_qwen:
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)
 

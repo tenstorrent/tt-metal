@@ -48,7 +48,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 64, "page_max_num_blocks": 512}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -56,7 +56,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_qwen_transformer_inference(
     max_seq_len,
@@ -68,11 +68,11 @@ def test_qwen_transformer_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 3
+    model_args.n_layers = 64
 
     state_dict = model_args.load_state_dict()
+    mesh_device.disable_and_clear_program_cache()
 
     # Setup reference model using full Transformer (ignoring embedding as requested)
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -135,6 +135,7 @@ def test_qwen_transformer_inference(
         paged_attention_config=paged_attention_config,
         mode="decode",
         reference_model=reference_model,
+        decode_mode_only=True,
     )
 
     seqlen = 1

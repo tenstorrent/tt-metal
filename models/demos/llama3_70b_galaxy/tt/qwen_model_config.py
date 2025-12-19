@@ -1039,12 +1039,7 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                self.dim // 4,
-                12288 // 8,  # Use padded N
-                RING_SIZE,
-                untilize_out=True,
+                1, 32, self.dim // 4, 12288 // 8, RING_SIZE, untilize_out=True, prefetch=True  # Use padded N
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
@@ -1086,11 +1081,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                10240 // 8,
-                self.dim_padded_24_cores // 4,  # Use padded N
-                RING_SIZE,
+                1, 32, 10240 // 8, self.dim_padded_24_cores // 4, RING_SIZE, prefetch=True  # Use padded N
             )
 
             # Use padded K and N
@@ -1112,6 +1103,15 @@ class TtQwenModelArgs(TtModelArgs):
                 5120 // 4,  # K = 1280
                 3840,  # Use padded N
                 RING_SIZE,
+                prefetch=True,
+            )
+
+            self.model_config["FF1_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,  # B
+                32,  # M
+                5120 // 4,  # K = 1280
+                3840,  # Use padded N
+                RING_SIZE,
             )
 
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
@@ -1121,6 +1121,7 @@ class TtQwenModelArgs(TtModelArgs):
                 3200,
                 6144 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=True,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
