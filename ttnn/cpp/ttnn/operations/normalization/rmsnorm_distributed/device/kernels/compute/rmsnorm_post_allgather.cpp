@@ -20,6 +20,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "debug/dprint_pages.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -92,6 +94,8 @@ void MAIN {
         ACQ();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
+            // UNPACK(tt::compute::common::print_full_tile(cb_stats,i,true));
+            // UNPACK(tt::compute::common::print_full_tile(cb_reduce,0,true));
             reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
         }
         pack_tile(0, cb_stats_reduced);
@@ -145,8 +149,11 @@ void MAIN {
             cb_reserve_back(normed_output_cb, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                // UNPACK(tt::compute::common::print_full_tile(cb_norm_x_input, wtr,true));
+                // UNPACK(tt::compute::common::print_full_tile(cb_recip_sqrt_var, 0,true));
                 mul_tiles_bcast_cols(cb_norm_x_input, cb_recip_sqrt_var, wtr, 0, wtr);
                 pack_tile(wtr, normed_output_cb);
+                dprint_tensix_dest_reg(wtr);
             }
             REL();
             cb_push_back(normed_output_cb, blk);
@@ -188,6 +195,7 @@ void MAIN {
                     cb_reserve_back(cb_out, blk);
                     ACQ();
                     for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                        UNPACK(tt::compute::common::print_full_tile(cb_times_gamma_out, wtr, true));
                         add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
                         pack_tile(wtr, cb_out);
                     }
