@@ -81,20 +81,20 @@ class WanAttentionBlock:
             weight = weight.permute(0, 2, 3, 1).reshape(out_c, in_c)
             return weight
 
-        self.to_qkv.load_state_dict(
+        self.to_qkv.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["to_qkv.weight"]),
                 "bias": state_dict["to_qkv.bias"],
             }
         )
-        self.proj.load_state_dict(
+        self.proj.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["proj.weight"]),
                 "bias": state_dict["proj.bias"],
             }
         )
 
-        self.norm.load_state_dict(
+        self.norm.load_torch_state_dict(
             {
                 "weight": state_dict["norm.gamma"].squeeze(),
             }
@@ -454,8 +454,8 @@ class WanResidualBlock:
         def rename_norm_state(state):
             return {"weight": state["gamma"].squeeze()}
 
-        self.norm1.load_state_dict(rename_norm_state(substate(state_dict, "norm1")))
-        self.norm2.load_state_dict(rename_norm_state(substate(state_dict, "norm2")))
+        self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
+        self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
         self.conv1.load_state_dict(substate(state_dict, "conv1"))
         self.conv2.load_state_dict(substate(state_dict, "conv2"))
 
@@ -466,7 +466,7 @@ class WanResidualBlock:
             return weight
 
         if self.conv_shortcut is not None:
-            self.conv_shortcut.load_state_dict(
+            self.conv_shortcut.load_torch_state_dict(
                 {
                     "weight": conv_1d_to_matmul_weight(state_dict["conv_shortcut.weight"]),
                     "bias": state_dict["conv_shortcut.bias"],
@@ -1016,7 +1016,7 @@ class WanDecoder3d:
         def rename_norm_state(state):
             return {"weight": state["gamma"].squeeze()}
 
-        self.norm_out.load_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
+        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
         self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0], first_chunk=False):
@@ -1166,7 +1166,7 @@ class WanDecoder:
             state["bias"] = bias
             return state
 
-        self.post_quant_conv.load_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
+        self.post_quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
         self.decoder.load_state_dict(substate(state_dict, "decoder"))
 
     def clear_cache(self):
