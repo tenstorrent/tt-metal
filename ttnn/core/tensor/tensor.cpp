@@ -791,8 +791,7 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
-        // if unsupported data type and user provided data type, convert on host and then move to device if
-        // provided.
+
         TensorLayout tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool pydata_borrowable = layout == Layout::ROW_MAJOR &&
@@ -830,8 +829,8 @@ Tensor create_tt_tensor_from_host_data(
     }
 }
 
-DataType create_strategy(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
-    auto is_pytype_borrowable = [](ttnn::PyDType type) {
+DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
+    auto is_torch_dtype_matches_ttnn = [](ttnn::PyDType type) {
         switch (type) {
             case ttnn::PyDType::UINT64:
             case ttnn::PyDType::FLOAT64:
@@ -856,7 +855,7 @@ DataType create_strategy(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
         }
     };
 
-    if (!is_pytype_borrowable(src_dtype)) {
+    if (!is_torch_dtype_matches_ttnn(src_dtype)) {
         if ((dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)) {
             return DataType::FLOAT32;
         }
@@ -890,7 +889,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
 
     // TODO: exist scope for GraphTracker::instance().track_function_end(output);
 
-    auto host_dtype = create_strategy(src_dtype, dst_dtype);
+    auto host_dtype = compute_host_dtype(src_dtype, dst_dtype);
     auto host_buffer = get_host_data(host_dtype);
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,
