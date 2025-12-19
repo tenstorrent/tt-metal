@@ -381,113 +381,406 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
 /**
  * Calculates NOC transfer rate for L1 local transfers using empirical data.
  *
- * The transfer rate follows a clamped linear approximation:
- * - Minimum rate for small transfers (16B)
- * - Linear growth until reaching peak performance
- * - Constant peak rate for larger transfers
+ * Two implementations available:
+ * 1. Linear approximation (USE_REAL_DATA = false)
+ * 2. Real measured data lookup (USE_REAL_DATA = true)
  */
 static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    // Switch between implementations: set to true to use real measured data
+    constexpr bool USE_REAL_DATA = true;
 
-    // Architecture-specific performance characteristics
-    struct NocPerformanceParams {
-        uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
-    };
+    if (USE_REAL_DATA) {
+        // ===== REAL DATA IMPLEMENTATION =====
+        // Real measured bandwidth values (GB/s) indexed by transfer size
+        // Structure: array of {transfer_size_bytes, bandwidth_gbps} pairs
+        // The data should be sorted by transfer_size_bytes in ascending order
 
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
-        default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
+        struct BandwidthDataPoint {
+            uint32_t transfer_size_bytes;
+            float bandwidth_gbps;
+        };
+
+        // Real measured data from Blackhole (num_transactions = 64, Receiver = Read)
+        // Bandwidth converted from bytes/cycle to GB/s (multiplied by 1.35 GHz)
+        // Using 64 transactions per barrier to better represent actual convolution workload pipelining
+        static const std::vector<BandwidthDataPoint> blackhole_data = {
+            {64, 2.162f},
+            {128, 4.322f},
+            {256, 8.617f},
+            {512, 17.213f},
+            {1024, 34.386f},
+            {2048, 68.320f},
+            {4096, 76.254f},
+            {8192, 79.805f},
+            {16384, 81.774f},
+            {32768, 82.654f},
+            {65536, 83.157f},
+        };
+
+        // Real measured data from Wormhole B0 (num_transactions = 64, Receiver = Read)
+        // Bandwidth converted from bytes/cycle to GB/s (multiplied by 1.0 GHz)
+        // Using 64 transactions per barrier to better represent actual convolution workload pipelining
+        static const std::vector<BandwidthDataPoint> wormhole_data = {
+            {32, 1.368f},
+            {64, 2.736f},
+            {128, 5.472f},
+            {256, 10.945f},
+            {512, 21.658f},
+            {1024, 24.591f},
+            {2048, 26.415f},
+            {4096, 27.673f},
+            {8192, 28.259f},
+            {16384, 28.486f},
+            {32768, 28.597f},
+            {65536, 28.654f},
+        };
+
+        const std::vector<BandwidthDataPoint>* data = nullptr;
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: data = &blackhole_data; break;
+            case tt::ARCH::WORMHOLE_B0: data = &wormhole_data; break;
+            default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
+        }
+
+        if (data->empty()) {
+            TT_THROW("Real data array is empty. Please populate the bandwidth data points.");
+        }
+
+        // If transfer size is smaller than the smallest data point, return the first value
+        if (transfer_size_bytes <= (*data)[0].transfer_size_bytes) {
+            return (*data)[0].bandwidth_gbps;
+        }
+
+        // If transfer size is larger than the largest data point, return the last value
+        if (transfer_size_bytes >= (*data)[data->size() - 1].transfer_size_bytes) {
+            return (*data)[data->size() - 1].bandwidth_gbps;
+        }
+
+        // Linear interpolation between two closest data points
+        for (size_t i = 0; i < data->size() - 1; i++) {
+            if (transfer_size_bytes >= (*data)[i].transfer_size_bytes &&
+                transfer_size_bytes <= (*data)[i + 1].transfer_size_bytes) {
+                // Check for exact match to avoid unnecessary interpolation
+                if (transfer_size_bytes == (*data)[i].transfer_size_bytes) {
+                    return (*data)[i].bandwidth_gbps;
+                }
+                if (transfer_size_bytes == (*data)[i + 1].transfer_size_bytes) {
+                    return (*data)[i + 1].bandwidth_gbps;
+                }
+
+                // Perform linear interpolation
+                const float x0 = static_cast<float>((*data)[i].transfer_size_bytes);
+                const float x1 = static_cast<float>((*data)[i + 1].transfer_size_bytes);
+                const float y0 = (*data)[i].bandwidth_gbps;
+                const float y1 = (*data)[i + 1].bandwidth_gbps;
+                const float x = static_cast<float>(transfer_size_bytes);
+
+                // Linear interpolation: y = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+            }
+        }
+
+        // Fallback (should not reach here)
+        return (*data)[data->size() - 1].bandwidth_gbps;
+
+    } else {
+        // ===== LINEAR APPROXIMATION IMPLEMENTATION =====
+        // Minimum NOC transfer size that was benchmarked
+        const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+        // Architecture-specific performance characteristics
+        struct NocPerformanceParams {
+            uint32_t linear_growth_threshold_bytes;
+            float min_rate_gbps;   // Transfer rate at minimum size
+            float peak_rate_gbps;  // Maximum achievable transfer rate
+        };
+
+        NocPerformanceParams params = {0, 0.0f, 0.0f};
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
+            case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
+            default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
+        }
+
+        // Clamp transfer size to the linear growth region
+        const uint32_t effective_transfer_size =
+            std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+        // Calculate transfer rate using linear interpolation
+        const float rate_increase_per_byte =
+            (params.peak_rate_gbps - params.min_rate_gbps) /
+            static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+        return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
     }
-
-    // Clamp transfer size to the linear growth region
-    const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
-    const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
- * Calculates NOC transfer rate for DRAM transfers using empirical data.
+ * Calculates NOC transfer rate for DRAM-to-L1 read transfers using empirical data.
  *
- * The transfer rate follows a clamped linear approximation:
- * - Minimum rate for small transfers (16B)
- * - Linear growth until reaching peak performance
- * - Constant peak rate for larger transfers
+ * Two implementations available:
+ * 1. Linear approximation (USE_REAL_DATA = false)
+ * 2. Real measured data lookup (USE_REAL_DATA = true)
  */
 static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    // Switch between implementations: set to true to use real measured data
+    constexpr bool USE_REAL_DATA = true;
 
-    // Architecture-specific performance characteristics
-    struct NocPerformanceParams {
-        uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
-    };
+    if (USE_REAL_DATA) {
+        // ===== REAL DATA IMPLEMENTATION =====
+        // Real measured bandwidth values (GB/s) indexed by transfer size
+        // Structure: array of {transfer_size_bytes, bandwidth_gbps} pairs
+        // The data should be sorted by transfer_size_bytes in ascending order
 
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
-        default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
+        struct BandwidthDataPoint {
+            uint32_t transfer_size_bytes;
+            float bandwidth_gbps;
+        };
+
+        // Real measured data from DRAM-to-L1 reads (num_transactions = 64, Receiver)
+        // Bandwidth converted from bytes/cycle to GB/s
+        // Blackhole: multiplied by 1.35 GHz, Wormhole: multiplied by 1.0 GHz
+        // Using 64 transactions per barrier to match typical weight block sizes
+        static const std::vector<BandwidthDataPoint> blackhole_data = {
+            {64, 2.056f},
+            {128, 4.091f},
+            {256, 8.222f},
+            {512, 16.372f},
+            {1024, 25.976f},
+            {2048, 27.861f},
+            {4096, 28.140f},
+            {8192, 31.090f},
+            {16384, 31.519f},
+            {32768, 45.570f},
+            {65536, 46.968f},
+        };
+
+        static const std::vector<BandwidthDataPoint> wormhole_data = {
+            {32, 1.368f},
+            {64, 2.736f},
+            {128, 5.472f},
+            {256, 10.945f},
+            {512, 21.658f},
+            {1024, 24.591f},
+            {2048, 26.415f},
+            {4096, 27.673f},
+            {8192, 28.259f},
+            {16384, 28.486f},
+            {32768, 28.597f},
+            {65536, 28.654f},
+        };
+
+        const std::vector<BandwidthDataPoint>* data = nullptr;
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: data = &blackhole_data; break;
+            case tt::ARCH::WORMHOLE_B0: data = &wormhole_data; break;
+            default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
+        }
+
+        if (data->empty()) {
+            TT_THROW("Real data array is empty. Please populate the DRAM bandwidth data points.");
+        }
+
+        // If transfer size is smaller than the smallest data point, return the first value
+        if (transfer_size_bytes <= (*data)[0].transfer_size_bytes) {
+            return (*data)[0].bandwidth_gbps;
+        }
+
+        // If transfer size is larger than the largest data point, return the last value
+        if (transfer_size_bytes >= (*data)[data->size() - 1].transfer_size_bytes) {
+            return (*data)[data->size() - 1].bandwidth_gbps;
+        }
+
+        // Linear interpolation between two closest data points
+        for (size_t i = 0; i < data->size() - 1; i++) {
+            if (transfer_size_bytes >= (*data)[i].transfer_size_bytes &&
+                transfer_size_bytes <= (*data)[i + 1].transfer_size_bytes) {
+                // Check for exact match to avoid unnecessary interpolation
+                if (transfer_size_bytes == (*data)[i].transfer_size_bytes) {
+                    return (*data)[i].bandwidth_gbps;
+                }
+                if (transfer_size_bytes == (*data)[i + 1].transfer_size_bytes) {
+                    return (*data)[i + 1].bandwidth_gbps;
+                }
+
+                // Perform linear interpolation
+                const float x0 = static_cast<float>((*data)[i].transfer_size_bytes);
+                const float x1 = static_cast<float>((*data)[i + 1].transfer_size_bytes);
+                const float y0 = (*data)[i].bandwidth_gbps;
+                const float y1 = (*data)[i + 1].bandwidth_gbps;
+                const float x = static_cast<float>(transfer_size_bytes);
+
+                // Linear interpolation: y = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+            }
+        }
+
+        // Fallback (should not reach here)
+        return (*data)[data->size() - 1].bandwidth_gbps;
+
+    } else {
+        // ===== LINEAR APPROXIMATION IMPLEMENTATION =====
+        // Minimum NOC transfer size that was benchmarked
+        const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+        // Architecture-specific performance characteristics
+        struct NocPerformanceParams {
+            uint32_t linear_growth_threshold_bytes;
+            float min_rate_gbps;   // Transfer rate at minimum size
+            float peak_rate_gbps;  // Maximum achievable transfer rate
+        };
+
+        NocPerformanceParams params = {0, 0.0f, 0.0f};
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
+            case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
+            default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
+        }
+
+        // Clamp transfer size to the linear growth region
+        const uint32_t effective_transfer_size =
+            std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+        // Calculate transfer rate using linear interpolation
+        const float rate_increase_per_byte =
+            (params.peak_rate_gbps - params.min_rate_gbps) /
+            static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+        return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
     }
-
-    // Clamp transfer size to the linear growth region
-    const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
-    const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
- * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
+ * Calculates NOC transfer rate for multicast L1-to-L1 transfers using empirical data.
  *
- * The transfer rate follows a clamped linear approximation:
- * - Minimum rate for small transfers (16B)
- * - Linear growth until reaching peak performance
- * - Constant peak rate for larger transfers
+ * Two implementations available:
+ * 1. Linear approximation (USE_REAL_DATA = false)
+ * 2. Real measured data lookup (USE_REAL_DATA = true)
  */
 static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
-    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+    // Switch between implementations: set to true to use real measured data
+    constexpr bool USE_REAL_DATA = true;
 
-    // Architecture-specific performance characteristics
-    struct NocPerformanceParams {
-        uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
-    };
+    if (USE_REAL_DATA) {
+        // ===== REAL DATA IMPLEMENTATION =====
+        // Real measured bandwidth values (GB/s) indexed by transfer size
+        // Structure: array of {transfer_size_bytes, bandwidth_gbps} pairs
+        // The data should be sorted by transfer_size_bytes in ascending order
 
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
-    switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
-        default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
+        struct BandwidthDataPoint {
+            uint32_t transfer_size_bytes;
+            float bandwidth_gbps;
+        };
+
+        // Real measured data from L1-to-L1 multicast (num_transactions = 1, Sender, whole chip)
+        // Bandwidth converted from bytes/cycle to GB/s
+        // Blackhole: multiplied by 1.35 GHz, Wormhole: multiplied by 1.0 GHz
+        // Using 1 transaction as convolutions issue single large multicast per weight block
+        static const std::vector<BandwidthDataPoint> blackhole_data = {
+            {64, 0.108f},
+            {128, 0.222f},
+            {256, 0.445f},
+            {512, 0.866f},
+            {1024, 1.724f},
+            {2048, 3.405f},
+            {4096, 6.467f},
+            {8192, 12.060f},
+            {16384, 21.206f},
+            {32768, 26.037f},
+            {65536, 29.679f},
+        };
+
+        static const std::vector<BandwidthDataPoint> wormhole_data = {
+            {32, 0.054f},
+            {64, 0.109f},
+            {128, 0.217f},
+            {256, 0.428f},
+            {512, 0.856f},
+            {1024, 1.665f},
+            {2048, 3.131f},
+            {4096, 5.713f},
+            {8192, 9.593f},
+            {16384, 11.653f},
+            {32768, 13.107f},
+            {65536, 13.950f},
+        };
+
+        const std::vector<BandwidthDataPoint>* data = nullptr;
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: data = &blackhole_data; break;
+            case tt::ARCH::WORMHOLE_B0: data = &wormhole_data; break;
+            default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
+        }
+
+        if (data->empty()) {
+            TT_THROW("Real data array is empty. Please populate the multicast bandwidth data points.");
+        }
+
+        // If transfer size is smaller than the smallest data point, return the first value
+        if (transfer_size_bytes <= (*data)[0].transfer_size_bytes) {
+            return (*data)[0].bandwidth_gbps;
+        }
+
+        // If transfer size is larger than the largest data point, return the last value
+        if (transfer_size_bytes >= (*data)[data->size() - 1].transfer_size_bytes) {
+            return (*data)[data->size() - 1].bandwidth_gbps;
+        }
+
+        // Linear interpolation between two closest data points
+        for (size_t i = 0; i < data->size() - 1; i++) {
+            if (transfer_size_bytes >= (*data)[i].transfer_size_bytes &&
+                transfer_size_bytes <= (*data)[i + 1].transfer_size_bytes) {
+                // Check for exact match to avoid unnecessary interpolation
+                if (transfer_size_bytes == (*data)[i].transfer_size_bytes) {
+                    return (*data)[i].bandwidth_gbps;
+                }
+                if (transfer_size_bytes == (*data)[i + 1].transfer_size_bytes) {
+                    return (*data)[i + 1].bandwidth_gbps;
+                }
+
+                // Perform linear interpolation
+                const float x0 = static_cast<float>((*data)[i].transfer_size_bytes);
+                const float x1 = static_cast<float>((*data)[i + 1].transfer_size_bytes);
+                const float y0 = (*data)[i].bandwidth_gbps;
+                const float y1 = (*data)[i + 1].bandwidth_gbps;
+                const float x = static_cast<float>(transfer_size_bytes);
+
+                // Linear interpolation: y = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+            }
+        }
+
+        // Fallback (should not reach here)
+        return (*data)[data->size() - 1].bandwidth_gbps;
+
+    } else {
+        // ===== LINEAR APPROXIMATION IMPLEMENTATION =====
+        // Minimum NOC transfer size that was benchmarked
+        const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+        // Architecture-specific performance characteristics
+        struct NocPerformanceParams {
+            uint32_t linear_growth_threshold_bytes;
+            float min_rate_gbps;   // Transfer rate at minimum size
+            float peak_rate_gbps;  // Maximum achievable transfer rate
+        };
+
+        NocPerformanceParams params = {0, 0.0f, 0.0f};
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
+            case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
+            default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
+        }
+
+        // Clamp transfer size to the linear growth region
+        const uint32_t effective_transfer_size =
+            std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+        // Calculate transfer rate using linear interpolation
+        const float rate_increase_per_byte =
+            (params.peak_rate_gbps - params.min_rate_gbps) /
+            static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+        return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
     }
-
-    // Clamp transfer size to the linear growth region
-    const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
-    const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Determines if split reader optimization is supported for the given configuration.
