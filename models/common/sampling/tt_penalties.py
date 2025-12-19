@@ -120,19 +120,6 @@ class TTPenalties(LightweightModule):
         self.repetition_penalties = self._alloc_bf16_buffer()
         self.inverse_repetition_penalties = self._alloc_bf16_buffer()
 
-        # vocab_per_dev = self.vocab_size // self.num_devices
-
-        # self.slice_start = ttnn.from_torch(
-        #     torch.tensor([0, 0, 0, vocab_per_dev, 0, vocab_per_dev*2, 0, vocab_per_dev*3, 0, vocab_per_dev*4, 0, vocab_per_dev*5, 0, vocab_per_dev*6, 0, vocab_per_dev*7,]),
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape),
-        # )
-
-        # self.slice_end = ttnn.from_torch(
-        #     torch.tensor([ 32, vocab_per_dev, 32, vocab_per_dev*2, 32, vocab_per_dev*3, 32, vocab_per_dev*4,32, vocab_per_dev*5, 32, vocab_per_dev*6, 32, vocab_per_dev*7, 32, vocab_per_dev*8]),
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape),
-        # )
         vocab_per_dev = self.vocab_size // self.num_devices
         d = torch.arange(self.num_devices, dtype=torch.int32)
 
