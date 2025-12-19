@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {

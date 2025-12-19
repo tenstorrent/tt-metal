@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "compute_kernel_api/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {

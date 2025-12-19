@@ -6,9 +6,10 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/cb_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 /**
- * @file untilize_helpers.h
+ * @file untilize_helpers.hpp
  * @brief Single unified untilize function with automatic dispatch
  *
  * Provides ONE function that handles all untilize operations:
@@ -16,9 +17,7 @@
  * - Large widths (> DEST limit) with integer types: Uses block-based pack_untilize (hardware-accelerated)
  * - Large widths (> DEST limit) with non-integer types: Uses standard untilize (fallback)
  *
- * DEST register capacity is automatically detected from JIT-generated headers:
- * - DST_SYNC_MODE (Half/Full sync mode)
- * - DST_ACCUM_MODE (16-bit/32-bit accumulation)
+ * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * Data format is automatically detected from JIT-generated header:
  * - unpack_dst_format[cb_id] contains the DataFormat enum value
@@ -27,7 +26,7 @@
  * Call compute_kernel_hw_startup() before using.
  *
  * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+ *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
  *
  *   compute_kernel_hw_startup(cb_in, cb_out);
  *
@@ -43,51 +42,7 @@
 
 namespace compute_kernel_lib {
 
-// =============================================================================
-// DEST Register Capacity - Automatic Detection
-// =============================================================================
-
-// DST_SYNC_MODE is defined in JIT-generated chlkc_dst_sync_mode.h
-// DST_ACCUM_MODE is defined in JIT-generated chlkc_dst_accum_mode.h
-// Both are included via chlkc_list.h -> common_globals.h
-
-// DEST register capacity depends on:
-// 1. Sync mode (Half vs Full) - determined by DST_SYNC_MODE
-// 2. Accumulation mode (16-bit vs 32-bit) - determined by DST_ACCUM_MODE
-//
-// Capacity table:
-// - SyncFull + 16-bit (DST_ACCUM_MODE=false): 16 tiles
-// - SyncFull + 32-bit (DST_ACCUM_MODE=true):  8 tiles
-// - SyncHalf + 16-bit (DST_ACCUM_MODE=false): 8 tiles
-// - SyncHalf + 32-bit (DST_ACCUM_MODE=true):  4 tiles
-
-constexpr uint32_t get_dest_limit() {
-#if defined(DST_SYNC_MODE) && defined(DST_ACCUM_MODE)
-    // Automatically detect from JIT-generated header files
-    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
-        // Full-sync mode
-        if constexpr (DST_ACCUM_MODE) {
-            return 8;  // 32-bit accumulation
-        } else {
-            return 16;  // 16-bit accumulation
-        }
-    } else {
-        // Half-sync mode
-        if constexpr (DST_ACCUM_MODE) {
-            return 4;  // 32-bit accumulation
-        } else {
-            return 8;  // 16-bit accumulation
-        }
-    }
-#else
-    // Fallback if JIT headers not defined (shouldn't happen in real kernels)
-    // Use conservative half-sync 16-bit value
-    return 8;
-#endif
-}
-
-// Auto-detected default dest limit based on current sync and accumulation modes
-constexpr uint32_t DEST_AUTO_LIMIT = get_dest_limit();
+// get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
 // =============================================================================
 // Data Format Detection - Automatic Detection

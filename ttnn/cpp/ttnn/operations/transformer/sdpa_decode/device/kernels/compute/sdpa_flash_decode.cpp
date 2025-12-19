@@ -18,8 +18,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
-#include "ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/kernel_lib/untilize_helpers.hpp"
 
 namespace NAMESPACE {
 

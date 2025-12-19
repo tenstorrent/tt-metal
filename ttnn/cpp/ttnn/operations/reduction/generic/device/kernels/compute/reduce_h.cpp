@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
