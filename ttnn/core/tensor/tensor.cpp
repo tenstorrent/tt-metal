@@ -881,13 +881,16 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value) {
     ZoneScoped;
 
-    // Construct TensorSpec from individual arguments
-    TensorSpec tensor_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(layout, optional_tile), memory_config));
-
     GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor", tensor_spec, device, cq_id, mesh_mapper, pad_value);
-
-    // TODO: exist scope for GraphTracker::instance().track_function_end(output);
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
+        dst_dtype,
+        layout,
+        optional_tile,
+        memory_config,
+        device,
+        cq_id,
+        mesh_mapper,
+        pad_value);
 
     auto host_dtype = compute_host_dtype(src_dtype, dst_dtype);
     auto host_buffer = get_host_data(host_dtype);
@@ -910,14 +913,14 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
 
     if (!device) {
         set_layout(layout);
+        GraphTracker::instance().track_function_end(output);
         return output;
     }
 
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
-        // TODO: pad is missing here?
-        return ttnn::distributed::distribute_tensor(
+        output = ttnn::distributed::distribute_tensor(
             output,
             *mesh_mapper,
             device != nullptr
@@ -927,12 +930,13 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     }
 
     output = output.to_device(device.value(), std::nullopt, cq_id);
-    if (output.dtype() != tensor_spec.data_type()) {
+    if (output.dtype() != dst_dtype) {
         // Need to perform final data conversion on device, typecast requires TILE layout.
         set_layout(Layout::TILE);
-        output = ttnn::typecast(output, tensor_spec.data_type());
+        output = ttnn::typecast(output, dst_dtype);
     }
 
     set_layout(layout);
+    GraphTracker::instance().track_function_end(output);
     return output;
 }

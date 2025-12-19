@@ -471,11 +471,11 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::object& py_tensor, DataTyp
     auto to_host_buffer_impl =
         []<typename T>(
             const void* py_data_ptr, std::size_t num_elements, const nb::object& contiguous_py_tensor) -> HostBuffer {
-        // Important: `py::object` copying and destruction must be done while holding GIL, which pybind ensures for a
-        // thread that calls the C++ APIs. We wrap `py::object` in `MemoryPin` so that multi-threaded C++ code only
+        // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
+        // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only
         // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
-        // triggered from the pybind caller thread, which will correctly decrement the `py::object` reference count
-        // while hodling GIL.
+        // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
+        // while holding GIL.
         tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::object>(contiguous_py_tensor));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(py_data_ptr));
         return HostBuffer(tt::stl::Span<T>(typed_py_ptr, typed_py_ptr + num_elements), pydata_pin);
@@ -506,46 +506,49 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::object& py_tensor, DataTyp
         }
     };
 
+    // Check if the object supports DLPack protocol
+    if (!nb::hasattr(py_tensor, "__dlpack__") && !nb::hasattr(py_tensor, "__array_interface__")) {
+        TT_THROW("The argument must support DLPack protocol (torch.Tensor or numpy.ndarray)!");
+    }
+
+    // numpy does not support bfloat16, so if the conversion explicitly requests this type,
+    // the mapping should happen through intermediate torch tensor.
+    bool is_numpy = nb::isinstance(py_tensor, nb::module_::import_("numpy").attr("ndarray"));
+    if (is_numpy && target_dtype == DataType::BFLOAT16) {
+        return convert_py_tensor_to_host_buffer(
+            nb::object(nb::module_::import_("torch").attr("from_numpy")(py_tensor)), target_dtype);
+    }
+
+    // Prepare tensor with correct dtype
+    nb::object converted_tensor = py_tensor;
     if (nb::isinstance(py_tensor, nb::module_::import_("torch").attr("Tensor"))) {
         nb::object torch = nb::module_::import_("torch");
-        nb::object cont_tensor = py_tensor.attr("contiguous")();
-        const auto py_dtype = cont_tensor.attr("dtype");
-
+        const auto py_dtype = py_tensor.attr("dtype");
         const char* target_py_dtype = get_py_dtype_name(target_dtype);
-        if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-            cont_tensor = cont_tensor.attr("to")(torch.attr(target_py_dtype));
+
+        if (!py_dtype.equal(torch.attr(target_py_dtype))) {
+            converted_tensor = py_tensor.attr("to")(torch.attr(target_py_dtype));
         }
 
-        auto numel = nb::cast<std::size_t>(cont_tensor.attr("numel")());
-        auto ptr = reinterpret_cast<const void*>(nb::cast<std::uintptr_t>(cont_tensor.attr("data_ptr")()));
-
-        return to_host_buffer(ptr, numel, cont_tensor);
-
-    } else if (nb::isinstance(py_tensor, nb::module_::import_("numpy").attr("ndarray"))) {
+        converted_tensor = converted_tensor.attr("contiguous")();
+    } else if (is_numpy) {
         nb::object np = nb::module_::import_("numpy");
-        // numpy does not support bfloat16, so if the conversion explicitly requests this type,
-        // the mapping should happen through intermediate torch tensor.
-        if (target_dtype == DataType::BFLOAT16) {
-            return convert_py_tensor_to_host_buffer(
-                nb::object(nb::module_::import_("torch").attr("from_numpy")(py_tensor)), target_dtype);
-        }
-
-        nb::object cont_tensor = np.attr("ascontiguousarray")(py_tensor);
-        const auto py_dtype = cont_tensor.attr("dtype");
-
+        const auto py_dtype = py_tensor.attr("dtype");
         const char* target_py_dtype = get_py_dtype_name(target_dtype);
-        if (not py_dtype.equal(np.attr(target_py_dtype))) {
-            cont_tensor = cont_tensor.attr("astype")(np.attr(target_py_dtype));
+
+        if (!py_dtype.equal(np.attr(target_py_dtype))) {
+            converted_tensor = py_tensor.attr("astype")(np.attr(target_py_dtype));
         }
 
-        nb::ndarray<nb::array_api> cont_ndarray = nb::cast<nb::ndarray<nb::array_api>>(cont_tensor);
-        auto numel = cont_ndarray.size();
-        auto ptr = reinterpret_cast<const void*>(cont_ndarray.data());
-
-        return to_host_buffer(ptr, numel, cont_tensor);
-    } else {
-        TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
+        converted_tensor = np.attr("ascontiguousarray")(converted_tensor);
     }
+
+    nb::ndarray<nb::device::cpu> ndarray = nb::cast<nb::ndarray<nb::device::cpu>>(converted_tensor);
+
+    auto numel = ndarray.size();
+    const auto* ptr = reinterpret_cast<const void*>(ndarray.data());
+
+    return to_host_buffer(ptr, numel, converted_tensor);
 }
 
 std::optional<DataType> map_torch_data_type_to_ttnn(const nb::object& py_dtype, const nb::object& torch) {
