@@ -141,9 +141,9 @@ create_program(
     std::string kernel_receiver = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in" +
                                   std::to_string(mcast_xy_offset) + "_mcast_receiver.cpp";
 
-    std::vector<uint32_t> sender_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(sender_compile_time_args);
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
     auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program_,
         kernel_sender,
@@ -151,11 +151,8 @@ create_program(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = sender_compile_time_args});
+            .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program_,
         kernel_receiver,
