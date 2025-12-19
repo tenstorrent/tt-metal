@@ -58,7 +58,7 @@ void kernel_main() {
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
         const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        if (partial_last_tile_cols > 0) {
+        if (partial_last_tile_cols > 0 && !use_welford) {
             norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
         }
     }
