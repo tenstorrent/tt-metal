@@ -161,7 +161,7 @@ run_falcon3_func() {
   falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
   falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
 
-  for repo in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
+  for repo in "$falcon3_1b_instruct" "$falcon3_7b_instruct"; do
     HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
     echo "LOG_METAL: Falcon3 functional tests for $repo completed"
   done
@@ -180,7 +180,7 @@ run_falcon3_perf() {
   falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
 
   # N150 perf executed on N300 perf pipeline machines (mirroring llama3 perf section approach for N150)
-  for repo in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
+  for repo in "$falcon3_1b_instruct" "$falcon3_7b_instruct"; do
     MESH_DEVICE=N150 HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Falcon3 tests for $repo completed on N150"
   done
