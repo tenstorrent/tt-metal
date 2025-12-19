@@ -46,21 +46,18 @@ runs:
         echo "📊 Found $REGRESSION_COUNT regression(s). Preparing Slack notification..."
         echo "has_regressions=true" >> "$GITHUB_OUTPUT"
 
-        # Function to format a single regression entry
-        format_regression_text() {
-          jq -r '
-            def mentionOwners(owners):
-              if (owners | type) == "array" and (owners | length) > 0 then
-                (owners
-                  | map(
-                      if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
-                      elif (.id // "") != "" then "<@" + .id + ">"
-                      elif (.name // "") != "" then .name
-                      else null end
-                    ) | map(select(. != null)) | join(" ")
-                )
-              else "<!subteam^S0985AN7TC5|metal infra team>" end;
+        # Slack has a 3000 character limit per text block
+        MAX_BLOCK_TEXT_LENGTH=2900
+        HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
 
+        # Function to format regression array to text (takes file path as argument)
+        format_regressions() {
+          local input_file="${1:-}"
+          if [ -z "$input_file" ] || [ ! -f "$input_file" ]; then
+            echo "Malformed regressions payload"
+            return 0
+          fi
+          jq -r '
             def formatFailingJobs(jobs):
               if (jobs | type) == "array" and (jobs | length) > 0 then
                 (jobs | map(
@@ -97,55 +94,46 @@ runs:
               ) | join("\n"))
             else
               "Malformed regressions payload"
-            end' "$1"
+            end' "$input_file"
         }
 
-        # Slack has a 3000 character limit per text block
-        # Reserve space for header and formatting
-        MAX_BLOCK_TEXT_LENGTH=2900
-        HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
-        HEADER_PREFIX_LENGTH=$(printf '%s' "$HEADER_PREFIX" | wc -c)
-        # Reserve space for chunk indicator (e.g., "*[Part 1/5]*\n") - estimate max 20 chars
-        CHUNK_INDICATOR_MAX_LENGTH=20
-        MAX_REGRESSION_TEXT_LENGTH=$((MAX_BLOCK_TEXT_LENGTH - HEADER_PREFIX_LENGTH - CHUNK_INDICATOR_MAX_LENGTH))
-
-        # Split regressions into chunks that fit within the limit
-        # We'll build chunks by adding regressions one at a time until we exceed the limit
-        chunk_file="$(mktemp)"
+        # Split regressions into chunks that fit within Slack's limit
+        chunk_dir="$(mktemp -d)"
         chunk_index=0
         current_chunk="[]"
-        current_chunk_text=""
 
         # Process each regression
         for i in $(seq 0 $((REGRESSION_COUNT - 1))); do
           regression=$(jq -c ".[$i]" "$tmp_file")
-          regression_text=$(echo "$regression" | format_regression_text)
 
-          # Calculate what the chunk text would be with this regression added
+          # Test if adding this regression would exceed the limit
           test_chunk=$(echo "$current_chunk" | jq -c ". + [$regression]")
-          test_chunk_text=$(echo "$test_chunk" | format_regression_text)
+          test_chunk_file="${chunk_dir}/test_${i}.json"
+          echo "$test_chunk" > "$test_chunk_file"
+          test_chunk_text=$(format_regressions "$test_chunk_file")
           test_full_text="${HEADER_PREFIX}${test_chunk_text}"
-          # Account for potential chunk indicator (we don't know total chunks yet, so be conservative)
-          # Estimate max chunk indicator length (e.g., "*[Part 99/99]*\n" = ~20 chars)
           test_length=$(printf '%s' "$test_full_text" | wc -c)
-          test_length_with_indicator=$((test_length + CHUNK_INDICATOR_MAX_LENGTH))
 
-          # If adding this regression would exceed the limit, save current chunk and start new one
+          # Reserve space for chunk indicator if we'll have multiple chunks
+          # Estimate max: "*[Part 99/99]*\n" = ~20 chars
+          CHUNK_INDICATOR_MAX=20
+          test_length_with_indicator=$((test_length + CHUNK_INDICATOR_MAX))
+
+          # If adding this regression would exceed the limit and we have regressions in current chunk, save it
           if [ "$test_length_with_indicator" -gt "$MAX_BLOCK_TEXT_LENGTH" ] && [ "$(echo "$current_chunk" | jq 'length')" -gt 0 ]; then
-            echo "$current_chunk" > "${chunk_file}.${chunk_index}"
+            echo "$current_chunk" > "${chunk_dir}/chunk_${chunk_index}.json"
             chunk_index=$((chunk_index + 1))
             current_chunk="[$regression]"
-            current_chunk_text="$regression_text"
           else
             # Add regression to current chunk
-            current_chunk=$(echo "$current_chunk" | jq -c ". + [$regression]")
-            current_chunk_text="$test_chunk_text"
+            current_chunk="$test_chunk"
           fi
+          rm -f "$test_chunk_file"
         done
 
         # Save the last chunk if it has any regressions
         if [ "$(echo "$current_chunk" | jq 'length')" -gt 0 ]; then
-          echo "$current_chunk" > "${chunk_file}.${chunk_index}"
+          echo "$current_chunk" > "${chunk_dir}/chunk_${chunk_index}.json"
           chunk_index=$((chunk_index + 1))
         fi
 
@@ -156,7 +144,7 @@ runs:
         # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
         # We count lines starting with "• " to get the total number of failing workflows
         FAILING_WORKFLOWS_COUNT_MESSAGE=""
-        if [ -n "$ALERT_RAW" ]; then
+        if [ -n "${ALERT_RAW:-}" ]; then
           # Decode the alert message and count workflow lines
           decoded_alert=$(printf '%b' "$ALERT_RAW")
           total_failing_count=$(echo "$decoded_alert" | grep -E '^• ' | wc -l | tr -d ' ')
@@ -177,10 +165,15 @@ runs:
         # Build payloads for each chunk
         HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
 
-        # Generate payloads for all chunks
+        # Generate payloads for all chunks and store them
         for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
-          chunk_regressions=$(cat "${chunk_file}.${i}")
-          chunk_text=$(echo "$chunk_regressions" | format_regression_text)
+          chunk_file="${chunk_dir}/chunk_${i}.json"
+          if [ ! -f "$chunk_file" ]; then
+            echo "⚠️ Chunk file not found: $chunk_file"
+            continue
+          fi
+
+          chunk_text=$(format_regressions "$chunk_file")
           chunk_full_text="${HEADER_PREFIX}${chunk_text}"
 
           # Add chunk indicator if there are multiple chunks
@@ -188,14 +181,8 @@ runs:
             chunk_full_text="*[Part $((i + 1))/$TOTAL_CHUNKS]*\n${chunk_full_text}"
           fi
 
-          # Final safety check - verify the body text doesn't exceed limit
-          body_length=$(printf '%s' "$chunk_full_text" | wc -c)
-          if [ "$body_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
-            echo "⚠️ Warning: Chunk $((i + 1)) body text ($body_length chars) exceeds limit ($MAX_BLOCK_TEXT_LENGTH chars). This may cause Slack API errors."
-          fi
-
           # Add failing workflows count message only to the last chunk
-          if [ "$i" -eq $((TOTAL_CHUNKS - 1)) ] && [ -n "$FAILING_WORKFLOWS_COUNT_MESSAGE" ]; then
+          if [ "$i" -eq $((TOTAL_CHUNKS - 1)) ] && [ -n "${FAILING_WORKFLOWS_COUNT_MESSAGE:-}" ]; then
             PAYLOAD=$(jq -cn \
               --arg header "$HEADER" \
               --arg body "$chunk_full_text" \
@@ -225,13 +212,13 @@ runs:
             ')
           fi
 
-          # Store payload in a file for the send step to read
+          # Store payload in a file for the send step
           payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
           echo "$PAYLOAD" > "$payload_file"
         done
 
         # Clean up temporary chunk files
-        rm -f "${chunk_file}".*
+        rm -rf "$chunk_dir"
 
     - name: Skip Slack notification (no regressions)
       if: steps.build.outputs.has_regressions != 'true'
@@ -250,13 +237,12 @@ runs:
       run: |
         set -euo pipefail
 
-        TOTAL_CHUNKS=${TOTAL_CHUNKS:-1}
+        TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
         echo "Sending $TOTAL_CHUNKS message(s) to Slack..."
 
-        # Get the first message timestamp for thread continuity (if using bot token)
         FIRST_TS=""
 
-        if [ -n "$SLACK_BOT_TOKEN" ] && [ -n "$CHANNEL_ID" ]; then
+        if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # Using Bot Token method - supports threading
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
             payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
@@ -268,38 +254,36 @@ runs:
             PAYLOAD=$(cat "$payload_file")
             echo "Sending message part $((i + 1))/$TOTAL_CHUNKS..."
 
-            # Send via Slack API
+            # Build request body with channel and optional thread_ts
             if [ -z "$FIRST_TS" ]; then
-              # First message - no thread_ts
               REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" '. + {channel: $channel}')
             else
-              # Subsequent messages - thread to first message
               REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" '. + {channel: $channel, thread_ts: $thread_ts}')
             fi
 
             RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$REQUEST_BODY" | jq -c '{channel: .channel, ts: .ts, ok: .ok, error: .error}')
+              -d "$REQUEST_BODY")
 
             # Extract timestamp for threading subsequent messages
             if [ -z "$FIRST_TS" ]; then
               FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
-              if [ -n "$FIRST_TS" ]; then
+              if [ -n "$FIRST_TS" ] && [ "$FIRST_TS" != "null" ]; then
                 echo "ts=$FIRST_TS" >> "$GITHUB_OUTPUT"
               fi
             fi
 
             # Check for errors
-            if [ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]; then
+            if [ "$(echo "$RESPONSE" | jq -r '.ok // false')" != "true" ]; then
               ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "unknown error"')
               echo "⚠️ Failed to send Slack message part $((i + 1)): $ERROR_MSG"
-              echo "$RESPONSE" | jq .
+              echo "$RESPONSE" | jq . || echo "$RESPONSE"
             else
               echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
             fi
           done
-        elif [ -n "$SLACK_WEBHOOK_URL" ]; then
+        elif [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
           # Using Webhook method (simpler but no threading support)
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
             payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
@@ -311,16 +295,17 @@ runs:
             PAYLOAD=$(cat "$payload_file")
             echo "Sending message part $((i + 1))/$TOTAL_CHUNKS via webhook..."
 
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
+            HTTP_CODE=$(curl -s -w "\n%{http_code}" -o /tmp/slack_response_${i}.txt -X POST "$SLACK_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
+              -d "$PAYLOAD" | tail -n1)
 
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
             if [ "$HTTP_CODE" != "200" ]; then
               echo "⚠️ Failed to send Slack message part $((i + 1)): HTTP $HTTP_CODE"
+              cat "/tmp/slack_response_${i}.txt" || true
             else
               echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
             fi
+            rm -f "/tmp/slack_response_${i}.txt"
           done
         else
           echo "⚠️ No Slack credentials provided (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL)"
