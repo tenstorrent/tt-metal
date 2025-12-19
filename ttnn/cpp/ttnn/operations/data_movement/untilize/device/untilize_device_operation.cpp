@@ -295,7 +295,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tens
 UntilizeDeviceOperation::create_op_performance_model(
     const UntilizeDeviceOperation::operation_attributes_t& op_attr,
     const UntilizeDeviceOperation::tensor_args_t& inputs,
-    const Tensor& output) {
+    tensor_return_value_t& output) {
     const auto& input_tensor = inputs.input;
     const auto& output_tensor = output;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
@@ -316,7 +316,7 @@ UntilizeDeviceOperation::create_op_performance_model(
 
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
-        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
