@@ -22,7 +22,7 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import UpsampleAr
 def generate_conv_configuration_from_args(conv2d_args: Conv2dArgs, parameters_dict: dict, **kwargs):
     packer_l1_acc = kwargs.pop("packer_l1_acc", True)
     fp32_dest_acc_en = kwargs.pop("fp32_dest_acc_en", True)
-    enable_weights_double_buffer = kwargs.pop("fp32_dest_acc_en", False)
+    enable_weights_double_buffer = kwargs.pop("enable_weights_double_buffer", False)
     math_fidelity = kwargs.pop("math_fidelity", ttnn.MathFidelity.HiFi2)
     weights, bias = parameters_dict["weight"], parameters_dict["bias"]
 
@@ -184,6 +184,8 @@ class TtSeparableConvBlock:
                 parameters_dict=parameters.pointwise_conv,
                 sharding_strategy=sharding_strategy,
                 deallocate_activation=True,
+                packer_l1_acc=False,
+                fp32_dest_acc_en=False,
             ),
             device=device,
         )

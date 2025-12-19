@@ -71,8 +71,8 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 )
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
-    "batch_size, size, expected_compile_time, expected_throughput_fps",
-    [(1, 512, 25.4, 39.3)],
+    "batch_size, size, expected_compile_time, expected_throughput_fps, use_torch_maxpool",
+    [(1, 512, 25.4, 39.3, True)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_efficientdet_d0_e2e_performant(
@@ -82,6 +82,7 @@ def test_efficientdet_d0_e2e_performant(
     size,
     expected_compile_time,
     expected_throughput_fps,
+    use_torch_maxpool,
     model_location_generator,
 ):
     """
@@ -112,6 +113,7 @@ def test_efficientdet_d0_e2e_performant(
         parameters=parameters,
         module_args=module_args,
         num_classes=num_classes,
+        use_torch_maxpool=use_torch_maxpool,
     )
 
     ttnn.synchronize_device(device)

@@ -59,6 +59,7 @@ class TtMBConvBlock:
                 parameters_dict=parameters._depthwise_conv,
                 sharding_strategy=sharding_strategy_depthwise_conv,
                 deallocate_activation=deallocate_activation,
+                packer_l1_acc=False,
             ),
             device=device,
         )
