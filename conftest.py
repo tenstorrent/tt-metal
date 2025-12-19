@@ -328,6 +328,30 @@ def device(request, device_params):
     ttnn.close_device(device)
 
 
+# Session-scoped device fixture for faster test execution
+# Use this for tests that don't require a fresh device state between runs
+# To use: replace `device` fixture with `device_session` in test function signature
+@pytest.fixture(scope="session")
+def device_session(request):
+    import ttnn
+
+    device_id = request.config.getoption("device_id")
+
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
+    device = ttnn.CreateDevice(device_id=device_id)
+    ttnn.SetDefaultDevice(device)
+
+    yield device
+
+    ttnn.SetDefaultDevice(None)
+    ttnn.close_device(device)
+
+
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
