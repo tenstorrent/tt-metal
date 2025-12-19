@@ -314,8 +314,8 @@
 <span class="w">    </span><span class="c1">// Perform matrix multiplication:</span>
 <span class="w">    </span><span class="c1">// - Take tile 0 from CB 0 and tile 0 from CB 1.</span>
 <span class="w">    </span><span class="c1">// - Place the result into Dst tile 0.</span>
-<span class="w">    </span><span class="c1">//              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx   transp</span>
-<span class="w">    </span><span class="n">matmul_tiles</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">      </span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">//              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx</span>
+<span class="w">    </span><span class="n">matmul_tiles</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
 
 <span class="w">    </span><span class="c1">// Commit the results, transferring ownership of Dst registers to the packer.</span>
 <span class="w">    </span><span class="n">tile_regs_commit</span><span class="p">();</span>

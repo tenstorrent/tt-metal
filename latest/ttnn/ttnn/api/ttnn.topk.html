@@ -71,6 +71,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#reduction">Reduction</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumprod.html">ttnn.cumprod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ema.html">ttnn.ema</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.max.html">ttnn.max</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.mean.html">ttnn.mean</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.min.html">ttnn.min</a></li>
@@ -82,12 +83,12 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.moe.html">ttnn.moe</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -223,7 +224,8 @@
 </tr>
 </tbody>
 </table>
-<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_value_tensor</span></code> will have the same data type as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_index_tensor</span></code> will have UINT16 data type.</p>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_value_tensor</span></code> will have the same data type as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and will be in TILE layout.
+The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_index_tensor</span></code> will be UINT16 and will be in TILE layout.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>

@@ -136,6 +136,8 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4N7ckernel25add_bcast_rows_init_shortE8uint32_t8uint32_t">ckernel::add_bcast_rows_init_short (C++ function)</a>
 </li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4N7ckernel27add_bcast_scalar_init_shortE8uint32_t8uint32_t">ckernel::add_bcast_scalar_init_short (C++ function)</a>
+</li>
       <li><a href="tt_metal/apis/kernel_apis/compute/add_binary_tile.html#_CPPv4N7ckernel15add_binary_tileE8uint32_t8uint32_t8uint32_t">ckernel::add_binary_tile (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/add_binary_tile.html#_CPPv4N7ckernel20add_binary_tile_initEv">ckernel::add_binary_tile_init (C++ function)</a>
@@ -146,7 +148,13 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles.html#_CPPv4N7ckernel9add_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles_bcast (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles_bcast (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4N7ckernel20add_tiles_bcast_colsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles_bcast_cols (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4N7ckernel20add_tiles_bcast_rowsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles_bcast_rows (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html#_CPPv4N7ckernel22add_tiles_bcast_scalarE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::add_tiles_bcast_scalar (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/add_tiles.html#_CPPv4N7ckernel14add_tiles_initE8uint32_t8uint32_tb">ckernel::add_tiles_init (C++ function)</a>
 </li>
@@ -242,9 +250,7 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/bitwise_xor_binary_tile.html#_CPPv4N7ckernel30bitwise_xor_uint16_binary_tileE8uint32_t8uint32_t8uint32_t">ckernel::bitwise_xor_uint16_binary_tile (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/ceil_tile.html#_CPPv4N7ckernel9ceil_tileE8uint32_t">ckernel::ceil_tile (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/ceil_tile.html#_CPPv4N7ckernel17ceil_tile_float32E8uint32_t">ckernel::ceil_tile_float32 (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel9ceil_tileE8uint32_t">ckernel::ceil_tile (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/celu_tile.html#_CPPv4N7ckernel9celu_tileE8uint32_t8uint32_t8uint32_t">ckernel::celu_tile (C++ function)</a>
 </li>
@@ -332,15 +338,11 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel10floor_tileE8uint32_t">ckernel::floor_tile (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel18floor_tile_float32E8uint32_t">ckernel::floor_tile_float32 (C++ function)</a>
-</li>
       <li><a href="tt_metal/apis/kernel_apis/compute/fmod_tile.html#_CPPv4N7ckernel9fmod_tileE8uint32_t8uint32_t8uint32_t">ckernel::fmod_tile (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/fmod_tile.html#_CPPv4N7ckernel14fmod_tile_initE8uint32_t8uint32_t">ckernel::fmod_tile_init (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel9frac_tileE8uint32_t">ckernel::frac_tile (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel17frac_tile_float32E8uint32_t">ckernel::frac_tile_float32 (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/gcd_tile.html#_CPPv4N7ckernel8gcd_tileE8uint32_t8uint32_t8uint32_t">ckernel::gcd_tile (C++ function)</a>
 </li>
@@ -454,13 +456,13 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/mask_tile.html#_CPPv4N7ckernel9mask_tileE8uint32_t8uint32_t10DataFormat">ckernel::mask_tile (C++ function)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="tt_metal/apis/kernel_apis/compute/mask_tile.html#_CPPv4N7ckernel14mask_tile_initEv">ckernel::mask_tile_init (C++ function)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="tt_metal/apis/kernel_apis/compute/matmul_block.html#_CPPv4N7ckernel12matmul_blockE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::matmul_block (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/matmul_tiles.html#_CPPv4N7ckernel12matmul_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_tK8uint32_t">ckernel::matmul_tiles (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/matmul_tiles.html#_CPPv4N7ckernel12matmul_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::matmul_tiles (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/max_tile.html#_CPPv4N7ckernel8max_tileE8uint32_t8uint32_ti">ckernel::max_tile (C++ function)</a>
 </li>
@@ -490,7 +492,11 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles.html#_CPPv4N7ckernel9mul_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15mul_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles_bcast (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15mul_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles_bcast (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html#_CPPv4N7ckernel20mul_tiles_bcast_colsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles_bcast_cols (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html#_CPPv4N7ckernel20mul_tiles_bcast_rowsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles_bcast_rows (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html#_CPPv4N7ckernel22mul_tiles_bcast_scalarE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::mul_tiles_bcast_scalar (C++ function)</a>
 </li>
@@ -680,7 +686,13 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles.html#_CPPv4N7ckernel9sub_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::sub_tiles (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15sub_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::sub_tiles_bcast (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html#_CPPv4I_13BroadcastTypeEN7ckernel15sub_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::sub_tiles_bcast (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html#_CPPv4N7ckernel20sub_tiles_bcast_colsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::sub_tiles_bcast_cols (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html#_CPPv4N7ckernel22sub_tiles_bcast_scalarE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::sub_tiles_bcast_scalar (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html#_CPPv4N7ckernel33sub_tiles_bcast_scalar_init_shortE8uint32_t8uint32_t">ckernel::sub_tiles_bcast_scalar_init_short (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/sub_tiles.html#_CPPv4N7ckernel14sub_tiles_initE8uint32_t8uint32_tb">ckernel::sub_tiles_init (C++ function)</a>
 </li>
@@ -731,8 +743,6 @@
       <li><a href="tt_metal/apis/kernel_apis/compute/transpose_wh_tile.html#_CPPv4N7ckernel17transpose_wh_tileE8uint32_t8uint32_t8uint32_t">ckernel::transpose_wh_tile (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel10trunc_tileE8uint32_t">ckernel::trunc_tile (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/round_tile.html#_CPPv4N7ckernel18trunc_tile_float32E8uint32_t">ckernel::trunc_tile_float32 (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/typecast_tile.html#_CPPv4I_8uint32_t_8uint32_tEN7ckernel13typecast_tileEv8uint32_t">ckernel::typecast_tile (C++ function)</a>
 </li>

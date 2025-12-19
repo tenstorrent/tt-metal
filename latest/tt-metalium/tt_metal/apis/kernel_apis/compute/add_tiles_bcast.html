@@ -134,8 +134,17 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">BroadcastType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">tBcastDim</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ab69ce76cfa211ae46dea6f04035a8050"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_bcast</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel27add_bcast_scalar_init_shortE8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a189960f81d1a7eaa0aa2f6eaa0b4e5e2"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_bcast_scalar_init_short</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel27add_bcast_scalar_init_shortE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be executed correctly. </p>
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">BroadcastType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">tBcastDim</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a497b4196d65969ecfc3e6c9881d369c9"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_bcast</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">bcast_row_idx</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_13BroadcastTypeEN7ckernel15add_tiles_bcastEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>This documentation applies to either one of the 3 broadcast operation variants - <em>add_tiles_bcast</em>, <em>sub_tiles_bcast</em> and <em>mul_tiles_bcast</em>.</p>
@@ -204,6 +213,33 @@
 </tbody>
 </table>
 
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel20add_tiles_bcast_rowsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a116b2eea72458a5a7608f4c56a69ea14"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_bcast_rows</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">bcast_row_idx</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel20add_tiles_bcast_rowsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Please refer to documentation for sub_tiles_bcast </p>
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel20add_tiles_bcast_colsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1ac6a07f0334b79f3a1945e988bed27e95"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_bcast_cols</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel20add_tiles_bcast_colsE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Please refer to documentation for sub_tiles_bcast </p>
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel22add_tiles_bcast_scalarE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1ae0c56cbe89c2bf82e59321407a6397de"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_bcast_scalar</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel22add_tiles_bcast_scalarE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Please refer to documentation for add_tiles_bcast </p>
 </dd>
 </dl>
 

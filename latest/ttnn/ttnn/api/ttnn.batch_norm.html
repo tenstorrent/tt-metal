@@ -27,7 +27,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.softmax" href="ttnn.softmax.html" />
-    <link rel="prev" title="ttnn.rms_norm" href="ttnn.rms_norm.html" /> 
+    <link rel="prev" title="ttnn.rms_norm_post_all_gather" href="ttnn.rms_norm_post_all_gather.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -76,7 +76,11 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.batch_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
@@ -86,7 +90,6 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -210,6 +213,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 </tbody>
 </table>
 <p>These apply for all the tensor inputs to this operation, including the optional <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> tensor.</p>
+<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
@@ -262,7 +266,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.rms_norm.html" class="btn btn-neutral float-left" title="ttnn.rms_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.rms_norm_post_all_gather.html" class="btn btn-neutral float-left" title="ttnn.rms_norm_post_all_gather" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn.softmax.html" class="btn btn-neutral float-right" title="ttnn.softmax" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

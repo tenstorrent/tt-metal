@@ -78,7 +78,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.SoftmaxShardedMultiCoreProgramConfig.html">ttnn.SoftmaxShardedMultiCoreProgramConfig</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -151,13 +150,8 @@ appropriate parameters based on the input tensor characteristics.</p>
 <div class="highlight"><pre><span></span><span class="c1"># Create input tensor</span>
 <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="c1"># Configure softmax program</span>
-<span class="n">compute_grid</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span>
-<span class="n">program_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">SoftmaxDefaultProgramConfig</span><span class="p">()</span>
-
-<span class="c1"># Perform softmax</span>
-<span class="n">result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">program_config</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Softmax with Program Config result: </span><span class="si">{</span><span class="n">result</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># Explicitly specify a default config</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">softmax_in_place</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">SoftmaxDefaultProgramConfig</span><span class="p">())</span>
 </pre></div>
 </div>
 </div>

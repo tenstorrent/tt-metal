@@ -1,0 +1,8 @@
+﻿ttnn.split\_work\_to\_cores
+===========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.split_work_to_cores:
+
+.. autofunction:: ttnn.split_work_to_cores

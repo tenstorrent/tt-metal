@@ -267,7 +267,6 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -326,10 +325,10 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.swish">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">swish</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.swish" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">swish</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.swish" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs swish function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>Applies swish to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
 <div class="math notranslate nohighlight">
 \[\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i)\]</div>
 <dl class="field-list simple">
@@ -341,7 +340,10 @@
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
@@ -362,7 +364,7 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>FLOAT32, BFLOAT16, BFLOAT8_B</p></td>
 <td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>

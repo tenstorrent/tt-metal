@@ -316,6 +316,11 @@
 <li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.to_memory_config.html#ttnn.to_memory_config"><code class="docutils literal notranslate"><span class="pre">to_memory_config()</span></code></a></li>
 </ul>
 </li>
+<li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.split_work_to_cores.html">ttnn.split_work_to_cores</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.split_work_to_cores.html#ttnn.split_work_to_cores"><code class="docutils literal notranslate"><span class="pre">split_work_to_cores()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toctree-l3">
@@ -387,11 +392,6 @@
 <li class="toctree-l4">
 <a class="reference internal" href="ttnn/api/ttnn.linear.html">ttnn.linear</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.linear.html#ttnn.linear"><code class="docutils literal notranslate"><span class="pre">linear()</span></code></a></li>
-</ul>
-</li>
-<li class="toctree-l4">
-<a class="reference internal" href="ttnn/api/ttnn.matmul_batched_weights.html">ttnn.matmul_batched_weights</a><ul>
-<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.matmul_batched_weights.html#ttnn.matmul_batched_weights"><code class="docutils literal notranslate"><span class="pre">matmul_batched_weights()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l4">
@@ -1871,6 +1871,11 @@
 </ul>
 </li>
 <li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.ema.html">ttnn.ema</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.ema.html#ttnn.ema"><code class="docutils literal notranslate"><span class="pre">ema()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
 <a class="reference internal" href="ttnn/api/ttnn.max.html">ttnn.max</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.max.html#ttnn.max"><code class="docutils literal notranslate"><span class="pre">max()</span></code></a></li>
 </ul>
@@ -1923,6 +1928,11 @@
 <li class="toctree-l4">
 <a class="reference internal" href="ttnn/api/ttnn.manual_seed.html">ttnn.manual_seed</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.manual_seed.html#ttnn.manual_seed"><code class="docutils literal notranslate"><span class="pre">manual_seed()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.moe.html">ttnn.moe</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.moe.html#ttnn.moe"><code class="docutils literal notranslate"><span class="pre">moe()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -2029,8 +2039,28 @@
 </ul>
 </li>
 <li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.layer_norm_pre_all_gather.html#ttnn.layer_norm_pre_all_gather"><code class="docutils literal notranslate"><span class="pre">layer_norm_pre_all_gather()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.layer_norm_post_all_gather.html#ttnn.layer_norm_post_all_gather"><code class="docutils literal notranslate"><span class="pre">layer_norm_post_all_gather()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
 <a class="reference internal" href="ttnn/api/ttnn.rms_norm.html">ttnn.rms_norm</a><ul>
 <li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.rms_norm.html#ttnn.rms_norm"><code class="docutils literal notranslate"><span class="pre">rms_norm()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.rms_norm_pre_all_gather.html#ttnn.rms_norm_pre_all_gather"><code class="docutils literal notranslate"><span class="pre">rms_norm_pre_all_gather()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="ttnn/api/ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.rms_norm_post_all_gather.html#ttnn.rms_norm_post_all_gather"><code class="docutils literal notranslate"><span class="pre">rms_norm_post_all_gather()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l4">
@@ -2084,15 +2114,6 @@
 <li class="toctree-l6"><a class="reference internal" href="ttnn/api/ttnn.SoftmaxShardedMultiCoreProgramConfig.html#ttnn.SoftmaxShardedMultiCoreProgramConfig.block_w"><code class="docutils literal notranslate"><span class="pre">SoftmaxShardedMultiCoreProgramConfig.block_w</span></code></a></li>
 </ul>
 </li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/api.html#moreh-operations">Moreh Operations</a><ul>
-<li class="toctree-l4">
-<a class="reference internal" href="ttnn/api/ttnn.moreh_sum.html">ttnn.moreh_sum</a><ul>
-<li class="toctree-l5"><a class="reference internal" href="ttnn/api/ttnn.moreh_sum.html#ttnn.moreh_sum"><code class="docutils literal notranslate"><span class="pre">moreh_sum()</span></code></a></li>
 </ul>
 </li>
 </ul>

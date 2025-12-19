@@ -71,6 +71,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#reduction">Reduction</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumprod.html">ttnn.cumprod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ema.html">ttnn.ema</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.max.html">ttnn.max</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.mean.html">ttnn.mean</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.min</a></li>
@@ -82,12 +83,12 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.moe.html">ttnn.moe</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -206,7 +207,7 @@ If no dimension is provided, min is computed over all dimensions yielding a sing
 </tr>
 </tbody>
 </table>
-<p>The output tensor will match the data type and layout of the input tensor.</p>
+<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
@@ -214,7 +215,7 @@ If no dimension is provided, min is computed over all dimensions yielding a sing
 <ul class="simple">
 <li><p>Interleaved: DRAM and L1</p></li>
 <li><p>Sharded (L1): Width, Height, and ND sharding</p></li>
-<li><p>Output sharding/layout will mirror the input</p></li>
+<li><p>Output sharding will mirror the input</p></li>
 </ul>
 </dd>
 </dl>

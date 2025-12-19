@@ -26,7 +26,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.rms_norm" href="ttnn.rms_norm.html" />
+    <link rel="next" title="ttnn.layer_norm_pre_all_gather" href="ttnn.layer_norm_pre_all_gather.html" />
     <link rel="prev" title="ttnn.group_norm" href="ttnn.group_norm.html" /> 
 </head>
 
@@ -76,7 +76,11 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
@@ -86,7 +90,6 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -148,7 +151,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">layer_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">epsilon</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">residual_input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.ProgramConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.layer_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Compute layer norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+<p>Computes layer norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
 See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a> for more details.</p>
 <blockquote>
 <div>
@@ -248,24 +251,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
 </table>
 <table class="docutils align-default" id="id5">
 <caption>
-<span class="caption-text">stats (POST_ALL_GATHER only)</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
-</tr>
-</tbody>
-</table>
-<table class="docutils align-default" id="id6">
-<caption>
-<span class="caption-text">output_tensor</span><a class="headerlink" href="#id6" title="Permalink to this table"></a>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
@@ -280,7 +266,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
 </tr>
 </tbody>
 </table>
-<p>Output dtype typically matches input; PRE_ALL_GATHER produces BF16</p>
+<p>Output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
@@ -325,7 +311,7 @@ See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer 
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.group_norm.html" class="btn btn-neutral float-left" title="ttnn.group_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.rms_norm.html" class="btn btn-neutral float-right" title="ttnn.rms_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.layer_norm_pre_all_gather.html" class="btn btn-neutral float-right" title="ttnn.layer_norm_pre_all_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

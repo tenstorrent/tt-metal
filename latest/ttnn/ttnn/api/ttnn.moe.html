@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.matmul_batched_weights &mdash; TT-NN  documentation</title>
+  <title>ttnn.moe &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.matmul_batched_weights.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.moe.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.addmm" href="ttnn.addmm.html" />
-    <link rel="prev" title="ttnn.linear" href="ttnn.linear.html" /> 
+    <link rel="next" title="ttnn.concat" href="ttnn.concat.html" />
+    <link rel="prev" title="ttnn.manual_seed" href="ttnn.manual_seed.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -64,27 +64,31 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="ttnn.matmul.html">ttnn.matmul</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.linear.html">ttnn.linear</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.matmul_batched_weights</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.addmm.html">ttnn.addmm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sparse_matmul.html">ttnn.sparse_matmul</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseProgramConfig.html">ttnn.MatmulMultiCoreReuseProgramConfig</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#reduction">Reduction</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.cumprod.html">ttnn.cumprod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ema.html">ttnn.ema</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.max.html">ttnn.max</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.mean.html">ttnn.mean</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.min.html">ttnn.min</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.argmax.html">ttnn.argmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prod.html">ttnn.prod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.moe</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -128,9 +132,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.matmul_batched_weights</li>
+      <li class="breadcrumb-item active">ttnn.moe</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.matmul_batched_weights.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.moe.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -138,32 +142,41 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-matmul-batched-weights">
-<h1>ttnn.matmul_batched_weights<a class="headerlink" href="#ttnn-matmul-batched-weights" title="Permalink to this heading"></a>
+  <section id="ttnn-moe">
+<h1>ttnn.moe<a class="headerlink" href="#ttnn-moe" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.matmul_batched_weights">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">matmul_batched_weights</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensors_b:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose_a:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose_b:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config:</span> <span class="pre">MatmulProgramConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation:</span> <span class="pre">str</span> <span class="pre">or</span> <span class="pre">ttnn.UnaryWithParam</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">core_grid:</span> <span class="pre">ttnn.CoreGrid</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tile:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int]</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.matmul_batched_weights" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.moe">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moe</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.moe" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.</p>
+<p>Returns the weight of the zero-th MoE expert.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This is equivalent to the following PyTorch code:
+val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
+return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)</p>
+</div>
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: Input Tensor for moe.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>: Expert Mask Tensor for mask to out invalid experts.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code>: Topk Mask Tensor for mask to out everything except topk.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: the number of top elements to look for</p>
+<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensors
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code>: preallocated output tensors
+:kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code>: Optional[ttnn.Tensor]</p>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
+<dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
-<li><p><strong>input_tensors_b</strong> (<em>ttnn.Tensor</em>) – the second tensor vector to be multiplied. Needs to be on the device.</p></li>
-</ul>
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>The tensors support the following data types and layouts:</p>
-<table class="docutils align-default" id="id2">
-<caption>
-<span class="caption-text">input_tensor_a</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
-</caption>
+<p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>, and <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code> must match the following data type and layout:</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>dtype</p></th>
@@ -172,53 +185,50 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32</p></td>
-<td><p>TILE</p></td>
-</tr>
-</tbody>
-</table>
-<table class="docutils align-default" id="id3">
-<caption>
-<span class="caption-text">input_tensors_b</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32</p></td>
+<td><p>BFLOAT16</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<dl class="field-list simple">
-<dt class="field-odd">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
+</blockquote>
+<p>The output tensor will be in TILE layout and BFLOAT16.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
 <ul class="simple">
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>activation</strong> (<em>str</em><em> or </em><em>ttnn.UnaryWithParam</em><em>, </em><em>optional</em>) – the activation function to be applied. When using sharded tensors, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">fused_activation</span></code> parameter of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">program_config</span></code> should be used instead. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Specifies the output tile configuration. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</p></li>
+<li><p>Interleaved: DRAM and L1</p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>Tensors must be 4D with shape [N, C, H, W], and must be located on the device.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> must be exactly 32.</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">topk_mask_tensor</span></code>, H must be 32 and W must match <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> (i.e. 32).</p></li>
+<li><p>For the <code class="xref py py-attr docutils literal notranslate"><span class="pre">expert_mask_tensor</span></code>, H must be 32 and W must match W of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></li>
+<li><p>All of the shape validations are performed on padded shapes.</p></li>
+<li><p>Sharding is not supported for this operation.</p></li>
+</ul>
 </dd>
 </dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span>
+<span class="n">k</span> <span class="o">=</span> <span class="mi">32</span>
+
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">expert_mask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">W</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">topE_mask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">k</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">tensor_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">moe</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">expert_mask</span><span class="p">,</span> <span class="n">topE_mask</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"MOE result: </span><span class="si">{</span><span class="n">tensor_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 
@@ -229,8 +239,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.linear.html" class="btn btn-neutral float-left" title="ttnn.linear" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.addmm.html" class="btn btn-neutral float-right" title="ttnn.addmm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.manual_seed.html" class="btn btn-neutral float-left" title="ttnn.manual_seed" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.concat.html" class="btn btn-neutral float-right" title="ttnn.concat" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

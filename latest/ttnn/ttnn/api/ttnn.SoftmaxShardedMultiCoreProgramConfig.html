@@ -24,7 +24,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.moreh_sum" href="ttnn.moreh_sum.html" />
+    <link rel="next" title="ttnn.transformer.split_query_key_value_and_split_heads" href="ttnn.transformer.split_query_key_value_and_split_heads.html" />
     <link rel="prev" title="ttnn.SoftmaxDefaultProgramConfig" href="ttnn.SoftmaxDefaultProgramConfig.html" /> 
 </head>
 
@@ -78,7 +78,6 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.SoftmaxShardedMultiCoreProgramConfig</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -169,23 +168,55 @@ optimal performance on sharded data.</p>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create input tensor</span>
-<span class="n">compute_grid</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span>
-<span class="n">fuse_head</span> <span class="o">=</span> <span class="mi">2</span>
-<span class="n">batch</span> <span class="o">=</span> <span class="n">compute_grid</span><span class="o">.</span><span class="n">x</span>
-<span class="n">num_cores_r</span> <span class="o">=</span> <span class="n">compute_grid</span><span class="o">.</span><span class="n">y</span>
+<div class="highlight"><pre><span></span><span class="c1"># Setup input tensor and mask</span>
+<span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
 
-<span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">num_cores_r</span><span class="p">,</span> <span class="n">fuse_head</span> <span class="o">*</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span>
+<span class="n">attention_mask_t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="c1"># Configure softmax program</span>
+<span class="c1"># Apply in-place scale mask softmax</span>
+<span class="n">tt_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">scale_mask_softmax_in_place</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="o">=</span><span class="n">input_tensor</span><span class="p">,</span>
+    <span class="n">scale</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">mask</span><span class="o">=</span><span class="n">attention_mask_t</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Scale Mask Softmax In Place result: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="n">compute_grid_size</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span>
+<span class="n">fuse_head</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">batch</span> <span class="o">=</span> <span class="n">compute_grid_size</span><span class="o">.</span><span class="n">x</span>
+<span class="n">num_cores_r</span> <span class="o">=</span> <span class="n">compute_grid_size</span><span class="o">.</span><span class="n">y</span>
+
+<span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">num_cores_r</span><span class="p">,</span> <span class="n">fuse_head</span> <span class="o">*</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span>
+
+<span class="n">attention_mask_t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">batch</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">768</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Shard the input tensor</span>
+<span class="n">grid_coord</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="n">compute_grid_size</span><span class="o">.</span><span class="n">x</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">compute_grid_size</span><span class="o">.</span><span class="n">y</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+<span class="n">shard_grid</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreRangeSet</span><span class="p">({</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreRange</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">grid_coord</span><span class="p">)})</span>
+<span class="n">shard_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">fuse_head</span> <span class="o">*</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">768</span><span class="p">]</span>
+<span class="n">shard_spec</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ShardSpec</span><span class="p">(</span><span class="n">shard_grid</span><span class="p">,</span> <span class="n">shard_shape</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ShardOrientation</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">)</span>
+<span class="n">sharded_mem_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MemoryConfig</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">HEIGHT_SHARDED</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">BufferType</span><span class="o">.</span><span class="n">L1</span><span class="p">,</span> <span class="n">shard_spec</span><span class="p">)</span>
+
+<span class="n">input_sharded</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">sharded_mem_config</span><span class="p">)</span>
+
+<span class="c1"># Create sharded program config</span>
 <span class="n">program_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">SoftmaxShardedMultiCoreProgramConfig</span><span class="p">(</span>
-    <span class="n">compute_with_storage_grid_size</span><span class="o">=</span><span class="n">compute_grid</span><span class="p">,</span> <span class="n">subblock_w</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">block_h</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">block_w</span><span class="o">=</span><span class="mi">32</span>
+    <span class="n">compute_with_storage_grid_size</span><span class="o">=</span><span class="n">compute_grid_size</span><span class="p">,</span>
+    <span class="n">subblock_w</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+    <span class="n">block_h</span><span class="o">=</span><span class="mi">12</span> <span class="o">*</span> <span class="n">fuse_head</span><span class="p">,</span>
+    <span class="n">block_w</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="c1"># Perform softmax</span>
-<span class="n">result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">program_config</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Softmax with Sharded Multi Core Program Config result: </span><span class="si">{</span><span class="n">result</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">tt_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">scale_mask_softmax_in_place</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="o">=</span><span class="n">input_sharded</span><span class="p">,</span>
+    <span class="n">scale</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">mask</span><span class="o">=</span><span class="n">attention_mask_t</span><span class="p">,</span>
+    <span class="n">program_config</span><span class="o">=</span><span class="n">program_config</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Scale Mask Softmax In Place result: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -207,7 +238,7 @@ optimal performance on sharded data.</p>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.SoftmaxDefaultProgramConfig.html" class="btn btn-neutral float-left" title="ttnn.SoftmaxDefaultProgramConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.moreh_sum.html" class="btn btn-neutral float-right" title="ttnn.moreh_sum" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.transformer.split_query_key_value_and_split_heads.html" class="btn btn-neutral float-right" title="ttnn.transformer.split_query_key_value_and_split_heads" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

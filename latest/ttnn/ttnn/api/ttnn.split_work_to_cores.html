@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.moreh_sum &mdash; TT-NN  documentation</title>
+  <title>ttnn.split_work_to_cores &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.moreh_sum.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.split_work_to_cores.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.transformer.split_query_key_value_and_split_heads" href="ttnn.transformer.split_query_key_value_and_split_heads.html" />
-    <link rel="prev" title="ttnn.SoftmaxShardedMultiCoreProgramConfig" href="ttnn.SoftmaxShardedMultiCoreProgramConfig.html" /> 
+    <link rel="next" title="ttnn.arange" href="ttnn.arange.html" />
+    <link rel="prev" title="ttnn.to_memory_config" href="ttnn.to_memory_config.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -62,7 +62,21 @@
 <li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
 <li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
-<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#core">Core</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.as_tensor.html">ttnn.as_tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.from_torch.html">ttnn.from_torch</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.to_torch.html">ttnn.to_torch</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.to_device.html">ttnn.to_device</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.from_device.html">ttnn.from_device</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.to_layout.html">ttnn.to_layout</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.dump_tensor.html">ttnn.dump_tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.load_tensor.html">ttnn.load_tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.deallocate.html">ttnn.deallocate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.reallocate.html">ttnn.reallocate</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.to_memory_config.html">ttnn.to_memory_config</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.split_work_to_cores</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
@@ -73,10 +87,6 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.moreh_sum</a></li>
-</ul>
-</li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -120,9 +130,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.moreh_sum</li>
+      <li class="breadcrumb-item active">ttnn.split_work_to_cores</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.moreh_sum.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.split_work_to_cores.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -130,15 +140,98 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-moreh-sum">
-<h1>ttnn.moreh_sum<a class="headerlink" href="#ttnn-moreh-sum" title="Permalink to this heading"></a>
+  <section id="ttnn-split-work-to-cores">
+<h1>ttnn.split_work_to_cores<a class="headerlink" href="#ttnn-split-work-to-cores" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.moreh_sum">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moreh_sum</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.moreh_sum" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.split_work_to_cores">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">split_work_to_cores</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.split_work_to_cores" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Moreh Sum Operation</p>
+<p>Overloaded function.</p>
+<ol class="arabic">
+<li>
+<p>split_work_to_cores(grid_size: ttnn._ttnn.tensor.CoreCoord, units_to_divide: int, row_wise: bool = False) -&gt; tuple[int, ttnn._ttnn.tensor.CoreRangeSet, ttnn._ttnn.tensor.CoreRangeSet, ttnn._ttnn.tensor.CoreRangeSet, int, int]</p>
+<blockquote>
+<div>
+<p>Split work units across cores in a grid.</p>
+<p>This function divides a specified number of work units across cores in a grid.
+It returns information about how the work is distributed, including core ranges
+for different groups if work cannot be evenly divided.</p>
+<dl class="simple">
+<dt>Args:</dt>
+<dd>
+<p>grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
+units_to_divide (int): The total number of work units to distribute.
+row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.</p>
+</dd>
+<dt>Returns:</dt>
+<dd>
+<dl class="simple">
+<dt>tuple: A tuple containing:</dt>
+<dd>
+<ul class="simple">
+<li><p>num_cores (int): Number of cores being used</p></li>
+<li><p>all_cores (CoreRangeSet): All cores involved</p></li>
+<li><p>core_group_1 (CoreRangeSet): Cores doing more work</p></li>
+<li><p>core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)</p></li>
+<li><p>units_per_core_group_1 (int): Work units per core in group 1</p></li>
+<li><p>units_per_core_group_2 (int): Work units per core in group 2</p></li>
+</ul>
+</dd>
+</dl>
+</dd>
+</dl>
+<p>Example:
+&gt;&gt;&gt; # Split 100 tiles across an 8x8 core grid
+&gt;&gt;&gt; num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \
+…     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+&gt;&gt;&gt; print(f”Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2”)</p>
+</div>
+</blockquote>
+</li>
+<li>
+<p>split_work_to_cores(core_grid: ttnn._ttnn.tensor.CoreRangeSet, units_to_divide: int, row_wise: bool = False) -&gt; tuple[int, ttnn._ttnn.tensor.CoreRangeSet, ttnn._ttnn.tensor.CoreRangeSet, ttnn._ttnn.tensor.CoreRangeSet, int, int]</p>
+<blockquote>
+<div>
+<p>Split work units across cores in a CoreRangeSet.</p>
+<p>This function divides a specified number of work units across cores in a CoreRangeSet.
+It returns information about how the work is distributed, including core ranges
+for different groups if work cannot be evenly divided.</p>
+<dl class="simple">
+<dt>Args:</dt>
+<dd>
+<p>core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
+units_to_divide (int): The total number of work units to distribute.
+row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.</p>
+</dd>
+<dt>Returns:</dt>
+<dd>
+<dl class="simple">
+<dt>tuple: A tuple containing:</dt>
+<dd>
+<ul class="simple">
+<li><p>num_cores (int): Number of cores being used</p></li>
+<li><p>all_cores (CoreRangeSet): All cores involved</p></li>
+<li><p>core_group_1 (CoreRangeSet): Cores doing more work</p></li>
+<li><p>core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)</p></li>
+<li><p>units_per_core_group_1 (int): Work units per core in group 1</p></li>
+<li><p>units_per_core_group_2 (int): Work units per core in group 2</p></li>
+</ul>
+</dd>
+</dl>
+</dd>
+</dl>
+<p>Example:
+&gt;&gt;&gt; # Split 100 tiles across an 8x8 core grid
+&gt;&gt;&gt; core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+&gt;&gt;&gt; num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \
+…     ttnn.split_work_to_cores(core_rangeset, 100)
+&gt;&gt;&gt; print(f”Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2”)</p>
+</div>
+</blockquote>
+</li>
+</ol>
 </dd>
 </dl>
 
@@ -149,8 +242,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.SoftmaxShardedMultiCoreProgramConfig.html" class="btn btn-neutral float-left" title="ttnn.SoftmaxShardedMultiCoreProgramConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.transformer.split_query_key_value_and_split_heads.html" class="btn btn-neutral float-right" title="ttnn.transformer.split_query_key_value_and_split_heads" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.to_memory_config.html" class="btn btn-neutral float-left" title="ttnn.to_memory_config" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.arange.html" class="btn btn-neutral float-right" title="ttnn.arange" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

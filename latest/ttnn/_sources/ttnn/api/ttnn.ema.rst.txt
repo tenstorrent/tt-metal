@@ -1,0 +1,8 @@
+﻿ttnn.ema
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ema:
+
+.. autooperation:: ttnn.ema

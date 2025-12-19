@@ -76,7 +76,11 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.group_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
@@ -86,7 +90,6 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -267,23 +270,7 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 </tr>
 </tbody>
 </table>
-<table class="docutils align-default" id="id5">
-<caption>
-<span class="caption-text">output_tensor</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
+<p>The output will be BFLOAT16, and both the layout and the memory configuration will match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
@@ -359,18 +346,12 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <span class="c1"># e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0</span>
 <span class="c1"># While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1</span>
 <span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_group_norm_input_mask</span><span class="p">(</span>
-    <span class="n">num_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
+    <span class="n">num_channel</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
     <span class="n">num_groups</span><span class="o">=</span><span class="n">num_groups</span><span class="p">,</span>
     <span class="n">num_cores_across_channel</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>  <span class="c1"># As explained in the Limitations, supply 1 for height sharded input tensors</span>
+    <span class="n">data_type</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span>
 <span class="p">)</span>
-
-<span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">input_mask_tensor</span><span class="p">,</span>
-    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT8_B</span><span class="p">,</span>
-    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
-    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-    <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DRAM_MEMORY_CONFIG</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="n">input_mask_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">input_mask_tensor</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
 
 <span class="c1"># Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing</span>
 <span class="c1"># First they will zero padded if needed (does not apply to this example)</span>

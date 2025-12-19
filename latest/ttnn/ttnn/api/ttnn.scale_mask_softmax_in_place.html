@@ -74,7 +74,11 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_pre_all_gather.html">ttnn.layer_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm_post_all_gather.html">ttnn.layer_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_pre_all_gather.html">ttnn.rms_norm_pre_all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm_post_all_gather.html">ttnn.rms_norm_post_all_gather</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
@@ -84,7 +88,6 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
@@ -147,10 +150,16 @@
 </dt>
 <dd>
 <p>Computes a fused scale-mask-softmax operation along the last dimension in-place.</p>
-<p>This operation modifies the input tensor directly and performs the following sequence:
-1. Optionally scales the input: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">*=</span> <span class="pre">scale</span></code> (if scale is provided)
-2. Optionally applies mask: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">+=</span> <span class="pre">mask</span></code> (if mask is provided, with broadcasting)
-3. Computes softmax: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">=</span> <span class="pre">softmax(input_tensor)</span></code></p>
+<dl class="simple">
+<dt>This operation modifies the input tensor directly and performs the following sequence:</dt>
+<dd>
+<ol class="arabic simple">
+<li><p>Optionally scales the input: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">*=</span> <span class="pre">scale</span></code> (if scale is provided)</p></li>
+<li><p>Optionally applies mask: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">+=</span> <span class="pre">mask</span></code> (if mask is provided, with broadcasting)</p></li>
+<li><p>Computes softmax: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">=</span> <span class="pre">softmax(input_tensor)</span></code></p></li>
+</ol>
+</dd>
+</dl>
 <p>This in-place fused operation is commonly used in attention mechanisms and is memory-efficient
 as it reuses the input tensor for output, avoiding additional memory allocation.</p>
 <dl class="field-list simple">
@@ -188,14 +197,14 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes
-- Layouts</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B
-- TILE</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
@@ -205,19 +214,20 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes
-- Layouts
-- Ranks</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B
-- TILE, ROW_MAJOR
-- 2, 3, 4</p></td>
+<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+<td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
+<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p>
 </div>
 <dl class="simple">
 <dt>Limitations:</dt>
