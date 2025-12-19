@@ -28,8 +28,9 @@ enum class BuilderType : uint8_t {
  * Z_ROUTER: Vertical Z router for inter-device connectivity
  */
 enum class RouterVariant : uint8_t {
-    MESH = 0,
-    Z_ROUTER = 1,
+    MESH = 0,               // Only for mesh horizontal routers
+    Z_ROUTER = 1,           // Only for Z routers
+    MESH_AND_Z_ROUTER = 2,  // For mesh horizontal routers on a device that has a Z router
 };
 
 struct LogicalSenderChannelKey {
@@ -111,6 +112,16 @@ public:
      * Check if this is a Z router
      */
     bool is_z_router() const;
+
+    /**
+     * Check if this is a mesh router with Z router support
+     */
+    bool is_mesh_and_z_router() const;
+
+    /**
+     * Check if this is a standard mesh router
+     */
+    bool is_mesh_router() const;
 
 private:
     Topology topology_;

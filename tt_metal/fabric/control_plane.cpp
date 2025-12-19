@@ -1211,7 +1211,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
         case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
         case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
         case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
-        case RoutingDirection::Z: return static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION);
+        case RoutingDirection::Z: dir = eth_chan_directions::Z; break;
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
     return dir;

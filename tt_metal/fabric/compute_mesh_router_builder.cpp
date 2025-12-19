@@ -69,8 +69,16 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
+    // Determine the router variant
+    bool has_z_router = fabric_context.has_z_router_on_device(device->id());
+    RouterVariant variant = RouterVariant::MESH;  // Default to mesh router
+    if (location.direction == RoutingDirection::Z) {
+        variant = RouterVariant::Z_ROUTER;  // Z router
+    } else if (has_z_router) {
+        variant = RouterVariant::MESH_AND_Z_ROUTER;  // Mesh router on a device that has a Z router
+    }
+
     // Create channel mapping EARLY (needed for computing injection flags)
-    RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping =
         FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
@@ -80,11 +88,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     if (variant == RouterVariant::Z_ROUTER) {
         connection_mapping = RouterConnectionMapping::for_z_router();
     } else {
-        // Check if this device has a Z router
-        bool has_z = fabric_context.has_z_router_on_device(device->id());
         // Enable VC1 for all routers when intermesh VC is configured
         bool enable_vc1 = intermesh_config.requires_vc1;
-        connection_mapping = RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z, enable_vc1);
+        connection_mapping =
+            RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z_router, enable_vc1);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -194,8 +201,8 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
 
     // Sender channel 0 is always reserved for the local worker (VC0 only).
     //
-    // VC0: Sender channels 1–3 correspond to the three upstream neighbors
-    // VC1: Sender channels 0–2 correspond to the three upstream neighbors
+    // VC0: Sender channels 1–4 correspond to the four upstream neighbors (E/W/N/S/Z)
+    // VC1: Sender channels 0–3 correspond to the four upstream neighbors (E/W/N/S)
     //
     // The mapping from receiver direction → sender channel depends on the
     // downstream forwarding direction:
@@ -204,21 +211,25 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     //         WEST  → channel 1 (VC0) or 0 (VC1)
     //         NORTH → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = WEST:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         NORTH → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = NORTH:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         WEST  → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = SOUTH:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         WEST  → channel 2 (VC0) or 1 (VC1)
     //         NORTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
 
     size_t downstream_compact_index_for_upstream;
     if (downstream_direction == eth_chan_directions::EAST) {
@@ -232,8 +243,8 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     }
 
     // Compute sender channel based on VC
-    // VC0: 1 + compact_index (channels 1-3, skip 0 for local worker)
-    // VC1: compact_index (channels 0-2, no local worker channel)
+    // VC0: 1 + compact_index (channels 1-4 for normal mesh, can go up to 4 for Z connections)
+    // VC1: compact_index (channels 0-3, no local worker channel)
     uint32_t sender_channel =
         (vc == 0) ? (1 + downstream_compact_index_for_upstream) : downstream_compact_index_for_upstream;
 
@@ -382,18 +393,49 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+        // Skip VC0 connections FROM inter-mesh routers
+        // Inter-mesh routers only use VC1 for forwarding to mesh routers
+        if (vc == 0 && this->is_inter_mesh_) {
+            log_debug(LogMetal, "Skipping VC0 connection from inter-mesh router (inter-mesh uses VC1 only)");
+            continue;
+        }
+
+        // Skip VC1 connections TO inter-mesh routers
+        // Mesh routers don't send VC1 to Z/inter-mesh routers
+        // This reduces Z router receiver count and keeps architectures clean
+        if (vc == 1 && downstream_router.is_inter_mesh_) {
+            log_debug(
+                LogMetal, "Skipping VC1 connection to inter-mesh router (Z router doesn't receive VC1 from mesh)");
+            continue;
+        }
+
         // Compute sender channel on downstream router based on directions and VC
         uint32_t downstream_sender_channel =
             get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
 
+        // Validate the channel index using downstream router's channel mapping
+        uint32_t num_sender_channels_for_vc = downstream_router.channel_mapping_.get_num_sender_channels_for_vc(vc);
+        TT_FATAL(
+            downstream_sender_channel < num_sender_channels_for_vc,
+            "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
+            downstream_sender_channel,
+            num_sender_channels_for_vc,
+            vc);
+
         // Get downstream builder and mapping
         auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
         auto downstream_mapping = downstream_router.channel_mapping_.get_sender_mapping(vc, downstream_sender_channel);
-        uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
+
+        // Get both absolute and VC-relative channel IDs
+        // - absolute_channel_id: flattened across all VCs (used for flat arrays)
+        // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
+        uint32_t absolute_channel_id = downstream_mapping.internal_sender_channel_id;
+        uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
 
         // Setup producer → consumer connection
-        // setup_downstream_vc_connection handles type checking internally
-        erisc_builder_->setup_downstream_vc_connection(downstream_builder, vc, vc, internal_channel_id);
+        // Pass both indices - build_connection_to_fabric_channel needs both
+        erisc_builder_->setup_downstream_vc_connection(
+            downstream_builder, vc, vc, absolute_channel_id, vc_relative_channel_id);
         // Record connection in registry if present
         if (connection_registry_) {
             RouterConnectionRecord record{
@@ -406,7 +448,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 .dest_direction = downstream_router.location_.direction,
                 .dest_eth_chan = downstream_router.location_.eth_chan,
                 .dest_vc = vc,
-                .dest_sender_channel = internal_channel_id,
+                .dest_sender_channel = absolute_channel_id,
                 .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
             connection_registry_->record_connection(record);
         }
@@ -444,6 +486,7 @@ void ComputeMeshRouterBuilder::configure_connection(
         "Tried to connect router to downstream in worker connection mode");
 
     // Establish INTRA_MESH connections between the two routers (bidirectional)
+    // Z routers follow inter-mesh conventions: VC0 and VC1 both use INTRA_MESH for local routing
     auto intra_mesh_filter = [](ConnectionType type) { return type == ConnectionType::INTRA_MESH; };
 
     establish_connections_to_router(peer_compute, intra_mesh_filter);

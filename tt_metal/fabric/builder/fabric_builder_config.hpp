@@ -52,10 +52,14 @@ static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
 // Z router channel counts
-// VC0: 4 channels (same as 2D mesh for consistency)
-// VC1: 4 sender channels (Z→mesh, one per direction), 1 receiver channel (mesh→Z)
-static constexpr std::size_t num_sender_channels_z_router_vc0 = 4;
-static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+// VC0: 5 sender channels (0=Worker, 1-4=E/W/N/S mesh directions) + 1 receiver
+// VC1: 4 sender channels (Z→mesh, one per direction: 0=E, 1=W, 2=N, 3=S) + 0 receiver (skipped)
+// Total sender channels: 5 + 4 = 9 (exceeds ideal 8, but necessary for full connectivity)
+// MESH_AND_Z routers: 4 VC0 + 4 VC1 = 8 (stay within 8)
+static constexpr std::size_t num_sender_channels_z_router_vc0 = 5;
+static constexpr std::size_t num_sender_channels_z_router_vc1 =
+    4;  // FIME: This is a temp hack to keep max sender channel count == 8
+        // We will skip connecting upstream VC1 receiver channel to z router VC1 sender channels.
 static constexpr std::size_t num_sender_channels_z_router = num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
 static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
@@ -64,7 +68,8 @@ static constexpr std::size_t num_sender_channels_1d = 2;
 // VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels
 // Total 2D: 4 + 3 = 7 channels (channel 7 reserved for future Z-axis)
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels = std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router, num_sender_channels_2d});
+static constexpr std::size_t num_max_sender_channels =
+    std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
 static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
