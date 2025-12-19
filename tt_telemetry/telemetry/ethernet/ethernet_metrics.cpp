@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <optional>
+#include <unordered_map>
 
 #include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 #include <topology/topology.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 /**************************************************************************************************
  Metric Creation
@@ -59,6 +63,8 @@ void create_ethernet_metrics(
         log_warning(tt::LogAlways, "Found 0 endpoints to monitor despite {} existing in factory system descriptor. Please check that the hostname in the FSD file matches the actual system hostname of this machine.", fsd.eth_connections().connection().size());
     }
 
+    std::unordered_map<tt::ChipId, std::shared_ptr<FabricTelemetryReader>> fabric_readers_by_chip;
+
     // For each, create a metric
     for (const auto& endpoint : endpoints) {
         uint32_t channel = endpoint.chan_id();
@@ -92,6 +98,42 @@ void create_ethernet_metrics(
                 tray_id, asic_location, chip_id, channel, cluster, hal, topology_translation));
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal, topology_translation));
+        }
+
+        if (hal->get_arch() == tt::ARCH::WORMHOLE_B0 || hal->get_arch() == tt::ARCH::BLACKHOLE) {
+            auto& telemetry_reader = fabric_readers_by_chip[chip_id];
+            if (!telemetry_reader) {
+                telemetry_reader = std::make_shared<FabricTelemetryReader>(chip_id, cluster, hal);
+            }
+
+            uint_metrics.push_back(std::make_unique<FabricTxWordsMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricRxWordsMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricTxPacketsMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricRxPacketsMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            uint_metrics.push_back(std::make_unique<FabricSupportedStatsMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            double_metrics.push_back(std::make_unique<FabricTxBandwidthMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            double_metrics.push_back(std::make_unique<FabricRxBandwidthMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            double_metrics.push_back(std::make_unique<FabricTxPeakBandwidthMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+            double_metrics.push_back(std::make_unique<FabricRxPeakBandwidthMetric>(
+                tray_id, asic_location, channel, telemetry_reader, topology_translation));
+
+            size_t num_erisc_cores = (hal->get_arch() == tt::ARCH::BLACKHOLE) ? 2 : 1;
+            for (size_t erisc_core = 0; erisc_core < num_erisc_cores; erisc_core++) {
+                uint_metrics.push_back(std::make_unique<FabricTxHeartbeatMetric>(
+                    tray_id, asic_location, channel, erisc_core, telemetry_reader, topology_translation));
+                uint_metrics.push_back(std::make_unique<FabricRxHeartbeatMetric>(
+                    tray_id, asic_location, channel, erisc_core, telemetry_reader, topology_translation));
+                uint_metrics.push_back(std::make_unique<FabricRouterStateMetric>(
+                    tray_id, asic_location, channel, erisc_core, telemetry_reader, topology_translation));
+            }
         }
     }
 
@@ -361,4 +403,557 @@ void EthernetUncorrectedCodewordCountMetric::update(
 
 std::unordered_map<std::string, std::string> EthernetUncorrectedCodewordCountMetric::labels() const {
     return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ Fabric Telemetry Metrics - Helper Functions
+**************************************************************************************************/
+
+// Helper to calculate bandwidth from word and cycle deltas
+// Returns bandwidth in MB/sec, or std::nullopt if calculation should be skipped
+static std::optional<double> calculate_bandwidth(
+    uint64_t delta_words, uint64_t delta_cycles, uint32_t channel, const char* metric_type) {
+    if (delta_cycles == 0) {
+        return std::nullopt;
+    }
+
+    // Sanity check: detect counter resets or impossibly long sampling gaps
+    // Note: This does NOT protect against multiple wraparounds (those are undetectable
+    // from two samples due to modulo arithmetic). At 1200 MHz, UINT64_MAX cycles = ~178 days,
+    // so multiple wraparounds between telemetry samples (~1 Hz) are practically impossible.
+    // This check catches: counter resets, hardware glitches, or missed samples for hours.
+    constexpr uint64_t MAX_REASONABLE_DELTA_CYCLES = 1000000000000ULL;  // ~14 minutes at 1200 MHz
+    if (delta_cycles > MAX_REASONABLE_DELTA_CYCLES) {
+        log_warning(
+            tt::LogAlways,
+            "Suspiciously large cycle delta ({}) for {} on channel {}. "
+            "Possible counter reset or sampling gap. Skipping update.",
+            delta_cycles,
+            metric_type,
+            channel);
+        return std::nullopt;
+    }
+
+    constexpr uint64_t BYTES_PER_WORD = 16;
+    constexpr uint64_t CLOCK_FREQ_MHZ = 1200;
+    double bytes_transferred = static_cast<double>(delta_words) * BYTES_PER_WORD;
+    double time_seconds = static_cast<double>(delta_cycles) / (CLOCK_FREQ_MHZ * 1e6);
+    return bytes_transferred / time_seconds / 1e6;
+}
+
+// Helper to update a bandwidth metric using delta calculation
+// Returns bandwidth in MB/sec, or std::nullopt if calculation should be skipped
+static std::optional<double> update_bandwidth_metric_impl(
+    uint64_t curr_words,
+    uint64_t curr_cycles,
+    uint64_t& prev_words,
+    uint64_t& prev_cycles,
+    bool& first_update,
+    uint32_t channel,
+    const char* metric_type) {
+    if (first_update) {
+        prev_words = curr_words;
+        prev_cycles = curr_cycles;
+        first_update = false;
+        return 0.0;
+    }
+
+    uint64_t delta_words = curr_words - prev_words;
+    uint64_t delta_cycles = curr_cycles - prev_cycles;
+
+    auto bandwidth = calculate_bandwidth(delta_words, delta_cycles, channel, metric_type);
+
+    prev_words = curr_words;
+    prev_cycles = curr_cycles;
+
+    return bandwidth;
+}
+
+// Helper to build telemetry path for fabric metrics (per channel)
+static std::vector<std::string> build_fabric_endpoint_path(
+    tt::tt_metal::TrayID tray_id, tt::tt_metal::ASICLocation asic_location, uint32_t channel, const char* metric_name) {
+    return {
+        "tray" + std::to_string(*tray_id),
+        "chip" + std::to_string(*asic_location),
+        "channel" + std::to_string(channel),
+        "fabric",
+        metric_name};
+}
+
+// Helper to build telemetry path for fabric metrics (per ERISC)
+static std::vector<std::string> build_fabric_erisc_path(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    const char* metric_name) {
+    return {
+        "tray" + std::to_string(*tray_id),
+        "chip" + std::to_string(*asic_location),
+        "channel" + std::to_string(channel),
+        "fabric",
+        "erisc" + std::to_string(erisc_core),
+        metric_name};
+}
+
+/**************************************************************************************************
+ FabricTxWordsMetric
+**************************************************************************************************/
+
+FabricTxWordsMetric::FabricTxWordsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricTxWordsMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "txWords");
+}
+
+void FabricTxWordsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        set_value(snapshot->dynamic_info->tx_bandwidth.words_sent);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricTxWordsMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricRxWordsMetric
+**************************************************************************************************/
+
+FabricRxWordsMetric::FabricRxWordsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRxWordsMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "rxWords");
+}
+
+void FabricRxWordsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        set_value(snapshot->dynamic_info->rx_bandwidth.words_sent);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRxWordsMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricTxPacketsMetric
+**************************************************************************************************/
+
+FabricTxPacketsMetric::FabricTxPacketsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricTxPacketsMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "txPackets");
+}
+
+void FabricTxPacketsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        set_value(snapshot->dynamic_info->tx_bandwidth.packets_sent);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricTxPacketsMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricRxPacketsMetric
+**************************************************************************************************/
+
+FabricRxPacketsMetric::FabricRxPacketsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRxPacketsMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "rxPackets");
+}
+
+void FabricRxPacketsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        set_value(snapshot->dynamic_info->rx_bandwidth.packets_sent);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRxPacketsMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricSupportedStatsMetric
+**************************************************************************************************/
+
+FabricSupportedStatsMetric::FabricSupportedStatsMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricSupportedStatsMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "supportedStats");
+}
+
+void FabricSupportedStatsMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot) {
+        set_value(snapshot->static_info.supported_stats);
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricSupportedStatsMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricTxBandwidthMetric
+**************************************************************************************************/
+
+FabricTxBandwidthMetric::FabricTxBandwidthMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0.0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricTxBandwidthMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "txBandwidthMBps");
+}
+
+void FabricTxBandwidthMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        uint64_t curr_words = snapshot->dynamic_info->tx_bandwidth.words_sent;
+        uint64_t curr_cycles = snapshot->dynamic_info->tx_bandwidth.elapsed_cycles;
+        auto bandwidth = update_bandwidth_metric_impl(
+            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "TX bandwidth");
+        if (bandwidth.has_value()) {
+            set_value(bandwidth.value());
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricTxBandwidthMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricRxBandwidthMetric
+**************************************************************************************************/
+
+FabricRxBandwidthMetric::FabricRxBandwidthMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0.0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRxBandwidthMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "rxBandwidthMBps");
+}
+
+void FabricRxBandwidthMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        uint64_t curr_words = snapshot->dynamic_info->rx_bandwidth.words_sent;
+        uint64_t curr_cycles = snapshot->dynamic_info->rx_bandwidth.elapsed_cycles;
+        auto bandwidth = update_bandwidth_metric_impl(
+            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "RX bandwidth");
+        if (bandwidth.has_value()) {
+            set_value(bandwidth.value());
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRxBandwidthMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricTxPeakBandwidthMetric
+**************************************************************************************************/
+
+FabricTxPeakBandwidthMetric::FabricTxPeakBandwidthMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0.0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricTxPeakBandwidthMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "txPeakBandwidthMBps");
+}
+
+void FabricTxPeakBandwidthMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        uint64_t curr_words = snapshot->dynamic_info->tx_bandwidth.words_sent;
+        uint64_t curr_cycles = snapshot->dynamic_info->tx_bandwidth.elapsed_active_cycles;
+        auto bandwidth = update_bandwidth_metric_impl(
+            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "TX peak bandwidth");
+        if (bandwidth.has_value()) {
+            set_value(bandwidth.value());
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricTxPeakBandwidthMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricRxPeakBandwidthMetric
+**************************************************************************************************/
+
+FabricRxPeakBandwidthMetric::FabricRxPeakBandwidthMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0.0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRxPeakBandwidthMetric::telemetry_path() const {
+    return build_fabric_endpoint_path(tray_id_, asic_location_, channel_, "rxPeakBandwidthMBps");
+}
+
+void FabricRxPeakBandwidthMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        uint64_t curr_words = snapshot->dynamic_info->rx_bandwidth.words_sent;
+        uint64_t curr_cycles = snapshot->dynamic_info->rx_bandwidth.elapsed_active_cycles;
+        auto bandwidth = update_bandwidth_metric_impl(
+            curr_words, curr_cycles, prev_words_, prev_cycles_, first_update_, channel_, "RX peak bandwidth");
+        if (bandwidth.has_value()) {
+            set_value(bandwidth.value());
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRxPeakBandwidthMetric::labels() const {
+    return build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+}
+
+/**************************************************************************************************
+ FabricTxHeartbeatMetric
+**************************************************************************************************/
+
+FabricTxHeartbeatMetric::FabricTxHeartbeatMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricTxHeartbeatMetric::telemetry_path() const {
+    return build_fabric_erisc_path(tray_id_, asic_location_, channel_, erisc_core_, "txHeartbeat");
+}
+
+void FabricTxHeartbeatMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        if (erisc_core_ < snapshot->dynamic_info->erisc.size()) {
+            set_value(snapshot->dynamic_info->erisc[erisc_core_].tx_heartbeat);
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricTxHeartbeatMetric::labels() const {
+    auto labels = build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+    labels["erisc_core"] = std::to_string(erisc_core_);
+    return labels;
+}
+
+/**************************************************************************************************
+ FabricRxHeartbeatMetric
+**************************************************************************************************/
+
+FabricRxHeartbeatMetric::FabricRxHeartbeatMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRxHeartbeatMetric::telemetry_path() const {
+    return build_fabric_erisc_path(tray_id_, asic_location_, channel_, erisc_core_, "rxHeartbeat");
+}
+
+void FabricRxHeartbeatMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        if (erisc_core_ < snapshot->dynamic_info->erisc.size()) {
+            set_value(snapshot->dynamic_info->erisc[erisc_core_].rx_heartbeat);
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRxHeartbeatMetric::labels() const {
+    auto labels = build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+    labels["erisc_core"] = std::to_string(erisc_core_);
+    return labels;
+}
+
+/**************************************************************************************************
+ FabricRouterStateMetric
+**************************************************************************************************/
+
+FabricRouterStateMetric::FabricRouterStateMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    uint32_t channel,
+    size_t erisc_core,
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+    const std::unique_ptr<TopologyHelper>& topology_helper) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    channel_(channel),
+    erisc_core_(erisc_core),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+    link_info_ = get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper);
+}
+
+const std::vector<std::string> FabricRouterStateMetric::telemetry_path() const {
+    return build_fabric_erisc_path(tray_id_, asic_location_, channel_, erisc_core_, "routerState");
+}
+
+void FabricRouterStateMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
+    if (snapshot && snapshot->dynamic_info.has_value()) {
+        if (erisc_core_ < snapshot->dynamic_info->erisc.size()) {
+            set_value(static_cast<uint64_t>(snapshot->dynamic_info->erisc[erisc_core_].router_state));
+        }
+    }
+}
+
+std::unordered_map<std::string, std::string> FabricRouterStateMetric::labels() const {
+    auto labels = build_ethernet_labels(tray_id_, asic_location_, channel_, link_info_);
+    labels["erisc_core"] = std::to_string(erisc_core_);
+    return labels;
 }
