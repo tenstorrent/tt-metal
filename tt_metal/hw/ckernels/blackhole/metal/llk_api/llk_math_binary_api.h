@@ -57,6 +57,26 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         binary_reuse_dest>(num_faces, dst_index, clear_fp32_dst_acc);
 }
 
+// Version with separate source and destination indices for dest reuse
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    BroadcastType src_b_bcast_type,
+    bool is_fp32_dest_acc_en,
+    int NUM_FIDELITY_PHASES = 0,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+inline void llk_math_eltwise_binary(uint src_dst_index, uint dst_index, const bool clear_fp32_dst_acc = true) {
+    const std::uint32_t num_faces = 4;
+
+    _llk_math_eltwise_binary_<
+        eltwise_binary_type,
+        src_b_bcast_type,
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        NUM_FIDELITY_PHASES,
+        binary_reuse_dest,
+        true>(num_faces, dst_index, clear_fp32_dst_acc, src_dst_index);
+}
+
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,

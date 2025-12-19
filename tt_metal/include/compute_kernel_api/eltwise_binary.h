@@ -231,4 +231,36 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
         in_tile_index, in_tile_index, dst_tile_index, true)));
 }
 
+// clang-format off
+/**
+ * Performs element-wise binary operations with separate source and destination DST indices.
+ * If binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA, then the tile at src_dst_tile_index will be loaded
+ * from the DST register buffer into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result
+ * will be written to the DST register buffer at dst_tile_index. Similar for DEST_TO_SRCB.
+ *
+ * This variant allows reading from one DST tile and writing to a different DST tile.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument           | Description                                                              | Type     | Valid Range                                    | Required |
+ * |--------------------|--------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in_cb_id           | The identifier of the circular buffer (CB) containing A                  | uint32_t | 0 to 31                                        | True     |
+ * | in_tile_index      | The index of tile A within the first CB                                  | uint32_t | Must be less than the size of the CB           | True     |
+ * | src_dst_tile_index | The index of the tile in DST REG to load into srcA/srcB                  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | dst_tile_index     | The index of the tile in DST REG for the result                          | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
+ALWI void binary_dest_reuse_tiles(
+    uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_dst_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, DST_ACCUM_MODE, MATH_FIDELITY, binary_reuse_dest>(
+        src_dst_tile_index, dst_tile_index, true)));
+}
+
 }  // namespace ckernel
