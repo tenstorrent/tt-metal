@@ -455,7 +455,7 @@ class Generator:
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._decode_easy_trace_text(
+            tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
                 reset_inputs=reset_inputs,
                 return_logits=return_logits,
@@ -465,16 +465,21 @@ class Generator:
                 **decode_kwargs,
                 return_logits=return_logits,
             )
+            tt_log_probs = None
 
         if read_from_device:
-            tt_out = self.read_decode_output(tt_tok, async_read=async_read)
+            # IMPORTANT: If split sampling is enabled, `tt_log_probs` is produced by the sampling
+            # module (potentially via its own trace). We must pass it through to the readback path;
+            # otherwise `process_output_decode()` will return log_probs=None and host code will fill
+            # log_probs with torch.ones(), masking the real values.
+            tt_out_for_read = (tt_tok, tt_log_probs) if tt_log_probs is not None else tt_tok
+            tt_out = self.read_decode_output(tt_out_for_read, async_read=async_read)
             if async_read:
-                tt_tok, read_event = tt_out
-                return tt_tok, read_event
+                return tt_out
             else:
                 return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
-        return tt_tok
+        return tt_tok, tt_log_probs
 
     def _decode_forward_no_trace_text(
         self,
@@ -631,26 +636,38 @@ class Generator:
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            tt_log_probs_cpu = None
             if isinstance(tt_out, tuple):
-                # Get logits and skip log-probs
+                tt_log_probs = tt_out[1]
                 tt_out = tt_out[0]
-            return tt_out.cpu()
+                if tt_log_probs is not None:
+                    tt_log_probs_cpu = tt_log_probs.cpu()
 
-        logits, read_event = self.model.process_output_decode(tt_out)
-        return logits, [read_event]
+            return tt_out.cpu(), tt_log_probs_cpu
+
+        logits, log_probs, read_event = self.model.process_output_decode(tt_out)
+        return (logits, log_probs), [read_event]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
         if isinstance(tt_out, tuple):
+            tt_log_probs = tt_out[1]
             tt_out = tt_out[0]
-        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            if tt_log_probs is not None:
+                tt_log_probs = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
+            else:
+                tt_log_probs = torch.ones(tt_out.shape)
+        else:
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            tt_log_probs = torch.ones(tt_out.shape)
         # Check if tensor is distributed across mesh devices (vocab_size // 8 indicates sharding)
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
             ttnn.synchronize_device(self.mesh_device)
-            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
+            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
 
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :]
+        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
 
     def chat_completion(
         self,
