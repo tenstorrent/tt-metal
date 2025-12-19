@@ -1689,11 +1689,19 @@ class ModelArgs:
             default_vision_dim = 1280
             default_cross_attn_layers = -1
 
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", default_chunk_size)
-        self.image_size = vision_config.get("image_size", 896)
-        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+        # Merge main branch logic with Mistral-specific defaults
+        self.vision_chunk_size = vision_config.get(
+            "vision_chunk_size", default_chunk_size if default_chunk_size != -1 else vision_config.get("image_size", -1)
+        )
+        self.image_size = vision_config.get(
+            "image_size", 896 if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name else -1
+        )
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
         self.vision_num_cross_attention_layers = vision_config.get(
-            "vision_num_cross_attention_layers", default_cross_attn_layers
+            "vision_num_cross_attention_layers",
+            default_cross_attn_layers
+            if default_cross_attn_layers != -1
+            else vision_config.get("num_global_layers", -1),
         )
         self.vision_dim = vision_config.get("hidden_size", default_vision_dim)
 
@@ -1707,7 +1715,8 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
+        # Use main branch default (32) but allow override from config
+        self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 32
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1814,7 +1823,17 @@ class ModelArgs:
 )"""
 
     def is_llama_vision(self):
-        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
+        return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
+
+    def is_vision(self):
+        """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
+        return (
+            self.is_llama_vision()
+            or (
+                "mistral" in self.model_name.lower() and self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower()
+            )
+            or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
+        )
 
     def can_enable_trace(self, prefill_seq_len):
         """
@@ -1851,7 +1870,10 @@ class ModelArgs:
         )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
+        # For Llama vision models, text keys always have "text_model." prefix
+        if self.is_llama_vision():
+            text_prefix = self.state_dict_text_prefix
+        elif self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
             text_prefix = self.state_dict_text_prefix
         else:
             text_prefix = "" if not is_vision else self.state_dict_text_prefix
@@ -1959,7 +1981,6 @@ class ModelArgs:
                     model_cls = Mistral3ForConditionalGeneration
                 else:
                     model_cls = self.get_hf_model_cls()
-
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
