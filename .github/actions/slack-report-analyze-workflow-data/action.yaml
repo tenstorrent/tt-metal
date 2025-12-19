@@ -373,6 +373,11 @@ runs:
         set -euo pipefail
 
         TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
+        # Handle edge case where TOTAL_CHUNKS is 0 or non-positive to ensure at least one message
+        if [ "${TOTAL_CHUNKS}" -le 0 ] 2>/dev/null; then
+          echo "Warning: TOTAL_CHUNKS was ${TOTAL_CHUNKS}, normalizing to 1 to ensure at least one Slack message."
+          TOTAL_CHUNKS=1
+        fi
         echo "Sending $TOTAL_CHUNKS message(s) to Slack..."
 
         # Debug: List all payload files
