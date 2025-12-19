@@ -23,6 +23,7 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 namespace NAMESPACE {
 
@@ -148,13 +149,20 @@ void MAIN {
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
-            for (auto i : block.local()) {
-                const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
-            }
-
-            cb_pop_front(cb_xmm2, block.full_block_size());
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                compute_kernel_lib::ReduceInputMode::PRELOADED,
+                true,
+                false,  // uninit=false (we need to do extra ops on dst0)
+                FLOAT32_REDUCTION>(
+                cb_xmm2,
+                cb_scaler,
+                cb_accumulate,
+                1,    // Ht (single row)
+                blk,  // Wt (width to reduce)
+                1);   // num_batches
+            cb_pop_front(cb_xmm2, blk);
 
             const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
