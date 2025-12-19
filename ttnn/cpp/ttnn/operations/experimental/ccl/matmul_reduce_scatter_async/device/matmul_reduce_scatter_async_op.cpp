@@ -10,8 +10,7 @@
 
 /* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn {
 
@@ -19,7 +18,7 @@ namespace ccl::matmul_reduce_scatter_async_detail {
 
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ReduceScatterMinimalAsyncParams& reduce_scatter_params_input,
-    const operations::matmul::Matmul& matmul_struct_input,
+    const MatmulReduceScatterAsync::matmul_device_t::operation_attributes_t& matmul_struct_input,
     const CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::MatmulReduceScatterAsync{
@@ -36,7 +35,9 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
     const auto& input_tensor = input_tensors[0];
     const auto& weight_tensor = input_tensors[1];
     // Matmul validate
-    this->matmul_struct.validate({input_tensor, weight_tensor}, optional_input_tensors, {});
+
+    MatmulReduceScatterAsync::matmul_device_t::validate_on_program_cache_miss(
+        matmul_struct, {{input_tensor, weight_tensor}, optional_input_tensors, {}});
 
     // Matmul Reduce Scatter validate
     TT_FATAL(
@@ -59,7 +60,8 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> MatmulReduceScatterAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = this->matmul_struct.compute_output_specs(input_tensors, {})[0];
+    auto matmul_output_specs =
+        MatmulReduceScatterAsync::matmul_device_t::compute_output_specs(matmul_struct, {input_tensors, {}, {}})[0];
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
     using ReduceScatterOp = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
@@ -74,7 +76,7 @@ std::vector<Tensor> MatmulReduceScatterAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
-        this->matmul_struct.create_output_tensors({input_tensors[0], input_tensors[1]})[0];
+        MatmulReduceScatterAsync::matmul_device_t::create_output_tensors(matmul_struct, {input_tensors, {}, {}})[0];
 
     // Reduce Scatter output tensor
     const auto& intermediate_tensor = optional_output_tensors.at(0).value();
@@ -215,30 +217,32 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     }
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::utilities::is_input_batched(weight_tensor.logical_shape());
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
 
-    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
-        input_tensor,
-        weight_tensor,
-        /*parameters=*/
-        operations::matmul::Matmul{
-            program_config,
-            /*bcast_batch=*/std::nullopt,
-            memory_config_mm.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.dtype()),
-            compute_kernel_config,
-            /*untilize_out=*/false,
-            user_core_coord,
-            ttnn::operations::matmul::get_fused_activation(activation),
-            user_run_batched,
-            transpose_a,
-            transpose_b,
-            /*output_tile=*/std::nullopt,
-            /*global_cb=*/std::nullopt});
+    operations::matmul::MatmulDeviceOperation::operation_attributes_t matmul_struct =
+        operations::matmul::create_matmul_attributes(
+            input_tensor,
+            weight_tensor,
+            /*parameters=*/
+            operations::matmul::MatmulDeviceOperation::operation_attributes_t{
+                program_config,
+                /*bcast_batch=*/std::nullopt,
+                memory_config_mm.value_or(input_tensor.memory_config()),
+                dtype.value_or(input_tensor.dtype()),
+                compute_kernel_config,
+                /*untilize_out=*/false,
+                user_core_coord,
+                ttnn::operations::matmul::utilities::get_fused_activation(activation),
+                user_run_batched,
+                transpose_a,
+                transpose_b,
+                /*output_tile=*/std::nullopt,
+                /*global_cb=*/std::nullopt},
+            {});
 
     // Not using persistent buffers not currently supported by the RSMM API
     bool using_persistent_buffers = true;
@@ -247,8 +251,8 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         persistent_intermediate_buffer, persistent_output_buffer};
 
     // Create the matmul output tensor used as input (activation) to the reduce scatter
-    ttnn::Tensor matmul_out_tensor =
-        matmul_struct.create_output_tensors({input_tensor, weight_tensor}, optional_output_tensors)[0];
+    ttnn::Tensor matmul_out_tensor = MatmulReduceScatterAsync::matmul_device_t::create_output_tensors(
+        matmul_struct, {{input_tensor, weight_tensor}, {}, optional_output_tensors})[0];
 
     /* ReduceScatter setup */
     constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;

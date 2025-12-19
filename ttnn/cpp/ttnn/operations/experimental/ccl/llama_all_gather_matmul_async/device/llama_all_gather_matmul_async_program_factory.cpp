@@ -465,33 +465,31 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     }
 
     // Call MM program factory with matmul_fused_op_signaler
-    std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
-        ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
-            program,
-            aggregated_tensor,         // in0
-            {input1},                  // in1
-            std::nullopt,              // bias
-            {output_tensor},           // out0
-            false,                     // broadcast_batch
-            compute_kernel_config,     // compute_kernel_config
-            program_config,            // program_config
-            false,                     // untilize_out
-            matmul_fused_op_signaler,  // fused_op_signaler
-            global_cb,                 // global_cb
-            args.sub_device_id);       // sub_device_id
-
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
-        matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
+    auto matmul_shared_variables = ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
+        program,
+        aggregated_tensor,         // in0
+        {input1},                  // in1
+        std::nullopt,              // bias
+        {output_tensor},           // out0
+        false,                     // broadcast_batch
+        compute_kernel_config,     // compute_kernel_config
+        program_config,            // program_config
+        false,                     // untilize_out
+        matmul_fused_op_signaler,  // fused_op_signaler
+        global_cb,                 // global_cb
+        args.sub_device_id,        // sub_device_id
+        matmul_fused_op_signaler->start_cb_index,
+        std::nullopt);
 
     return cached_program_t{
-        std::move(matmul_program_with_callbacks->program),
+        std::move(program),
         {worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
          worker_receiver_kernel_id,
          sender_worker_cores,
          intermediate_cores_vec,
          ring_index,
-         matmul_override_runtime_arguments_callback}};
+         matmul_shared_variables}};
 }
 
 void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
@@ -535,15 +533,13 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
             worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
         }
 
-        if (shared_vars.matmul_override_runtime_arguments_callback.has_value()) {
-            shared_vars.matmul_override_runtime_arguments_callback.value()(
-                &args.matmul_struct,
-                program,
-                {aggregated_tensor, input1}, /* all gather output tensor, weight tensor */
-                {},
-                {output_tensor} /* matmul output tensor */
-            );
-        }
+        llama_matmul::override_agmm_fusion_program_parameters(
+            shared_vars.matmul_shared_variables,
+            args.matmul_struct,
+            program,
+            {aggregated_tensor, input1},
+            {},
+            {output_tensor});
     }
 }
 

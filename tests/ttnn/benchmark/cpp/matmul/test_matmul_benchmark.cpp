@@ -21,7 +21,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/trace.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -290,28 +290,31 @@ void RunMatmulBenchmark(
     const auto output_tile =
         (out_sharded && tile_h <= 16) ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w});
 
-    const ttnn::operations::matmul::Matmul matmul_params(
-        program_config,
-        /*bcast_batch=*/std::nullopt,
-        out_mem_config,
-        dtype,
-        compute_kernel_config,
-        /*untilize_out=*/false,
-        /*user_core_coord=*/std::nullopt,
-        /*user_fused_activation=*/std::nullopt,
-        /*user_run_batched=*/false,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        output_tile);
+    ttnn::operations::matmul::operation_attributes_t attributes{
+        .program_config = program_config,
+        .bcast_batch = std::nullopt,
+        .output_mem_config = out_mem_config,
+        .output_dtype = dtype,
+        .compute_kernel_config = compute_kernel_config,
+        .untilize_out = false,
+        .user_core_coord = std::nullopt,
+        .user_fused_activation = std::nullopt,
+        .user_run_batched = false,
+        .transpose_a = false,
+        .transpose_b = false,
+        .output_tile = output_tile};
+    attributes = ttnn::operations::matmul::create_matmul_attributes(input_tensor_0, input_tensor_1, attributes, {});
 
     ttnn::Tensor output_tensor;
     // Warmup iterations
     for (int iter = 0; iter < num_warmup_iterations; ++iter) {
-        output_tensor = ttnn::operations::matmul::matmul(
-            input_tensor_0,
-            input_tensor_1,
-            /*bias=*/std::nullopt,
-            /*parameters=*/matmul_params);
+        output_tensor = ttnn::prim::matmul(
+                            input_tensor_0,
+                            input_tensor_1,
+                            /*bias=*/std::nullopt,
+                            /*output_tensor*/ std::nullopt,
+                            attributes)
+                            .at(0);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
@@ -322,11 +325,13 @@ void RunMatmulBenchmark(
     if (use_trace) {
         auto tid = ttnn::operations::trace::begin_trace_capture(dev_ptr, std::nullopt);
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-            output_tensor = ttnn::operations::matmul::matmul(
-                input_tensor_0,
-                input_tensor_1,
-                /*bias=*/std::nullopt,
-                /*parameters=*/matmul_params);
+            output_tensor = ttnn::prim::matmul(
+                                input_tensor_0,
+                                input_tensor_1,
+                                /*bias=*/std::nullopt,
+                                /*output_tensor*/ std::nullopt,
+                                attributes)
+                                .at(0);
             output_tensor.deallocate();
         }
         ttnn::operations::trace::end_trace_capture(dev_ptr, tid, std::nullopt);
@@ -347,11 +352,13 @@ void RunMatmulBenchmark(
             ZoneScopedN("Matmul iterations");
             for (int iter = 0; iter < num_measurement_iterations; ++iter) {
                 auto start_time = std::chrono::high_resolution_clock::now();
-                output_tensor = ttnn::operations::matmul::matmul(
-                    input_tensor_0,
-                    input_tensor_1,
-                    /*bias=*/std::nullopt,
-                    /*parameters=*/matmul_params);
+                output_tensor = ttnn::prim::matmul(
+                                    input_tensor_0,
+                                    input_tensor_1,
+                                    /*bias=*/std::nullopt,
+                                    /*output_tensor*/ std::nullopt,
+                                    attributes)
+                                    .at(0);
                 tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;

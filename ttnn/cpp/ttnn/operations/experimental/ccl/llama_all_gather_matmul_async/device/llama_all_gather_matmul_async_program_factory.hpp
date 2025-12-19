@@ -6,6 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation_types.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 
 namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program {
 
@@ -16,8 +17,7 @@ struct LlamaAllGatherMatmulAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     std::vector<tt::tt_metal::CoreCoord> intermediate_cores_vec;
     uint32_t ring_index{};
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
-        matmul_override_runtime_arguments_callback;
+    matmul::program::matmul_mcast_1d_common_override_variables_t matmul_shared_variables;
 };
 
 struct LlamaAllGatherMatmulAsyncProgramFactory {
