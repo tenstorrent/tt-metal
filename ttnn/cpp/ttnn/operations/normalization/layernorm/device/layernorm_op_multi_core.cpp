@@ -229,6 +229,12 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
+    // The following constants were chosen empirically to
+    // maximize the buffer size while still fitting the
+    // largest cases (fused pre-add + gamma + beta) in L1.
+    // There is room for optimization here based on different
+    // conditions (like what buffers are actually used),
+    // but having two constants for all cases is simpler.
     constexpr uint32_t with_weights_max_size = 56;
     constexpr uint32_t without_weights_max_size = 112;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
@@ -497,13 +503,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     }
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } e{}, one{};
-    e.f = eps;
-    one.f = 1.0f;
-    auto bfloat_one_value = bfloat16(one.f);
+    auto bfloat_one_value = bfloat16(1);
     uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -526,7 +526,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
             Wt,
             tile_offset,
             packed_one_value,
-            e.u,  // 0-5
+            std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
             beta_dram_addr,
             b_dram_addr};

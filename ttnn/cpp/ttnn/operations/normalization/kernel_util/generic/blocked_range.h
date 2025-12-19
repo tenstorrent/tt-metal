@@ -76,7 +76,6 @@ public:
         LocalRange local() const { return LocalRange{size()}; }
 
         SizeT to_global(SizeT local) const { return start_ + local; }
-        SizeT to_local(SizeT global) const { return global - start_; }
 
         // Default iteration is global
         Iterator begin() const { return Iterator(start_); }

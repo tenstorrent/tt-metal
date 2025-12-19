@@ -37,7 +37,6 @@ FORCE_INLINE void generate_partial_reduce_scaler(const uint32_t cb_id, const uin
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
 
     // Fill tile with zeros
-    // TODO: src addr does not need to be rewritten. Update/add api for this
     noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
         noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);

@@ -125,6 +125,8 @@ inline void accumulate_compute_loop(
  * @note It is up to the caller to ensure that the scalar tile
  * is correctly populated. If it doesn't contain 1's, the result
  * will be incorrect @anchor scalar_tile_ones
+ * @note If the last tile is partial, we need two scalar tiles in cb_scalar:
+ * One for the full tiles, and one for the partial tile @anchor partial_tile_scaler_tiles
  * @note This function must be called from a compilation unit
  * that has the following preprocessor directives (this is for
  * the reduce interface):
@@ -151,6 +153,8 @@ inline void row_wise_accumulate_with_epilogue(
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
+    // If the last tile is partial, we need two scalar tiles:
+    // One for the full tiles, and one for the partial tile
     const auto last_tile_partial = N % tt::constants::TILE_WIDTH > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
     cb_wait_front(cb_scalar, num_scaler_tiles_needed);
@@ -180,7 +184,8 @@ inline void row_wise_accumulate_with_epilogue(
  * @brief Compute the row-wise mean of an entire input CB
  *
  * @param cb_in Input CB to compute mean of
- * @param cb_scalar CB containing a scalar reduce tile of 1's
+ * @param cb_scalar CB containing a scalar reduce tile of 1's.
+ * See \ref partial_tile_scaler_tiles for additional requirements
  * @param cb_out Output CB to store the mean
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
@@ -189,7 +194,8 @@ inline void row_wise_accumulate_with_epilogue(
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
- * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs
+ * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs, \ref
+ * partial_tile_scaler_tiles
  */
 template <
     bool FLOAT32_REDUCTION,
@@ -208,7 +214,8 @@ inline void row_wise_mean(
  *
  * @param cb_in Input CB to compute mean of
  * @param cb_in1 Additional input CB to accumulate
- * @param cb_scalar CB containing a scalar reduce tile of 1's
+ * @param cb_scalar CB containing a scalar reduce tile of 1's.
+ * See \ref partial_tile_scaler_tiles for additional requirements
  * @param cb_out Output CB to store the mean
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
@@ -217,7 +224,8 @@ inline void row_wise_mean(
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
- * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs
+ * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs, \ref
+ * partial_tile_scaler_tiles
  */
 template <
     bool FLOAT32_REDUCTION,
