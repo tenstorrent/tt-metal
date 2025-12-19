@@ -22,7 +22,6 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/untilize.h"
-#include "ttnn/kernel_lib/tilize_helpers.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
