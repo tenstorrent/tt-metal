@@ -515,7 +515,8 @@ class PreSDPA:
         matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_weights_cb, matmul_weights_tensor)
 
         # CB 8: Matmul input buffer (1x32 tiles, receives mcast data)
-        # Allocated on full mcast grid since mcast writes to all cores in the grid
+        # Must be allocated on union of sender (rmsnorm input grid) and receiver (matmul grid)
+        # Similar constraint as gather CB - senders query write_ptr to get receiver address
         # Note: TILE_1x32, matmul_input_page_size, and matmul_input_total_size
         # were already calculated above for mcast page count calculation
         matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -525,9 +526,10 @@ class PreSDPA:
             page_size=matmul_input_page_size,
             tile=matmul_input_tile_descriptor,
         )
+        matmul_input_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
         matmul_input_cb_descriptor = ttnn.CBDescriptor(
             total_size=matmul_input_total_size,
-            core_ranges=ttnn.CoreRangeSet([main_grid]),
+            core_ranges=matmul_input_cb_core_ranges,
             format_descriptors=[matmul_input_cb_format],
         )
 
@@ -546,7 +548,9 @@ class PreSDPA:
             format_descriptors=[matmul_output_cb_format],
         )
 
-        # CB 14: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles, on main grid)
+        # CB 14: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles)
+        # Must be allocated on union of sender (rmsnorm input grid) and receiver (matmul2 grid)
+        # Similar constraint as gather CB - senders query write_ptr to get receiver address
         matmul2_input_total_size = matmul2_num_tiles_k * matmul_input_page_size  # 48 * 64 bytes
         matmul2_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=matmul2_input_cb,
@@ -554,9 +558,10 @@ class PreSDPA:
             page_size=matmul_input_page_size,
             tile=matmul_input_tile_descriptor,
         )
+        matmul2_input_cb_core_ranges = ttnn.CoreRangeSet([main_grid]).merge(rmsnorm_core_grid)
         matmul2_input_cb_descriptor = ttnn.CBDescriptor(
             total_size=matmul2_input_total_size,
-            core_ranges=ttnn.CoreRangeSet([main_grid]),
+            core_ranges=matmul2_input_cb_core_ranges,
             format_descriptors=[matmul2_input_cb_format],
         )
 
@@ -584,6 +589,7 @@ class PreSDPA:
             tile=matmul_input_tile_descriptor,
         )
         gather_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
+        # gather_cb_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.grid_x - 1, device.grid_y - 1))])
         gather_output_cb_descriptor = ttnn.CBDescriptor(
             total_size=gather_output_total_size,
             core_ranges=gather_cb_core_ranges,

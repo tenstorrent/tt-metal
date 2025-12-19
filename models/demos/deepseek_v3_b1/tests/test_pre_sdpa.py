@@ -35,6 +35,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     matmul2_width = matmul2_num_cores * 4 * 32  # 12288 or 11264
     matmul2_weights_shape = (1536, matmul2_width)
 
+    # Mcast/gather core coordinates (same as RMSNorm input core)
+    mcast_core_x = matmul2_grid_x - 1  # 11 for P150, 10 for non-P150
+    mcast_core_y = 8
+
     tile = ttnn.Tile([1, 32])
 
     # RMSNorm2 parameters (1536 elements padded to 2 full 32x32 tiles = 2048)
@@ -52,10 +56,11 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_rmsnorm2_gamma, (0, rmsnorm2_padded_width - rmsnorm2_width), value=0.0
     )
 
-    # Shard spec: single core for input, gamma
+    # Shard spec: single core for input, gamma (on mcast/gather core)
     shard_shape = shape
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
         shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -125,7 +130,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     # Create RMSNorm2 gamma tensor sharded on same core (2 full 32x32 tiles)
     rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
         (1, rmsnorm2_padded_width),
         ttnn.ShardOrientation.ROW_MAJOR,
     )

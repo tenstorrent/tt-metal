@@ -265,6 +265,7 @@ KERNEL_ENTRY {
     }
 
     deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul_core, true> mcast;
+    DPRINT << "-------- mcast started --------" << ENDL();
     mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
@@ -277,6 +278,7 @@ KERNEL_ENTRY {
     // ========================================================================
     // Matmul operation
     // ========================================================================
+    DPRINT << "-------- matmul started --------" << ENDL();
     {
         DeviceZoneScopedN("MATMUL");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
@@ -313,9 +315,11 @@ KERNEL_ENTRY {
 
         // Wait for gather dst cb data (already pushed by gather receiver)
         cb_wait_front(gather_dst_cb, gather_dst_num_pages);
+        DPRINT << "wait for gather dst cb data" << ENDL();
 
         // Reserve space in rmsnorm2 input cb (2 tiles)
         cb_reserve_back(rmsnorm2_input_cb, 2);
+        DPRINT << "reserve space in rmsnorm2 input cb" << ENDL();
 
         // Get source and destination addresses
         uint32_t src_addr = get_read_ptr(gather_dst_cb);
@@ -324,7 +328,9 @@ KERNEL_ENTRY {
         // Copy gather data to rmsnorm2 cb using local NOC read
         uint64_t src_noc_addr = get_noc_addr(src_addr);
         noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
+        DPRINT << "read gather data to rmsnorm2 input cb" << ENDL();
         noc_async_read_barrier();
+        DPRINT << "wait for read gather data to rmsnorm2 input cb" << ENDL();
 
         // Zero-pad the remaining bytes (last half tile)
         volatile tt_l1_ptr uint16_t* pad_ptr =
@@ -333,6 +339,7 @@ KERNEL_ENTRY {
         for (uint32_t i = 0; i < padding_elements; ++i) {
             pad_ptr[i] = 0;
         }
+        DPRINT << "zero-pad the remaining bytes" << ENDL();
 
         // Push the completed 2 tiles to rmsnorm2 input cb
         DPRINT << TileSlice(rmsnorm2_input_cb, 0, SliceRange::hw0_32_16(), true, true) << ENDL();

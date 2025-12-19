@@ -337,6 +337,11 @@ struct Mcast {
 
                 // Compute mcast data NOC address from runtime args
                 uint64_t mcast_data_noc_addr = noc_coord_ | (uint64_t)args.mcast_receiver_data_addr;
+                DPRINT << "mcast num cores: " << CTArgsT::mcast_num_cores << ENDL();
+                DPRINT << "mcast receiver data addr: " << args.mcast_receiver_data_addr << ENDL();
+                DPRINT << "mcast data noc addr: " << mcast_data_noc_addr << ENDL();
+                DPRINT << "mcast data size bytes: " << args.data_size_bytes << ENDL();
+                DPRINT << "mcast input data addr: " << args.input_data_addr << ENDL();
 
                 // Send data with state
                 mcast_send_with_state<

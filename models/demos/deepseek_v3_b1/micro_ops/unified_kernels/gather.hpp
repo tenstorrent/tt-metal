@@ -127,6 +127,7 @@ struct Gather {
             // ================================================================
             if constexpr (IsReceiverCore) {
                 // Reserve space in destination CB
+                DPRINT << "reserve space in destination CB for gather" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
 
                 uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
@@ -135,8 +136,10 @@ struct Gather {
                     (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
                 volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                DPRINT << "wait for semaphores for gather" << ENDL();
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
+                DPRINT << "set semaphores for gather" << ENDL();
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
                 noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
 
