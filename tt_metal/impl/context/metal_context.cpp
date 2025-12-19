@@ -1121,12 +1121,22 @@ void MetalContext::initialize_firmware(
         size_t launch_msg_size = launch_msg.size();
         std::vector<std::byte> init_launch_msg_data(
             dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
-        for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
-            std::copy(
-                launch_msg.data(),
-                launch_msg.data() + launch_msg_size,
-                init_launch_msg_data.data() + (i * launch_msg_size));
+
+        // Entry 0: Use the proper firmware startup message
+        std::copy(
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data());
+
+        // Entries 1-7: Set dispatch mode to DISPATCH_MODE_NONE as they are not needed during init
+        // These are placeholder entries during firmware initialization that should be skipped.
+        auto factory = hal_->get_dev_msgs_factory(core_type);
+        for (size_t i = 1; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
+            auto entry_view =
+                factory.create_view<dev_msgs::launch_msg_t>(init_launch_msg_data.data() + (i * launch_msg_size));
+            entry_view.kernel_config().mode() = dev_msgs::DISPATCH_MODE_NONE;
         }
+
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
         cluster_->write_core(
             init_launch_msg_data.data(),
