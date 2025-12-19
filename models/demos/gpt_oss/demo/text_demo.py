@@ -194,6 +194,7 @@ def prepare_gpt_oss_generator_args(
     paged_attention,
     mesh_config=None,
     state_dict=None,
+    users_row_sharded=False,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
     submesh_devices = create_submeshes(mesh_device, data_parallel)
@@ -223,25 +224,34 @@ def prepare_gpt_oss_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
+            users_row_sharded=users_row_sharded,
         )
         model_args.append(model_args_i)
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
 
     # Page table will be created using tt-transformers infrastructure after input preprocessing
-    page_tables = (
-        [
-            create_tt_page_table(
-                global_batch_size // mesh_device.shape[0],
+    if paged_attention:
+        if users_row_sharded:
+            # If users are sharded on rows of mesh, we need a separate page table for each row
+            page_tables = [
+                create_tt_page_table(
+                    global_batch_size // mesh_device.shape[0],
+                    data_parallel,
+                    paged_attention_config,
+                )
+                for _ in range(mesh_device.shape[0])
+            ]
+            # Concat the separate page tables into a single page table
+            page_table = torch.concat(page_tables, dim=0) if page_tables else None
+        else:
+            page_table = create_tt_page_table(
+                global_batch_size,
                 data_parallel,
                 paged_attention_config,
             )
-            for _ in range(mesh_device.shape[0])
-        ]
-        if paged_attention
-        else None
-    )
-    page_table = torch.concat(page_tables, dim=0) if page_tables else None
+    else:
+        page_table = None
 
     # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[0].tokenizer
@@ -261,7 +271,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -273,7 +283,8 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
             True,  # enable_decode_trace
-            True,  # enable_prefill_trace
+            False,  # enable_prefill_trace
+            False,  # users_row_sharded
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -285,7 +296,8 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
-            True,  # enable_prefill_trace
+            False,  # enable_prefill_trace
+            False,  # users_row_sharded
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -297,7 +309,8 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
-            True,  # enable_prefill_trace
+            False,  # enable_prefill_trace
+            False,  # users_row_sharded
         ),
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -308,8 +321,9 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            True,
-            False,
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace
+            True,  # users_row_sharded
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -389,6 +403,7 @@ def test_gpt_oss_demo(
     sampling_params,
     enable_decode_trace,
     enable_prefill_trace,
+    users_row_sharded,
     is_ci_env,
     state_dict,
 ):
@@ -442,11 +457,12 @@ def test_gpt_oss_demo(
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
         state_dict=state_dict,
+        users_row_sharded=users_row_sharded,
     )
 
     # Create generator (match tt-transformers pattern)
-    # generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
-    generator = GPTOSSGenerator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    generator_class = GPTOSSGenerator if users_row_sharded else Generator
+    generator = generator_class(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 

@@ -38,7 +38,10 @@ def decode_forward(
         Expert output [batch, 1, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
-    batch_size, seq_len = hidden_states.shape[0], hidden_states.shape[1]
+    batch_dim = 1
+    seq_dim = 2
+    batch_size = hidden_states.shape[batch_dim]
+    seq_len = hidden_states.shape[seq_dim]
 
     # ✅ Use exceptions instead of assertions
     if seq_len != 1:
@@ -50,7 +53,7 @@ def decode_forward(
     mode_config = mesh_config.get_config(Mode.DECODE)
     ep, tp = mode_config.ep, mode_config.tp
     # Prepare inputs for sparse matmul
-    hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
+    # hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
     sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
 
     # EP-specific routing remap for sparsity
@@ -63,13 +66,13 @@ def decode_forward(
 
     # Gate projection
     gate = ttnn.sparse_matmul(
-        hidden_states_4D,
+        hidden_states,
         weights.gate_proj,
         sparsity=sparsity,
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states_4D.shape[2], weights.gate_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.gate_proj.shape[3]),
         dtype=activation_dtype,
     )
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
@@ -80,16 +83,16 @@ def decode_forward(
 
     # Up projection
     up = ttnn.sparse_matmul(
-        hidden_states_4D,
+        hidden_states,
         weights.up_proj,
         sparsity=sparsity,
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states_4D.shape[2], weights.up_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.up_proj.shape[3]),
         dtype=activation_dtype,
     )
-    hidden_states_4D.deallocate(True)
+    hidden_states.deallocate(True)
     up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     up = ttnn.transpose(up, 1, 2)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
@@ -140,8 +143,8 @@ def decode_forward(
     # Final reshape
     next_states = ttnn.reshape(
         next_states,
-        (batch_size, seq_len, config.hidden_size),
-        (batch_size, max(32, seq_len), config.hidden_size),
+        (1, batch_size, seq_len, config.hidden_size),
+        (1, batch_size, max(32, seq_len), config.hidden_size),
     )
 
     return next_states
