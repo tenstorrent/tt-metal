@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_tt_cnn_unit_tests:
+        description: 'Run tt-cnn-unit-tests'
+        required: false
+        type: boolean
+        default: false
       additional_test_categories:
         description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,bos,eltwise,matmul,experimental,docs_examples,misc,moreh,fused,data_movement,transformers)'
         required: false
@@ -283,7 +288,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
