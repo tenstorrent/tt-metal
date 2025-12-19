@@ -97,6 +97,7 @@ struct Gather {
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
+                DPRINT << "wait for source CB data to be ready" << ENDL();
 
                 // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
@@ -113,7 +114,9 @@ struct Gather {
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)receiver_semaphore_addr;
                 noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
                 noc_semaphore_inc<true>(dst_semaphore_noc_addr, 1);
+                DPRINT << "increment semaphore" << ENDL();
                 noc_async_posted_writes_flushed();
+                DPRINT << "send data to destination CB" << ENDL();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
@@ -127,6 +130,7 @@ struct Gather {
             if constexpr (IsReceiverCore) {
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << "reserve space in destination CB" << ENDL();
 
                 uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
                 uint32_t noc1_receiver_semaphore_addr = get_semaphore(args.noc1_receiver_semaphore_id);
@@ -134,8 +138,11 @@ struct Gather {
                     (volatile tt_l1_ptr uint32_t*)noc0_receiver_semaphore_addr;
                 volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)noc1_receiver_semaphore_addr;
+                DPRINT << "wait for noc0 semaphore" << ENDL();
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
+                DPRINT << "wait for noc1 semaphore" << ENDL();
                 noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
+                DPRINT << "set noc0 semaphore to 0" << ENDL();
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
                 noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
 

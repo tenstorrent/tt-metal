@@ -257,7 +257,7 @@ struct Mcast {
     //   Op op;
     //   op.init(args);      // Initialize persistent mcast sender (call once)
     //   op(args);           // Send data (can be called multiple times)
-    //   op.teardown(args);  // Teardown persistent mcast sender (call once)
+    //   op.teardown();      // Teardown persistent mcast sender (call once)
     //
     // Or use the legacy all-in-one call:
     //   op.init_send_teardown(args);  // Does init + send + teardown
@@ -307,7 +307,7 @@ struct Mcast {
         // Must be called after all operator() calls on sender core
         // No-op for BRISC/TRISC
         // ====================================================================
-        void teardown([[maybe_unused]] const RTArgs& args) {
+        void teardown() {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsSenderCore) {
                 // Teardown persistent mcast sender
@@ -325,7 +325,7 @@ struct Mcast {
         void init_send_teardown([[maybe_unused]] const RTArgs& args) {
             init(args);
             impl(args);
-            teardown(args);
+            teardown();
         }
 
     private:

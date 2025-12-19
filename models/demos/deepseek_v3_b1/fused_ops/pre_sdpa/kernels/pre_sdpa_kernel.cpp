@@ -22,7 +22,6 @@
 KERNEL_ENTRY {
     // Use UnifiedCoreDescriptor for compile-time role checks
     using Core = pre_sdpa::UnifiedCoreDescriptor;
-    DPRINT << "-------- kernel started --------" << ENDL();
 
 // ============================================================================
 // NCRISC (Reader + Mcast Sender) - ReaderConfigDescriptor compiles as NCRISC
@@ -272,7 +271,7 @@ KERNEL_ENTRY {
         // pop_src = true (input is consumed after mcast)
         mcast(mcast_args);
     }
-    // mcast.teardown(mcast_args);
+    mcast.teardown();
 
     // ========================================================================
     // Matmul operation
@@ -369,9 +368,10 @@ KERNEL_ENTRY {
         // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
         // pop_src = true (rmsnorm2 output is consumed after mcast)
         deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, true> mcast2;
+        mcast2.init(mcast2_args);
         mcast2(mcast2_args);
+        mcast2.teardown();
     }
-    mcast.teardown(mcast2_args);
     DPRINT << "-------- mcast 2 completed --------" << ENDL();
 
     // ========================================================================
