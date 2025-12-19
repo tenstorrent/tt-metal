@@ -73,13 +73,36 @@ COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
 
 # JSON serializer for the weight config
 class WeightConfigEncoder(json.JSONEncoder):
+    def __init__(self, *args, base_path: Path | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.base_path = base_path
+
     def default(self, obj):
         if isinstance(obj, SavedWeight):
+            path = obj.path
+            # Convert absolute paths to relative paths if base_path is provided
+            if self.base_path is not None and path.is_absolute():
+                try:
+                    # Check if the path is under base_path
+                    path = path.relative_to(self.base_path)
+                except ValueError:
+                    # Path is not under base_path, keep it as absolute
+                    pass
             obj = {
-                "path": str(obj.path),
+                "path": str(path),
                 "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
             }
         return obj
+
+
+def create_weight_config_encoder(base_path: Path):
+    """Create a WeightConfigEncoder subclass with base_path captured."""
+
+    class WeightConfigEncoderWithBase(WeightConfigEncoder):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, base_path=base_path, **kwargs)
+
+    return WeightConfigEncoderWithBase
 
 
 def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
@@ -913,7 +936,9 @@ def get_weight_config(
     # Convert weights to TT tensors-on-disk and build weight_config
     logger.info("Converting weights to TTNN SavedWeight format...")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-    json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
+    # Create encoder with base_path to convert absolute paths to relative
+    encoder_class = create_weight_config_encoder(weight_cache_path)
+    json.dump(weight_config, config_path.open("w"), cls=encoder_class)
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
     logger.info("Converting weights to TTNN SavedWeight format...done")
     return weight_config
