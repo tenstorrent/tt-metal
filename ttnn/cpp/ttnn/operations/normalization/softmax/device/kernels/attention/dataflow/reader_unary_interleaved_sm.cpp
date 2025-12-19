@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
@@ -39,8 +39,8 @@ void kernel_main() {
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
-    uint32_t mask_offset = get_arg_val<uint32_t>(13);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
+    uint32_t mask_offset = get_arg_val<uint32_t>(12);
 
     uint32_t mask_id_offset = mask_offset;
     uint32_t mask_ht = mask_start_ht;
@@ -59,11 +59,10 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);
 
-    // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
-        generate_reduce_scaler(cb_in_2, reduce_scaler);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

@@ -10,11 +10,12 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
-#include "cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
 #include <cstdint>
 #include <utility>
+
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_in_2 = get_compile_time_arg_val(1);

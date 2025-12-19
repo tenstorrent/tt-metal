@@ -62,7 +62,7 @@ std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
     std::map<std::string, std::string> defines;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: defines["REDUCE_OP"] = "PoolType::MAX"; break;
-        case Pool2DType::AVG_POOL2D: defines["REDUCE_OP"] = "PoolType::SUM"; break;
+        case Pool2DType::AVG_POOL2D: defines["REDUCE_OP"] = "PoolType::AVG"; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";

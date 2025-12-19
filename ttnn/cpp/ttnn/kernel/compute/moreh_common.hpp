@@ -136,14 +136,6 @@ ALWI void mul_tiles_bcast_scalar_init_short_with_dt(uint32_t icb0 = 0, uint32_t 
     mul_tiles_bcast_scalar_init_short(icb0, icb1);
 }
 
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1) {
-#if defined FP32_DEST_ACC_EN
-    reconfig_data_format(icb0, icb1);
-#endif
-    reduce_init<reduce_type, reduce_dim>(icb0, icb1, ocb);
-}
-
 class ArgFetcher {
 private:
     int arg_idx = 0;
@@ -591,41 +583,6 @@ ALWI void mask_tile_to_cb(
     cb_push_back(ocb, onetile);
 }
 
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_tile_to_cb(
-    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-
-    cb_reserve_back(ocb, onetile);
-
-    tile_regs_acquire();
-    cb_wait_front(icb1, onetile);
-
-    reduce_init_delta_with_dt<reduce_type, reduce_dim>(ocb, icb0, icb1);
-    for (uint32_t x = 0; x < size; ++x) {
-        cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
-
-        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
-    }
-    reduce_uninit();
-    tile_regs_commit();
-
-    if (pop0) {
-        cb_pop_front(icb0, pop0);
-    }
-    if (pop1) {
-        cb_pop_front(icb1, pop1);
-    }
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, ocb);
-    tile_regs_release();
-
-    cb_push_back(ocb, onetile);
-}
-
 ALWI void sub_tiles_bcast_cols_to_cb(
     uint32_t icb0,
     uint32_t icb1,
@@ -931,80 +888,6 @@ ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     if (pop) {
         cb_pop_front(icb, pop);
     }
-    cb_push_back(ocb, onetile);
-}
-
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_and_recip_tile_to_cb(
-    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-
-    cb_reserve_back(ocb, onetile);
-    cb_wait_front(icb1, onetile);
-
-    tile_regs_acquire();
-    reduce_init_delta_with_dt<reduce_type, reduce_dim>(ocb, icb0, icb1);
-    for (uint32_t x = 0; x < size; ++x) {
-        cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
-
-        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
-    }
-    if (pop0) {
-        cb_pop_front(icb0, pop0);
-    }
-    if (pop1) {
-        cb_pop_front(icb1, pop1);
-    }
-
-    reduce_uninit();
-
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, ocb);
-    tile_regs_release();
-
-    cb_push_back(ocb, onetile);
-}
-
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_and_log_tile_to_cb(
-    uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-
-    cb_reserve_back(ocb, onetile);
-    cb_wait_front(icb1, onetile);
-
-    tile_regs_acquire();
-    reduce_init_delta_with_dt<reduce_type, reduce_dim>(ocb, icb0, icb1);
-    for (uint32_t x = 0; x < size; ++x) {
-        cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
-
-        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
-    }
-    if (pop0) {
-        cb_pop_front(icb0, pop0);
-    }
-    if (pop1) {
-        cb_pop_front(icb1, pop1);
-    }
-
-    reduce_uninit();
-
-    log_tile_init();
-    log_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, ocb);
-    tile_regs_release();
-
     cb_push_back(ocb, onetile);
 }
 
