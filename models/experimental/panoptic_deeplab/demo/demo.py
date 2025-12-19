@@ -20,6 +20,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     extract_outputs_from_pipeline_result,
     create_visualization_from_outputs,
     validate_outputs_with_pcc,
+    convert_pytorch_outputs_to_numpy,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
@@ -323,7 +324,36 @@ def run_panoptic_deeplab_demo(
         ttnn_output_dir = os.path.join(output_dir, "ttnn_output")
         save_predictions(ttnn_output_dir, image_name, original_image, panoptic_vis_ttnn)
 
-        logger.info(f"Processed image {i+1}/{len(outputs)}: {image_name}")
+        logger.info(f"Processed TTNN image {i+1}/{len(outputs)}: {image_name}")
+
+    # Process and save PyTorch reference outputs for visualization
+    logger.info("Processing PyTorch reference outputs for visualization...")
+    for i, (ref_tuple, (image_path, original_image)) in enumerate(zip(reference_outputs, original_images)):
+        pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
+
+        # Convert PyTorch outputs to numpy format for visualization
+        semantic_np_pytorch, center_np_pytorch, offset_np_pytorch = convert_pytorch_outputs_to_numpy(
+            pytorch_semantic,
+            pytorch_center,
+            pytorch_offset,
+        )
+
+        # Create visualization
+        panoptic_vis_pytorch, panoptic_info_pytorch = create_visualization_from_outputs(
+            semantic_np_pytorch,
+            original_image,
+            model_category,
+            center_np=center_np_pytorch,
+            offset_np=offset_np_pytorch,
+            center_threshold=center_threshold,
+        )
+
+        # Save results
+        image_name = os.path.basename(image_path)
+        pytorch_output_dir = os.path.join(output_dir, "pytorch_output")
+        save_predictions(pytorch_output_dir, image_name, original_image, panoptic_vis_pytorch)
+
+        logger.info(f"Processed PyTorch image {i+1}/{len(reference_outputs)}: {image_name}")
 
     logger.info(f"Demo completed! Results saved to {output_dir}")
     logger.info(f"Processed {len(outputs)} images using pipeline with {executor_name}")
