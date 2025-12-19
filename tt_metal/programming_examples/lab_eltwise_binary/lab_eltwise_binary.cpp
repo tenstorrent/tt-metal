@@ -165,10 +165,12 @@ void eltwise_add_tensor(
 
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware expects for element-wise operations.
+    // For TILE layout with sequential tiles, we need a 2D shape where each tile is 32x32.
+    // Reshape as (n_tiles * TILE_HEIGHT, TILE_WIDTH) so tiles are laid out sequentially.
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
-    TensorSpec src0_spec(Shape({total_elements}), tile_layout);
-    TensorSpec src1_spec(Shape({total_elements}), tile_layout);
-    TensorSpec dst_spec(Shape({total_elements}), tile_layout);
+    TensorSpec src0_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
+    TensorSpec src1_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
+    TensorSpec dst_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
 
     // Create device tensors from input data.
     // This creates the tensors and transfers data to device in one step.
