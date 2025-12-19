@@ -9,6 +9,11 @@ on:
       runner-label:
         required: true
         type: string
+      post_commit:
+        description: "If true, run in post-commit mode (exclude @skip_post_commit). If false, run full profiler regression."
+        required: false
+        type: boolean
+        default: true
       timeout:
         required: false
         type: number
@@ -49,6 +54,11 @@ on:
           - N150
           - N300
           - BH
+      post_commit:
+        description: "Run in post-commit mode (exclude @skip_post_commit)"
+        required: false
+        type: boolean
+        default: true
       timeout:
         required: false
         type: number
@@ -120,7 +130,11 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          if [[ "${{ inputs.post_commit }}" == "true" ]]; then
+            ./tests/scripts/run_profiler_regressions.sh --post-commit
+          else
+            ./tests/scripts/run_profiler_regressions.sh --full
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

@@ -11,18 +11,28 @@ usage() {
 Usage: run_profiler_regressions.sh [options]
 
 Options:
-  --include-skip-post-commit   Include tests marked with @pytest.mark.skip_post_commit
-                              (default: exclude them)
+  --post-commit                Post-commit mode: exclude tests marked with @pytest.mark.skip_post_commit (default)
+  --full                       Full mode: include tests marked with @pytest.mark.skip_post_commit
+  --include-skip-post-commit   Alias for --full (backwards compatible)
   -h, --help                   Show this help
 EOF
 }
 
-INCLUDE_SKIP_POST_COMMIT=0
+# Default to post-commit behavior to preserve existing CI behavior.
+MODE="post_commit" # or "full"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --post-commit)
+            MODE="post_commit"
+            shift
+            ;;
+        --full)
+            MODE="full"
+            shift
+            ;;
         --include-skip-post-commit)
-            INCLUDE_SKIP_POST_COMMIT=1
+            MODE="full"
             shift
             ;;
         -h|--help)
@@ -50,7 +60,7 @@ run_profiling_test() {
     run_mid_run_data_dump
 
     device_profiler_marker_args=()
-    if [[ "$INCLUDE_SKIP_POST_COMMIT" -eq 0 ]]; then
+    if [[ "$MODE" == "post_commit" ]]; then
         device_profiler_marker_args=(-m "not skip_post_commit")
     fi
 
