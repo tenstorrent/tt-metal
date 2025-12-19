@@ -20,8 +20,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-def test_ttnn_reshape_with_cache(device_module, enable_cache, input_shape, output_shape):
-    device = device_module
+def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if not enable_cache:
         device.disable_program_cache()
 
@@ -48,8 +47,7 @@ def test_ttnn_reshape_with_cache(device_module, enable_cache, input_shape, outpu
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-def test_tensor_reshape_with_cache(device_module, enable_cache, input_shape, output_shape):
-    device = device_module
+def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     # respecting the parameters of the test, although cache should be active by default
     if not enable_cache:
         device.disable_and_clear_program_cache()
@@ -74,8 +72,7 @@ def test_tensor_reshape_with_cache(device_module, enable_cache, input_shape, out
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
-def test_reshape_sharded_rm(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_sharded_rm(device, n, c, h, w):
     pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17030")
 
     if device.core_grid.y < 8:
@@ -117,8 +114,7 @@ def test_reshape_sharded_rm(device_module, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_reshape_cw_div2_rm(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_cw_div2_rm(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c * 2, h, w // 2)
 
@@ -136,8 +132,7 @@ def test_reshape_cw_div2_rm(device_module, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_reshape_cw_mul2_rm(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_cw_mul2_rm(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c // 2, h, w * 2)
 
@@ -155,8 +150,7 @@ def test_reshape_cw_mul2_rm(device_module, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_reshape_hw_div2_rm(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_hw_div2_rm(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h * 2, w // 2)
 
@@ -174,8 +168,7 @@ def test_reshape_hw_div2_rm(device_module, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [8])
-def test_reshape_hw_mul2_rm(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_hw_mul2_rm(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(n, c, h // 2, w * 2)
 
@@ -207,8 +200,7 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [8])
-def test_reshape_hw_rm_with_program_cache(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     for _ in range(2):
         run_reshape_hw_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
@@ -272,8 +264,7 @@ def test_reshape_in_4D(n, c, h, w):
 @pytest.mark.parametrize("c", [32, 64])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-def test_reshape_in_4D_on_device(device_module, n, c, h, w):
-    device = device_module
+def test_reshape_in_4D_on_device(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
 
@@ -287,8 +278,7 @@ def test_reshape_in_4D_on_device(device_module, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-def test_permute_reshape(device_module):
-    device = device_module
+def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
 
@@ -307,8 +297,7 @@ def test_permute_reshape(device_module):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-def test_reshape_with_negative_dim(device_module):
-    device = device_module
+def test_reshape_with_negative_dim(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, -1, 2, 32)
     expected_output_shape = (1, 128, 2, 32)
@@ -327,8 +316,7 @@ def test_reshape_with_negative_dim(device_module):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-def test_reshape_tile_layout_mamba(device_module):
-    device = device_module
+def test_reshape_tile_layout_mamba(device):
     torch_input_tensor = torch.randn((1, 1, 2048, 64), dtype=torch.bfloat16)
     reshape_shape = (1, 2, 1024, 64)
     torch_result = torch_input_tensor.reshape(reshape_shape)
@@ -341,8 +329,7 @@ def test_reshape_tile_layout_mamba(device_module):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-def test_reshape_tile_layout_only_change_shape(device_module):
-    device = device_module
+def test_reshape_tile_layout_only_change_shape(device):
     torch_input_tensor = torch.randn((1, 64, 32, 4 * 32), dtype=torch.bfloat16)
     reshape_shape = (1, 32, 64, 4 * 32)
     torch_result = torch_input_tensor.reshape(reshape_shape)
@@ -386,8 +373,7 @@ def test_reshape_tile_layout_only_change_shape(device_module):
 @pytest.mark.parametrize(
     "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
 )
-def test_reshape_tile(device_module, input_shape, output_shape, layout, memory_config, dtype):
-    device = device_module
+def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
     if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
         pytest.xfail("Test case is too big for L1")
 
@@ -435,8 +421,7 @@ def test_reshape_tile(device_module, input_shape, output_shape, layout, memory_c
         ),
     ),
 )
-def test_reshape_subgrid(device_module, input_shape, output_shape, layout, memory_config, dtype, sub_core_grids):
-    device = device_module
+def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_config, dtype, sub_core_grids):
     if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
         pytest.xfail("Test case is too big for L1")
 
@@ -458,8 +443,7 @@ def test_reshape_subgrid(device_module, input_shape, output_shape, layout, memor
 
 
 @pytest.mark.parametrize("recreate_mapping_tensor", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
-def test_reshape_tile_program_cache(device_module, recreate_mapping_tensor):
-    device = device_module
+def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -475,8 +459,7 @@ def test_reshape_tile_program_cache(device_module, recreate_mapping_tensor):
 
 
 # issue 15048
-def test_previously_failing_test(device_module):
-    device = device_module
+def test_previously_failing_test(device):
     src_shape = (1, 56, 56, 64)
     target_shape = (1, 1, 56 * 56, 64)
     torch_input_tensor = torch.randn(src_shape, dtype=torch.bfloat16)
@@ -505,8 +488,7 @@ def test_previously_failing_test(device_module):
         ((1, 128, 1), (1, 128)),
     ],
 )
-def test_reshape_host(input_shape, output_shape, device_module):
-    device = device_module
+def test_reshape_host(input_shape, output_shape, device):
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(output_shape)
 
@@ -527,8 +509,7 @@ def test_reshape_host(input_shape, output_shape, device_module):
         ((64, 32), (1, 1, 64, 32)),
     ],
 )
-def test_reshape_int(input_shape, output_shape, device_module):
-    device = device_module
+def test_reshape_int(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
@@ -557,8 +538,7 @@ def test_reshape_int(input_shape, output_shape, device_module):
         ((16, 1, 32), (16, 1, 32)),
     ],
 )
-def test_fp32_support(input_shape, output_shape, device_module):
-    device = device_module
+def test_fp32_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
@@ -589,8 +569,7 @@ def test_fp32_support(input_shape, output_shape, device_module):
         ((16, 1, 32), (16, 1, 32)),
     ],
 )
-def test_bf8_support(input_shape, output_shape, device_module):
-    device = device_module
+def test_bf8_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
@@ -630,10 +609,7 @@ def test_bf8_support(input_shape, output_shape, device_module):
     "use_device, memory_config",
     [(True, None), (True, ttnn.L1_MEMORY_CONFIG), (False, None)],
 )
-def test_reshape_zero_element(
-    input_shape, output_shape, layout, ttnn_reshape, use_device, memory_config, device_module
-):
-    device = device_module
+def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, use_device, memory_config, device):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     if use_device:
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=memory_config)
@@ -670,12 +646,11 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-def test_reshape_oob(device_module):
+def test_reshape_oob(device):
     """
     Test proves that this reshape op writes data out of bounds, corrupting
     tensors at other memory locations.
     """
-    device = device_module
 
     def bf16_tensor(tensor):
         return ttnn.from_torch(tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
