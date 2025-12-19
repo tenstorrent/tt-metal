@@ -181,7 +181,7 @@ jobs:
               "name": "t3k DiTs Image and Video Generation",
               "model": "dits",
               "arch": "wormhole_b0",
-              "cmd": "run_t3000_dit_tests",
+              "cmd": "run_t3000_tt_dit_tests",
               "timeout": 20,
               "owner_id": "U08TED0JM9D" # Samuel Adesoye
             }
