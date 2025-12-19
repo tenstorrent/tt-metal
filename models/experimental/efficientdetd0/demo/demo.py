@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ from loguru import logger
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import disable_persistent_kernel_cache, comp_pcc
+from models.common.utility_functions import comp_pcc
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.common import load_torch_model_state
@@ -60,7 +60,6 @@ def run_efficient_det_demo(
         width: Input image width
         num_classes: Number of object classes
     """
-    disable_persistent_kernel_cache()
 
     logger.info("=" * 80)
     logger.info("EfficientDet Demo")

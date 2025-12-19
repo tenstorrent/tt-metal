@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -274,7 +274,8 @@ class TtEfficientNet:
             deallocate_activation=True,
         )
 
-    def __call__(self, x):
+    def __call__(self, input):
+        x = ttnn.to_memory_config(input, ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = self._conv_stem(x)
         x = ttnn.swish(x)

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -51,7 +52,7 @@ def test_efficient_det(batch, channels, height, width, device):
     )
     module_args = infer_torch_module_args(model=torch_model, input=torch_inputs)
 
-    # Create TTNN BiFPN model
+    # Create TTNN EffDet model
     ttnn_model = TtEfficientDetBackbone(
         device=device,
         parameters=parameters,
@@ -90,7 +91,6 @@ def test_efficient_det(batch, channels, height, width, device):
         logger.info(f"Feature {i} (P{i+3}) PCC: {pcc_message}")
         all_passed = all_passed and passing
 
-    # Compare regression outputs
     # Compare regression outputs
     logger.info("Comparing regression outputs...")
     ttnn_regression_torch = ttnn.to_torch(ttnn_regression)

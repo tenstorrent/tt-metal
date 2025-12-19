@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,6 @@ from loguru import logger
 
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.common import load_torch_model_state
@@ -127,8 +126,6 @@ def evaluate_coco(
     """
     if not PYCOCOTOOLS_AVAILABLE:
         raise ImportError("pycocotools is required for COCO evaluation. Install with: pip install pycocotools")
-
-    disable_persistent_kernel_cache()
 
     # Load COCO dataset
     coco = COCO(coco_annotations_path)

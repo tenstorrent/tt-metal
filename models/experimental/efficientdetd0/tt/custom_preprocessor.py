@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -250,6 +250,10 @@ def register_layer_hooks(model, layer_type):
 
 
 def _expand_dotted_keys(flat_dict):
+    """
+    Helper function to convert dot separated layer name keys to nested dict format
+    {"classifier.conv1.kernel_size": 3} -> {"classifier": {"conv1": {"kernel_size": 3}}}
+    """
     result = {}
 
     for key, value in flat_dict.items():
@@ -271,6 +275,9 @@ def _expand_dotted_keys(flat_dict):
 
 
 def _fix_layername(layer_info):
+    """
+    Helper function for updating layer names to represent model init structure instead of the forward flow retured by hook.
+    """
     structured_info = {}
     for layer_name, instances in layer_info.items():
         if len(instances) > 1:
