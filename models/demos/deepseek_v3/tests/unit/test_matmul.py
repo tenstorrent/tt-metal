@@ -383,6 +383,7 @@ def run_test_matmul_interleaved(
     logger.info(f"in0_mem={in0_mem_config}, in1_mem={in1_mem_config}, out_mem={out_mem_config}")
     logger.info(f"compute_kernel_config={compute_kernel_config}")
 
+    torch.manual_seed(1234)
     # Create input tensors
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
