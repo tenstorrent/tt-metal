@@ -21,8 +21,8 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 void kernel_main() {
