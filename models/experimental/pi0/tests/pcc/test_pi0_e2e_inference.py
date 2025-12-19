@@ -412,8 +412,13 @@ def main():
             print("=" * 80)
             print(f"\n   PyTorch E2E Time:     {torch_time:.2f}ms")
             print(f"   TTNN E2E Time:        {ttnn_time:.2f}ms")
-            if ttnn_time > 0:
-                print(f"   Speedup:              {torch_time/ttnn_time:.2f}x")
+            if ttnn_time > 0 and torch_time > 0:
+                if ttnn_time < torch_time:
+                    speedup = torch_time / ttnn_time
+                    print(f"   Speedup:              {speedup:.2f}x faster (TTNN)")
+                else:
+                    slowdown = ttnn_time / torch_time
+                    print(f"   Slowdown:             {slowdown:.2f}x slower (TTNN)")
             print(f"\n   Output Shape:         {output_ttnn.shape}")
             print(f"   PCC:                  {pcc:.6f}")
             print(f"\n   Status:               {'✅ PASS' if passed else '❌ FAIL'}")
