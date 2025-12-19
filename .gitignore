@@ -145,3 +145,6 @@ Testing
 .auto_triage/data
 .auto_triage/output
 .github/actions/*/node_modules/
+
+# Exclude inspector RPC schema header from source control
+tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp.h

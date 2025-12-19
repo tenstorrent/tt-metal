@@ -4,6 +4,7 @@ function(TT_ADD_INSPECTOR_RPC_SUPPORT TARGET_NAME)
     set(oneValueArgs OUTPUT_DIR)
     set(multiValueArgs
         CAPNP_SCHEMAS
+        IMPORT_CAPNP_SCHEMAS
         RPC_CHANNEL_SCHEMAS
     )
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -25,7 +26,7 @@ function(TT_ADD_INSPECTOR_RPC_SUPPORT TARGET_NAME)
     set(COPIED_CAPNP_SCHEMAS)
 
     # Generate C++ sources from Cap'n Proto schemas
-    foreach(SCHEMA ${ARG_CAPNP_SCHEMAS})
+    foreach(SCHEMA ${ARG_CAPNP_SCHEMAS} ${ARG_IMPORT_CAPNP_SCHEMAS})
         get_filename_component(SCHEMA_NAME ${SCHEMA} NAME_WE)
         set(COPIED_SCHEMA ${ARG_OUTPUT_DIR}/${SCHEMA_NAME}.capnp)
         add_custom_command(

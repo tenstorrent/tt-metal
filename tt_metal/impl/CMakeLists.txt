@@ -136,6 +136,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
 )
 
+# Add Cap'n Proto RPC support for Inspector
 TT_ADD_INSPECTOR_RPC_SUPPORT(
     impl
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector
@@ -145,6 +146,21 @@ TT_ADD_INSPECTOR_RPC_SUPPORT(
     RPC_CHANNEL_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
 )
+
+# Copy inspector_rpc.capnp.h to tt-metalium/include for public API access
+set(INSPECTOR_RPC_METALIUM_API_HEADER ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp.h)
+add_custom_command(
+    OUTPUT
+        ${INSPECTOR_RPC_METALIUM_API_HEADER}
+    COMMAND
+        ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h
+        ${INSPECTOR_RPC_METALIUM_API_HEADER}
+    DEPENDS
+        ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h
+    COMMENT
+        "Copying Cap'n Proto schema ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h to ${INSPECTOR_RPC_METALIUM_API_HEADER}"
+)
+target_sources(impl PRIVATE ${INSPECTOR_RPC_METALIUM_API_HEADER})
 
 target_include_directories(
     impl
