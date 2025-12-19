@@ -56,7 +56,7 @@ def create_config() -> PI0ModelConfig:
         action_expert_variant="gemma_300m",
         pi05=False,
     )
-    
+
     config.siglip_config = SigLIPConfig(
         hidden_size=1152,
         intermediate_size=4304,
@@ -65,25 +65,22 @@ def create_config() -> PI0ModelConfig:
         image_size=224,
         patch_size=14,
     )
-    
+
     return config
 
 
 def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
     """Create test inputs."""
     image_size = config.siglip_config.image_size
-    
-    images = [
-        torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) 
-        for _ in range(2)
-    ]
+
+    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(2)]
     img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(2)]
-    
+
     lang_tokens = torch.randint(0, 256000, (batch_size, 32))
     lang_masks = torch.ones(batch_size, 32, dtype=torch.bool)
-    
+
     state = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
-    
+
     return {
         "images": images,
         "img_masks": img_masks,
@@ -97,13 +94,13 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     """Compute Pearson Correlation Coefficient."""
     t1 = tensor1.flatten().float()
     t2 = tensor2.flatten().float()
-    
+
     mean1, mean2 = torch.mean(t1), torch.mean(t2)
     std1, std2 = torch.std(t1), torch.std(t2)
-    
+
     if std1 == 0 or std2 == 0:
         return 1.0 if torch.allclose(t1, t2) else 0.0
-    
+
     covariance = torch.mean((t1 - mean1) * (t2 - mean2))
     return (covariance / (std1 * std2)).item()
 
@@ -112,11 +109,12 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 # PYTEST TEST FUNCTION
 # =============================================================================
 
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_pi0_full_denoising(device):
     """
     Pytest: PI0 full denoising (sample_actions) TTNN vs PyTorch.
-    
+
     This test:
     1. Loads PI0 model (PyTorch and TTNN)
     2. Runs full denoising loop (10 steps)
@@ -125,18 +123,18 @@ def test_pi0_full_denoising(device):
     checkpoint_path = Path(CHECKPOINT_PATH)
     if not checkpoint_path.exists():
         pytest.skip(f"Checkpoint not found: {checkpoint_path}")
-    
+
     # Create config and inputs
     config = create_config()
     inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
-    
+
     # Load weights
     weight_loader = PI0WeightLoader(str(checkpoint_path))
-    
+
     # Initialize models
     model_torch = PI0ModelTorch(config, weight_loader)
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
-    
+
     # Run PyTorch
     torch.manual_seed(SEED)
     with torch.no_grad():
@@ -147,7 +145,7 @@ def test_pi0_full_denoising(device):
             lang_masks=inputs["lang_masks"],
             state=inputs["state"],
         )
-    
+
     # Run TTNN
     torch.manual_seed(SEED)
     with torch.no_grad():
@@ -158,13 +156,13 @@ def test_pi0_full_denoising(device):
             lang_masks=inputs["lang_masks"],
             state=inputs["state"],
         )
-    
+
     # Compute PCC
     pcc = compute_pcc(torch_actions, ttnn_actions)
-    
+
     print(f"\n✅ Full Denoising PCC: {pcc:.6f}")
     print(f"   Output shape: {ttnn_actions.shape}")
-    
+
     assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
@@ -172,56 +170,57 @@ def test_pi0_full_denoising(device):
 # STANDALONE RUNNER
 # =============================================================================
 
+
 def main():
     """Run full denoising test."""
     print("=" * 80)
     print("  PI0 FULL DENOISING TEST")
     print("  TTNN vs PyTorch (sample_actions)")
     print("=" * 80)
-    
+
     # Verify checkpoint
     checkpoint_path = Path(CHECKPOINT_PATH)
     if not checkpoint_path.exists():
         print(f"\n❌ Checkpoint not found: {checkpoint_path}")
         return 1
-    
+
     print(f"\n📁 Checkpoint: {checkpoint_path}")
     print(f"📊 Batch size: {BATCH_SIZE}")
     print(f"🎲 Seed: {SEED}")
-    
+
     # Open device
     print("\n🔌 Opening TTNN device...")
     device = ttnn.open_device(device_id=0)
     grid = device.compute_with_storage_grid_size()
     print(f"✅ Device opened (grid: {grid.x}x{grid.y})")
-    
+
     try:
         # Create config
         config = create_config()
         print(f"\n📋 Config: {config.siglip_config.image_size}x{config.siglip_config.image_size} images")
-        
+
         # Load weights
         print("\n1. Loading weights...")
         weight_loader = PI0WeightLoader(str(checkpoint_path))
         print("   ✅ Weights loaded")
-        
+
         # Initialize models
         print("\n2. Initializing models...")
         model_torch = PI0ModelTorch(config, weight_loader)
         print("   ✅ PyTorch model initialized")
-        
+
         model_ttnn = PI0ModelTTNN(config, weight_loader, device)
         print("   ✅ TTNN model initialized")
-        
+
         # Create inputs
         print("\n3. Creating test inputs...")
         inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
         print(f"   ✅ Inputs: batch_size={BATCH_SIZE}, images={inputs['images'][0].shape}")
-        
+
         # Run full denoising
         print("\n4. Running FULL DENOISING (sample_actions)...")
         print("   This runs the complete denoising loop (10 steps)")
-        
+
         # PyTorch
         print("\n   Running PyTorch sample_actions()...")
         torch.manual_seed(SEED)
@@ -236,7 +235,7 @@ def main():
             )
         torch_time = (time.time() - start) * 1000
         print(f"      PyTorch: {torch_actions.shape}, time: {torch_time:.2f}ms")
-        
+
         # TTNN
         print("\n   Running TTNN sample_actions()...")
         torch.manual_seed(SEED)  # Same seed
@@ -251,19 +250,19 @@ def main():
             )
         ttnn_time = (time.time() - start) * 1000
         print(f"      TTNN:    {ttnn_actions.shape}, time: {ttnn_time:.2f}ms")
-        
+
         # Compute PCC
         print("\n5. Computing PCC (PyTorch vs TTNN)...")
         pcc = compute_pcc(torch_actions, ttnn_actions)
         passed = pcc >= PCC_THRESHOLD
-        
+
         # Final summary
         print("\n" + "=" * 80)
         print("  RESULTS")
         print("=" * 80)
         print(f"\n   PyTorch Time:    {torch_time:.2f}ms")
         print(f"   TTNN Time:       {ttnn_time:.2f}ms")
-        
+
         if ttnn_time > 0 and torch_time > 0:
             if ttnn_time < torch_time:
                 speedup = torch_time / ttnn_time
@@ -271,21 +270,22 @@ def main():
             else:
                 slowdown = ttnn_time / torch_time
                 print(f"   Slowdown:        {slowdown:.2f}x slower (TTNN)")
-        
+
         print(f"\n   Output Shape:    {ttnn_actions.shape}")
         print(f"   PCC:             {pcc:.6f}")
         print(f"   Threshold:       {PCC_THRESHOLD}")
         print(f"\n   Status:          {'✅ PASS' if passed else '❌ FAIL'}")
         print("=" * 80)
-        
+
         return 0 if passed else 1
-        
+
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
-        
+
     finally:
         print("\n🔌 Closing device...")
         ttnn.close_device(device)
@@ -294,4 +294,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
