@@ -120,7 +120,8 @@ def test_clip_encoder(
         hf_model = CLIPTextModelWithProjection.from_pretrained(
             model_name_checkpoint, subfolder=clip_path, local_files_only=True
         )
-    print(hf_model.config)
+
+    hf_model.eval()
     tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
 
     # Test prompt. Cannot use randn tensor due to specific HF eos token id
