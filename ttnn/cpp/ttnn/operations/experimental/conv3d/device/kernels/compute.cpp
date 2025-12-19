@@ -10,8 +10,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
