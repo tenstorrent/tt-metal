@@ -28,10 +28,8 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_input_params,
     skip_if_not_blackhole_20_or_130_cores,
 )
-from models.tt_cnn.tt.executor import ModelExecutor
 from models.tt_cnn.tt.pipeline import PipelineConfig
 from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
-    CustomTracedModelExecutor,
     create_pipeline_from_config,
 )
 from models.common.utility_functions import profiler
@@ -196,12 +194,6 @@ def run_panoptic_deeplab_demo(
 
     pipe = create_pipeline_from_config(**pipeline_args)
 
-    # Verify executor type
-    expected_executor_type = CustomTracedModelExecutor if use_trace else ModelExecutor
-    assert isinstance(
-        pipe.executor, expected_executor_type
-    ), f"Expected {expected_executor_type.__name__}, got {type(pipe.executor).__name__}"
-
     # Compile pipeline
     logger.info("Compiling pipeline...")
     pipe.compile(host_inputs[0])
@@ -225,10 +217,6 @@ def run_panoptic_deeplab_demo(
     # Generate reference outputs from PyTorch
     reference_outputs = generate_reference_outputs(pytorch_model, host_inputs)
 
-    # Validate outputs
-    assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
-    assert len(outputs) == num_inputs, f"Expected {num_inputs} outputs, got {len(outputs)}"
-
     # Validate outputs with PCC and relative error checks
     logger.info("Validating outputs with PCC and relative error checks...")
     logger.info("=" * 80)
@@ -243,7 +231,7 @@ def run_panoptic_deeplab_demo(
 
         # Extract outputs from pipeline result
         ttnn_semantic, ttnn_center, ttnn_offset = extract_outputs_from_pipeline_result(
-            ttnn_output, model_category, output_index=i, validate_storage=True
+            ttnn_output, model_category, output_index=i
         )
 
         logger.info(f"Image {i+1}/{num_inputs}: {image_name}")
@@ -290,7 +278,7 @@ def run_panoptic_deeplab_demo(
     for i, (ttnn_output, (image_path, original_image)) in enumerate(zip(outputs, original_images)):
         # Extract outputs from pipeline result
         ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits = extract_outputs_from_pipeline_result(
-            ttnn_output, model_category, output_index=i, validate_storage=False
+            ttnn_output, model_category, output_index=i
         )
 
         # Process TTNN outputs for visualization

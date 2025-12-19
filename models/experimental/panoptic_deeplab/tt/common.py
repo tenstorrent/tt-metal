@@ -794,7 +794,6 @@ def extract_outputs_from_pipeline_result(
     ttnn_output: Union[ttnn.Tensor, Tuple, List],
     model_category: str,
     output_index: int = 0,
-    validate_storage: bool = True,
 ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
     """
     Extract semantic, center, and offset outputs from pipeline result.
@@ -807,7 +806,6 @@ def extract_outputs_from_pipeline_result(
         ttnn_output: Output from pipeline (can be tensor, tuple, or list)
         model_category: Model category (PANOPTIC_DEEPLAB or DEEPLAB_V3_PLUS)
         output_index: Index for error messages (for validation)
-        validate_storage: If True, validate that outputs are on HOST
 
     Returns:
         Tuple of (semantic_logits, center_logits, offset_logits)
@@ -815,11 +813,9 @@ def extract_outputs_from_pipeline_result(
     """
     if model_category == DEEPLAB_V3_PLUS:
         ttnn_semantic = ttnn_output
-        if validate_storage:
-            assert isinstance(ttnn_semantic, ttnn.Tensor), f"Semantic output {output_index} should be ttnn.Tensor"
-            assert (
-                ttnn_semantic.storage_type() == ttnn.StorageType.HOST
-            ), f"Semantic output {output_index} should be on host"
+        assert (
+            ttnn_semantic.storage_type() == ttnn.StorageType.HOST
+        ), f"Semantic output {output_index} should be on host"
         return ttnn_semantic, None, None
     else:
         # PANOPTIC_DEEPLAB
@@ -829,19 +825,11 @@ def extract_outputs_from_pipeline_result(
         assert len(ttnn_output) == 3, f"Output {output_index} should have 3 elements, got {len(ttnn_output)}"
         ttnn_semantic, ttnn_center, ttnn_offset = ttnn_output
 
-        if validate_storage:
-            assert isinstance(ttnn_semantic, ttnn.Tensor), f"Semantic output {output_index} should be ttnn.Tensor"
-            assert (
-                ttnn_semantic.storage_type() == ttnn.StorageType.HOST
-            ), f"Semantic output {output_index} should be on host"
-            assert isinstance(ttnn_center, ttnn.Tensor), f"Center output {output_index} should be ttnn.Tensor"
-            assert (
-                ttnn_center.storage_type() == ttnn.StorageType.HOST
-            ), f"Center output {output_index} should be on host"
-            assert isinstance(ttnn_offset, ttnn.Tensor), f"Offset output {output_index} should be ttnn.Tensor"
-            assert (
-                ttnn_offset.storage_type() == ttnn.StorageType.HOST
-            ), f"Offset output {output_index} should be on host"
+        assert (
+            ttnn_semantic.storage_type() == ttnn.StorageType.HOST
+        ), f"Semantic output {output_index} should be on host"
+        assert ttnn_center.storage_type() == ttnn.StorageType.HOST, f"Center output {output_index} should be on host"
+        assert ttnn_offset.storage_type() == ttnn.StorageType.HOST, f"Offset output {output_index} should be on host"
 
         return ttnn_semantic, ttnn_center, ttnn_offset
 
