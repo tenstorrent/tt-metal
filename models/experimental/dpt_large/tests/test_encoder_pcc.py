@@ -9,14 +9,12 @@ Validates:
 - Encoder throughput for 20+ FPS target
 """
 
-import sys
 import time
 import torch
 import ttnn
 from transformers import DPTForDepthEstimation
 
-sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from tt_encoder import create_encoder
+from models.experimental.dpt_large.tt.tt_encoder import create_encoder
 
 
 def compute_pcc(a, b):

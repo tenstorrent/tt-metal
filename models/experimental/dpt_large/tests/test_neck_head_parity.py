@@ -10,11 +10,11 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("PIL")
 from PIL import Image
 
-from models.experimental.dpt_large.config import DPTLargeConfig
-from models.experimental.dpt_large.fallback import DPTFallbackPipeline
-from models.experimental.dpt_large.vit_backbone import DPTViTBackboneTTNN
-from models.experimental.dpt_large.reassembly import DPTReassembly
-from models.experimental.dpt_large.fusion_head import DPTFusionHead
+from models.experimental.dpt_large.tt.config import DPTLargeConfig
+from models.experimental.dpt_large.tt.fallback import DPTFallbackPipeline
+from models.experimental.dpt_large.tt.vit_backbone import DPTViTBackboneTTNN
+from models.experimental.dpt_large.tt.reassembly import DPTReassembly
+from models.experimental.dpt_large.tt.fusion_head import DPTFusionHead
 
 transformers = pytest.importorskip("transformers")
 

@@ -10,8 +10,8 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("PIL")
 from PIL import Image
 
-from models.experimental.dpt_large.config import DPTLargeConfig
-from models.experimental.dpt_large.pipeline import DPTTTPipeline
+from models.experimental.dpt_large.tt.config import DPTLargeConfig
+from models.experimental.dpt_large.tt.pipeline import DPTTTPipeline
 
 transformers = pytest.importorskip("transformers")
 

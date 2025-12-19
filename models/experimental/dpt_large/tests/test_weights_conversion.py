@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from models.experimental.dpt_large.config import DPTLargeConfig
-from models.experimental.dpt_large.weights import convert_weights_for_tt
+from models.experimental.dpt_large.tt.config import DPTLargeConfig
+from models.experimental.dpt_large.tt.weights import convert_weights_for_tt
 
 transformers = pytest.importorskip("transformers")
 from transformers import DPTConfig, DPTForDepthEstimation  # noqa: E402
