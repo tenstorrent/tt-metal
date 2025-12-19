@@ -94,7 +94,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-
   galaxy-bh-nightly-tests:
     if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     strategy:
