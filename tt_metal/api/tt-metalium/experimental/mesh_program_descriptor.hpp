@@ -22,9 +22,10 @@
 
 namespace tt::tt_metal::experimental {
 
+// Describes a GlobalSemaphore to be allocated at mesh level
 struct GlobalSemaphoreDescriptor {
     CoreRangeSet cores;
-    uint32_t initial_value;
+    uint32_t initial_value = 0;
     tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::L1;
 };
 
@@ -46,17 +47,16 @@ struct MeshProgramDescriptor {
     std::unordered_map<distributed::MeshCoordinateRange, ProgramDescriptor> mesh_programs;
     std::vector<MeshRuntimeArgsDescriptor> mesh_runtime_args = {{}};
 
-    ttsl::SmallVector<GlobalSemaphoreDescriptor, 3> global_semaphores = {{}};
+    // GlobalSemaphores to allocate at mesh level
+    // Referenced via GlobalSemRef{index} in RuntimeArgsBuilder
+    ttsl::SmallVector<GlobalSemaphoreDescriptor, 3> global_semaphores;
 
     //------------------------------------------------------------------
     // Topology/Configuration
     //------------------------------------------------------------------
-    // std::optional<tt::tt_fabric::Topology> topology;
-    // std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
-    // Custom reflection attributes to avoid serializing the large mesh_programs map
-    // which exceeds the Attribute storage size limit
+    // Custom reflection attributes
     static constexpr auto attribute_names =
         std::forward_as_tuple("num_mesh_programs", "num_runtime_args", "num_global_semaphores", "sub_device_id");
     auto attribute_values() const {
