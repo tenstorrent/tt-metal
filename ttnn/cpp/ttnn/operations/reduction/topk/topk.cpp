@@ -140,7 +140,9 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
-        padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
+        const bool pad_multicore = transformed_tensor.dtype() == DataType::BFLOAT16 &&
+                                   transformed_tensor.memory_config().buffer_type() != BufferType::L1;
+        padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val, pad_multicore);
     }
 
     // fill implicit padding, if any
