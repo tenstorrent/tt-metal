@@ -21,6 +21,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
+from ttexalens.cli.debug_bus import _format_signal_value
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -67,24 +68,26 @@ def dump_risc_debug_signals(
 
                 # Since we are rewriting the firmware text, we need to read the original data to restore it later
                 original_data = read_words_from_device(location, firmware_text_address, word_count=4)
+                try:
+                    l1_address = firmware_text_address
 
-                l1_address = firmware_text_address
-
-                # Collect all signals from all matching groups
-                signal_names_str: list[str] = []
-                signal_values_hex: list[str] = []
-                for group_name in sorted(matching_groups):
-                    # Read the signal group
-                    group_sample = debug_bus.read_signal_group(group_name, l1_address)
-                    # Iterate through all signals in the group
-                    for signal_name in sorted(group_sample.keys()):
-                        signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
-                        signal_values_hex.append(f"{hex(group_sample[signal_name])}")
-
-        # Restoring the original data
-        write_words_to_device(location, firmware_text_address, original_data)
-        # Verifying that the original data was restored
-        assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
+                    # Collect all signals from all matching groups
+                    signal_names_str: list[str] = []
+                    signal_values_hex: list[str] = []
+                    for group_name in sorted(matching_groups):
+                        # Read the signal group
+                        group_sample = debug_bus.read_signal_group(group_name, l1_address)
+                        # Iterate through all signals in the group
+                        for signal_name in sorted(group_sample.keys()):
+                            signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
+                            signal_values_hex.append(_format_signal_value(group_sample[signal_name]))
+                except Exception as e:
+                    log_check_risc(location, risc_name, False, f"Failed to collect all debug bus signals: {e}")
+                finally:
+                    # Restoring the original data
+                    write_words_to_device(location, firmware_text_address, original_data)
+                    # Verifying that the original data was restored
+                    assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
         log_check_risc(location, risc_name, False, f"Failed to halt core {risc_name} at {location.to_user_str()}")
 

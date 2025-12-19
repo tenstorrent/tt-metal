@@ -46,8 +46,7 @@ def read_ring_buffer(
         return None
 
     fw_elf = elf_cache[fw_path]
-    l1_mem_access = MemoryAccess.get_l1(location)
-    mailboxes = fw_elf.read_global("mailboxes", l1_mem_access)
+    mailboxes = dispatcher_data.get_cached_core_data(location, risc_name).mailboxes
 
     current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
     if current_ptr == 65535:
