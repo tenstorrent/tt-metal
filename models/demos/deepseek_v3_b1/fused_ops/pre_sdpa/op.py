@@ -55,6 +55,8 @@ class PreSDPA:
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         matmul_result = rmsnorm(input_tensor, gamma_tensor) @ matmul_weights_tensor
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
+        print(f"result of matmul: {matmul_result}")
+        print(f"result of rmsnorm: {rmsnorm(matmul_result, rmsnorm2_gamma_tensor)}")
         return rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
 
     @staticmethod

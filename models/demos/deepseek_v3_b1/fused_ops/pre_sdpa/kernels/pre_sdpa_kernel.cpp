@@ -321,17 +321,17 @@ KERNEL_ENTRY {
         uint32_t dst_addr = get_write_ptr(rmsnorm2_input_cb);
 
         // Copy gather data to rmsnorm2 cb using local NOC read
-        uint64_t src_noc_addr = get_noc_addr(src_addr);
-        noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
-        noc_async_read_barrier();
+        // uint64_t src_noc_addr = get_noc_addr(src_addr);
+        // noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
+        // noc_async_read_barrier();
 
-        // Zero-pad the remaining bytes (last half tile)
-        volatile tt_l1_ptr uint16_t* pad_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
-        constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
-        for (uint32_t i = 0; i < padding_elements; ++i) {
-            pad_ptr[i] = 0;
-        }
+        // // Zero-pad the remaining bytes (last half tile)
+        // volatile tt_l1_ptr uint16_t* pad_ptr =
+        //     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
+        // constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
+        // for (uint32_t i = 0; i < padding_elements; ++i) {
+        //     pad_ptr[i] = 0;
+        // }
 
         // Push the completed 2 tiles to rmsnorm2 input cb
         cb_push_back(rmsnorm2_input_cb, 2);
@@ -355,7 +355,6 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("RMSNORM2");
         rmsnorm(rmsnorm2_args);
     }
-    DPRINT << "-------- rmsnorm2 completed --------" << ENDL();
 
     // ========================================================================
     // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
@@ -372,7 +371,6 @@ KERNEL_ENTRY {
         mcast2(mcast2_args);
         mcast2.teardown();
     }
-    DPRINT << "-------- mcast 2 completed --------" << ENDL();
 
     // ========================================================================
     // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
@@ -387,6 +385,5 @@ KERNEL_ENTRY {
         // deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
         // matmul2(matmul2_args);
     }
-    DPRINT << "-------- matmul 2 completed --------" << ENDL();
 }
 KERNEL_END
