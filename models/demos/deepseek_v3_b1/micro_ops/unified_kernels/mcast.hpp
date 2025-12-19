@@ -165,7 +165,9 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr)
         false,
         false,
         write_reg_cmd_buf>(0, 0, 0);
+    DPRINT << "-------- teardown_persistent_mcast_sender --------" << ENDL();
     noc_async_write_barrier();
+    DPRINT << "-------- noc_async_write_barrier --------" << ENDL();
     riscv_wait(1000);  // This is just to guarantee safety due to posted mcast hw bug
 }
 
