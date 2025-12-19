@@ -131,11 +131,14 @@ private:
     // buffering.
     std::map<CoreCoord, std::map<tracy::RiscType, bool>> active_dram_buffer_per_core_risc_map;
 
+    DeviceAddr getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const;
+
     // Read all control buffers
-    void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void readControlBuffers(
+        IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch = false);
 
     // Read control buffer for a single core
-    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
+    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch = false);
 
     // Reset all control buffers
     void resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
@@ -148,13 +151,13 @@ private:
         IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read device profiler buffer
-    void readProfilerBuffer(IDevice* device);
+    void readProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0, bool force_slow_dispatch = false);
 
     // Read data from profiler buffer using fast dispatch
-    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+    void issueFastDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from profiler buffer using slow dispatch
-    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from L1 data buffer using fast dispatch
     void issueFastDispatchReadFromL1DataBuffer(

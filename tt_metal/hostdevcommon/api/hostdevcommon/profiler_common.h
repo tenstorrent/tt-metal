@@ -9,11 +9,11 @@
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
 #define PROFILER_OPT_DO_SUM (1 << 3)
-#define PROFILER_OPT_DEBUG_DUMP (1 << 4)
 
 namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;
+static constexpr uint32_t DRAM_PROFILER_ADDRESS_STALLED = 0xFFFFFFFF;
 
 enum BufferIndex {
     ID_HH,
@@ -44,7 +44,7 @@ enum ControlBuffer {
     DEVICE_BUFFER_END_INDEX_T2,
     FW_RESET_H,
     FW_RESET_L,
-    DRAM_PROFILER_ADDRESS,
+    DRAM_PROFILER_ADDRESS_DEFAULT,  // Used in normal profiler operation
     RUN_COUNTER,
     NOC_X,
     NOC_Y,
@@ -54,16 +54,11 @@ enum ControlBuffer {
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
     // Used for device debug dump mode
-    DRAM_PROFILER_ADDRESS_BR_ER_0,  // DRAM buffer 0
-    DRAM_PROFILER_ADDRESS_BR_ER_1,  // DRAM buffer 1
+    DRAM_PROFILER_ADDRESS_BR_ER_0,
     DRAM_PROFILER_ADDRESS_NC_0,
-    DRAM_PROFILER_ADDRESS_NC_1,
     DRAM_PROFILER_ADDRESS_T0_0,
-    DRAM_PROFILER_ADDRESS_T0_1,
     DRAM_PROFILER_ADDRESS_T1_0,
-    DRAM_PROFILER_ADDRESS_T1_1,
     DRAM_PROFILER_ADDRESS_T2_0,
-    DRAM_PROFILER_ADDRESS_T2_1,
 };
 
 enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };

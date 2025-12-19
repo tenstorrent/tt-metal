@@ -27,7 +27,7 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
 
     const uint32_t profiler_l1_program_min_optional_marker_count =
         do_profiler_sum ? DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT : 0;
-    const uint32_t dram_bank_size_per_risc_bytes_single_program =
+    uint32_t dram_bank_size_per_risc_bytes_single_program =
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
         (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
          profiler_l1_program_min_optional_marker_count) *
@@ -44,6 +44,11 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value(),
             old_profiler_program_support_count,
             profiler_program_support_count.value());
+    }
+
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        // Using 2 buffers so half the bank size to keep overall profiler size the same
+        dram_bank_size_per_risc_bytes_single_program /= 2;
     }
 
     const uint32_t dram_bank_size_per_risc_bytes =
@@ -133,12 +138,11 @@ void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t tr
 
 void ProfilerStateManager::start_debug_dump_thread(
     std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
-    log_info(tt::LogMetal, "Starting profiler dump thread");
     this->debug_dump_thread = std::thread([this,
                                            active_devices = std::move(active_devices),
                                            virtual_cores_map = std::move(virtual_cores_map)]() {
         while (true) {
-            {
+            auto process_devices = [&]() {
                 std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
                 for (auto* device : active_devices) {
                     auto profiler_it = this->device_profiler_map.find(device->id());
@@ -146,12 +150,16 @@ void ProfilerStateManager::start_debug_dump_thread(
                     DeviceProfiler& profiler = profiler_it->second;
                     profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()));
                 }
-            }
+            };
 
-            constexpr auto interval = std::chrono::milliseconds(100);
+            process_devices();
+
+            constexpr auto interval = std::chrono::milliseconds(500);
             std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
             if (this->stop_debug_dump_thread_cv.wait_for(
                     lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {
+                // One more time to ensure all data is read before exiting
+                process_devices();
                 break;
             }
         }
