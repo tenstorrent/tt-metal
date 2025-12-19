@@ -240,8 +240,12 @@ target_sources(
         untilize/device/factories/untilize_multi_core_block_program_factory.cpp
         untilize/device/factories/untilize_multi_core_program_factory.cpp
         untilize/untilize.cpp
-        untilize_with_unpadding/device/untilize_with_unpadding_op.cpp
-        untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
+        untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
+        untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
+        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory.cpp
+        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.cpp
+        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.cpp
+        untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.cpp
         untilize_with_unpadding/untilize_with_unpadding.cpp
         view/view.cpp
         sort/sort.cpp
