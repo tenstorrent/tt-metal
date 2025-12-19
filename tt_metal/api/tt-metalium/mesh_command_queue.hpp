@@ -82,9 +82,8 @@ public:
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
 
-    // Specifies host data to be written to or read from a MeshBuffer shard. Deprecated - use
-    // distributed::ShardDataTransfer instead.
-    struct ShardDataTransfer {
+    // Specifies host data to be written to or read from a MeshBuffer shard.
+    struct [[deprecated("Use distributed::ShardDataTransfer instead.")]] ShardDataTransfer {
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
         std::optional<BufferRegion> region;
@@ -105,7 +104,7 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
-    //  deprecated
+    [[deprecated("Use enqueue_write_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
@@ -124,7 +123,7 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
-    // deprecated
+    [[deprecated("Use enqueue_read_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
