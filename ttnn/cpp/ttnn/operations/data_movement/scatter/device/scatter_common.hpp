@@ -7,6 +7,7 @@
 #include "scatter_device_operation_types.hpp"
 #include "tt-metalium/allocator.hpp"
 #include "tt-metalium/device.hpp"
+#include "common/common.hpp"  // Data movement common utilities
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -30,21 +31,14 @@ inline uint64_t ceil32(const uint64_t& number) {
     return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
 }
 
-inline uint32_t get_max_l1_space(IDevice* device) {
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    return max_l1_space;
-}
-
 // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
 // BH available L1 mem size of nearly 1.5 MB...
 // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~10% to account for reserved memory
-inline uint32_t calculate_optimal_chunk_size(IDevice* device) {
-    return ceil32(((((get_max_l1_space(device)) / 4) / 4) * 0.9) - 32);
+inline uint32_t calculate_optimal_chunk_size(const Tensor& input_tensor) {
+    return ceil32(((((get_max_l1_space(input_tensor)) / 4) / 4) * 0.9) - 32);
 }
 
 inline CBHandle create_cb(

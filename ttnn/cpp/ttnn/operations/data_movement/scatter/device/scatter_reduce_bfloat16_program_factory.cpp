@@ -60,7 +60,7 @@ ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16Progr
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
     // ... minimized by 120% to account for reserved memory
-    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor);
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
