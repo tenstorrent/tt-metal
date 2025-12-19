@@ -99,6 +99,8 @@ runs:
           if [ -n "${chunk_dir:-}" ] && [ -d "$chunk_dir" ]; then
             rm -rf "$chunk_dir"
           fi
+          # Also clean up payload files
+          rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || true
         }
         trap cleanup_temp_files EXIT
 
