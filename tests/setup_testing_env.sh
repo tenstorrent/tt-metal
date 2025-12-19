@@ -49,14 +49,14 @@ download_headers() {
     echo "Downloading headers for ${chip_arch}..."
     mkdir -p "$header_dir/internal"
 
-    local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}"
+    local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/internal/tt-1xx/${chip_arch}"
     local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_types.h")
 
-    local risc_attribs_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/risc_attribs.h"
+    local risc_attribs_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/internal/risc_attribs.h"
 
     local specific_url=""
     if [[ "$chip_arch" == "wormhole" ]]; then
-        specific_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}/wormhole_b0_defines"
+        specific_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/internal/tt-1xx/${chip_arch}/wormhole_b0_defines"
     fi
 
     for header in "${headers[@]}"; do
