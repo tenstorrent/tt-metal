@@ -753,6 +753,8 @@ class PI0ModelTTNN:
             
             # Euler step
             x_t = x_t + velocity_torch * dt
+            # Clear profiler buffer after each denoising step (~500 ops)
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         
         return x_t
     
