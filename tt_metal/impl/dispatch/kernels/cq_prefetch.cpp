@@ -16,12 +16,12 @@
 //  Using the normal NoC APIs for writes and/or inline_dw_writes are not allowed on this kernel.
 //
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
@@ -1089,6 +1089,9 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
     // set transaction ID to 1 for all read
     noc_async_read_set_trid(1);
+    ASSERT(page_size <= NOC_MAX_BURST_SIZE);
+    // Initialize the read size for all later commands.
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
 
     // initial read
     if (exec_buf_state.prefetch_length == 0) {
@@ -1098,13 +1101,19 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            invalidate_l1_cache();
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-            noc_async_read_one_packet_set_state(noc_addr, page_size);
-            noc_async_read_one_packet_with_state_with_trid<false, true>(noc_addr, 0, read_ptr, 1);
-            read_ptr += page_size;
-            page_id++;
-            initial_pages_at_once--;
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            if (pages_to_read > initial_pages_at_once) {
+                pages_to_read = initial_pages_at_once;
+            }
+            initial_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
         }
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
@@ -1112,14 +1121,13 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         exec_buf_state.pages = pages;
         exec_buf_state.length += initial_read_length;
         exec_buf_state.read_ptr = read_ptr;
-    } else if (exec_buf_state.length == 0) {
+    } else {
+        ASSERT(exec_buf_state.length == 0);
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
         exec_buf_state.length += exec_buf_state.prefetch_length;
         exec_buf_state.prefetch_length = 0;
-    } else {
-        ASSERT(exec_buf_state.length == 0);
     }
 
     // prefetch only when there are still pages to prefetch
@@ -1136,13 +1144,19 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            invalidate_l1_cache();
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-            noc_async_read_one_packet_set_state(noc_addr, page_size);
-            noc_async_read_one_packet_with_state_with_trid<false, true>(noc_addr, 0, read_ptr, 1);
-            read_ptr += page_size;
-            page_id++;
-            prefetch_pages_at_once--;
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            if (pages_to_read > prefetch_pages_at_once) {
+                pages_to_read = prefetch_pages_at_once;
+            }
+            prefetch_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
         }
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
@@ -1154,6 +1168,8 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     // set transaction ID to 0 for other noc read to not use transaction id 1
     // to remove unnecessary barrier delay
     noc_async_read_set_trid(0);
+    // Ensure reads receive the updated data.
+    invalidate_l1_cache();
 }
 
 // processes the relay_inline cmd from an exec_buf

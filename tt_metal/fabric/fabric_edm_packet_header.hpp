@@ -11,7 +11,7 @@
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -56,7 +56,38 @@ enum EDMStatus : uint32_t {
     READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA4B4C4D4
+    TERMINATED = 0xA4B4C4D4,
+
+    // Fabric Initialization Postcodes
+    // Initialization started
+    INITIALIZATION_STARTED = 0xB0C0D0E0,
+
+    // TXQ initialized
+    TXQ_INITIALIZED = 0xB1C1D1E1,
+
+    // Stream registers initialized
+    STREAM_REG_INITIALIZED = 0xB2C2D2E2,
+
+    // Started setting up downstream EDMs
+    DOWNSTREAM_EDM_SETUP_STARTED = 0xB3C3D3E3,
+
+    // EDM VC0 setup complete
+    EDM_VCS_SETUP_COMPLETE = 0xB4C4D4E4,
+
+    // Worker interfaces initialized
+    WORKER_INTERFACES_INITIALIZED = 0xB6C6D6E6,
+
+    // Ethernet handshake complete
+    ETHERNET_HANDSHAKE_COMPLETE = 0xB7C7D7E7,
+
+    // VCs opened
+    VCS_OPENED = 0xB8C8D8E8,
+
+    // Routing table initialized
+    ROUTING_TABLE_INITIALIZED = 0xB9C9D9E9,
+
+    // Initialization complete
+    INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
 // 3 bits

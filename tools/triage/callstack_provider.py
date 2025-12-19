@@ -17,6 +17,7 @@ Description:
 """
 
 from dataclasses import dataclass
+import io
 
 from triage import (
     ScriptConfig,
@@ -35,7 +36,7 @@ from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import WARN, BLUE, GREEN, ORANGE, RED, RST
+from utils import WARN
 
 import socket
 import threading
@@ -121,11 +122,11 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     cwd = Path.cwd()
 
     for i, frame in enumerate(callstack):
-        line = f"  #{i:<{frame_number_width}} "
+        line = f"#{i:<{frame_number_width}} "
         if frame.pc is not None:
-            line += f"{BLUE}0x{frame.pc:08X}{RST} in "
+            line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:
-            line += f"{ORANGE}{frame.function_name}{RST} () "
+            line += f"[yellow]{frame.function_name}[/] () "
         if frame.file is not None:
             # Convert absolute path to relative path with ./ prefix
             file_path = Path(frame.file)
@@ -139,11 +140,11 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
                 # Path is not relative to cwd, keep as is
                 display_path = frame.file
 
-            line += f"at {GREEN}{display_path}{RST}"
+            line += f"at [green]{display_path}[/]"
             if frame.line is not None:
-                line += f" {GREEN}{frame.line}{RST}"
+                line += f" [green]{frame.line}[/]"
                 if frame.column is not None:
-                    line += f"{GREEN}:{frame.column}{RST}"
+                    line += f"[green]:{frame.column}[/]"
         result.append(line)
     return result
 
@@ -154,7 +155,7 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+            [f"[error]{callstack_with_message.message}[/]"] + _format_callstack(callstack_with_message.callstack)
         )
     else:
         return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
@@ -256,9 +257,15 @@ class CallstackProvider:
                         offsets.append(dispatcher_core_data.kernel_offset)
                     gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
                     callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
-                    # If GDB failed to get callstack, we default to top callstack
+                    # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
-                        error_message = "Failed to get callstack from GDB. Look for error message above the table."
+                        error_message = ""
+                        if self.gdb_server.error_stream:
+                            error_message = f"\n  {self.gdb_server.error_stream.getvalue().strip()}"
+                            # Clear after read so we don't repeat the same errors next time
+                            self.gdb_server.error_stream.seek(0)
+                            self.gdb_server.error_stream.truncate(0)
+                        # Default to top callstack
                         callstack_with_message = get_callstack(
                             location,
                             risc_name,
@@ -323,11 +330,11 @@ def find_available_port() -> int:
 
 
 def start_gdb_server(port: int, context: Context) -> GdbServer:
-    """Start GDB server and return it."""
+    """Start GDB server and return it along with an error stream buffer."""
     try:
         server = ServerSocket(port)
         server.start()
-        gdb_server = GdbServer(context, server)
+        gdb_server = GdbServer(context, server, error_stream=io.StringIO())
         gdb_server.start()
     except Exception as e:
         raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
@@ -356,7 +363,14 @@ def run(args, context: Context):
             port = find_available_port()
             gdb_server = start_gdb_server(port, context)
 
-    return CallstackProvider(dispatcher_data, elfs_cache, full_callstack, gdb_callstack, gdb_server, force_active_eth)
+    return CallstackProvider(
+        dispatcher_data,
+        elfs_cache,
+        full_callstack,
+        gdb_callstack,
+        gdb_server,
+        force_active_eth,
+    )
 
 
 if __name__ == "__main__":

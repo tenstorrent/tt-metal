@@ -135,7 +135,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 50,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
               "owner_id": "U09ELB03XRU"
             } # Stephen Osborne
           ]' --compact-output)

@@ -355,9 +355,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto common_flags = jit_build_query.common_flags(params);
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
-        this->lflags_ += jit_build_query.linker_flags(params);
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
+    this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     // Source files
     {
