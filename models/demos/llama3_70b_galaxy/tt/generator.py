@@ -170,9 +170,9 @@ class Generator:
         # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
         if (
-            batch == 32
+            batch >= 16
             and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] * batch < 128 * 1024
+            and prefill_seq_lens[0] < 4 * 1024
             and tt_out_logits_all_users is None
             and not return_logits
         ):
@@ -198,20 +198,23 @@ class Generator:
                 if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
                     enable_trace = False
 
+            padded_batch = 32
             if use_batched_prefill:
-                # reordering the tokens when empty_slots are not sequential (from vllm)
-                inverse_empty_slots = [empty_slots.index(i) for i in range(batch)]
-                prefill_ids = torch.cat(
-                    [
-                        torch.cat(
-                            [tokens[id : id + 1, : seq_len[id]], torch.zeros(1, prefill_seq_len - seq_len[id]).long()],
-                            dim=-1,
-                        )
-                        for id in inverse_empty_slots
-                    ],
-                    dim=-1,
-                )
-                last_token_idx = [last_token_idx[id] for id in inverse_empty_slots]
+                # Place each request at its corresponding slot and pad to 32 users
+                prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
+                padded_last_token_idx = [1] * padded_batch  # dummy idx for padded slots
+                for local_idx, slot in enumerate(empty_slots):
+                    seq_len_local = int(seq_len[local_idx])
+                    padded_tokens = torch.cat(
+                        [
+                            tokens[local_idx : local_idx + 1, :seq_len_local],
+                            torch.zeros(1, prefill_seq_len - seq_len_local, dtype=torch.long, device=tokens.device),
+                        ],
+                        dim=-1,
+                    )
+                    prefill_ids[slot : slot + 1] = padded_tokens
+                    padded_last_token_idx[slot] = last_token_idx[local_idx]
+                last_token_idx = padded_last_token_idx
             else:
                 prefill_ids = torch.cat(
                     [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
@@ -229,7 +232,7 @@ class Generator:
                 "kv_cache": kv_cache,
                 "user_id": 0 if use_batched_prefill else user_id,
                 "last_token_idx": last_token_idx,
-                "batch_size": batch if use_batched_prefill else 1,
+                "batch_size": padded_batch if use_batched_prefill else 1,
             }
 
             # If PCC check enabled or return_logits is True (we save output logits)
@@ -243,7 +246,8 @@ class Generator:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
             if use_batched_prefill:
                 # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
-                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)[empty_slots]
+                tt_tok_tensor = torch.stack(tt_tok, dim=0)
+                output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
             else:
                 output_toks[id] = tt_tok
 
