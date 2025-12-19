@@ -325,11 +325,11 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
                 // Process each face in the tile
                 for (size_t face_row_idx = 0; face_row_idx < faces_per_tile_row; face_row_idx++) {
                     for (size_t face_col_idx = 0; face_col_idx < faces_per_tile_col; face_col_idx++) {
-                        const size_t face_idx = face_row_idx * faces_per_tile_col + face_col_idx;
-                        T* face_dst = tile_dst + face_idx * elements_per_face;
+                        const size_t face_idx = (face_row_idx * faces_per_tile_col) + face_col_idx;
+                        T* face_dst = tile_dst + (face_idx * elements_per_face);
 
                         // Source position in row-major input
-                        const size_t src_row_start = tile_row * tile_H + face_row_idx * face_H;
+                        const size_t src_row_start = (tile_row * tile_H) + face_row_idx * face_H;
                         const size_t src_col_start = tile_col * tile_W + face_col_idx * face_W;
 
                         if (can_use_avx) {
