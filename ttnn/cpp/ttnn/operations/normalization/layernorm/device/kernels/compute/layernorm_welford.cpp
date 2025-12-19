@@ -115,6 +115,7 @@ void MAIN {
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
         uint32_t start_N = 0;
+        reconfig_data_format_srca(cb_x);
         transpose_wh_init_short(cb_x);
         tile_regs_acquire();
         welford_init();
