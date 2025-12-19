@@ -24,7 +24,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     const auto& a = tensor_args.input;
-    auto& output = tensor_return_value;
+    const auto& output = tensor_return_value;
     const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 

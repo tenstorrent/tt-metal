@@ -229,7 +229,7 @@ tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
 UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;
-    auto& output_tensor = operation_attributes.output_mem_config;
+    const auto& output_tensor = operation_attributes.output_mem_config;
 
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
@@ -280,11 +280,11 @@ UntilizeDeviceOperation::invoke(
     uint32_t pf_type) {
     return {
         UntilizeDeviceOperation::operation_attributes_t{
-            .output_mem_config = output_mem_config,
+            .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,
             .use_pack_untilize = use_pack_untilize,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .sub_core_grids = sub_core_grids,
+            .sub_core_grids = std::move(sub_core_grids),
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},

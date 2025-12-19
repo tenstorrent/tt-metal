@@ -27,7 +27,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
-    auto& output = tensor_return_value;
+    const auto& output = tensor_return_value;
     const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
