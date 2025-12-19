@@ -621,13 +621,13 @@ void read_pages_to_host_helper(
     const auto& cluster = MetalContext::instance().get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
-    std::vector<uint8_t> page(aligned_page_size);
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
         auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
+            std::vector<uint8_t> page(aligned_page_size);
             MetalContext::instance().get_cluster().read_core(
                 page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
@@ -639,6 +639,7 @@ void read_pages_to_host_helper(
                 absolute_address);
         }
     } else {
+        std::vector<uint8_t> page(aligned_page_size);
         auto bank_local_address = dev_buffer.address() + (core_page_id * dev_buffer.aligned_page_size());
         ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, std::span<uint8_t>(page));
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
