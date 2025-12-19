@@ -21,12 +21,11 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
-from ttexalens.cli.debug_bus import _format_signal_value
 import os
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
-    disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None
+    disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
 )
 
 
@@ -81,7 +80,7 @@ def dump_risc_debug_signals(
                         # Iterate through all signals in the group
                         for signal_name in sorted(group_sample.keys()):
                             signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
-                            signal_values_hex.append(_format_signal_value(group_sample[signal_name]))
+                            signal_values_hex.append(hex(group_sample[signal_name]))
                 except Exception as e:
                     log_check_risc(location, risc_name, False, f"Failed to collect all debug bus signals: {e}")
                 finally:
@@ -90,7 +89,7 @@ def dump_risc_debug_signals(
                     # Verifying that the original data was restored
                     assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
-        log_check_risc(location, risc_name, False, f"Failed to halt core {risc_name} at {location.to_user_str()}")
+        log_check_risc(risc_name, location, False, f"Failed to halt core {risc_name} at {location.to_user_str()}")
 
         # Return the collected debug bus signals
         return DumpDebugBusSignals(
