@@ -21,18 +21,19 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 37000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 38000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        # 2x4 config with SP enabled - SP on axis 0 enables FSDP weight sharding (no CFG parallel)
+        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4cfg0sp0tp1",
+        "2x4sp2tp4",
         # "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
@@ -81,6 +82,7 @@ def test_qwenimage_pipeline(
         topology=topology,
         width=width,
         height=height,
+        is_fsdp=True,  # Enable FSDP to avoid model load/unload cycle
     )
     pipeline.timing_collector = TimingCollector()
 

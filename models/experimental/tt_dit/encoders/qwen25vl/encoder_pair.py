@@ -31,6 +31,7 @@ class Qwen25VlTokenizerEncoderPair:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
         use_torch: bool,
+        is_fsdp: bool = False,
     ) -> None:
         self._device = device
         self._ccl_manager = ccl_manager
@@ -39,6 +40,7 @@ class Qwen25VlTokenizerEncoderPair:
         self._encoder_subfolder = encoder_subfolder
         self._use_torch = use_torch
         self._encoder_loaded = True
+        self._is_fsdp = is_fsdp
 
         if tokenizer_subfolder is not None:
             self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
@@ -72,6 +74,7 @@ class Qwen25VlTokenizerEncoderPair:
             device=self._device,
             ccl_manager=self._ccl_manager,
             parallel_config=self._parallel_config,
+            is_fsdp=self._is_fsdp,
         )
 
         torch_text_model = torch_model.model.language_model

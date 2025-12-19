@@ -53,10 +53,14 @@ class QwenImageTransformer(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
 
         inner_dim = num_attention_heads * attention_head_dim
+
+        # FSDP: shard weights on sequence parallel axis to reduce memory
+        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         # self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(axes_dims_rope), scale_rope=True)
 
@@ -71,6 +75,8 @@ class QwenImageTransformer(Module):
             inner_dim,
             mesh_device=device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -79,6 +85,8 @@ class QwenImageTransformer(Module):
             inner_dim,
             mesh_device=device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.transformer_blocks = ModuleList(
@@ -92,6 +100,7 @@ class QwenImageTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=device,
+                is_fsdp=is_fsdp,
             )
             for i in range(num_layers)
         )
