@@ -387,6 +387,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        return_prefill_row_major: bool = True,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -404,6 +405,7 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            return_prefill_row_major=return_prefill_row_major,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -489,6 +491,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        return_prefill_row_major: bool = True,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -529,6 +532,8 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
 
         if mode == "prefill":
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Default behavior keeps prefill logits in row-major DRAM for fast host readback.
+            # For on-device sampling, keep logits in their existing (sampling-friendly) layout.
+            if return_prefill_row_major:
+                x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

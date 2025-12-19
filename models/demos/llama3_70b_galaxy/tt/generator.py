@@ -149,6 +149,21 @@ class Generator:
             return_logits = True
         else:
             return_logits = False
+            # Prefill sampling uses the batch=32 sampler by sampling over the 32-token tile containing the
+            # last prompt token and selecting lane (last_token_idx % 32). Penalties are not meaningful for
+            # prefill-tiles (rows represent positions, not users), so force them to defaults.
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_params = sampling_params.__class__(
+                temperature=sampling_params.temperature,
+                top_k=sampling_params.top_k,
+                top_p=sampling_params.top_p,
+                presence_penalty=[0.0] * 32,
+                frequency_penalty=[0.0] * 32,
+                repetition_penalty=[1.0] * 32,
+                seed=sampling_params.seed,
+            )
+            sampling_module = self.model.sampling
+            sampling_module.reset_sampling_params(sampling_params)
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
@@ -273,12 +288,20 @@ class Generator:
             batch_size=batch_size,
         )
 
+        # For on-device sampling we need the full 32-token tile containing the last token.
+        # - batch_size==1: slice in forward to just that 32-token tile for efficiency.
+        # - batched prefill packs users along sequence dim; do NOT slice in forward (would break splitting).
+        if isinstance(last_token_idx, list) or batch_size > 1:
+            get_last_token = -1
+        else:
+            get_last_token = (last_token_idx // 32) * 32
+
         tt_toks = self.model.ttnn_prefill_forward(
             prefill_input,
             rot_mats=None,
             user_id=tt_user_id,
             page_table=page_table_tt,
-            get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
+            get_last_token=get_last_token,
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
@@ -350,8 +373,13 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
 
+        if isinstance(last_token_idx, list) or batch_size > 1:
+            get_last_token = -1
+        else:
+            get_last_token = (last_token_idx // 32) * 32
+
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=get_last_token, batch_size=batch_size
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
@@ -360,7 +388,7 @@ class Generator:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=get_last_token, batch_size=batch_size
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)

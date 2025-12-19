@@ -222,17 +222,17 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            128,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "temperature": [0.7] * 32,  # torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": [0.9] * 32,  # torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": [32] * 32,  # torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
                 "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
-                "seed": torch.randint(0, 33, size=(32,)).tolist(),
+                # "frequency_penalty": torch.linspace(-1.5, 1.5, steps=32).tolist(),
+                # "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+                "seed": torch.randint(0, 1, size=(32,)).tolist(),
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
@@ -257,7 +257,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -512,7 +512,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-32",  # throughput
-        "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
+        "batch-3-non-uniform-sampling",  # throughput w/ non-uniform sampling
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)

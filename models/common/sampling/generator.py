@@ -107,11 +107,12 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
+        enable_log_probs = getattr(sampling_params, "enable_log_probs", False)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
-            enable_log_probs=sampling_params.enable_log_probs,
+            enable_log_probs=enable_log_probs,
         )
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
@@ -227,7 +228,7 @@ class SamplingGenerator:
 
         penalties_on = self._penalties_active
         log_probs_on = self._log_probs_active
-        use_internal_trace = enable_trace and self.enable_internal_trace
+        use_internal_trace = False  # enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
             tt_out = self._run_sampling(

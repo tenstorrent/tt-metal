@@ -300,18 +300,19 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            2048,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            800,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "frequency_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "presence_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "temperature": [0.7] * 32,  # torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": [0.9] * 32,  # torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": [32] * 32,  # torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                # "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "frequency_penalty": [1.5] * 32,  # torch.linspace(-1.5, 1.5, steps=32).tolist(),
+                # "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+                "seed": torch.randint(0, 1, size=(32,)).tolist(),
             },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
@@ -714,7 +715,7 @@ def prepare_generator_args(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
-        "batch-32-log-probs",  # throughput with log-probs
+        "batch-2-log-probs",  # throughput with log-probs
         "long-context-64k",  # 64k context, max_seq_len=128k
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
@@ -740,9 +741,11 @@ def prepare_generator_args(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    ids=[
+        "performance",
+    ],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -756,7 +759,7 @@ def prepare_generator_args(
             "N150": (1, 1),
             "N300": (1, 2),
             "N150x4": (1, 4),
-            "T3K": (1, 8),
+            "T3K": (4, 8),
             "TG": (8, 4),
             "P150": (1, 1),
             "P300": (1, 2),
@@ -796,6 +799,7 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:

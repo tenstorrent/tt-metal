@@ -160,6 +160,12 @@ class TtTransformer(LightweightModule):
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
+        # SamplingGenerator holds references to tt_ccl buffers; refresh it for the current prefill tt_ccl.
+        self.sampling = SamplingGenerator(
+            args=self.args,
+            mesh_device=self.mesh_device,
+            tt_ccl=self.tt_ccl,
+        )
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -180,13 +186,14 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 is_qwen=True if self.args.is_qwen else False,
             )
-            self.sampling = SamplingGenerator(
-                args=self.args,
-                mesh_device=self.mesh_device,
-                tt_ccl=self.tt_ccl,
-            )
         else:
             self.tt_ccl = self.tt_ccl_decode
+        # SamplingGenerator holds references to tt_ccl buffers; refresh it for the current decode tt_ccl.
+        self.sampling = SamplingGenerator(
+            args=self.args,
+            mesh_device=self.mesh_device,
+            tt_ccl=self.tt_ccl,
+        )
 
     def prepare_prefill_inputs_host(
         self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
@@ -453,37 +460,69 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            # Sample using batch=32 sampler by sampling over the 32-token tile containing last_token_idx_i,
+            # then selecting the lane (last_token_idx_i % 32).
+            # If upstream already sliced to a 32-token tile (recommended), use it directly.
+            if x.shape[2] <= 32:
+                x_tile = x
+            else:
+                tile_start = (last_token_idx_i // 32) * 32
+                x_tile = x[:, :, tile_start : tile_start + 32, :]
+            tt_logits_sharded = self.lm_head(x_tile, None, mode="prefill")
+            logits_for_sampling = (
+                tt_logits_sharded[0] if isinstance(tt_logits_sharded, (list, tuple)) else tt_logits_sharded
+            )
 
-            tt_logits = self.lm_head(x, None, mode="prefill")
+            # TTSampling assumes batch dim (shape[2]) is exactly 32. Some LM head configurations can emit a single-row
+            # logits tensor even when given a 32-token tile, so pad/expand to 32 rows here.
+            if logits_for_sampling.shape[2] == 1:
+                logits_for_sampling = ttnn.repeat(logits_for_sampling, (1, 1, 32, 1))
+            elif logits_for_sampling.shape[2] < 32:
+                last_row = ttnn.slice(
+                    logits_for_sampling,
+                    (0, 0, logits_for_sampling.shape[2] - 1, 0),
+                    (1, 1, logits_for_sampling.shape[2], logits_for_sampling.shape[3]),
+                )
+                pad_rows = ttnn.repeat(last_row, (1, 1, 32 - logits_for_sampling.shape[2], 1))
+                logits_for_sampling = ttnn.concat([logits_for_sampling, pad_rows], dim=2)
+                ttnn.deallocate(last_row)
+                ttnn.deallocate(pad_rows)
 
-            # Gather the output across all devices and untilize the tensor (for argmax)
-            tt_logits = self.tt_ccl.line_all_gather(
-                tt_logits[0],
+            # Ensure we provide an output tensor so the sampler produces a [1,1,32,1] token tensor.
+            if not hasattr(self, "_prefill_sampling_out_tok") or self._prefill_sampling_out_tok.shape[2] != 32:
+                host_out = torch.zeros((1, 1, 32, 1), dtype=torch.int32)
+                self._prefill_sampling_out_tok = ttnn.from_torch(
+                    host_out,
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            self.sampling.sample(logits_for_sampling, tt_out_tok=self._prefill_sampling_out_tok, enable_trace=False)
+            lane = last_token_idx_i % 32
+            toks_32 = ttnn.to_torch(ttnn.get_device_tensors(self._prefill_sampling_out_tok)[0]).to(torch.int64)
+            toks = toks_32[0, 0, lane, :1]
+            toks_list.append(toks)
+
+        if tt_out_logits_saved is not None:
+            # Save full gathered logits to host for debug/accuracy tests (expensive).
+            # Note: this gathers the 32-row tile logits, not just the selected lane.
+            gathered_logits = self.tt_ccl.line_all_gather(
+                logits_for_sampling,
                 dim=3,
                 num_links=3,
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
             )
-
-            tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
-
-            tt_logits = ttnn.reshape(
-                tt_logits,
-                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
-                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            gathered_logits = ttnn.untilize(gathered_logits, use_multicore=True)
+            gathered_logits = ttnn.reshape(
+                gathered_logits,
+                ttnn.Shape([1, 1, 1, gathered_logits.shape[-1]]),
+                ttnn.Shape([1, 1, gathered_logits.shape[-2], gathered_logits.shape[-1]]),
             )
-            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-            if isinstance(tt_out, list):
-                tt_out = tt_out[0]
-
-            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
-            toks_list.append(toks)
-
-        if tt_out_logits_saved is not None:
-            # make sure tt_out_logits_saved is mutable
-            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
+            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(gathered_logits)[0]).float()[0, 0, :, :]
             tt_out_logits_saved.copy_(logits_saved)
 
         return toks_list if isinstance(last_token_idx, list) else toks
