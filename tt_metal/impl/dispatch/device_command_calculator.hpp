@@ -156,6 +156,12 @@ public:
         this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     }
 
+    void add_prefetch_exec_buf() { this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment); }
+
+    void add_prefetch_exec_buf_end() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), this->pcie_alignment);
+    }
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint16_t num_sub_cmds,
