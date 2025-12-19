@@ -260,10 +260,12 @@ void MAIN {
                      * Partial reduce_sum is used to push the final row_reduction within a tile
                      * outside of the loop over K chunks.
                      */
-                    sub_exp_block_bcast_rows_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
+                    transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
+                    transpose_tiles_inplace(alias_cur_max, Sq_chunk_t);
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
                         alias_cur_max, alias_cur_sum);
 
-                    transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
+                    // transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
 
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     cb_wait_front(cb_v_in, k_chunk_tiles);
@@ -294,9 +296,9 @@ void MAIN {
                          * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                          * Scale is fused into exp again since max is the max of unscaled scores.
                          */
+                        transpose_tiles_inplace(alias_prev_max, Sq_chunk_t);
 
-                        sub_exp_block_transposed<scale_fp32>(
-                            alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /**
@@ -304,7 +306,7 @@ void MAIN {
                          * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                          * reduction, containing the sum of tiles in dim=-1 of QK.
                          */
-                        mul_tiles_bcast_rows_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
@@ -312,10 +314,11 @@ void MAIN {
                          * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
                          * This uses L1 accumulation to accumulate onto mm2_cur_out.
                          */
-                        transpose_tiles_inplace(cb_exp_max_diff, Sq_chunk_t);
+                        // transpose_tiles_inplace(cb_exp_max_diff, Sq_chunk_t);
                         mul_block_bcast_cols<Sq_chunk_t, vDHt>(
                             alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                     }
+                    transpose_tiles_inplace(alias_cur_max, Sq_chunk_t);
 
                     // Swap CB handles to prepare for next iteration
                     std::swap(alias_prev_sum, alias_cur_sum);
@@ -325,7 +328,7 @@ void MAIN {
                 /**
                  * Performs final row-reduction on the partial sum.
                  */
-                transpose_tiles_inplace(alias_prev_sum, Sq_chunk_t);
+                // transpose_tiles_inplace(alias_prev_sum, Sq_chunk_t);
                 matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
 
                 /**
