@@ -362,6 +362,7 @@ def run_qwen_demo(
     failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
+    tt_log_probs_cpu = []
     iteration_time_start = time()
     prefill = True
     block_host = True
@@ -410,7 +411,7 @@ def run_qwen_demo(
             iteration_time_start = time()
         else:
             tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
-            log_probs_cpu += [tt_sampling.log_probs_calculator.output_tensor.cpu(blocking=block_host, cq_id=0)]
+            tt_log_probs_cpu += [tt_sampling.log_probs_calculator.output_tensor.cpu(blocking=block_host, cq_id=0)]
             read_events += [ttnn.record_event(mesh_device, 0)]
 
             if decode_iteration >= trace_exec_offset:
@@ -421,7 +422,12 @@ def run_qwen_demo(
                 tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
                     0, 0, 0, :batch_size
                 ]
-                log_probs_torch = ttnn.to_torch(log_probs_cpu[current_decode_iteration])[0, 0, 0, :batch_size]
+                log_probs_torch = ttnn.to_torch(
+                    tt_log_probs_cpu[current_decode_iteration],
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=(0, 1), mesh_shape=list(mesh_device.shape)
+                    ),
+                )[0, 0, 0, :batch_size]
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
                 all_log_probs.append(
                     log_probs_torch.tolist()[0]
