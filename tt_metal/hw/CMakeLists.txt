@@ -191,7 +191,7 @@ foreach(ARCH IN LISTS ARCHS)
                     OUTPUT
                         ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     COMMAND
-                        ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
+                        ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}
                     COMMAND
                         ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDE} -E -P -x c -o
                         ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
@@ -221,7 +221,7 @@ foreach(ARCH IN LISTS ARCHS)
                 OUTPUT
                     ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                 COMMAND
-                    ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
+                    ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}
                 COMMAND
                     ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
                     -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
