@@ -5,16 +5,20 @@
 #include <cstdint>
 
 void kernel_main() {
-    uint32_t c_addr = get_arg_val<uint32_t>(0);
+    uint32_t out0_base_addr = get_arg_val<uint32_t>(0);
     uint32_t n_tiles = get_arg_val<uint32_t>(1);
 
     // The circular buffer that we are going to read from and write to DRAM
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
-    // Address of the output buffer
-    constexpr auto out0_args = TensorAccessorArgs<0>();
-    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
+    // Create address generator for the output buffer. Address generators can determine
+    // physical address based on the provided data layout and base address.
+    // Observe that here we are just constructing the address generator, but not using it yet.
+    // It is used in the loop below to write the tiles from the circular buffer to the memory
+    // where the result needs to be stored.
+    constexpr auto out0_layout_args = TensorAccessorArgs<0>();
+    const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -22,7 +26,7 @@ void kernel_main() {
         cb_wait_front(cb_out0, 1);
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
         // write the tile to DRAM
-        noc_async_write_tile(i, out0, cb_out0_addr);
+        noc_async_write_tile(i, out0_addr_gen, cb_out0_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to
