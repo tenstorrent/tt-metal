@@ -51,7 +51,7 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_optimized_self_attn", [False, True])  # False uses old implementation, True uses optimized
+@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
 def test_gpt_block(
     device,
     n_embed,

@@ -63,7 +63,6 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
                     "bias": preprocess_linear_bias(qkv_bias, dtype=weight_dtype),
                 }
             else:
-                # Old version: Separate Q, K, V (from commit 8ceddd60)
                 parameters["key"] = {}
                 parameters["query"] = {}
                 parameters["value"] = {}
@@ -98,7 +97,7 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_optimized", [False, True])  # False uses old implementation, True uses optimized
+@pytest.mark.parametrize("use_optimized", [False, True])
 def test_self_attn(
     device, n_embed, n_head, attn_pdrop, resid_pdrop, input_shape, input_dtype, weight_dtype, use_optimized
 ):

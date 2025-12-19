@@ -24,10 +24,8 @@ def generate_token_embeddings_tt(image_tensor, lidar_tensor, seq_len, n_embd):
     """
     bz = image_tensor.shape[0]
     img_num_tokens = image_tensor.shape[2]  # 110
-    img_c = image_tensor.shape[3]  # 72
 
     lidar_num_tokens = lidar_tensor.shape[2]  # 64
-    lidar_c = lidar_tensor.shape[3]  # 72
 
     # Calculate original spatial dimensions
     # Assuming img_num_tokens = img_h * img_w = 5 * 22 = 110

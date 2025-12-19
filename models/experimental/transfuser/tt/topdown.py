@@ -13,18 +13,6 @@ class TtTopDown:
         self.bev_features_channels = bev_features_channels
         self.bev_upsample_factor = bev_upsample_factor
 
-        # # Extract and convert PyTorch weights to TT-NN format
-        # self.c5_conv_weight = self._prepare_conv_weight(torch_model.c5_conv.weight)
-        # self.c5_conv_bias = self._prepare_conv_bias(torch_model.c5_conv.bias)
-
-        # self.up_conv5_weight = self._prepare_conv_weight(torch_model.up_conv5.weight)
-        # self.up_conv5_bias = self._prepare_conv_bias(torch_model.up_conv5.bias)
-
-        # self.up_conv4_weight = self._prepare_conv_weight(torch_model.up_conv4.weight)
-        # self.up_conv4_bias = self._prepare_conv_bias(torch_model.up_conv4.bias)
-
-        # self.up_conv3_weight = self._prepare_conv_weight(torch_model.up_conv3.weight)
-        # self.up_conv3_bias = self._prepare_conv_bias(torch_model.up_conv3.bias)
         # Use preprocessed parameters instead of extracting from torch model
         self.c5_conv_weight = parameters.c5_conv.weight
         self.c5_conv_bias = parameters.c5_conv.bias

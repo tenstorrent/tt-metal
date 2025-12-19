@@ -30,8 +30,6 @@ class TTSelfAttention(LightweightModule):
         B, T, C = x.shape
 
         if self.use_optimized:
-            # Optimized version: Use ttnn.transformer functions
-            # Ensure input is in tile layout
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
             # Fused QKV projection
@@ -56,7 +54,7 @@ class TTSelfAttention(LightweightModule):
                 key,
                 value,
                 is_causal=False,
-                scale=None,  # Will use default 1/sqrt(head_dim)
+                scale=None,
                 program_config=None,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=self.memory_config,
@@ -84,7 +82,6 @@ class TTSelfAttention(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                 )
         else:
-            # Old version from commit 8ceddd60: Separate Q, K, V and manual attention
             query = ttnn.linear(
                 x,
                 self.parameters["query"]["weight"],
