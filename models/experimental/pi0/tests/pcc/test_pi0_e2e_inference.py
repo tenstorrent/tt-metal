@@ -96,9 +96,14 @@ def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1) -> Dict:
 
 
 def run_pytorch_inference(model: PI0ModelTorch, inputs: Dict) -> Tuple[torch.Tensor, float]:
-    """Run full PyTorch forward pass and return output + time."""
+    """
+    Run full PyTorch forward pass and return output + time.
+    
+    Uses `forward_training()` for single-pass inference (not full denoising).
+    """
     start = time.time()
     with torch.no_grad():
+        # Single forward pass: (images, lang, state, noisy_actions, timestep) → velocity
         output = model.forward_training(
             images=inputs["images"],
             img_masks=inputs["img_masks"],
@@ -117,9 +122,17 @@ def run_ttnn_inference(model: PI0ModelTTNN, inputs: Dict) -> Tuple[torch.Tensor,
     Run FULL TTNN forward pass and return output + time.
     
     Uses DRAM memory config for large tensors to avoid OOM.
+    
+    NOTE: We use `forward_training()` (not `sample_actions()`) because:
+    - forward_training(): Single forward pass → returns velocity (for PCC comparison)
+    - sample_actions(): Full denoising loop (100+ iterations) → returns clean actions
+    
+    For PCC testing, we only need a single forward pass to compare TTNN vs PyTorch.
     """
     start = time.time()
     with torch.no_grad():
+        # Single forward pass (not full denoising loop)
+        # This computes: velocity = model(images, lang, state, noisy_actions, timestep)
         output = model.forward_training(
             images=inputs["images"],
             img_masks=inputs["img_masks"],
