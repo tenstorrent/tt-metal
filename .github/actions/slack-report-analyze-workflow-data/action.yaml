@@ -207,16 +207,15 @@ runs:
 
               # Safety check to prevent infinite loop
               if [ "$jobs_in_this_batch" -eq 0 ] && [ "$jobs_added" -lt "$failing_jobs_count" ]; then
-                # No progress made - save what we have and exit loop to avoid infinite spin
+                # No progress made - save what we have and continue after skipping this job
                 if [ -n "$current_chunk_text" ]; then
                   echo "$current_chunk_text" > "${chunk_dir}/chunk_${chunk_index}.txt"
                   chunk_index=$((chunk_index + 1))
                   current_chunk_text=""
                 fi
                 is_first_job_batch=false
-                # Force increment jobs_added to skip problematic job and exit loop
+                # Force increment jobs_added to skip problematic job and allow next iteration
                 jobs_added=$((jobs_added + 1))
-                break
               fi
             done
           fi
