@@ -281,6 +281,9 @@ class TestTriage:
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")
 
+    def test_dump_risc_debug_signals(self):
+        self.run_triage_script("dump_risc_debug_signals.py")
+
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
