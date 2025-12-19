@@ -28,7 +28,7 @@ run_t3000_falcon3_1b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon3_1b_tests"
 
-  hf_model=tiiuae/falcon3-1b-instruct
+  hf_model=tiiuae/Falcon3-1B-Instruct
   tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
 
@@ -48,7 +48,7 @@ run_t3000_falcon3_7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon3_7b_tests"
 
-  hf_model=tiiuae/falcon3-7b-instruct
+  hf_model=tiiuae/Falcon3-7B-Instruct
   tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
 
