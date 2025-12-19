@@ -37,7 +37,7 @@ def reference_rmsnorm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float) -> t
 # =============================================================================
 
 
-def test_rmsnorm_pre_all_gather(device):
+def test_rmsnorm_pre_all_gather_single_device(device):
     """
     Test rms_norm_pre_all_gather operation.
 
@@ -117,6 +117,97 @@ def test_rmsnorm_pre_all_gather(device):
 
     # Compare
     assert_with_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_params):
+    """
+    Mesh device test for rms_norm_pre_all_gather operation.
+
+    This computes the local mean(x^2) statistics that will be gathered across devices.
+    The output is a stats tensor containing the partial sums.
+
+    Test configuration based on model usage:
+    - Input: (1, 1, 32, 896), L1 WIDTH_SHARDED, grid=(4,7)
+    - HiFi4 compute kernel with math_approx_mode=True
+    - LayerNormShardedMultiCoreProgramConfig
+    """
+    torch.manual_seed(1234)
+
+    inp_shape = (1, 1, 32, 896)
+    grid = ttnn.CoreGrid(x=4, y=7)
+
+    logger.info(f"Testing rms_norm_pre_all_gather on mesh: shape={inp_shape}, grid={grid}")
+
+    # Compute kernel config - HiFi4 as specified in model
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Create input tensor
+    inp = torch.randn(inp_shape).bfloat16().float()
+
+    # Compute expected partial sum(x^2)
+    expected_sum_x2 = inp.pow(2).sum(dim=-1, keepdim=True)
+
+    # Create L1 width-sharded config matching model usage
+    # grid=(4,7) = 28 cores, shard_width = 896 / 28 = 32
+    num_cores = grid.num_cores
+    shard_width = inp_shape[-1] // num_cores  # 896 / 28 = 32
+    shard_height = inp_shape[-2]  # 32
+
+    in_mem_config = ttnn.create_sharded_memory_config_(
+        shape=(shard_height, shard_width),
+        core_grid=ttnn.num_cores_to_corerangeset(
+            num_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Use create_sharded_norm_config to generate program config
+    program_config = create_sharded_norm_config(
+        grid=grid,
+        dim=inp_shape[-1],  # 896
+        tile_padded_batch_rows=inp_shape[-2],  # 32
+    )
+
+    # Convert to TT tensor
+    tt_inp = ttnn.from_torch(
+        inp,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
+
+    def run_op():
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            tt_inp,
+            compute_kernel_config=kernel_config,
+            program_config=program_config,
+            dtype=ttnn.bfloat16,
+        )
+        return tt_stats
+
+    def check_op(tt_output):
+        # The output contains the partial sum(x^2) in the first position
+        tt_sum_x2 = tt_output[..., 0:1]
+        assert_with_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
+
+    run_test(mesh_device, run_op, check_op, enable_trace)
 
 
 # =============================================================================
