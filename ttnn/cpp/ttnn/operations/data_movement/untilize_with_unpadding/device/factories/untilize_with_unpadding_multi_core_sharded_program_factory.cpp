@@ -310,7 +310,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         .cb_sharded_output = cb_sharded_output,
         .cores = cores};
 
-    return cached_program_t{std::move(program), shared_variables)};
+    return cached_program_t{std::move(program), std::move(shared_variables)};
 }
 
 void UntilizeWithUnpaddingMultiCoreShardedProgramFactory::override_runtime_arguments(
