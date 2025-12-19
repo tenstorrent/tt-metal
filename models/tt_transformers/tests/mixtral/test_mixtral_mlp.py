@@ -4,10 +4,11 @@
 import pytest
 import torch
 from loguru import logger
+from transformers.models.mixtral.configuration_mixtral import MixtralConfig
+from transformers.models.mixtral.modeling_mixtral import MixtralBlockSparseTop2MLP, MixtralRMSNorm
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import FeedForward, RMSNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
@@ -34,6 +35,10 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
 
     model_args = ModelArgs(t3k_mesh_device)
     model_args.n_layers = 32
+    # Note: The naming conventions in Hugging Face (HF) Mixtral differ from those in `ModelArgs`.
+    # In HF, `hidden_size` refers to the attention dimension, whereas in `ModelArgs`, `hidden_dim` specifies the hidden layer size of the FFN.
+    mixtral_cofig = MixtralConfig(hidden_size=model_args.dim, intermediate_size=model_args.hidden_dim)
+
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
 
@@ -46,11 +51,11 @@ def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
     }
     partial_state_dict_ref = {k[32:]: v for k, v in partial_state_dict.items() if f"experts.{0}" in k}
-    reference_model = FeedForward(model_args)
+    reference_model = MixtralBlockSparseTop2MLP(mixtral_cofig)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
     rms_state_dict = {k[18:]: v for k, v in state_dict.items() if (k.startswith("layers.0.ffn_norm."))}
-    rms = RMSNorm(dim=model_args.dim)
+    rms = MixtralRMSNorm(hidden_size=model_args.dim)
     rms.load_state_dict(rms_state_dict)
 
     original_input = (torch.rand(1, 1, seqlen, model_args.dim) * 2) - 1
