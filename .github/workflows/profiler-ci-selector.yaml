@@ -148,6 +148,8 @@ jobs:
     with:
       arch: blackhole
       runner-label: P150b
+      # Full profiler regression (non post-commit)
+      post_commit: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
@@ -188,6 +190,8 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: N150
+      # Full profiler regression (non post-commit)
+      post_commit: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
