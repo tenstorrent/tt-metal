@@ -83,6 +83,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         lengths = kwargs["prompt_lens"]
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        empty_slots = kwargs.get("empty_slots", None)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             logger.info(f"prefill_forward: Setting kv_cache for {len(kv_cache)}")
@@ -90,19 +91,35 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         else:
             logger.info(f"prefill_forward: kv_cache not updated")
 
-        tokens = _pad_tokens(tokens, self.tokenizer.pad_token_id, block_size=USERS_PER_ROW)
+        pad_value = self.tokenizer.pad_token_id
+        pad_block_size = self.paged_config.block_size if self.paged_config is not None else USERS_PER_ROW
+        max_prompt_len = int(max(lengths)) if len(lengths) else 0
+        max_padded_len = (
+            ((max_prompt_len + pad_block_size - 1) // pad_block_size) * pad_block_size if max_prompt_len > 0 else 0
+        )
         num_of_users = tokens.shape[0]
         last_logits = []
-        for user_id in range(num_of_users):
-            if lengths[user_id] == 0:
+        for i in range(num_of_users):
+            user_id = empty_slots[i] if empty_slots is not None else i
+            prompt_len = int(lengths[i])
+            if prompt_len == 0:
                 logger.info(f"prefill_forward: User {user_id} has no tokens")
                 last_logits.append(
-                    torch.zeros(tokens.shape[1], self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
+                    torch.zeros(max_padded_len, self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
                 )
                 continue
+            user_tokens = tokens[i, :prompt_len].unsqueeze(0)
+            user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
             logger.info(f"prefill_forward: Running prefill for user {user_id}")
-            user_out = self._prefill(tokens[user_id], user_id, page_table)
-            last_logits.append(user_out.squeeze(0).squeeze(0))  # [1, 1, S, V] -> [S, V]
+            user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i)
+            user_logits = user_out.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
+            if user_logits.shape[0] > prompt_len:
+                user_logits = user_logits[:prompt_len]
+            if user_logits.shape[0] < max_padded_len:
+                pad_len = max_padded_len - user_logits.shape[0]
+                pad_logits = user_logits[-1:].expand(pad_len, -1)
+                user_logits = torch.cat([user_logits, pad_logits], dim=0)
+            last_logits.append(user_logits)
         last_logits = torch.stack(last_logits)  # [num_of_users, S, V]
 
         logger.info(f"prefill_forward: Last logits shape: {last_logits.shape}")

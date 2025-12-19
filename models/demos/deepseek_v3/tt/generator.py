@@ -680,13 +680,18 @@ class DeepseekGenerator:
             logger.info(f"print_page_table: shape: {page_table.shape}")
 
     def _prefill(
-        self, tokens: torch.Tensor, user_id: int, page_table: list[ttnn.Tensor] | list[torch.Tensor] | None = None
+        self,
+        tokens: torch.Tensor,
+        user_id: int,
+        page_table: list[ttnn.Tensor] | list[torch.Tensor] | None = None,
+        local_user_id: int | None = None,
     ) -> torch.Tensor:
         """Run prefill for the full prompt sequence and return logits for the last position.
 
         Args:
             tokens: [1, 1, seq_len] padded token sequences
             user_id: user id for the prefill
+            local_user_id: local user id for page table lookup
 
         Returns:
             logits: [1, 1, seq_len, V] logits for the full sequence
@@ -723,7 +728,7 @@ class DeepseekGenerator:
 
         if page_table is not None:
             logger.info(f"page_table is provided in _prefill")
-            page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id)
+            page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
         else:
             logger.info(f"page_table is not provided in _prefill, using  page_tables_tt")
             page_tables_to_use = self.page_tables_tt
@@ -914,7 +919,9 @@ class DeepseekGenerator:
                 f"set_kv_cache: More kv_cache entries provided ({len(kv_cache_list)}) than decoder blocks ({cache_idx})"
             )
 
-    def _convert_vllm_page_table_for_user(self, page_table: torch.Tensor, user_id: int) -> tuple[ttnn.Tensor, ...]:
+    def _convert_vllm_page_table_for_user(
+        self, page_table: torch.Tensor, user_id: int, local_user_id: int | None = None
+    ) -> tuple[ttnn.Tensor, ...]:
         """
         Convert vLLM's block_tables (page_table) to TTNN tensor format for a specific user.
         Creates one page table per layer as expected by the model.
@@ -922,6 +929,7 @@ class DeepseekGenerator:
         Args:
             page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
             user_id: The user index to extract the page table for
+            local_user_id: The local user index to extract the page table for
 
         Returns:
             Tuple of TTNN tensors, one per layer
@@ -931,8 +939,9 @@ class DeepseekGenerator:
         blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
 
         # Extract the user's block table row
+        idx = local_user_id if local_user_id is not None else user_id
         user_blocks = page_table[
-            user_id, : min(blocks_per_user, page_table.shape[1])
+            idx, : min(blocks_per_user, page_table.shape[1])
         ].clone()  # [max_num_blocks_per_req] or less
 
         # Create a full page table with shape [batch_per_shard, blocks_per_user]
@@ -940,9 +949,9 @@ class DeepseekGenerator:
         full_page_table = torch.randperm(max_num_blocks, dtype=torch.int32)
         full_page_table = full_page_table.reshape(batch_per_shard, blocks_per_user)
 
-        local_user_id = user_id % batch_per_shard
+        local_user_idx = user_id % batch_per_shard
         num_user_blocks = min(user_blocks.shape[0], blocks_per_user)
-        full_page_table[local_user_id, :num_user_blocks] = user_blocks[:num_user_blocks]
+        full_page_table[local_user_idx, :num_user_blocks] = user_blocks[:num_user_blocks]
 
         # Convert to TTNN format using the model's helper
         page_table_tt = MLA2D.create_page_table(
