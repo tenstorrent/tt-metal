@@ -11,8 +11,8 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t packed_dest_core_start = get_compile_time_arg_val(4);
     constexpr uint32_t packed_dest_core_end = get_compile_time_arg_val(5);
-    constexpr uint32_t loopback = get_compile_time_arg_val(7);
-    constexpr uint32_t num_dests = get_compile_time_arg_val(8);
+    constexpr uint32_t loopback = get_compile_time_arg_val(6);
+    constexpr uint32_t num_dests = get_compile_time_arg_val(7);
 
     uint32_t dest_x_start = packed_dest_core_start >> 16;
     uint32_t dest_y_start = packed_dest_core_start & 0xFFFF;
@@ -27,35 +27,22 @@ void kernel_main() {
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_endpoint;
     experimental::MulticastEndpoint mcast_endpoint;
-
+    constexpr auto mcast_mode =
+        loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_transactions; i++) {
-            if constexpr (loopback) {
-                noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
-                    unicast_endpoint,
-                    mcast_endpoint,
-                    transaction_size,
-                    num_dests,
-                    {.addr = l1_local_addr},
-                    {.noc_x_start = dest_x_start,
-                     .noc_y_start = dest_y_start,
-                     .noc_x_end = dest_x_end,
-                     .noc_y_end = dest_y_end,
-                     .addr = l1_local_addr});
-            } else {
-                noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
-                    unicast_endpoint,
-                    mcast_endpoint,
-                    transaction_size,
-                    num_dests,
-                    {.addr = l1_local_addr},
-                    {.noc_x_start = dest_x_start,
-                     .noc_y_start = dest_y_start,
-                     .noc_x_end = dest_x_end,
-                     .noc_y_end = dest_y_end,
-                     .addr = l1_local_addr});
-            }
+            noc.async_write_multicast<mcast_mode>(
+                unicast_endpoint,
+                mcast_endpoint,
+                transaction_size,
+                num_dests,
+                {.addr = l1_local_addr},
+                {.noc_x_start = dest_x_start,
+                 .noc_y_start = dest_y_start,
+                 .noc_x_end = dest_x_end,
+                 .noc_y_end = dest_y_end,
+                 .addr = l1_local_addr});
         }
     }
 

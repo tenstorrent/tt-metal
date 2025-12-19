@@ -1,6 +1,6 @@
 # NOC API Latency Tests
 
-This test suite measures the latency (in cycles) of various NOC API calls using the experimental dataflow 2.0 API.
+This test suite measures the issue latency (in cycles) of various NOC API calls using the experimental dataflow 2.0 API.
 
 ## Dispatch Mode
 These tests use **Fast Dispatch (Mesh Device API)** with `GenericMeshDeviceFixture` for optimal performance measurement.

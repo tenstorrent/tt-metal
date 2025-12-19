@@ -18,7 +18,7 @@ void kernel_main() {
     experimental::UnicastEndpoint unicast_endpoint;
 
     {
-        DeviceZoneScopedN("RISCV0");
+        DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_transactions; i++) {
             noc.async_read(
                 unicast_endpoint,

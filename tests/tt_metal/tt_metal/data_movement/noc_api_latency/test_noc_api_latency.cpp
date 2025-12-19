@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "data_types.hpp"
 #include "multi_device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -93,7 +94,6 @@ bool run_noc_api_latency_test(
         (uint32_t)test_config.test_id,
         (uint32_t)packed_dest_core_coordinates,
         (uint32_t)packed_dest_core_end_coordinates,
-        (uint32_t)test_config.kernel_type,
         (uint32_t)test_config.loopback};
 
     if (test_config.kernel_type == KernelType::MULTICAST_WRITE) {
@@ -115,13 +115,18 @@ bool run_noc_api_latency_test(
 
     std::string kernel_path = kernels_dir + kernel_filename + ".cpp";
 
+    auto riscv = DataMovementProcessor::RISCV_0;
+
+    if (test_config.kernel_type == KernelType::UNICAST_READ || test_config.kernel_type == KernelType::STATEFUL_READ) {
+        riscv = DataMovementProcessor::RISCV_1;
+    }
+
     // Create kernel on source core
     CreateKernel(
         program,
         kernel_path,
         test_config.source_core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
+        DataMovementConfig{.processor = riscv, .noc = test_config.noc_id, .compile_args = compile_args});
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
