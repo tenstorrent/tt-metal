@@ -7,8 +7,8 @@
 #include "api/compute/common.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {

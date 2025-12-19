@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/untilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
