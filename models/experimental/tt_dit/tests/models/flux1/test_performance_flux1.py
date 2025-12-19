@@ -143,8 +143,8 @@ def test_flux1_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     seed=0,
                     traced=True,
-                    timer=benchmark_profiler,
-                    timer_iteration=i,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
             images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
 
