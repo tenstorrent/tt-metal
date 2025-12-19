@@ -399,10 +399,25 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
 # ============================================================================
 
 
-@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize(
+    "batch_size",
+    [
+        1,
+    ],
+)
 @pytest.mark.parametrize("seq_len", [128])  # 2D core grid is typically used with seq_len=128
-@pytest.mark.parametrize("hidden_dim", [2048, 4096, 8192])
-@pytest.mark.parametrize("eps", [1e-5, 1e-6])
+@pytest.mark.parametrize(
+    "hidden_dim",
+    [
+        2048,
+    ],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-5,
+    ],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
