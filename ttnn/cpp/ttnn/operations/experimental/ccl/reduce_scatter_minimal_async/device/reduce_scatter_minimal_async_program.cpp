@@ -1131,12 +1131,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            CoreCoord mux_logical_core =
-                num_mux_cores_per_direction_per_link ? *((mux_core_iter++)->begin()) : CoreCoord{0, 0};
             CoreCoord termination_master_logical_core = {0, 0};
-            CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+            CoreCoord mux_virtual_core = CoreCoord{0, 0};
             if (num_mux_cores_per_direction_per_link) {
-                termination_master_logical_core = *((termination_master_core_iter++)->begin());
+                auto mux_logical_core = *((mux_core_iter++)->begin());
+                mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+
                 std::vector<uint32_t> mux_rt_args = {};
                 const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 if (dir) {  // forward
@@ -1149,6 +1149,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+
+                termination_master_logical_core = *((termination_master_core_iter++)->begin());
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
