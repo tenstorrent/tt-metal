@@ -8,7 +8,7 @@ This module provides functions used across the Panoptic DeepLab model,
 including model creation, pipeline setup, input/output processing, and validation.
 """
 
-from typing import Callable, Tuple, List, Optional, Union, TYPE_CHECKING
+from typing import Callable, Tuple, List, Optional, Union
 from loguru import logger
 import torch
 import ttnn
@@ -25,10 +25,6 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     fuse_conv_bn_parameters,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-
-# Use TYPE_CHECKING to avoid circular import
-if TYPE_CHECKING:
-    pass
 
 PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
 
@@ -841,7 +837,6 @@ def create_visualization_from_outputs(
     center_np: Optional[np.ndarray] = None,
     offset_np: Optional[np.ndarray] = None,
     center_threshold: float = 0.05,
-    log_timing: bool = False,
 ) -> Tuple[np.ndarray, dict]:
     """
     Create visualization from processed outputs.
@@ -853,7 +848,6 @@ def create_visualization_from_outputs(
         center_np: Optional center heatmap predictions (for PANOPTIC_DEEPLAB)
         offset_np: Optional offset predictions (for PANOPTIC_DEEPLAB)
         center_threshold: Center threshold for panoptic segmentation
-        log_timing: If True, log visualization timing (for DEEPLAB_V3_PLUS)
 
     Returns:
         Tuple of (visualization_image, panoptic_info)
@@ -876,22 +870,10 @@ def create_visualization_from_outputs(
             nms_kernel=11,
         )
     else:
-        if log_timing:
-            import time
-
-            start_time = time.time()
-            panoptic_vis, panoptic_info = create_deeplab_v3plus_visualization(
-                semantic_np,
-                original_image=original_image,
-            )
-            end_time = time.time()
-            visualization_duration_us = (end_time - start_time) * 1e6
-            logger.info(f"create_deeplab_v3plus_visualization() duration: {visualization_duration_us:.2f} μs")
-        else:
-            panoptic_vis, panoptic_info = create_deeplab_v3plus_visualization(
-                semantic_np,
-                original_image=original_image,
-            )
+        panoptic_vis, panoptic_info = create_deeplab_v3plus_visualization(
+            semantic_np,
+            original_image=original_image,
+        )
 
     return panoptic_vis, panoptic_info
 

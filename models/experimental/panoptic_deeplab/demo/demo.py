@@ -37,7 +37,7 @@ from models.common.utility_functions import profiler
 
 def create_host_input_tensors_from_images(
     device: ttnn.Device, image_paths: List[str], target_size: Tuple[int, int]
-) -> Tuple[List[ttnn.Tensor], ttnn.MemoryConfig, ttnn.MemoryConfig]:
+) -> Tuple[List[ttnn.Tensor], ttnn.MemoryConfig, ttnn.MemoryConfig, List[str]]:
     """
     Create host input tensors for multiple images.
 
@@ -47,15 +47,28 @@ def create_host_input_tensors_from_images(
         target_size: Target size as (height, width)
 
     Returns:
-        Tuple of (list of host input tensors, dram_memory_config, l1_memory_config)
+        Tuple of (list of host input tensors, dram_memory_config, l1_memory_config, list of successfully processed image paths)
+
+    Raises:
+        RuntimeError: If no valid images could be processed
     """
     torch_inputs = []
+    successful_paths = []
     for image_path in image_paths:
-        # Preprocess image to get NCHW tensor [1, C, H, W]
-        torch_input = preprocess_image(image_path, target_size)
-        torch_inputs.append(torch_input)
+        try:
+            # Preprocess image to get NCHW tensor [1, C, H, W]
+            torch_input = preprocess_image(image_path, target_size)
+            torch_inputs.append(torch_input)
+            successful_paths.append(image_path)
+        except (ValueError, Exception) as e:
+            logger.warning(f"Could not preprocess image from {image_path}: {e}, skipping...")
+            continue
 
-    return create_host_input_tensors_from_torch(device, torch_inputs)
+    if len(torch_inputs) == 0:
+        raise RuntimeError("No valid images could be preprocessed")
+
+    host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors_from_torch(device, torch_inputs)
+    return host_inputs, dram_memory_config, l1_memory_config, successful_paths
 
 
 def run_panoptic_deeplab_demo(
@@ -95,7 +108,6 @@ def run_panoptic_deeplab_demo(
 
     # Get model configuration
     model_config = get_panoptic_deeplab_config()
-    batch_size = model_config["batch_size"]
     num_classes = model_config["num_classes"]
     project_channels = model_config["project_channels"]
     decoder_channels = model_config["decoder_channels"]
@@ -169,9 +181,16 @@ def run_panoptic_deeplab_demo(
 
     # Create host input tensors
     logger.info("Preprocessing images for TTNN model...")
-    host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors_from_images(
+    host_inputs, dram_memory_config, l1_memory_config, successful_image_paths = create_host_input_tensors_from_images(
         device, [path for path, _ in original_images], target_size
     )
+
+    # Filter original_images to match successfully processed images
+    original_images = [(path, img) for path, img in original_images if path in successful_image_paths]
+
+    if len(original_images) == 0:
+        logger.error("No images were successfully processed for both visualization and model inference")
+        return
 
     num_inputs = len(host_inputs)
 
@@ -297,7 +316,6 @@ def run_panoptic_deeplab_demo(
             center_np=center_np_ttnn,
             offset_np=offset_np_ttnn,
             center_threshold=center_threshold,
-            log_timing=(model_category == DEEPLAB_V3_PLUS),
         )
 
         # Save results
