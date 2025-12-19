@@ -594,14 +594,28 @@ class PI0ModelTTNN:
             device=self.device,
         )
         
-        # Embed prefix using TTNN
-        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(
-            images, img_masks, lang_tokens, lang_masks
+        # Convert language tokens to TTNN (uint32 for embedding lookup)
+        lang_tokens_ttnn = ttnn.from_torch(
+            lang_tokens,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        lang_masks_ttnn = ttnn.from_torch(
+            lang_masks.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
         )
         
-        # Embed suffix using TTNN
+        # Embed prefix using TTNN
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(
+            images, img_masks, lang_tokens_ttnn, lang_masks_ttnn
+        )
+        
+        # Embed suffix using TTNN (pass TTNN tensors)
         suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(
-            state, actions, timestep
+            state_ttnn, actions_ttnn, timestep_ttnn
         )
         
         # Get sequence lengths

@@ -597,17 +597,18 @@ class GemmaMLPTTNN:
         Returns:
             TTNN output tensor
         """
-        gate = ttnn.linear(x, self.gate_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
-        up = ttnn.linear(x, self.up_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Use DRAM for large intermediate tensors to avoid OOM
+        gate = ttnn.linear(x, self.gate_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        up = ttnn.linear(x, self.up_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         
         # GELU activation
-        gate_activated = ttnn.gelu(gate)
+        gate_activated = ttnn.gelu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         
         # Element-wise multiply
-        hidden = ttnn.multiply(gate_activated, up)
+        hidden = ttnn.multiply(gate_activated, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         
         # Down projection
-        return ttnn.linear(hidden, self.down_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.linear(hidden, self.down_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 # ============================================================================
