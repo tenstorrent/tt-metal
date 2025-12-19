@@ -39,10 +39,10 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 
         features, regression, classification = ttnn_model(l1_input_tensor)
 
-        for feature in features:
-            if feature.layout != ttnn.ROW_MAJOR_LAYOUT:
-                feature = ttnn.to_layout(feature, ttnn.ROW_MAJOR_LAYOUT)
-            feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
+        # Move features to DRAM (result not needed, just ensuring memory placement)
+        for feat in features:
+            feat_rm = ttnn.to_layout(feat, ttnn.ROW_MAJOR_LAYOUT) if feat.layout != ttnn.ROW_MAJOR_LAYOUT else feat
+            ttnn.to_memory_config(feat_rm, ttnn.DRAM_MEMORY_CONFIG)
 
         if regression.layout != ttnn.ROW_MAJOR_LAYOUT:
             regression = ttnn.to_layout(regression, ttnn.ROW_MAJOR_LAYOUT)
@@ -152,7 +152,7 @@ def test_efficientdet_d0_e2e_performant(
 
     logger.info(f"Running {num_iterations} inference iterations...")
     start = time.time()
-    outputs = pipeline.enqueue(input_tensors).pop_all()
+    pipeline.enqueue(input_tensors).pop_all()
     end = time.time()
 
     pipeline.cleanup()

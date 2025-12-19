@@ -192,10 +192,9 @@ def register_layer_hooks(model, layer_type):
     layer_info = {}
 
     def make_hook(name):
-        def hook_fn(module, input, output):
-            # input and output are tuples
+        def hook_fn(module, input, output):  # noqa: ARG001 - output needed for hook signature
+            # input is a tuple
             input_shape = tuple(input[0].shape) if isinstance(input, (tuple, list)) else tuple(input.shape)
-            output_shape = tuple(output.shape) if isinstance(output, torch.Tensor) else tuple(output[0].shape)
             if name not in layer_info:
                 layer_info[name] = {}
             if isinstance(module, torch.nn.Conv2d):

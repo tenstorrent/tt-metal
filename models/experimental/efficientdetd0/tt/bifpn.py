@@ -326,7 +326,7 @@ class TtBiFPN:
         if self.attention:
             return self._forward_fast_attention(inputs)
         else:
-            raise NotImplemented("Only _forward_fast_attention() is supported")
+            raise NotImplementedError("Only _forward_fast_attention() is supported")
 
     def _forward_fast_attention(self, inputs: Tuple[ttnn.Tensor, ...]) -> Tuple[ttnn.Tensor, ...]:
         """Forward pass with fast weighted attention"""
