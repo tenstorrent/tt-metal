@@ -80,6 +80,16 @@ jobs:
 
           ACTIVE_MODELS=$(jq -n '[
             {
+              "name": "Galaxy LLM falcon3_1b model perf tests",
+              "model-type": "LLM",
+              "model-name": "falcon3_1b",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 50,
+              "cmd": "HF_MODEL=tiiuae/Falcon3-1B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and batch-1\"",
+              "owner_id": "U05RWH3QUPM"
+            }, # Salar Hosseini
+            {
               "name": "Galaxy CNN model perf tests",
               "model-type": "CNN",
               "model-name": "cnn",

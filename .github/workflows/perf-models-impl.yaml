@@ -77,6 +77,18 @@ jobs:
         with:
           commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
+      - name: Run falcon3_1b model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          commands: HF_MODEL=tiiuae/Falcon3-1B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon3_1b') }}
+      - name: Run falcon3_7b model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          commands: HF_MODEL=tiiuae/Falcon3-7B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon3_7b') }}
       - name: Run vanilla_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main

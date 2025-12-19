@@ -11,6 +11,8 @@ on:
         options:
           - all
           - falcon7b
+          - falcon3_1b
+          - falcon3_7b
           - mamba
           - functional_unet
           - stable_diffusion
