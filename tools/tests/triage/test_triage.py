@@ -23,10 +23,45 @@ triage_home = os.path.join(metal_home, "tools", "triage")
 sys.path.insert(0, triage_home)
 
 
-from triage import run_script, FAILURE_CHECKS
+from triage import run_script, FAILURE_CHECKS, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
+
+
+# Mapping of hang application paths to their expected test results
+HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_EXPECTED_RESULTS = {
+    HANG_APP_ADD_2_INTEGERS: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "risc_names": {"trisc0", "trisc1", "trisc2"},
+            "first_callstack_file": "add_2_tiles_hang.cpp",
+            "first_callstack_line": 40,
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",  # Only check this core location
+            "cores_to_check": {
+                "trisc0": {
+                    "pc": 34556,
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc1": {
+                    "pc": 35360,
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+                "trisc2": {
+                    "pc": 36236,
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 40,
+                },
+            },
+        },
+    },
+}
 
 
 def print_process_output(proc):
@@ -93,45 +128,16 @@ def cause_hang_with_app(request):
     [
         (
             # Manual hang detection with timeout from outside
-            "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
+            HANG_APP_ADD_2_INTEGERS,
             [],
             {
-                "expected_results": {
-                    "lightweight_asserts": {
-                        "kernel_name": "add_2_tiles_hang",
-                        "risc_names": {"trisc0", "trisc1", "trisc2"},
-                        "first_callstack_file": "add_2_tiles_hang.cpp",
-                        "first_callstack_line": 40,
-                    },
-                    "callstacks": {
-                        "device_to_check": 0,
-                        "location_to_check": "0,0",  # Only check this core location
-                        "cores_to_check": {
-                            "brisc": {
-                                "file": "writer_1_tile.cpp",
-                                "line": 19,
-                            },
-                            "trisc0": {
-                                "file": "add_2_tiles_hang.cpp",
-                                "line": 50,
-                            },
-                            "trisc1": {
-                                "file": "trisck.cc",
-                                "line": 81,
-                            },
-                            "trisc2": {
-                                "file": "add_2_tiles_hang.cpp",
-                                "line": 43,
-                            },
-                        },
-                    },
-                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             10,
         ),
         (
             # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
-            "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang",
+            HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
@@ -139,36 +145,7 @@ def cause_hang_with_app(request):
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
                 },
-                "expected_results": {
-                    "lightweight_asserts": {
-                        "kernel_name": "add_2_tiles_hang",
-                        "risc_names": {"trisc0", "trisc1", "trisc2"},
-                        "first_callstack_file": "add_2_tiles_hang.cpp",
-                        "first_callstack_line": 40,
-                    },
-                    "callstacks": {
-                        "device_to_check": 0,
-                        "location_to_check": "0,0",  # Only check this core location
-                        "cores_to_check": {
-                            "brisc": {
-                                "file": "writer_1_tile.cpp",
-                                "line": 19,
-                            },
-                            "trisc0": {
-                                "file": "add_2_tiles_hang.cpp",
-                                "line": 50,
-                            },
-                            "trisc1": {
-                                "file": "trisck.cc",
-                                "line": 81,
-                            },
-                            "trisc2": {
-                                "file": "add_2_tiles_hang.cpp",
-                                "line": 43,
-                            },
-                        },
-                    },
-                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             20,
         ),
@@ -242,7 +219,7 @@ class TestTriage:
         self.run_triage_script("check_noc_status.py")
 
     def test_dump_callstacks(self):
-        result = self.run_triage_script("dump_callstacks.py", return_result=True)
+        result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"], return_result=True)
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
 
@@ -276,10 +253,20 @@ class TestTriage:
             check = results_by_risc[risc_name]
             assert check.result is not None, f"Expected non-None result for {risc_name}"
 
+            # Verify core is halted (stuck on ebreak)
+            risc_debug = check.location.noc_block.get_risc_debug(risc_name)
+            assert risc_debug.is_halted(), f"{risc_name}: Core is not halted (not stuck on ebreak)"
+
             # Verify callstack
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Verify PC if specified
+            expected_pc = expected_data.get("pc")
+            if expected_pc is not None:
+                actual_pc = check.result.pc
+                assert actual_pc == expected_pc, f"{risc_name}: Expected PC {expected_pc}, got {actual_pc}"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")
@@ -355,21 +342,20 @@ class TestTriage:
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")
 
-    def run_triage_script(self, script_name: str, return_result: bool = False):
+    def run_triage_script(
+        self, script_name: str, args: ScriptArguments = None, argv: list[str] = [], return_result: bool = True
+    ):
         global triage_home
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
         result = run_script(
             script_path=os.path.join(triage_home, script_name),
-            args=None,
+            args=args,
             context=self.exalens_context,
-            argv=[],
+            argv=argv,
             return_result=return_result,
         )
 
         assert len(FAILURE_CHECKS) == 0, f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
-
-        if return_result:
-            return result
-        return None
+        return result
