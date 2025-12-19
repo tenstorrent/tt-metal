@@ -16,7 +16,7 @@ struct operation_attributes_t {
     ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
     bool recreate_mapping_tensor;
-    std::optional<CoreRangeSet> sub_core_grid;
+    std::optional<SubDeviceId> subdevice_id;
 };
 
 struct tensor_args_t {

@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 
+#include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -18,7 +19,7 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& sub_core_grid = operation_attributes.sub_core_grid;
+    const auto& subdevice_id = operation_attributes.subdevice_id;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
@@ -30,8 +31,16 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange default_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    CoreRangeSet total_cores = sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(default_cores);
-    uint32_t num_cores_total = total_cores.num_cores();
+    CoreRangeSet worker_cores = CoreRangeSet(default_cores);
+    if (subdevice_id.has_value()) {
+        const std::vector<SubDeviceId>& sub_device_ids = device->get_sub_device_ids();
+        const auto& subdevice_id_value = subdevice_id.value();
+        TT_FATAL(
+            std::find(sub_device_ids.begin(), sub_device_ids.end(), subdevice_id_value) != sub_device_ids.end(),
+            "Subdevice ID is not a valid subdevice ID for this device");
+        auto sub_device_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id_value);
+    }
+    uint32_t num_cores_total = worker_cores.num_cores();
 
     auto input_log_shape = input.logical_shape();
     auto output_log_shape = output.logical_shape();
@@ -66,11 +75,11 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_size0 * 2, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_size0);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_src0_config);
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb_size1, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size1);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_src1_config);
     std::vector<uint32_t> compile_time_args = {
         (std::uint32_t)(source_page_size_bytes % 64 == 0) ? 1 : 0,
         (std::uint32_t)(source_page_size_bytes % 16 == 0) ? 1 : 0,
@@ -84,7 +93,7 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
-        total_cores,
+        worker_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t src2_cb_index = 2;
     uint32_t src3_cb_index = 3;
@@ -93,21 +102,21 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(cb_size0 * 2, {{src2_cb_index, cb_data_format}})
                 .set_page_size(src2_cb_index, cb_size0);
-        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_src2_config);
         tt::tt_metal::CircularBufferConfig cb_src3_config =
             tt::tt_metal::CircularBufferConfig(cb_size1, {{src3_cb_index, cb_data_format}})
                 .set_page_size(src3_cb_index, cb_size1);
-        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src3_config);
+        tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_src3_config);
         compile_time_args[2] = src2_cb_index;
         compile_time_args[3] = src3_cb_index;
         reader_kernel_id2 = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
-            total_cores,
+            worker_cores,
             tt::tt_metal::WriterDataMovementConfig(compile_time_args));
     }
     uint32_t done = 0;
-    for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
+    for (auto core : corerange_to_cores(worker_cores, std::nullopt)) {
         if (done == 1) {
             const std::vector<uint32_t> reader_runtime_args = {
                 src_buffer->address(), dst_buffer->address(), source_read_size_bytes, 0, 0, 0, 0, 1
@@ -202,9 +211,10 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     CoreRange default_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    CoreRangeSet total_cores = operation_attributes.sub_core_grid.has_value()
-                                   ? operation_attributes.sub_core_grid.value()
-                                   : CoreRangeSet(default_cores);
+    // CoreRangeSet total_cores = operation_attributes.sub_core_grid.has_value()
+    //                                ? operation_attributes.sub_core_grid.value()
+    //                                : CoreRangeSet(default_cores);
+    CoreRangeSet total_cores = CoreRangeSet(default_cores);
 
     for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
         // Update buffer addresses for primary kernel

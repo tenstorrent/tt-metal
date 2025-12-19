@@ -79,9 +79,8 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         input_dtype,
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grid.has_value(),
-        operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
-                                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
+        operation_attributes.subdevice_id.has_value(),
+        operation_attributes.subdevice_id.has_value() ? operation_attributes.subdevice_id.value() : SubDeviceId(0));
 }
 
 std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
@@ -91,10 +90,10 @@ ReshapeDeviceOperation::invoke(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<SubDeviceId>& subdevice_id) {
     return {
         operation_attributes_t{
-            logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
+            logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, subdevice_id},
         tensor_args_t{input}};
 }
 

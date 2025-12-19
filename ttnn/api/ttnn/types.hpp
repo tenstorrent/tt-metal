@@ -63,6 +63,7 @@ inline std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
 
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;
+using tt::tt_metal::SubDeviceId;
 using tt::tt_metal::SubDeviceManagerId;
 using tt::tt_metal::experimental::GlobalCircularBuffer;
 

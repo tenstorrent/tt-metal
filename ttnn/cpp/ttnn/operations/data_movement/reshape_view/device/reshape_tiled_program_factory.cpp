@@ -350,9 +350,10 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            operation_attributes.sub_core_grid.has_value()
-                ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
-                : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
+            //            operation_attributes.sub_core_grid.has_value()
+            //                ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grid.value(),
+            //                num_output_pages) : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
+        tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
     TT_ASSERT(num_cores <= num_output_pages);
 
