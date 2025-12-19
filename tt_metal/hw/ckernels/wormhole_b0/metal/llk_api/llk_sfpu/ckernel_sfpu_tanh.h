@@ -9,36 +9,27 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 /*
  * Accurate tanh for fp32 using sigmoid: tanh(x) = 2*sigmoid(2x) - 1
  * For small |x| < 0.6, uses minimax polynomial for better accuracy
  *
  * Algorithm:
- * - For |x| > 9: Return ±1 (saturated)
  * - For |x| < 0.6: Use minimax polynomial (Sollya-optimized)
  * - For |x| >= 0.6: Use 2*sigmoid(2x) - 1
  *
- * Target accuracy: < 10 ULP for float32
+ * Target accuracy: < 5 ULP for float32 (0.5 ULP for bfloat16)
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result;
 
-    // Thresholds
-    constexpr float UPPER_THRESHOLD = 9.0f;
-    constexpr float TAYLOR_THRESHOLD = 0.6f;
+    constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
 
     sfpi::vFloat abs_val = sfpi::abs(val);
 
-    v_if(abs_val > UPPER_THRESHOLD) {
-        // Saturated region: tanh(x) ≈ sign(x) for |x| > 9
-        result = sfpi::vConst1;
-        result = sfpi::setsgn(result, val);  // Copy sign from input
-    }
-    v_elseif(abs_val < TAYLOR_THRESHOLD) {
+    v_if(abs_val < POLYNOMIAL_THRESHOLD) {
         // Small |x|: Use minimax polynomial for better accuracy
         // Polynomial coefficients found with Sollya using the following command:
         // fpminimax(tanh(x)/x, [|0,2,4,6,8|], [|single...|], [-0.6; -2^(-40)] + [2^(-40); 0.6], relative);
@@ -56,15 +47,23 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
     }
     v_else {
         // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
-        sfpi::vFloat two_x = val + val;  // 2x (faster than multiplication by 2.0f)
+        sfpi::vFloat two_x = 2.f * val;
 
         // Call accurate sigmoid kernel
-        sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+        // sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+
+        sfpi::vFloat exp_neg_x = _sfpu_exp_f32_accurate_(-two_x);
+        sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+        sfpi::vFloat sig = _sfpu_reciprocal_<2>(denominator);
 
         // Compute 2*sigmoid(2x) - 1
-        result = sig + sig - sfpi::vConst1;
+        result = 2.f * sig - sfpi::vConst1;
     }
     v_endif;
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+    }
 
     return result;
 }
@@ -195,5 +194,4 @@ inline void tanh_init() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
