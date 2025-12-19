@@ -660,7 +660,7 @@ class Generator:
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
             ttnn.synchronize_device(self.mesh_device)
-            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs
+            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
 
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
         return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
