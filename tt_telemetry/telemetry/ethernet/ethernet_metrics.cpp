@@ -555,6 +555,24 @@ static std::optional<double> update_bandwidth_metric_impl(
         return 0.0;
     }
 
+    // Detect counter resets (e.g., device restart) before computing unsigned deltas
+    // If current counters are less than previous, treat as garbage data and reset baseline
+    if (curr_words < prev_words || curr_cycles < prev_cycles) {
+        log_debug(
+            tt::LogAlways,
+            "Counter reset detected for {} on channel {} (words: {} < {}, cycles: {} < {}). Resetting baseline.",
+            metric_type,
+            channel,
+            curr_words,
+            prev_words,
+            curr_cycles,
+            prev_cycles);
+        prev_words = curr_words;
+        prev_cycles = curr_cycles;
+        first_update = true;
+        return std::nullopt;
+    }
+
     uint64_t delta_words = curr_words - prev_words;
     uint64_t delta_cycles = curr_cycles - prev_cycles;
 
