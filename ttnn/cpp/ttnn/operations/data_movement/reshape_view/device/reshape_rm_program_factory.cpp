@@ -37,8 +37,9 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
         const auto& subdevice_id_value = subdevice_id.value();
         TT_FATAL(
             std::find(sub_device_ids.begin(), sub_device_ids.end(), subdevice_id_value) != sub_device_ids.end(),
-            "Subdevice ID is not a valid subdevice ID for this device");
+            "Subdevice ID is not valid for this device");
         auto sub_device_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id_value);
+        worker_cores = sub_device_cores;
     }
     uint32_t num_cores_total = worker_cores.num_cores();
 
@@ -211,10 +212,12 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     CoreRange default_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    // CoreRangeSet total_cores = operation_attributes.sub_core_grid.has_value()
-    //                                ? operation_attributes.sub_core_grid.value()
-    //                                : CoreRangeSet(default_cores);
     CoreRangeSet total_cores = CoreRangeSet(default_cores);
+    if (operation_attributes.subdevice_id.has_value()) {
+        tt::tt_metal::distributed::MeshDevice* device = tensor_args.input.device();
+        total_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id.value());
+    }
 
     for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
         // Update buffer addresses for primary kernel
