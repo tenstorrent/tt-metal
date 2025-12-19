@@ -9,6 +9,7 @@
  * metrics received from remote instances are propagated via delta updates.
  */
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <future>
@@ -160,6 +161,16 @@ static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     return path;
 }
 
+// Structure to track metric timing
+struct MetricTiming {
+    std::string metric_type;
+    std::string metric_path;
+    int64_t duration_ms;
+};
+
+// Global vector to track all metric timings for reporting
+static std::vector<MetricTiming> metric_timings_;
+
 // Helper function to update a collection of metrics with exception handling
 template <typename MetricType>
 static size_t update_metrics_with_exception_handling(
@@ -168,10 +179,29 @@ static size_t update_metrics_with_exception_handling(
     std::chrono::steady_clock::time_point start_of_update_cycle,
     std::string_view metric_type_name) {
     size_t failed_count = 0;
+    constexpr int64_t SLOW_METRIC_THRESHOLD_MS = 100;  // Lowered from 500ms to 100ms
 
     for (auto& metric : metrics) {
         try {
+            auto metric_start = std::chrono::steady_clock::now();
             metric->update(cluster, start_of_update_cycle);
+            auto metric_end = std::chrono::steady_clock::now();
+
+            auto metric_duration_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(metric_end - metric_start).count();
+
+            // Track all metric timings for summary reporting
+            metric_timings_.push_back(
+                {std::string(metric_type_name), metric->telemetry_path_string(), metric_duration_ms});
+
+            if (metric_duration_ms >= SLOW_METRIC_THRESHOLD_MS) {
+                log_warning(
+                    tt::LogAlways,
+                    "SLOW METRIC UPDATE: {} metric {} took {} ms",
+                    metric_type_name,
+                    metric->telemetry_path_string(),
+                    metric_duration_ms);
+            }
         } catch (const std::exception& e) {
             failed_count++;
             log_debug(
@@ -190,13 +220,31 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     log_info(tt::LogAlways, "Starting telemetry readout...");
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
+    // Clear previous timing data
+    metric_timings_.clear();
+
     // Track failed metrics to report summary at end of cycle
     size_t failed_metrics = 0;
 
+    auto bool_start = std::chrono::steady_clock::now();
     failed_metrics += update_metrics_with_exception_handling(bool_metrics_, cluster, start_of_update_cycle, "bool");
+    auto bool_end = std::chrono::steady_clock::now();
+    auto bool_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(bool_end - bool_start).count();
+
+    auto uint_start = std::chrono::steady_clock::now();
     failed_metrics += update_metrics_with_exception_handling(uint_metrics_, cluster, start_of_update_cycle, "uint");
+    auto uint_end = std::chrono::steady_clock::now();
+    auto uint_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(uint_end - uint_start).count();
+
+    auto double_start = std::chrono::steady_clock::now();
     failed_metrics += update_metrics_with_exception_handling(double_metrics_, cluster, start_of_update_cycle, "double");
+    auto double_end = std::chrono::steady_clock::now();
+    auto double_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(double_end - double_start).count();
+
+    auto string_start = std::chrono::steady_clock::now();
     failed_metrics += update_metrics_with_exception_handling(string_metrics_, cluster, start_of_update_cycle, "string");
+    auto string_end = std::chrono::steady_clock::now();
+    auto string_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(string_end - string_start).count();
 
     if (failed_metrics > 0) {
         log_warning(
@@ -208,7 +256,41 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
     auto duration_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(end_of_update_cycle - start_of_update_cycle).count();
-    log_info(tt::LogAlways, "Telemetry readout took {} ms", duration_ms);
+
+    // Log metric counts
+    log_info(
+        tt::LogAlways,
+        "Telemetry readout took {} ms (bool: {} ms [{} metrics], uint: {} ms [{} metrics], double: {} ms [{} metrics], "
+        "string: {} ms [{} metrics])",
+        duration_ms,
+        bool_duration_ms,
+        bool_metrics_.size(),
+        uint_duration_ms,
+        uint_metrics_.size(),
+        double_duration_ms,
+        double_metrics_.size(),
+        string_duration_ms,
+        string_metrics_.size());
+
+    // Sort metric timings by duration (descending) and report top 10 slowest
+    std::sort(metric_timings_.begin(), metric_timings_.end(), [](const MetricTiming& a, const MetricTiming& b) {
+        return a.duration_ms > b.duration_ms;
+    });
+
+    size_t top_n = std::min(static_cast<size_t>(10), metric_timings_.size());
+    if (top_n > 0) {
+        log_info(tt::LogAlways, "Top {} slowest metrics:", top_n);
+        for (size_t i = 0; i < top_n; ++i) {
+            const auto& timing = metric_timings_[i];
+            log_info(
+                tt::LogAlways,
+                "  #{}: {} ms - {} metric: {}",
+                i + 1,
+                timing.duration_ms,
+                timing.metric_type,
+                timing.metric_path);
+        }
+    }
 }
 
 
