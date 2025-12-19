@@ -10,7 +10,7 @@
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t n_tiles = get_arg_val<uint32_t>(0);
+    uint32_t n_tiles = get_compile_time_arg_val(0);
 
     // We are going to read from these two circular buffers
     constexpr auto cb_in0 = tt::CBIndex::c_0;

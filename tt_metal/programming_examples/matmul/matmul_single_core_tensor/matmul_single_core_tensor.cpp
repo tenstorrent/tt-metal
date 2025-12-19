@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
@@ -53,7 +52,7 @@ void golden_matmul(
     const uint32_t K) {
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
-            // Compute C[i * N + j] += A[i * K + k] * B[k * N + j];
+            // Compute C[i * N + j] += A[i * K + k] * B[k * N + j] in every iteration of the "k" loop.
             std::uint32_t idx_c = (i * N) + j;
             std::uint32_t idx_a = i * K;
             std::uint32_t idx_b = j;
@@ -152,8 +151,8 @@ ProgramState init_program() {
  */
 // clang-format on
 void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t num_tiles, tt::CBIndex cb_index) {
-    uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    const tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, cb_data_format}})
                                          .set_page_size(cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_config);
@@ -209,20 +208,20 @@ void matmul_single_core_tensor(
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
-    // the compute kernel is using the other tile). This number can be adjusted based on the use case, But generally
+    // the compute kernel is using the other tile). This number can be adjusted based on the use case, but generally
     // there are diminishing returns observed after several tiles.
-    constexpr uint32_t num_input_tiles = 2;
+    constexpr uint32_t tiles_per_cb_input = 2;
     // There are 32 circular buffers (c_0 - c_31) on the device. We can use any of them, as long as they are not already
     // in use. Kernel code is responsible for using the correct circular buffer for the input and output data (e.g.
     // reader kernel reads data into c_0 and c_1, while the compute kernel reads data from these same buffers).
-    create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_0);
-    create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_1);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_input, CBIndex::c_0);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_input, CBIndex::c_1);
 
-    constexpr uint32_t num_output_tiles = 2;
+    constexpr uint32_t tiles_per_cb_output = 2;
     // Compute kernel will write output data to c_16, which will be consumed by the writer kernel.
     // c_16 chosen arbitrarily (e.g. to leave c_2-c_15 free for other potential inputs when code is extended in the
     // future).
-    create_cb(prog_state.program, prog_state.core, num_output_tiles, tt::CBIndex::c_16);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_output, tt::CBIndex::c_16);
 
     // Get mesh buffers from tensors for use with TensorAccessorArgs and runtime args.
     auto src0_mesh_buffer = src0_tensor.mesh_buffer();
@@ -235,9 +234,9 @@ void matmul_single_core_tensor(
     // Kernels can use TensorAccessorArgs to access the data in a unified way, regardless of the physical distribution.
     TensorAccessorArgs(*src0_mesh_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_mesh_buffer).append_to(reader_compile_time_args);
-    // There are two data movement processors (RISCVs) in each Tensix core. We pick one to read data from DRAM into
-    // circular buffers and the other to write result from circular buffer to DRAM. Which one is used for what doesn't
-    // impact functionality or performance.
+    // There are two data movement RISCV processors in each Tensix core. We pick one to read data from DRAM into
+    // circular buffers and the other to write result from circular buffer to DRAM. Which one is used for
+    // reading vs writing  doesn't impact functionality or performance.
     KernelHandle reader_id = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
@@ -260,14 +259,10 @@ void matmul_single_core_tensor(
             .compile_args = writer_compile_time_args});
 
     // Compile time arguments for the compute kernel.
-    // Note that these take effect at the kernel's compile time, which is JIT compile done at program creation time.
+    // Note that these are evaluated at the kernel's compile time, which is JIT compile done at program creation time.
     // Having arguments at compile time allows the compiler to optimize the kernel for the specific use case
     // (e.g. apply loop unrolling, constant folding, etc.), resulting in a more efficient kernel.
-    std::vector<uint32_t> compute_compile_time_args = {
-        Mt,  // Mt
-        Kt,  // Kt
-        Nt   // Nt
-    };
+    std::vector<uint32_t> compute_compile_time_args = {Mt, Kt, Nt};
     // Observe that the compute kernel is
     tt_metal::CreateKernel(
         prog_state.program,
@@ -282,8 +277,8 @@ void matmul_single_core_tensor(
     tt_metal::SetRuntimeArgs(prog_state.program, reader_id, prog_state.core, {src0_addr, src1_addr, Mt, Kt, Nt});
 
     tt_metal::SetRuntimeArgs(prog_state.program, writer_id, prog_state.core, {dst_addr, Mt, Kt, Nt});
-    // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
-    // been set at compile time. The compute kernel does not need any runtime arguments to execute, so we can skip
+    // NOTE: Observe that we never set the runtime arguments for the compute kernel. This is because everything needed
+    // has been set at compile time. The compute kernel does not need any runtime arguments to execute, so we can skip
     // this step.
 
     // Execute the kernels (data is already on device from Tensor::from_vector)
@@ -325,15 +320,15 @@ int main() {
         constexpr uint32_t rng_seed = 42;
         std::mt19937 rng(rng_seed);
         // Input vectors with random values in the range [0, 1).
-        std::uniform_real_distribution<float> dist(0.f, 1.0f);
+        std::uniform_real_distribution<float> rng_dist(0.f, 1.0f);
         std::vector<bfloat16> src0_vec(M * K);
         std::vector<bfloat16> src1_vec(K * N);
 
         for (bfloat16& v : src0_vec) {
-            v = static_cast<bfloat16>(dist(rng));
+            v = static_cast<bfloat16>(rng_dist(rng));
         }
         for (bfloat16& v : src1_vec) {
-            v = static_cast<bfloat16>(dist(rng));
+            v = static_cast<bfloat16>(rng_dist(rng));
         }
 
         // Golden Matmul running on CPU so we can verify Tensix result.
@@ -353,6 +348,19 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pcc);
         constexpr float expected_pcc = 0.97;
         TT_FATAL(pcc >= expected_pcc, "PCC not high enough. Result PCC: {}, Expected PCC: {}", pcc, expected_pcc);
+
+        // Validate results
+        constexpr float eps = 1e-2f;  // Loose tolerance because of limited precision of bfloat16.
+        TT_FATAL(result_vec.size() == golden_vec.size(), "Result vector size mismatch");
+        for (size_t i = 0; i < result_vec.size(); ++i) {
+            const float expected = static_cast<float>(golden_vec[i]);
+            const float actual = static_cast<float>(result_vec[i]);
+
+            if (std::abs(expected - actual) > eps) {
+                pass = false;
+                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
+            }
+        }
 
         pass &= prog_state.mesh_device->close();
 
