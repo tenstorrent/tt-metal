@@ -323,7 +323,7 @@ class TT_CCL:
             torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=buffer_mem_cfg,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )

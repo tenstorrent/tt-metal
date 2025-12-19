@@ -192,6 +192,7 @@ class LMHead(LightweightModule):
                 memory_config=output.memory_config(),
                 lm_head=True,
                 buffer_key="LM_HEAD",
+                dtype=ttnn.bfloat8_b,
             )  # self.output_memory_config
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

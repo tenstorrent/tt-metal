@@ -24,12 +24,12 @@ from tqdm import tqdm
 @pytest.mark.parametrize(
     "tracing",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "tracing",
-        "no_tracing",
+        "tracing",
+        # "no_tracing",
     ),
 )
 @pytest.mark.parametrize(
@@ -38,7 +38,7 @@ from tqdm import tqdm
 )
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 511, 128 * 1024),),
+    ((0, 511, 1024),),
 )
 @pytest.mark.parametrize(
     "sampling_params",
@@ -64,7 +64,7 @@ from tqdm import tqdm
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 64, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
     "batch_size",
