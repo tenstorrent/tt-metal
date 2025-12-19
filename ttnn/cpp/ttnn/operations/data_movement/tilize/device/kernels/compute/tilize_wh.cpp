@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     const uint32_t block_size_col = get_compile_time_arg_val(0);
