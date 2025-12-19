@@ -2,6 +2,23 @@ name: "(Galaxy) DeepSeek tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      run-op-unit-tests:
+        required: false
+        type: boolean
+        default: true
+      run-module-tests:
+        required: false
+        type: boolean
+        default: true
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "topology-6u"
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
@@ -14,12 +31,25 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  Galaxy-DeepSeek-tests:
+  DeepSeek-op-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-deepseek-op-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      topology: topology-6u
+      topology: ${{ inputs.topology || 'topology-6u' }}
+      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+    if: ${{ inputs.run-op-unit-tests || github.event_name == 'schedule' }}
+  DeepSeek-module-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-deepseek-module-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      topology: ${{ inputs.topology || 'topology-6u' }}
+      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+    if: ${{ inputs.run-module-tests || github.event_name == 'schedule' }}
