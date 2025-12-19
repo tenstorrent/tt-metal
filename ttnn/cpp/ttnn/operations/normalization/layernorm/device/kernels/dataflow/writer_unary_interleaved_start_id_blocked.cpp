@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
 
