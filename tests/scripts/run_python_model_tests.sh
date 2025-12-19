@@ -59,6 +59,12 @@ run_python_model_tests_wormhole_b0() {
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
     tt_cache_mistral=$TT_CACHE_HOME/$mistral_weights
     HF_MODEL=$mistral_weights TT_CACHE_PATH=$tt_cache_mistral pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+
+    # ARCEE AFM-4.5B
+    arcee_weights=arcee-ai/AFM-4.5B
+    tt_cache_arcee=$TT_CACHE_HOME/$arcee_weights
+    HF_MODEL=$arcee_weights TT_CACHE_PATH=$tt_cache_arcee pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    echo "LOG_METAL: ARCEE tests for $arcee_weights completed"
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {

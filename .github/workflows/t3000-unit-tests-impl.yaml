@@ -72,6 +72,14 @@ jobs:
               "owner_id": "U053W15B6JF" # Djordje Ivanovic
             },
             {
+              "name": "t3k arcee-afm tests",
+              "model": "arcee-afm",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_arcee_afm_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
               "name": "t3k llama3-small tests",
               "model": "llama3-small",
               "arch": "wormhole_b0",
