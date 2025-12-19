@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-enum class ReduceOpMath { SUM, MAX, MIN };
+enum class ReduceOpMath { SUM, AVG, MAX, MIN };
 
 enum class ReduceOpDim { H, W, HW };
 

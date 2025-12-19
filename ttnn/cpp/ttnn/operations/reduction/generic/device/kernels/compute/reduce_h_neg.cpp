@@ -10,12 +10,13 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
-    uint32_t row_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     // Circular buffers:
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
@@ -91,10 +92,10 @@ void kernel_main() {
                         copy_tile(cb_acc, i, i);
                     }
                 }
-                reduce_init(cb_ineg, cb_scaler, cb_acc);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 pack_reconfig_data_format(cb_acc);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    reduce_tile(cb_ineg, cb_scaler, i, 0, i);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);
                 }
                 reduce_uninit(cb_ineg);
                 tile_regs_commit();

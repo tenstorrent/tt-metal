@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <bit>
 #include <cmath>
 
 namespace ttnn::prim {
@@ -44,8 +45,10 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
 
-    // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
-    tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format =
+        (src0_cb_data_format == tt::DataFormat::Float32 && a.device()->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -76,9 +79,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(scaler)};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     if (operation_attributes.negate) {

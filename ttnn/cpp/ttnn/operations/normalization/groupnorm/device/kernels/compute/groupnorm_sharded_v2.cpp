@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -20,7 +17,7 @@
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -240,6 +237,7 @@ void kernel_main() {
             reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
 
             // Partial-E[x]
+            // LOCAL reduction: Use mul_tiles for high precision (don't use reduce helper here!)
             index_h_offset = 0;
             mul_tiles_init(cb_x_id, cb_ones_id);
             cb_ex2pe.reserve_back(1);
@@ -248,7 +246,7 @@ void kernel_main() {
             cb_ones.wait_front(1);
 
             index_h_offset = 0;
-            // Accomulate into dest directly by using mul_tiles (tile * 1 is accomulated into dest at the moment)
+            // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
@@ -262,38 +260,23 @@ void kernel_main() {
             pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
             cb_ex2pe.push_back(1);
-            tile_regs_acquire();
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
-            cb_ex_partial.reserve_back(1);
-            cb_scaler.wait_front(1);
-            cb_ex2pe.wait_front(1);
-            // reduce only one final tile
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
-            cb_ex2pe.pop_front(1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial_id);
-            tile_regs_release();
-            cb_ex_partial.push_back(1);
-            reduce_uninit<FP32_DEST_ACC>();
 
+            // reduce only one final tile
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
+
+            // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
-                cb_ex_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
-                cb_ex_external.pop_front(1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex_global.push_back(1);
                 cb_ex.push_back(1);
             }
             // x - E[x]
@@ -377,41 +360,21 @@ void kernel_main() {
             tile_regs_release();
             cb_ex2pe.push_back(1);
 
-            cb_ex_partial.reserve_back(1);
-            cb_scaler.wait_front(1);
-            cb_ex2pe.wait_front(1);
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
-
-            tile_regs_acquire();
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial_id);
-            tile_regs_release();
-            cb_ex_partial.push_back(1);
-
-            reduce_uninit<FP32_DEST_ACC>();
-
-            cb_ex2pe.pop_front(1);
             cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
-                cb_ex_global.reserve_back(1);
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_ex.reserve_back(1);
-                tile_regs_acquire();
-                cb_scaler_global.wait_front(1);
-                cb_ex_external.wait_front(1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
-                cb_ex_external.pop_front(1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global_id);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_ex_global.push_back(1);
                 cb_ex.push_back(1);
             }
 

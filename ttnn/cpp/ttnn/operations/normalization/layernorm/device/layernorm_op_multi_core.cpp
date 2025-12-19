@@ -29,24 +29,6 @@ namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
 bool CB_can_fit_in_L1(
@@ -204,6 +186,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
@@ -318,7 +302,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im5_t * single_tile_size,
         im4_t * single_tile_size,
         im1_t * single_tile_size,
-        in2_t * bfloat16_tile_size,
+        in2_t * scaler_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
@@ -584,7 +568,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             reader_args.push_back(tile_height);
         }
         if (input_is_row_major) {
-            reader_args.push_back(H_logical);  // arg[10]
+            reader_args.push_back(H_logical);
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
@@ -684,8 +668,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // CB 2: Scaler for reduce (if not use_welford)
     if (!use_welford) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in2_t * bfloat16_tile_size, tt::CBIndex::c_2, tt::DataFormat::Float16_b, bfloat16_tile_size));
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(in2_t * scaler_tile_size, tt::CBIndex::c_2, scaler_cb_data_format, scaler_tile_size));
     }
 
     // CB 3: Epsilon

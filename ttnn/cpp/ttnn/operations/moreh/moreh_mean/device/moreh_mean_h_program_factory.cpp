@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -75,12 +74,9 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             {CBIndex::c_16, 1},                                // output
         });
 
-    float scaler = 1.0f / origin_H;
-    bfloat16 bfloat_scaler_value(scaler);
-    auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt};
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    reader_compile_time_args.push_back(packed_scaler_value);
+    reader_compile_time_args.push_back(origin_H);
 
     std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
@@ -107,7 +103,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
     std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
-    auto reduce_op = ReduceOpMath::SUM;
+    auto reduce_op = ReduceOpMath::AVG;
     auto reduce_dim = ReduceOpDim::H;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);

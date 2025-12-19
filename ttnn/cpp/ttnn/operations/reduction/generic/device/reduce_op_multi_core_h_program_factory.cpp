@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <bit>
 #include <cmath>
 
 namespace ttnn::prim {
@@ -34,7 +35,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format =
+        (src0_cb_data_format == tt::DataFormat::Float32 && a.device()->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -124,8 +128,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     if (operation_attributes.negate) {
         uint32_t acc_cb_index = CBIndex::c_4;
@@ -142,7 +145,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     }
 
     if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
@@ -152,15 +155,21 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        // Reader auto-detects chunk_size via DEST_AUTO_LIMIT (row_chunk parameter removed)
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+
+        // Pass DEST config as defines so reader can compute DEST_AUTO_LIMIT
+        std::map<std::string, std::string> reader_defines;
+        reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+        reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -191,7 +200,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
-        chunk_size,                 // Column Chunk Size
     };
 
     const std::string compute_kernel =
@@ -205,6 +213,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .compile_args = compute_kernel_args_group_1,
             .defines = reduce_defines});
 
@@ -213,7 +222,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
-            chunk_size,                 // Column Chunk Size
         };
 
         tt_metal::CreateKernel(
@@ -223,6 +231,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = reduce_defines});
     }
@@ -245,7 +254,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
         std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
