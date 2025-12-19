@@ -88,7 +88,8 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, core_grid, index_input_intermed0_config);
 
     // identity scale input
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_values_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scale_tiles = 1;
     uint32_t scalar_tile_size = tile_size(scalar_df);
     uint32_t scale_cb_index = tt::CBIndex::c_3;
@@ -241,9 +242,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             input_indices_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
 
@@ -264,7 +262,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
                 output_cb_index,
                 topk_mask_cb_index,
                 scale_cb_index,
-                packed_identity_scalar,
                 final_indices_rm_cb_index,
                 cb_local_vals_index,
                 output_ind_cb_index,

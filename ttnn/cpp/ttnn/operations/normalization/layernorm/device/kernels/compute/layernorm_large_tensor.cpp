@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -26,6 +24,7 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -105,10 +104,13 @@ void kernel_main() {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
+        numeric::row_wise_mean_with_pre_add<
+            PoolType::AVG,
+            ReduceDim::REDUCE_ROW,
+            FLOAT32_REDUCTION,
+            policies::FullBlockWithPopPolicy>(cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+        numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_in, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
 #endif
 #endif  // !RMS ifdef end
@@ -176,13 +178,14 @@ void kernel_main() {
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
+            reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
+                    cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 
-            cb_xmm2_obj.pop_front(block.full_block_size());
+            cb_pop_front(cb_xmm2, block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;

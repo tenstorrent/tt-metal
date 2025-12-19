@@ -85,7 +85,8 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
 
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
@@ -154,15 +155,11 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
     tt::tt_metal::create_cb(
         output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_id,
         reduce_scalar_cb_id,
         num_tile_cols,
         dst_reg_count,
-        packed_winv_value,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
 
