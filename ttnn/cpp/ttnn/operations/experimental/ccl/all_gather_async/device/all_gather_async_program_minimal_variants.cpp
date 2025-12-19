@@ -289,7 +289,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     // op hyperparams
     uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 0;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
     if (num_workers_per_direction_opt.has_value() && num_workers_per_direction_opt.value() == 1) {
         num_mux_cores_per_direction_per_link = 0;
     }
@@ -309,11 +309,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     if (num_workers_per_direction == 1) {
         num_mux_cores_per_direction_per_link = 0;
     }
-    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
