@@ -962,7 +962,7 @@ class TT_CCL:
             # persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             #     self.reduce_scatter_buffer_idx[cluster_axis]
             # ]
-            # ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+            # ttnn_tensor_out = ttnn.reduce_scatter(
             #     input_tensor_mesh,
             #     persistent_interim_buffer,
             #     dim,
@@ -976,13 +976,10 @@ class TT_CCL:
             #     use_noc1_only=use_noc1_only,
             # )
 
-            # breakpoint()
-            ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+            # # breakpoint()
+            ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
-                persistent_output_buffers=None,
                 dim=dim,
-                multi_device_global_semaphore=self.get_and_cycle_reduce_scatter_semaphore_handles(cluster_axis),
-                barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 num_links=1,
                 memory_config=memory_config,
                 topology=self.model_config["CCL_TOPOLOGY"],
