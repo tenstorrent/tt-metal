@@ -226,6 +226,21 @@ pytest models/experimental/transfuser/tests/test_topdown.py
 
 All tests use PCC (Pearson Correlation Coefficient) validation to compare TTNN outputs with PyTorch reference outputs.
 
+### Backbone PCC Scores
+
+The TransFuserBackbone TTNN implementation achieves the following PCC scores compared to the PyTorch reference:
+
+| Output | PCC Score |
+|--------|-----------|
+| p2 (FPN feature) | 0.9892 |
+| p3 (FPN feature) | 0.9884 |
+| p4 (FPN feature) | 0.9894 |
+| p5 (FPN feature) | 0.9918 |
+| Image Grid | 0.9894 |
+| Fused Features | 0.9895 |
+
+*Test configuration: `image_architecture=regnety_032`, `lidar_architecture=regnety_032`, `n_layer=4`, `use_fallback=True`, `use_optimized_self_attn=True`*
+
 ## Demo
 
 Run the LidarCenterNet demo to compare TTNN and PyTorch implementations:

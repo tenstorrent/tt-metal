@@ -97,6 +97,7 @@ class TransfuserBackboneInfra:
         use_optimized_self_attn,
     ):
         super().__init__()
+        torch.manual_seed(42)
         self.device = device
         self.n_layer = n_layer
         self.image_arch = image_architecture

@@ -215,7 +215,7 @@ def main():
     parser.add_argument("--image-arch", type=str, default="regnety_032")
     parser.add_argument("--lidar-arch", type=str, default="regnety_032")
     parser.add_argument("--layers", type=int, default=4)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
 
     # Fallback flags
     parser.add_argument("--no-fallback", action="store_true", help="Disable TTNN fallback paths.")
