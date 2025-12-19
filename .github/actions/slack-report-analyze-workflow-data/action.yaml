@@ -94,15 +94,14 @@ runs:
 
         # Split regressions into chunks, splitting failing jobs if a single regression is too large
         chunk_dir="$(mktemp -d)"
-        # Ensure temporary files are cleaned up on exit
-        cleanup_temp_files() {
+        # Ensure temporary chunk directory is cleaned up on exit of this step
+        # Note: payload files are cleaned up in the slack_send step after they're used
+        cleanup_chunk_dir() {
           if [ -n "${chunk_dir:-}" ] && [ -d "$chunk_dir" ]; then
             rm -rf "$chunk_dir"
           fi
-          # Also clean up payload files
-          rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || true
         }
-        trap cleanup_temp_files EXIT
+        trap cleanup_chunk_dir EXIT
 
         chunk_index=0
         current_chunk_text=""
@@ -373,6 +372,12 @@ runs:
         TOTAL_CHUNKS: ${{ steps.build.outputs.total_chunks }}
       run: |
         set -euo pipefail
+
+        # Ensure payload files are cleaned up even if this step fails
+        cleanup_payload_files() {
+          rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || true
+        }
+        trap cleanup_payload_files EXIT
 
         TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
         # Handle edge case where TOTAL_CHUNKS is 0 or non-positive to ensure at least one message
