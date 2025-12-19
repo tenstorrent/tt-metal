@@ -5,6 +5,7 @@
 import sys
 from pathlib import Path
 import time
+import os
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
@@ -13,6 +14,7 @@ import pytest
 import ttnn
 from loguru import logger
 from transformers.models.t5.modeling_t5 import T5EncoderModel
+from transformers.models.t5.configuration_t5 import T5Config as HF_T5Config
 from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 
@@ -20,6 +22,10 @@ from models.experimental.tt_dit.encoders.t5.model_t5 import T5Config, T5Encoder
 from models.experimental.tt_dit.utils.check import assert_quality
 
 
+@pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
 @pytest.mark.parametrize(
     "model_name",
     [
@@ -39,6 +45,7 @@ def test_t5_encoder(
     submesh_shape: ttnn.MeshShape,
     model_name: str,
     topology: ttnn.Topology,
+    dit_unit_test: bool,
 ) -> None:
     parent_mesh_shape = tuple(mesh_device.shape)
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
@@ -57,8 +64,22 @@ def test_t5_encoder(
 
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
-    hf_model = T5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder_3", local_files_only=False)
-
+    if dit_unit_test:
+        # Config for t5-xxl
+        hf_config = HF_T5Config(
+            d_model=4096,
+            d_ff=10240,
+            num_heads=64,
+            num_layers=24,
+            num_decoder_layers=24,
+            feed_forward_proj="gated-gelu",
+            output_past=True,
+        )
+        hf_model = T5EncoderModel(hf_config)
+    else:
+        hf_model = T5EncoderModel.from_pretrained(
+            model_name_checkpoint, subfolder="text_encoder_3", local_files_only=False
+        )
     hf_model.eval()
 
     logger.info("=== HuggingFace T5 Config ===")

@@ -609,6 +609,12 @@ run_t3000_tt_dit_tests() {
 
   echo "LOG_METAL: Running run_t3000_tt_dit_tests"
 
+  #T5 Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
+
+  #Clip Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4 ; fail+=$?
+
   #Image DiTs VAE with one iteration pcc and perf test
   DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
 
@@ -623,6 +629,9 @@ run_t3000_tt_dit_tests() {
 
   #Mochi Transformer
   DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
+
+  #Mochi VAE main component
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py::test_tt_resblock_forward[wormhole_b0-mesh_device0-device_params0-1link-l768] ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1

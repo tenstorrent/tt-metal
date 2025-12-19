@@ -5,6 +5,7 @@
 import sys
 from pathlib import Path
 import time
+import os
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
@@ -12,7 +13,7 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextConfig as HF_CLIPConfig
 
 from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
 from models.experimental.tt_dit.parallel.manager import CCLManager
@@ -20,6 +21,42 @@ from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, Pa
 from models.experimental.tt_dit.utils.check import assert_quality
 
 
+def get_hf_config(model_name: str) -> HF_CLIPConfig:
+    # Clip config pulled from the model
+    config_params = {
+        "text_encoder": {
+            "architectures": ["CLIPTextModelWithProjection"],
+            "bos_token_id": 0,
+            "eos_token_id": 2,
+            "hidden_act": "quick_gelu",
+            "hidden_size": 768,
+            "intermediate_size": 3072,
+            "num_attention_heads": 12,
+            "num_hidden_layers": 12,
+            "projection_dim": 768,
+            "vocab_size": 49408,
+        },
+        "text_encoder_2": {
+            "architectures": ["CLIPTextModelWithProjection"],
+            "bos_token_id": 0,
+            "eos_token_id": 2,
+            "hidden_act": "gelu",
+            "hidden_size": 1280,
+            "intermediate_size": 5120,
+            "num_attention_heads": 20,
+            "num_hidden_layers": 32,
+            "projection_dim": 1280,
+            "vocab_size": 49408,
+        },
+    }
+
+    return HF_CLIPConfig(**config_params[model_name])
+
+
+@pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
 @pytest.mark.parametrize(
     "model_name",
     [
@@ -50,6 +87,7 @@ def test_clip_encoder(
     tokenizer_path: str,
     expected_pcc: float,
     topology: ttnn.Topology,
+    dit_unit_test: bool,
 ) -> None:
     parent_mesh_shape = tuple(mesh_device.shape)
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
@@ -76,19 +114,14 @@ def test_clip_encoder(
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     # HF model
-    hf_model = CLIPTextModelWithProjection.from_pretrained(
-        model_name_checkpoint, subfolder=clip_path, local_files_only=True
-    )
+    if dit_unit_test:
+        hf_model = CLIPTextModelWithProjection(get_hf_config(clip_path))
+    else:
+        hf_model = CLIPTextModelWithProjection.from_pretrained(
+            model_name_checkpoint, subfolder=clip_path, local_files_only=True
+        )
+    print(hf_model.config)
     tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
-
-    hf_model.eval()
-
-    logger.info("=== HuggingFace CLIP Config ===")
-    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
-    logger.info(f"hidden_size: {hf_model.config.hidden_size}")
-    logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
-    logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
-    logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
 
     # Test prompt. Cannot use randn tensor due to specific HF eos token id
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"

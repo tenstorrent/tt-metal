@@ -546,6 +546,10 @@ def test_sd35_vae_unet_mid_block2d(
 
 @vae_device_config
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     (
         "batch",
         "in_channels",
@@ -572,6 +576,7 @@ def test_sd35_vae_vae_decoder(
     width: int,
     norm_num_groups: int,
     block_out_channels: list[int] | tuple[int, ...],
+    dit_unit_test: bool,
 ):
     skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
@@ -608,7 +613,7 @@ def test_sd35_vae_vae_decoder(
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.99_000)
 
-    if os.environ.get("DIT_UNIT_TEST"):
+    if dit_unit_test:
         benchmark_profiler = BenchmarkProfiler()
         with benchmark_profiler("vae_decoding", iteration=0):
             tt_out = tt_model(tt_input_tensor)
