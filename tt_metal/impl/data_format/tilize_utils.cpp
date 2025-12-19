@@ -329,7 +329,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
                         T* face_dst = tile_dst + (face_idx * elements_per_face);
 
                         // Source position in row-major input
-                        const size_t src_row_start = (tile_row * tile_H) + face_row_idx * face_H;
+                        const size_t src_row_start = (tile_row * tile_H) + (face_row_idx * face_H);
                         const size_t src_col_start = (tile_col * tile_W) + (face_col_idx * face_W);
 
                         if (can_use_avx) {
