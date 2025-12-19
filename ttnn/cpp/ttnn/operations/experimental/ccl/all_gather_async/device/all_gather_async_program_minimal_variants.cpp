@@ -651,8 +651,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             CoreCoord mux_virtual_core = {0, 0};
             if (num_mux_cores_per_direction_per_link) {
                 if (mux_connection_valid(dir)) {
-                    termination_master_logical_core = *((termination_master_core_iter++)->begin());
                     auto mux_logical_core = *((mux_core_iter++)->begin());
+                    mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
+
                     std::vector<uint32_t> mux_rt_args = {};
                     const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                     if (dir) {  // forward
@@ -666,6 +667,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     }
                     tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
                 }
+
+                termination_master_logical_core = *((termination_master_core_iter++)->begin());
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
