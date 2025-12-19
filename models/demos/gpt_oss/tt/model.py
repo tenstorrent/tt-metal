@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 
 import torch
 
@@ -42,6 +41,7 @@ class Model:
         mesh_config=None,
         create_kv_cache=True,
         max_local_batch_size=1,
+        users_row_sharded=False,
     ):
         """
         Initialize GPT-OSS model
@@ -62,6 +62,7 @@ class Model:
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
+        self.users_row_sharded = users_row_sharded
 
         self.ccl_manager = ccl_manager
 
@@ -114,6 +115,7 @@ class Model:
                 create_kv_cache=create_kv_cache,
                 transformation_mats=self.transformation_mats,
                 max_local_batch_size=max_local_batch_size,
+                users_row_sharded=users_row_sharded,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -148,6 +150,7 @@ class Model:
         rope_setup_class=None,
         mesh_config=None,
         create_kv_cache=True,
+        users_row_sharded=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -168,6 +171,7 @@ class Model:
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
             max_local_batch_size=args.max_local_batch_size,
+            users_row_sharded=users_row_sharded,
         )
 
         # Add tt_transformers compatible attributes
@@ -366,15 +370,13 @@ class Model:
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
         # Convert tokens to TTNN format
-        batch_tiles = math.ceil(len(tokens) / 32)
-        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
-        tokens = ttnn.from_torch(
-            tokens,
-            device=None,
-            dtype=ttnn.uint32,
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
-        )
+        # batch_tiles = math.ceil(len(tokens) / 32)
+        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
+        if self.users_row_sharded:
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
+        else:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
         # Ensure position indices are non-negative (matches tt-transformers)
@@ -382,23 +384,11 @@ class Model:
         rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
         # Prepare current position tensor
-        current_pos_tt = ttnn.from_torch(
-            current_pos,
-            device=None,
-            dtype=ttnn.int32,
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
-        )
+        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = ttnn.from_torch(
-                page_table,
-                device=None,
-                dtype=ttnn.int32,
-                # mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
-            )
+            page_table = ttnn.from_torch(page_table, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
@@ -447,14 +437,21 @@ class Model:
         tt_page_table = None
         tt_chunk_page_table = None
         if page_table is not None:
-            # tt_page_table = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
+            if self.users_row_sharded:
+                tt_page_table = ttnn.from_torch(
+                    page_table,
+                    device=device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                    ),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            else:
+                tt_page_table = ttnn.from_torch(
+                    page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -471,22 +468,22 @@ class Model:
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """Process decode output and convert to torch tensors"""
         concat_out = self.concat_device_output(tt_out)
-
         if is_tokens:
             return concat_out[:B, 0]  # [batch_size]
 
         torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
+        # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong
         return torch_out.view(B, S, -1)
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
-        # tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        tt_output_tensor = ttnn.get_device_tensors(tt_out)[::8]
-        # tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
-        # return ttnn.to_torch(tt_output_tensor)
-        return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
-        # tt_output_tensor = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, 1), mesh_shape=tuple(self.mesh_device.shape)))
-        # return tt_output_tensor
+        if self.users_row_sharded:
+            tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_device.shape[1]]
+            return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
+        else:
+            tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
+            tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
+            return ttnn.to_torch(tt_output_tensor)
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Process prefill output and extract last token logits"""

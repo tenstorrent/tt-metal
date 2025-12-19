@@ -706,6 +706,7 @@ def run_model_forward_test(
         mesh_config=mesh_config,
         create_kv_cache=True,
         max_local_batch_size=local_batch_size,
+        users_row_sharded=is_row_sharded,
     )
 
     # Create reference model with HF format weights
@@ -742,7 +743,7 @@ def run_model_forward_test(
         )
 
         # Run TT decode forward
-        tt_logits = tt_model.ttnn_decode_forward(
+        tt_logits, _ = tt_model.ttnn_decode_forward(
             tokens=tt_tokens,
             current_pos=tt_current_pos,
             rot_mat_idxs=tt_rope_idxs,
@@ -797,9 +798,14 @@ def run_model_forward_test(
     "batch_size, seq_len, mode",
     [
         (1, 128, "prefill"),  # Prefill test: batch=1, seq=128
+        (1, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
         (128, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
     ],
-    ids=["prefill_b1_s128", "decode_b128_s1"],
+    ids=[
+        "prefill_b1_s128",
+        "decode_b1_s1",
+        "decode_b128_s1",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_shape",
@@ -809,8 +815,11 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1],
-    ids=["1_layer"],
+    [1, 5],
+    ids=[
+        "1_layer",
+        "5_layers",
+    ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
     """
@@ -878,7 +887,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         batch_size=batch_size,
         seq_len=seq_len,
         is_decode=is_decode,
-        pcc_threshold=0.85,  # Use slightly lower threshold for full model
+        pcc_threshold=0.95 if num_layers == 1 else 0.85,  # Use slightly lower threshold for full model
     )
 
     if passing:

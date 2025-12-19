@@ -27,6 +27,7 @@ class DecoderLayer:
         transformation_mats=None,
         max_seq_len=1024,
         max_local_batch_size=1,
+        users_row_sharded=False,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -64,6 +65,7 @@ class DecoderLayer:
             sliding_window=hf_config.sliding_window,
             max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,
+            users_row_sharded=users_row_sharded,
         )
 
         # Create attention program config
