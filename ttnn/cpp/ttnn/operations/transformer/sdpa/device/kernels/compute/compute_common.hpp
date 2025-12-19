@@ -433,8 +433,11 @@ void calculate_exponential_first_column(int scale_bf16) {
             val = val * sfpi::s2vFloat16b(scale_bf16);
             sfpi::vFloat result;
             if constexpr (!DST_ACCUM_MODE) {
+                // bfloat16-accurate implementation of exp ( < 1 ULP)
                 result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
             } else {
+                // float32 version of exp (< 150 float32 ULP)
+                // this is more accurate than exp_21f, but also slower
                 result = ckernel::sfpu::_sfpu_exp_61f_(val);
             }
 
