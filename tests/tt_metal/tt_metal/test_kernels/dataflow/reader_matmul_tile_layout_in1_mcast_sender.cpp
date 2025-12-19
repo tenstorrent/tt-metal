@@ -52,16 +52,16 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in1 = 1;
+
+    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
 
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, single_tile_size_bytes);
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;

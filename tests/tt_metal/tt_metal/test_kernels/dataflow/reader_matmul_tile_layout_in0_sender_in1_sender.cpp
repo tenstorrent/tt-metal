@@ -126,8 +126,8 @@ void kernel_main() {
         // Now we have the block in the CB address, we can mcast to dests!
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc.async_write_multicast(
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
+            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_in0),
+            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_in0),
             in0_block_size_bytes,
             in0_mcast_num_dests,
             {},
@@ -192,8 +192,8 @@ void kernel_main() {
         // Now we have the block in the CB address, we can mcast to dests!
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc.async_write_multicast(
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in1),
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in1),
+            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_in1),
+            experimental::use<experimental::CircularBuffer::AddrSelector::WRITE_PTR>(cb_in1),
             in1_block_size_bytes,
             in1_mcast_num_dests,
             {},

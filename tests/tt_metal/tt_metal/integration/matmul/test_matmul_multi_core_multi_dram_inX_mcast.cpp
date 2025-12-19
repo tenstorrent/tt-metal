@@ -140,26 +140,41 @@ create_program(
                                 std::to_string(mcast_xy_offset) + "_mcast_sender.cpp";
     std::string kernel_receiver = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in" +
                                   std::to_string(mcast_xy_offset) + "_mcast_receiver.cpp";
+
+    std::vector<uint32_t> sender_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(sender_compile_time_args);
     auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program_,
         kernel_sender,
         mcast_senders,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = sender_compile_time_args});
 
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program_,
         kernel_receiver,
         mcast_receivers,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     int num_blocks = (K / in0_block_w);
 
