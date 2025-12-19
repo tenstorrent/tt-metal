@@ -33,8 +33,6 @@ class Program;
 
 namespace detail {
 
-bool DispatchStateCheck(bool isFastDispatch);
-
 std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
@@ -61,6 +59,38 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices);
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
 IDevice* GetActiveDevice(ChipId device_id);
+
+void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
+/**
+ * Copies data from a buffer into a host buffer
+ *
+ * Return value: void
+ *
+ * | Argument    | Description                                     | Data type               | Valid range | Required |
+ * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+ * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
+ * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | core_id | ID
+ * of core                                      | const uint32_t &        | | Yes      |
+ */
+template <typename DType>
+void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
+    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
+    ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
+}
+
+/**
+ * Return the name of the architecture present.
+ *
+ * Return value: std::string
+ */
+std::string get_platform_architecture_name();
+
+}  // namespace detail
+
+// TODO: functions below are to be moved out of the api directory and dispersed
+namespace detail {
+
+bool DispatchStateCheck(bool isFastDispatch);
 
 /**
  * Copies data from a host buffer into the specified buffer
@@ -118,24 +148,6 @@ void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
 template <typename DType>
 void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
-}
-
-void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
-/**
- * Copies data from a buffer into a host buffer
- *
- * Return value: void
- *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
- * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | core_id | ID
- * of core                                      | const uint32_t &        | | Yes      |
- */
-template <typename DType>
-void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
-    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
-    ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
 }
 
 // Launches all kernels on cores specified with kernels in the program.
@@ -380,13 +392,6 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
-
-/**
- * Return the name of the architecture present.
- *
- * Return value: std::string
- */
-std::string get_platform_architecture_name();
 
 }  // namespace detail
 }  // namespace tt::tt_metal
