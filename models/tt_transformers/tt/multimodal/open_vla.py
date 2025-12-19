@@ -44,6 +44,7 @@ if is_blackhole():
 else:
     from models.demos.grayskull.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 
+# Custom vision encoders with better PCC (bfloat16 instead of bfloat8_b)
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import (
     create_tt_model,
@@ -55,6 +56,8 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.openvla_dinov2_tt import create_openvla_dinov2_encoder_tt
+from models.tt_transformers.tt.multimodal.openvla_siglip_tt import create_openvla_siglip_encoder_tt
 
 """
 configuration_prismatic.py
@@ -269,7 +272,7 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 
 class OpenVLALanguageModel(GenerationMixin):
-    def __init__(self, device, local_state_dict=None, aggressive_perf=False):
+    def __init__(self, device, local_state_dict=None):
         self.device = device
         optimization_mode = "performance"
 
@@ -286,8 +289,6 @@ class OpenVLALanguageModel(GenerationMixin):
             "num_layers": 32,  # Default number of layers for LLaMA model
         }
 
-        self.aggressive_perf = aggressive_perf
-
         def model_factory_fn(*args, **kwargs):
             return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
 
@@ -301,20 +302,6 @@ class OpenVLALanguageModel(GenerationMixin):
         ) = prepare_generator_args(**self.generator_args_config, model_factory_fn=model_factory_fn)
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
         self.num_actions = 1
-
-        if self.aggressive_perf:
-            from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
-
-            model_config = self.model_args[0].get_model_config()
-            opt = model_config["DECODERS_OPTIMIZATIONS"]
-            for decoder_id in opt.decoder_optimizations:
-                decoder_opt = opt.decoder_optimizations[decoder_id]
-                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
-                decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
-                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
-                decoder_opt._opt_settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
-                decoder_opt._opt_settings["OpFidelity"][OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI2
-            print("[AGGRESSIVE PERF] Using LOFI for decode ops, HIFI2 for prefill SDPA")
 
         # Cache for page tables and rope slices to avoid repeated host->device transfers
         # Key: padded_seq_len, Value: cached tensor
@@ -375,6 +362,35 @@ class OpenVLALanguageModel(GenerationMixin):
         ]
         self._rope_slice_cache[padded_seq_len] = rope_slices
         return rope_slices
+
+    def reset_kv_cache(self):
+        """Reset KV cache to zeros for deterministic behavior across runs.
+
+        This is needed because paged attention KV cache accumulates state
+        across predictions, causing non-deterministic behavior on subsequent calls.
+        """
+        if self.tt_kv_cache is None:
+            return
+
+        # Zero out all layer KV caches
+        # Structure: tt_kv_cache[layer_idx] = [keys, values] where each may be a list for mesh
+        for layer_idx, layer_cache in enumerate(self.tt_kv_cache):
+            if layer_cache is not None:
+                keys_list, values_list = layer_cache[0], layer_cache[1]
+                # Handle both single tensor and list of tensors (mesh device)
+                if isinstance(keys_list, list):
+                    for k in keys_list:
+                        ttnn.fill(k, 0.0, output_tensor=k)
+                else:
+                    ttnn.fill(keys_list, 0.0, output_tensor=keys_list)
+
+                if isinstance(values_list, list):
+                    for v in values_list:
+                        ttnn.fill(v, 0.0, output_tensor=v)
+                else:
+                    ttnn.fill(values_list, 0.0, output_tensor=values_list)
+
+        ttnn.synchronize_device(self.device)
 
     def predict_text(self, input_prompts, max_generated_tokens=200):
         (
@@ -731,7 +747,8 @@ IGNORE_INDEX = -100
 def unpack_tuple(fn: Callable[[Any], Tuple[Any]]) -> Callable[[Any], Any]:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         result = fn(*args, **kwargs)
-        return result[0] if isinstance(result, tuple) else result
+        # Handle both tuple and list returns from TIMM's get_intermediate_layers
+        return result[0] if isinstance(result, (tuple, list)) else result
 
     return wrapper
 
@@ -766,11 +783,13 @@ class PrismaticVisionBackbone(nn.Module):
         timm_override_act_layers: List[Optional[str]],
         ttnn_device: Optional[Any] = None,
         local_state_dict=None,
+        use_custom_vision: bool = True,  # Use custom encoders with better PCC (bfloat16)
     ) -> None:
         super().__init__()
         self.use_fused_vision_backbone = use_fused_vision_backbone
         self.ttnn_device = ttnn_device
         self.local_state_dict = local_state_dict
+        self.use_custom_vision = use_custom_vision
         # [Contract] Validate number of (fused) vision backbones, create "alpha" featurizer and Instantiate
         #   =>> Note :: Monkey-Patch the `forward()` function of the backbone to ensure FSDP-compatibility
         #               Hardcodes `get_intermediate_layers` to return the **SECOND-TO-LAST** layer patches!
@@ -800,7 +819,12 @@ class PrismaticVisionBackbone(nn.Module):
         self.embed_dim = self.featurizer.embed_dim
         if self.ttnn_device is not None:
             CHECKPOINTS.checkpoint("start_DINOINIT")
-            self.ttnn_featurizer = ttnn_optimized_vit_highres.dinov2_encoder(self.featurizer, self.ttnn_device)
+            if self.use_custom_vision:
+                # Custom DinoV2 encoder with bfloat16 for better PCC (~0.97 vs ~0.27)
+                self.tt_dinov2 = create_openvla_dinov2_encoder_tt(ttnn_device=self.ttnn_device)
+            else:
+                # Original encoder (bfloat8_b, lower PCC)
+                self.ttnn_featurizer = ttnn_optimized_vit_highres.dinov2_encoder(self.featurizer, self.ttnn_device)
             CHECKPOINTS.checkpoint("end_DINOINIT")
 
         # If `use_fused_vision_backbone` =>> create "beta" featurizer
@@ -829,32 +853,37 @@ class PrismaticVisionBackbone(nn.Module):
                     ls_apply_patch(module)
             if self.ttnn_device is not None:
                 CHECKPOINTS.checkpoint("start_SIGLIPINIT")
-                self.featurize_parameters_2 = preprocess_model_parameters(
-                    initialize_model=lambda: self.fused_featurizer.to(torch.bfloat16),
-                    device=self.ttnn_device,
-                    custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
-                )
-
-                self.head_masks_2 = [
-                    ttnn.from_torch(
-                        torch.zeros(1, 1, 1, 1, dtype=torch.float32),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
+                if self.use_custom_vision:
+                    # Custom SigLIP encoder with bfloat16 for better PCC (~0.98 vs ~0.27)
+                    self.tt_siglip = create_openvla_siglip_encoder_tt(ttnn_device=self.ttnn_device)
+                else:
+                    # Original encoder (bfloat8_b, lower PCC)
+                    self.featurize_parameters_2 = preprocess_model_parameters(
+                        initialize_model=lambda: self.fused_featurizer.to(torch.bfloat16),
                         device=self.ttnn_device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
                     )
-                    for _ in self.featurize_parameters_2.blocks
-                ]
-                self.ttnn_fused_featurizer = lambda x2: ttnn_featurizer(
-                    embedding=lambda x: ttnn_optimized_vit_highres.siglip_patch_embeddings(
-                        x,
-                        parameters=self.featurize_parameters_2.patch_embed.patch_embeddings,
-                    ),
-                    encoder=lambda x: ttnn_optimized_vit_highres.siglip_encoder(
-                        x, self.head_masks_2, parameters=self.featurize_parameters_2.blocks
-                    ),
-                    pixel=x2,
-                )
+
+                    self.head_masks_2 = [
+                        ttnn.from_torch(
+                            torch.zeros(1, 1, 1, 1, dtype=torch.float32),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=self.ttnn_device,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                        )
+                        for _ in self.featurize_parameters_2.blocks
+                    ]
+                    self.ttnn_fused_featurizer = lambda x2: ttnn_featurizer(
+                        embedding=lambda x: ttnn_optimized_vit_highres.siglip_patch_embeddings(
+                            x,
+                            parameters=self.featurize_parameters_2.patch_embed.patch_embeddings,
+                        ),
+                        encoder=lambda x: ttnn_optimized_vit_highres.siglip_encoder(
+                            x, self.head_masks_2, parameters=self.featurize_parameters_2.blocks
+                        ),
+                        pixel=x2,
+                    )
                 CHECKPOINTS.checkpoint("end_SIGLIPINIT")
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
@@ -869,12 +898,20 @@ class PrismaticVisionBackbone(nn.Module):
         else:
             img, img_fused = pixel_values
             CHECKPOINTS.checkpoint("start_DINOFORWARD")
-            patches = self.ttnn_featurizer(img)[:, 5:, :]
+            if self.use_custom_vision:
+                # Custom DinoV2 with bfloat16
+                patches = self.tt_dinov2(img)[:, 5:, :]  # Skip CLS + reg tokens
+            else:
+                patches = self.ttnn_featurizer(img)[:, 5:, :]
             # Flush profiler buffer after DinoV2 (generates many ops)
             ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_DINOFORWARD")
             CHECKPOINTS.checkpoint("start_SIGLIPFORWARD")
-            patches_fused = self.ttnn_fused_featurizer(img_fused)
+            if self.use_custom_vision:
+                # Custom SigLIP with bfloat16
+                patches_fused = self.tt_siglip(img_fused)
+            else:
+                patches_fused = self.ttnn_fused_featurizer(img_fused)
             # Flush profiler buffer after SigLIP
             ttnn.ReadDeviceProfiler(self.ttnn_device)
             CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
@@ -1022,9 +1059,10 @@ class PrismaticPreTrainedModel(PreTrainedModel):
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
-    def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
+    def __init__(
+        self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None, use_custom_vision=True
+    ) -> None:
         super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
-        self.aggressive_perf = aggressive_perf
 
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
@@ -1053,6 +1091,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             config.timm_override_act_layers,
             ttnn_device,
             local_state_dict=local_state_dict,
+            use_custom_vision=use_custom_vision,
         )
         CHECKPOINTS.checkpoint("end_VISIONINIT")
 
@@ -1087,7 +1126,6 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             self.language_model = OpenVLALanguageModel(
                 ttnn_device,
                 local_state_dict=local_state_dict,
-                aggressive_perf=self.aggressive_perf,
             )
             CHECKPOINTS.checkpoint("end_LLama2INIT")
         else:
@@ -1416,12 +1454,12 @@ def get_final_action(generated_ids, action_dims, bin_centers, vocab_size, action
 class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, GenerationMixin):
     config_class: PretrainedConfig = OpenVLAConfig
 
-    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None, aggressive_perf=False) -> None:
+    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None, use_custom_vision=True) -> None:
         super().__init__(
             config,
             ttnn_device=ttnn_device,
             local_state_dict=local_state_dict,
-            aggressive_perf=aggressive_perf,
+            use_custom_vision=use_custom_vision,
         )
         self.norm_stats = config.norm_stats
         self.ttnn_device = ttnn_device
@@ -1606,15 +1644,11 @@ def test_openvla_model(mesh_device, iterations):
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-    aggressive_perf = os.environ.get("OPENVLA_AGGRESSIVE_PERF", "0") == "1"
     vla = TTOpenVLAForActionPrediction(
         vla_config,
         ttnn_device=mesh_device,
         local_state_dict=merged_tensors,
-        aggressive_perf=aggressive_perf,
     ).to("cpu", dtype=torch.bfloat16)
-    if aggressive_perf:
-        print("[INFO] Aggressive performance mode ENABLED - using LOFI for decode ops")
 
     print(f"Running FULL MODEL: 32 layers, 7 action tokens")
     inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)

@@ -1,0 +1,34 @@
+2025-12-18 23:28:46.247 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/local/ttuser/.cache/ttnn,model_cache_path=/local/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.4.2, pluggy-1.6.0 -- /local/ttuser/teja/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /local/ttuser/teja/tt-metal
+configfile: pytest.ini
+plugins: xdist-3.8.0, benchmark-5.1.0, anyio-4.12.0, dash-2.15.0, split-0.10.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+test_openvla_pcc.py::TestOpenVLAPCC::test_vision_backbone_pcc[blackhole-mesh_device0-device_params0] 2025-12-18 23:28:47.397 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:69)
+2025-12-18 23:28:47.608 | info     |             UMD | Established firmware bundle version: 19.2.0 (topology_discovery.cpp:369)
+2025-12-18 23:28:47.608 | warning  |             UMD | Firmware bundle version 19.2.0 on the system is newer than the maximum supported version 19.1.0 for blackhole architecture. New features may not be supported. (topology_discovery.cpp:395)
+2025-12-18 23:28:47.608 | info     |             UMD | Established ETH FW version: 1.7.0 (topology_discovery_blackhole.cpp:305)
+2025-12-18 23:28:47.608 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:73)
+2025-12-18 23:28:47.670 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:211)
+2025-12-18 23:28:47.670 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:69)
+2025-12-18 23:28:47.879 | info     |             UMD | Established firmware bundle version: 19.2.0 (topology_discovery.cpp:369)
+2025-12-18 23:28:47.879 | warning  |             UMD | Firmware bundle version 19.2.0 on the system is newer than the maximum supported version 19.1.0 for blackhole architecture. New features may not be supported. (topology_discovery.cpp:395)
+2025-12-18 23:28:47.879 | info     |             UMD | Established ETH FW version: 1.7.0 (topology_discovery_blackhole.cpp:305)
+2025-12-18 23:28:47.879 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:73)
+2025-12-18 23:28:47.941 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:69)
+2025-12-18 23:28:48.155 | info     |             UMD | Established firmware bundle version: 19.2.0 (topology_discovery.cpp:369)
+2025-12-18 23:28:48.155 | warning  |             UMD | Firmware bundle version 19.2.0 on the system is newer than the maximum supported version 19.1.0 for blackhole architecture. New features may not be supported. (topology_discovery.cpp:395)
+2025-12-18 23:28:48.155 | info     |             UMD | Established ETH FW version: 1.7.0 (topology_discovery_blackhole.cpp:305)
+2025-12-18 23:28:48.155 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:73)
+2025-12-18 23:28:48.218 | info     |             UMD | Harvesting masks for chip 0 tensix: 0x0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:358)
+2025-12-18 23:28:48.368 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:202)
+2025-12-18 23:28:48.368 | info     |             UMD | IOMMU: disabled (cluster.cpp:178)
+2025-12-18 23:28:48.368 | info     |             UMD | KMD version: 2.1.0 (cluster.cpp:181)
