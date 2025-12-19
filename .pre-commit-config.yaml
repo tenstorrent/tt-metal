@@ -76,12 +76,6 @@ repos:
       name: Convert .ipynb to .py for ttnn basic examples
       entry: python3 scripts/convert_notebooks_to_python.py
       language: system
-# - repo: local
-#   hooks:
-#     - id: detect-undocumented-ttnn-ops
-#       name: Detect ttnn registered ops missing documentation in api.rst
-#       entry: python3 scripts/detect_undocumented_ttnn_ops.py
-#       language: system
 - repo: local
   hooks:
     - id: detect-legacy-device-op
