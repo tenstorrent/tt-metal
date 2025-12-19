@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-// #include "debug/dprint_pages.h"
+#include "debug/dprint_pages.h"
 
 using fn_compute_5 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 using fn_compute_6 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -106,10 +106,10 @@ template <typename cur_llk_type>
 void print_input_CBs(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
     // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-    //  UNPACK(DPRINT << "=============CB_A==============" << ENDL());
-    //  UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
-    //  UNPACK(DPRINT << "=============CB_B==============" << ENDL());
-    //  UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
+    // UNPACK(DPRINT << "=============CB_A==============" << ENDL());
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
+    // UNPACK(DPRINT << "=============CB_B==============" << ENDL());
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
 }
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops) {
@@ -119,6 +119,8 @@ void unroll_inner_loop(uint32_t register_loops) {
     cb_wait_front(cur_llk.CB_A, num_dst_regs);
     if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
         cb_wait_front(cur_llk.CB_B, num_dst_regs);
+    } else if constexpr (cur_llk.fixed_CB_B_index == 0xDDDD) {
+        cb_wait_front(cur_llk.CB_B, num_dst_regs + (wt));
     } else {
         cb_wait_front(cur_llk.CB_B, cur_llk.fixed_CB_B_index + 1);
     }

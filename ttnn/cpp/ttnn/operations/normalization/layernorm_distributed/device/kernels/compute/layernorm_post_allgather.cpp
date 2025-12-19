@@ -85,8 +85,8 @@ struct gamma_optional_node {
         .CB_A = cb_x_normed,
         .CB_B = cb_gamma,
         .CB_OUT = cb_times_gamma_out,
-        .fixed_CB_B_index = 0xFFFF,
-        .fixed_dest_reg = pop_gamma_beta,
+        .fixed_CB_B_index = pop_gamma_beta,
+        .fixed_dest_reg = 0xFFFF,
     };
 };
 constexpr uint32_t cb_in_beta = do_gamma ? cb_times_gamma_out : normed_output_cb;
@@ -98,13 +98,12 @@ struct beta_optional_node {
         .CB_A = cb_in_beta,
         .CB_B = cb_beta,
         .CB_OUT = cb_out,
-        .fixed_CB_B_index = 0xFFFF,
-        .fixed_dest_reg = pop_gamma_beta,
+        .fixed_CB_B_index = pop_gamma_beta,
+        .fixed_dest_reg = 0xFFFF,
     };
 };
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
-    DPRINT << "pop_gamma_beta: " << pop_gamma_beta << ENDL();
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(2);
