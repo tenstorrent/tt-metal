@@ -65,7 +65,7 @@ void create_arc_metrics(
     log_info(tt::LogAlways, "Creating ARC firmware metrics...");
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones for which we have a telemetry reader
-    for (auto [chip_id, telemetry_reader] : telemetry_reader_by_chip_id) {
+    for (const auto& [chip_id, telemetry_reader] : telemetry_reader_by_chip_id) {
         // Get ASICDescriptor
         std::optional<tt::tt_metal::ASICDescriptor> asic_descriptor =
             topology_translation->get_asic_descriptor_for_local_chip(chip_id);

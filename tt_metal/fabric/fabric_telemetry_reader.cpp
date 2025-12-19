@@ -48,6 +48,23 @@ struct ChannelContext {
 
 }  // namespace
 
+// Reads fabric telemetry for a specific chip and channel without MetalContext dependency.
+// This overload is used by the telemetry collector to avoid global lock contention.
+//
+// Thread safety: This function is thread-safe as long as cluster and hal references
+// remain valid for the duration of the call. The caller is responsible for ensuring
+// proper lifetime management of these objects.
+//
+// Error conditions: Throws std::exception if device read fails or if the channel
+// is invalid for the given chip.
+//
+// Arguments:
+//   cluster - UMD cluster reference for device I/O (must outlive this call)
+//   hal - Hardware abstraction layer for address resolution (must outlive this call)
+//   chip_id - Target chip to read telemetry from
+//   channel - Ethernet channel number to read
+//
+// Returns: FabricTelemetrySnapshot containing static and dynamic telemetry data
 tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
     tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel) {
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
@@ -55,7 +72,7 @@ tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
     const auto telemetry_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
 
-    auto& soc_desc = cluster.get_soc_descriptor(chip_id);
+    const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
     tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
 
     std::vector<std::byte> buffer(telemetry_size);

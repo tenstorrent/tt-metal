@@ -5,6 +5,7 @@
 #include <telemetry/ethernet/caching_fabric_telemetry_reader.hpp>
 
 #include <mutex>
+#include <typeinfo>
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
@@ -25,14 +26,14 @@ CachingFabricTelemetryReader::CachingFabricTelemetryReader(
 
 tt::tt_fabric::FabricTelemetrySnapshot CachingFabricTelemetryReader::read_telemetry() {
     try {
-        auto snapshot =
-            tt::tt_fabric::read_fabric_telemetry(const_cast<tt::umd::Cluster&>(*cluster_), *hal_, chip_id_, channel_);
+        auto snapshot = tt::tt_fabric::read_fabric_telemetry(*cluster_, *hal_, chip_id_, channel_);
 
         if (snapshot.static_info.supported_stats == 0) {
             log_debug(
                 tt::LogAlways,
                 "Fabric telemetry disabled for chip {} channel {} (supported_stats=0). "
-                "Set TT_METAL_FABRIC_TELEMETRY=1 to enable.",
+                "Set TT_METAL_FABRIC_TELEMETRY=\"chips=all;eth=all;erisc=all;stats=BANDWIDTH|...\" "
+                "and TT_METAL_FABRIC_BW_TELEMETRY=1 to enable.",
                 chip_id_,
                 channel);
             snapshot.dynamic_info.reset();
@@ -40,14 +41,39 @@ tt::tt_fabric::FabricTelemetrySnapshot CachingFabricTelemetryReader::read_teleme
 
         return snapshot;
 
-    } catch (const std::exception& e) {
+    } catch (const std::runtime_error& e) {
         log_warning(
             tt::LogAlways,
-            "Failed to read fabric telemetry for chip {} channel {}: {}. "
+            "Failed to read fabric telemetry for chip {} channel {} (runtime_error): {}. "
             "Device may be busy or unavailable.",
             chip_id_,
             channel_,
             e.what());
+
+        tt::tt_fabric::FabricTelemetrySnapshot empty_snapshot;
+        empty_snapshot.dynamic_info.reset();
+        return empty_snapshot;
+
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogAlways,
+            "Failed to read fabric telemetry for chip {} channel {} ({}): {}. "
+            "Unexpected error.",
+            chip_id_,
+            channel_,
+            typeid(e).name(),
+            e.what());
+
+        tt::tt_fabric::FabricTelemetrySnapshot empty_snapshot;
+        empty_snapshot.dynamic_info.reset();
+        return empty_snapshot;
+
+    } catch (...) {
+        log_warning(
+            tt::LogAlways,
+            "Failed to read fabric telemetry for chip {} channel {}: Unknown exception type. Unexpected error.",
+            chip_id_,
+            channel_);
 
         tt::tt_fabric::FabricTelemetrySnapshot empty_snapshot;
         empty_snapshot.dynamic_info.reset();

@@ -35,9 +35,9 @@ struct ARCTelemetrySnapshot {
     uint64_t board_id;
     uint8_t asic_location;
 
-    // Temperature sensors
-    double asic_temperature;
-    std::optional<double> board_temperature;
+    // Temperature sensors (Celsius)
+    double asic_temperature;                  // °C
+    std::optional<double> board_temperature;  // °C
 
     // Clock frequencies (MHz)
     std::optional<uint32_t> aiclk;

@@ -89,7 +89,11 @@ ChannelCounters read_tx_counters(tt::umd::Cluster& cluster, const Hal& hal, Chip
                 counters.tx_cycles = di.tx_bandwidth.elapsed_active_cycles;
             }
         }
-    } catch (...) { /* ignore read errors */
+    } catch (const std::exception& e) {
+        // Ignore read errors for inactive/unconfigured channels
+        log_trace(tt::LogTest, "Failed to read telemetry for chip {} channel {}: {}", chip, channel, e.what());
+    } catch (...) {
+        log_trace(tt::LogTest, "Failed to read telemetry for chip {} channel {}: unknown error", chip, channel);
     }
     return counters;
 }
