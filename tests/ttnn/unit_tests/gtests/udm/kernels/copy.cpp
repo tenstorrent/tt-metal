@@ -13,7 +13,7 @@
 
 #include <cstdint>
 #include <array>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "udm/accessor/mesh_tensor_accessor.h"
 #include "tt_metal/hw/inc/udm/udm_api.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"

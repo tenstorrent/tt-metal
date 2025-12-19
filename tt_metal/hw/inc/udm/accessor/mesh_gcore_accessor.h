@@ -5,10 +5,10 @@
 #pragma once
 
 #include <array>
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "dataflow_api_addrgen.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
 #endif
 
 // Forward declaration

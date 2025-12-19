@@ -22,12 +22,12 @@
 
 #include <cstdint>
 #include <array>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "udm/accessor/mesh_tensor_accessor.h"
 #include "tt_metal/hw/inc/udm/udm_api.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // TODO: move fabric counter init to fw kernel init
