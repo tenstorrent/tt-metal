@@ -14,7 +14,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, collection_serializer, triage_field, run_script
+from triage import ScriptConfig, collection_serializer, triage_field, run_script, log_check_risc
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -86,6 +86,9 @@ def dump_risc_debug_signals(
         # Verifying that the original data was restored
         assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
+        log_check_risc(location, risc_name, False, f"Failed to halt core {risc_name} at {location.to_user_str()}")
+
+        # Return the collected debug bus signals
         return DumpDebugBusSignals(
             names=signal_names_str,
             values=signal_values_hex,
