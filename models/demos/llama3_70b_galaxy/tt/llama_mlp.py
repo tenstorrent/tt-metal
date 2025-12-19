@@ -282,6 +282,21 @@ class TtLlamaMLP(LightweightModule):
             print(comp_allclose(ref_after_mul, comp_out))
             print()
 
+            if self.layer_num == 6:
+                # save w1_out_reduced_bf16 and w3_out_reduced_bf16
+                mesh_composer2d = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=[8, 4])
+                torch_w1_out_reduced_bf16 = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer2d)
+                torch_w3_out_reduced_bf16 = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer2d)
+                torch.save(torch_w1_out_reduced_bf16, "models/demos/llama3_70b_galaxy/tests/mul_silu_in0_8x4.pt")
+                torch.save(torch_w3_out_reduced_bf16, "models/demos/llama3_70b_galaxy/tests/mul_silu_in1_8x4.pt")
+                torch.save(ref_after_mul, "models/demos/llama3_70b_galaxy/tests/ref_after_mul.pt")
+                torch.save(comp_out, "models/demos/llama3_70b_galaxy/tests/comp_out_mul_silu.pt")
+
+                torch_w1_out_reduced_bf16_32x1 = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)
+                torch_w3_out_reduced_bf16_32x1 = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)
+                torch.save(torch_w1_out_reduced_bf16_32x1, "models/demos/llama3_70b_galaxy/tests/mul_silu_in0_32x1.pt")
+                torch.save(torch_w3_out_reduced_bf16_32x1, "models/demos/llama3_70b_galaxy/tests/mul_silu_in1_32x1.pt")
+
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
