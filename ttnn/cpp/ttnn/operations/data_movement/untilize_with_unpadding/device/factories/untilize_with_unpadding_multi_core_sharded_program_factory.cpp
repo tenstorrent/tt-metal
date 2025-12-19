@@ -300,14 +300,14 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         }
     }
 
-    shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id,
-        .writer_kernel_id = unary_writer_kernel_id,
-        .cb_src0 = cb_src0,
-        .cb_sharded_output = cb_sharded_output,
-        .cores = cores};
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = unary_reader_kernel_id,
+            .writer_kernel_id = unary_writer_kernel_id,
+            .cb_src0 = cb_src0,
+            .cb_sharded_output = cb_sharded_output,
+            .cores = cores}};
 }
 
 void UntilizeWithUnpaddingMultiCoreShardedProgramFactory::override_runtime_arguments(

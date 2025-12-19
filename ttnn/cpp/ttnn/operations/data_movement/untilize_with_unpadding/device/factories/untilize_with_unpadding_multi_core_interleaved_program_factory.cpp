@@ -228,13 +228,13 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
         tile_start_id += num_tiles_per_core;
     }
 
-    shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id,
-        .writer_kernel_id = unary_writer_kernel_id,
-        .cores = cores,
-        .ncores = ncores};
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = unary_reader_kernel_id,
+            .writer_kernel_id = unary_writer_kernel_id,
+            .cores = cores,
+            .ncores = ncores}};
 }
 
 void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_arguments(

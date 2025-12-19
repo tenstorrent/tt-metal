@@ -202,10 +202,10 @@ UntilizeWithUnpaddingSingleCoreProgramFactory::cached_program_t UntilizeWithUnpa
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
-    shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id, .core = core};
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = unary_reader_kernel_id, .writer_kernel_id = unary_writer_kernel_id, .core = core}};
 }
 
 void UntilizeWithUnpaddingSingleCoreProgramFactory::override_runtime_arguments(
