@@ -7,8 +7,6 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
-from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -30,6 +28,7 @@ class TransformerBlock(LightweightModule):
     ):
         super().__init__()
 
+        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
 
@@ -44,7 +43,7 @@ class TransformerBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
-        self.is_mixture_of_experts = False
+
         self.layer_num = layer_num
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
@@ -61,39 +60,16 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-
-        if getattr(self.args, "is_mixture_of_experts", False):
-            self.feed_forward = TtMoeLayer(
-                mesh_device=mesh_device,
-                state_dict=state_dict,
-                experts=TtMixtralMLP(
-                    mesh_device=mesh_device,
-                    state_dict=state_dict,
-                    args=args,
-                    layer_num=layer_num,
-                    dtypes={
-                        "w1": dtype,
-                        "w2": dtype,
-                        "w3": dtype,
-                    },
-                ),
-                args=args,
-                layer_num=layer_num,
-                dtype=dtype,
-                tt_ccl=self.tt_ccl,
-            )
-        else:
-            self.feed_forward = MLP(
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=layer_num,
-                dtype=dtype,
-                model_config=self.model_config,
-            )
-
+        self.feed_forward = MLP(
+            mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
+            args=args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            model_config=self.model_config,
+        )
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -194,8 +170,7 @@ class TransformerBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats_global=None,
-        rot_mats_local=None,
+        rot_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -210,12 +185,6 @@ class TransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
-
-        # Choose the correct rotation matrices based on the mode
-        rot_mats = (
-            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
-        )
-
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs

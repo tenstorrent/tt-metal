@@ -3,35 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
-from transformers.cache_utils import DynamicCache
-from transformers.models.mllama.modeling_mllama import MllamaTextCrossAttention
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
+from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
-def load_partial_weights(weights_path, layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len(layer_prefix) :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
-
-
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "text_seq_len",
     (2048,),
@@ -53,7 +36,6 @@ def load_partial_weights(weights_path, layer_prefix):
         "batch_2",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -64,36 +46,27 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model.cross_attention_layers.0.attention."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
     norm_eps = model_args.norm_eps
-
-    # Initialization of HF subclass parameters
-    hf_weights_repo_name = os.getenv("HF_MODEL")
-    past_key_values = DynamicCache()
-    config = AutoConfig.from_pretrained(hf_weights_repo_name)
-    config.text_config._attn_implementation = "sdpa"
-
-    # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
-    layer_idx = config.text_config.cross_attention_layers[0]
-    reference_model = MllamaTextCrossAttention(config.text_config, layer_idx=layer_idx)
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(
-        hf_weights_repo_name, f"model.language_model.layers.{layer_idx}.cross_attn."
+    reference_model = llama_reference_mod.CrossAttention(
+        dim=dim, head_dim=head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, norm_eps=norm_eps
     )
     reference_model.load_state_dict(partial_state_dict)
+
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
 
     all_tests_pass = True
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaCrossAttention(
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -109,13 +82,16 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
 
-    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute and store the Key and Value projections in memory
-    # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
-    reference_model.forward(
-        torch.ones(batch, 1, dim), pt_xattn_tokens, past_key_value=past_key_values, attention_mask=None
-    )
-    # tt_model expects a list of Key and Value projections
-    pt_xattn_cache_chunks = [past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx]]
+    """
+    Test compute_xattn_kv_cache
+    """
+    pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
+    pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
+    # slice out repeated KV heads
+    pt_xattn_cache_chunks = [
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+    ]
+
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
@@ -167,11 +143,9 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
-        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st ouput of the subclass method indexed as [0].
         pt_out = reference_model.forward(
-            pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
-        )[0] * full_text_mask.squeeze(1)
+            pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
+        )
 
         if mode == "prefill":
             outputs = []

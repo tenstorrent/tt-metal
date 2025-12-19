@@ -101,7 +101,6 @@ def tt_all_reduce(
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
-
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
             persistent_output_buffers=None,

@@ -74,25 +74,29 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.experimental.all_gather_async(
-                x,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.args.model_config[self.ag_config_key]["num_links"]
-                if self.ag_config_key and mode == "decode"
-                else 1,
-                topology=self.args.ccl_topology(),
-                memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
-                if self.ag_config_key and mode == "decode"
-                else 10,
-                num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
-                if self.ag_config_key and mode == "decode"
-                else 2,
-                num_buffers_per_channel=2,
-            )
+            try:
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=self.args.model_config[self.ag_config_key]["num_links"]
+                    if self.ag_config_key and mode == "decode"
+                    else 1,
+                    topology=self.args.ccl_topology(),
+                    memory_config=input_mem_cfg,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
+                    if self.ag_config_key and mode == "decode"
+                    else 10,
+                    num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
+                    if self.ag_config_key and mode == "decode"
+                    else 2,
+                    num_buffers_per_channel=2,
+                )
+            except:
+                breakpoint()
+                print("DOne")
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 

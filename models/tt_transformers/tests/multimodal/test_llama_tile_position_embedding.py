@@ -5,35 +5,19 @@
 import itertools
 import os
 
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoModelForVision2Seq
-from transformers.models.mllama.image_processing_mllama import (
-    convert_aspect_ratios_to_ids,
-    get_all_supported_aspect_ratios,
-)
-from transformers.models.mllama.modeling_mllama import MllamaPrecomputedAspectRatioEmbedding
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-def load_partial_weights(weights_path, embedding_layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(weights_path, torch_dtype="auto", local_files_only=True)
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if embedding_layer_prefix in key:
-            key_name = "embedding.weight" if "weight" in key else "gate"
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
-
-
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -51,7 +35,7 @@ def load_partial_weights(weights_path, embedding_layer_prefix):
     ],
 )
 @pytest.mark.parametrize("pre_embed", [False, True])
-def test_tile_position_emb_inference(
+def test_conv2d_inference(
     mesh_device,
     reset_seeds,
     # Input params
@@ -69,11 +53,13 @@ def test_tile_position_emb_inference(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    # TT models use full state dict keys as cached weight names
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder." + (
         "pre_tile_pos_embed." if pre_embed else "post_tile_pos_embed."
     )
-    embedding_layer_prefix = "pre_tile_positional_embedding" if pre_embed else "post_tile_positional_embedding"
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     ntok = nearest_32(model_args.vision_chunk_ntok - (0 if pre_embed else 1))
     dim = model_args.vision_dim
@@ -110,29 +96,13 @@ def test_tile_position_emb_inference(
     tt_aspect_ratios = aspect_ratios.tolist()
 
     ##### Perform the torch ops #####
-    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
-
-    # subclass MllamaPrecomputedAspectRatioEmbedding expects parameters in the following format
-    class Config:
-        def __init__(
-            self,
-            max_num_tiles=max_num_tiles,
-            hidden_size=dim,
-            max_aspect_ratio_id=len(supported_aspect_ratios),
-            is_gated=gated,
-        ):
-            self.max_num_tiles = max_num_tiles
-            self.hidden_size = hidden_size
-            self.max_aspect_ratio_id = max_aspect_ratio_id
-            self.is_gated = is_gated
-
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), embedding_layer_prefix)
-    reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
+    reference_model = llama_reference_mod.TilePositionEmbedding(
+        num_tiles=max_num_tiles,
+        width=dim,
+        gated=gated,
+    )
     reference_model.load_state_dict(partial_state_dict)
-    # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
-    aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))
-    reference_output = reference_model(input_tensor, aspect_ratios_id)
+    reference_output = reference_model(input_tensor, aspect_ratios)
 
     ##### Perform the TT ops #####
     tt_model = TtLlamaTilePositionEmbedding(

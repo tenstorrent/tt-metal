@@ -29,6 +29,7 @@ class Attention(LightweightModule):
     ):
         super().__init__()
 
+        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -94,10 +95,6 @@ class Attention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-        self.is_sliding = (
-            configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
-        )
-        self.sliding_window = configuration.sliding_window if self.is_sliding else None
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -151,14 +148,14 @@ class Attention(LightweightModule):
         self.wqkv_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
-        if f"{wq_str}.bias" in state_dict:
+        if f"{wq_str}.bias" in self.state_dict:
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
                         ],
                         dim=-1,
                     )
@@ -217,9 +214,9 @@ class Attention(LightweightModule):
         qkv_list = []
         for i in range(self.num_devices_per_group):
             # Chunk weights
-            wq_selected = torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(self.state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
@@ -253,12 +250,12 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
-        if f"{q_norm_str}.weight" in state_dict:
+        if f"{q_norm_str}.weight" in self.state_dict:
             fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
-                state_dict=state_dict,
+                state_dict=self.state_dict,
                 state_dict_prefix=None,  # we already prefix q_norm_str
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
@@ -267,18 +264,17 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"]
-                tt_ccl=self.tt_ccl,
             )
             self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
         else:
             self.q_norm = lambda x, mode: x
 
-        if f"{k_norm_str}.weight" in state_dict:
+        if f"{k_norm_str}.weight" in self.state_dict:
             fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
-                state_dict=state_dict,
+                state_dict=self.state_dict,
                 state_dict_prefix=None,  # we already prefix k_norm_str
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
@@ -287,7 +283,6 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"],
-                tt_ccl=self.tt_ccl,
             )
             self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
         else:
@@ -295,7 +290,7 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
@@ -382,7 +377,14 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
+    def forward_decode(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mats=None,
+        page_table=None,
+        kv_cache=None,
+    ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
@@ -413,7 +415,6 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
-            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -507,7 +508,6 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -519,7 +519,6 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
@@ -668,6 +667,7 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        print("Entering forward_prefill")
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -688,11 +688,12 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
-
+        print("Completed QKV matmul")
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
+        print("STARTING ALL REDUCE")
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
             self.mesh_device,
@@ -703,6 +704,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
         )
+        print("DONE ALL REDUCE")
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -721,6 +723,7 @@ class Attention(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        print("Completed creating QKV heads")
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
@@ -733,7 +736,7 @@ class Attention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-
+        print("Applying rotary embeddings")
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -745,7 +748,7 @@ class Attention(LightweightModule):
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-
+        print("Applying rotary embeddings to K")
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
             rot_mats[0],
@@ -778,7 +781,7 @@ class Attention(LightweightModule):
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
-
+        print("Filling KV cache")
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
@@ -805,6 +808,7 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
+        print("Filling KV cache done")
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
@@ -812,16 +816,15 @@ class Attention(LightweightModule):
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
+        print("Starting SDPA")
 
         if chunk_start_idx is not None:
-            if self.sliding_window is not None:
-                raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_1QSD_8b,
-                input_tensor_k=keys_BKSD,
-                input_tensor_v=values_BKSD,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
+                q_heads_1QSD_8b,
+                keys_BKSD,
+                values_BKSD,
+                page_table,
+                chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
@@ -831,7 +834,6 @@ class Attention(LightweightModule):
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
                 is_causal=True,
-                sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -847,6 +849,7 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
+        print("Starting output matmul")
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -855,7 +858,7 @@ class Attention(LightweightModule):
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
-
+        print("Completed concatenating heads")
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
             attn_output_11SH = ttnn.experimental.all_gather_async(
@@ -871,7 +874,7 @@ class Attention(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-
+        print("Completed all gather")
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -880,7 +883,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
-
+        print("Completed output matmul")
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
@@ -899,7 +902,7 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
             )
-
+        print("Completed reduce scatter")
         return output_11SH
 
     def forward(

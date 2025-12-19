@@ -2,24 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
-from dataclasses import dataclass, fields
-from typing import List
+from dataclasses import dataclass
 
 import torch
+from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
+from llama_models.llama3.reference_impl.generation import (
+    ChatPrediction,
+    CompletionPrediction,
+    TokenResult,
+    sample_top_p,
+)
 from loguru import logger
 
 import ttnn
-from models.common.llama_models import (
-    CompletionMessage,
-    StopReason,
-    TokenResult,
-    create_vision_mask,
-    encode_content,
-    extract_images_from_messages,
-    sample_top_p,
-)
-from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -36,37 +31,13 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float | list[float]
-    top_k: int | list[int]
-    top_p: float | list[float]
-    presence_penalty: float | list[float] = 0.0
-    frequency_penalty: float | list[float] = 0.0
-    repetition_penalty: float | list[float] = 1.0
-    seed: int | list[int] = 0
-    enable_log_probs: bool | list[bool] = False
-
-
-SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
-
-
-# Split lists into chunks
-def split_list(lst, n):
-    """Split list into n equal parts"""
-    chunk_size = len(lst) // n
-    chunks = []
-    start = 0
-    for i in range(n):
-        chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
-        start += chunk_size
-    return chunks
-
-
-def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
-    return sequence_length > max_prefill_chunk_size
+    temperature: float
+    top_k: int
+    top_p: float
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
+    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -80,203 +51,17 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
-        self.processor = processor
         self.tokenizer = tokenizer
+        self.formatter = formatter
         self.data_parallel = len(self.model)
         self.prev_page_table = None
-        self.trace_id_prefill = defaultdict(lambda: None)
-        self.trace_inputs_prefill = defaultdict(lambda: None)
-        self.trace_output_prefill = defaultdict(lambda: None)
-        self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
-        self.trace_inputs_decode = defaultdict(lambda: None)
-        self.trace_output_decode = defaultdict(lambda: None)
-        self.prefill_traces_warmup = False
-        self.already_warmed_up_prefill = False
-        # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
-        self.enable_split_sampling = True
-        self.mode = None
-
-    def _chunk_sampling_param(self, values):
-        if isinstance(values, List):
-            return split_list(values, self.data_parallel)
-        return [values] * self.data_parallel
-
-    def _set_sampling_trace_mode(self, enabled: bool):
-        for model_instance in self.model:
-            sampling_module = getattr(model_instance, "sampling", None)
-            if sampling_module is not None:
-                sampling_module.enable_internal_trace = enabled
-
-    def warmup_model_prefill(
-        self,
-        kv_cache,
-        enable_trace,
-        sampling_params=None,
-    ):
-        if self.already_warmed_up_prefill:
-            return
-        self.already_warmed_up_prefill = True
-
-        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
-
-        for model_id in range(self.data_parallel):
-            for supported_length in sequence_lengths_to_warmup:
-                # When model_id = 0, we compile all operators for the first time
-                # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
-                if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
-                ):
-                    continue
-
-                warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
-                warmup_empty_slots = list(range(1))
-
-                logger.info(f"Warming up prefill for sequence length: {supported_length}")
-
-                page_table_warmup = None
-                # second check is some tests set the kv_cache to [None] instead of None
-                if kv_cache is not None and kv_cache[model_id] is not None:
-                    block_size = get_block_size(kv_cache[model_id])
-                    num_blocks = num_blocks_in_seq(supported_length, block_size)
-                    page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
-
-                # chunked prefill not supported without paged attention
-                if page_table_warmup is None and max_prefill_chunk_size_cutoff(
-                    supported_length, self.model_args[0].max_prefill_chunk_size
-                ):
-                    logger.warning(
-                        "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
-                    )
-                    break
-
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    page_table_warmup,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    warmup_empty_slots,
-                    enable_trace,
-                    model_id,
-                )
-
-    def _capture_trace_prefill(
-        self,
-        prefill_ids,
-        page_table=None,
-        kv_cache=None,
-        model_id=-1,
-    ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
-        # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
-        tt_rot_mats_prefill_global = host_inputs[1]
-        tt_rot_mats_prefill_local = host_inputs[2]
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x=transformed_inputs[0],
-            rot_mats_global=tt_rot_mats_prefill_global,
-            rot_mats_local=tt_rot_mats_prefill_local,
-            page_table=transformed_inputs[1],
-            chunk_page_table=transformed_inputs[2],
-            kv_cache=kv_cache,
-        )
-        logger.info("Done Compiling Model")
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
-        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x=transformed_inputs[0],
-            rot_mats_global=tt_rot_mats_prefill_global,
-            rot_mats_local=tt_rot_mats_prefill_local,
-            page_table=transformed_inputs[1],
-            chunk_page_table=transformed_inputs[2],
-            kv_cache=kv_cache,
-        )
-        ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-        logger.info("Done Capturing Prefill Trace")
-        return trace_id, tt_out_trace, *device_inputs
-
-    def _easy_trace_prefill(
-        self,
-        prefill_ids,
-        page_table=None,
-        user_id=0,
-        last_token_idx=None,
-        kv_cache=None,
-        model_id=-1,
-        prefill_seq_len=None,
-        **kwargs,
-    ):
-        # We are not appending host/device here because we never do device sampling in prefill with TTT
-        trace_key = f"{prefill_seq_len}_{model_id}"
-        if self.trace_id_prefill[trace_key] is None:
-            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                prefill_ids,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                model_id=model_id,
-            )
-            self.trace_id_prefill[trace_key] = trace_id
-            self.trace_inputs_prefill[trace_key] = device_inputs
-            self.trace_output_prefill[trace_key] = tt_out_trace
-
-        tt_out_trace = self._prefill_forward_trace(
-            self.trace_id_prefill[trace_key],
-            self.trace_inputs_prefill[trace_key],
-            self.trace_output_prefill[trace_key],
-            prefill_ids,
-            page_table=page_table,
-            model_id=model_id,
-        )
-
-        return tt_out_trace
-
-    def _prefill_forward_trace(
-        self,
-        trace_id,
-        device_inputs,
-        tt_out_trace,
-        prefill_ids,
-        user_id=0,
-        page_table=None,
-        model_id=-1,
-    ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
-
-        device_inputs = copy_host_to_device(
-            host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
-        )
-
-        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
-
-        return tt_out_trace
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self,
-        tokens: torch.Tensor,
-        page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        enable_trace=True,
-        model_id_warmup=None,
-        **kwargs,
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
     ):
-        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-        else:
-            # Only paged attention is supported for prefill
-            enable_trace = False
-
-        # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -290,13 +75,11 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            # if model_id is not None, it means that prefill is called from warmup_prefill
-            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+            model_id = user_id // max_batch_size_per_model
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
-            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
@@ -305,71 +88,28 @@ class Generator:
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
-
-            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
-
-            logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
-            )
-
             page_table_user = (
-                self._get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
-                    kv_cache[model_id],
-                    seq_len,
-                    trace_enabled=enable_trace_current_prompt,
-                    prefill_seq_len=prefill_seq_len,
-                )
+                self._get_prefill_user_page_table(page_table[idx : idx + 1], kv_cache[model_id], seq_len)
                 if page_table is not None
                 else None
             )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
-            # Check if 'pixel_values' exists and index it safely
-            if local_kwargs.get("pixel_values", None) is not None:
-                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
-                if "image_grid_thw" in local_kwargs:
-                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+            logits = self.prefill_forward_single_user_text(
+                prefill_ids,
+                page_table=page_table_user,
+                user_id=group_user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=model_kv_cache,
+                model_id=model_id,
+            )
+            out_list.append(logits)
 
-            if enable_trace_current_prompt:
-                logits = self._easy_trace_prefill(
-                    prefill_ids,
-                    page_table=page_table_user,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
-                    model_id=model_id,
-                    prefill_seq_len=prefill_seq_len,
-                    **local_kwargs,
-                )
-            else:
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
-                    model_id=model_id,
-                    **local_kwargs,
-                )
-            if enable_trace_current_prompt:
-                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-                # We need to do this here, because we can't do this part in forward() if we have trace enabled
-                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
-
-            # We have to dispatch copy to host to avoid corruption by the next user's prefill
-            out_list.append(logits.cpu(blocking=False))
-
-        # Process the logits after all the prefill are done in data parallel mode
         for idx, out in enumerate(out_list):
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-
-            # Ensure all copying is done
-            ttnn.synchronize_device(self.model[model_id].mesh_device)
+            model_id = user_id // max_batch_size_per_model
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
@@ -377,9 +117,7 @@ class Generator:
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
-    ):
+    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -420,8 +158,7 @@ class Generator:
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_global_prefill,
-                    chunk_rot_mats_local_prefill,
+                    chunk_rot_mats_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
@@ -429,19 +166,16 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
-                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=chunk_rot_mats_global_prefill,
-                    rot_mats_local=chunk_rot_mats_local_prefill,
+                    rot_mats=chunk_rot_mats_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
-                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -449,22 +183,14 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            (
-                prefill_input,
-                rot_mats_global_prefill,
-                rot_mats_local_prefill,
-                page_table_tt,
-                _,
-            ) = self.model[model_id].prepare_inputs_prefill(
+            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
-                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=rot_mats_global_prefill,
-                rot_mats_local=rot_mats_local_prefill,
+                rot_mats=rot_mats_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -482,78 +208,34 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_batch=False,
-        prompt_tokens: torch.Tensor | None = None,
-        output_tokens: torch.Tensor | None = None,
     ):
-        mode_switched = False
-        if self.mode != "decode":
-            self.mode = "decode"
-            mode_switched = True
-        sampling_on_device = sampling_params is not None
-        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
-        self._set_sampling_trace_mode(split_sampling_enabled)
+        assert (
+            sampling_params is None or sampling_params.temperature == 0
+        ), "Currently only supporting greedy decoding (temperature=0) on device"
+        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
         B = tokens.shape[0]
-
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-        sampling_params_list = None
-        if sampling_params is not None:
-            # Fall back to dataclass defaults when optional fields are omitted
-            chunked_fields = {}
-            for field in SAMPLING_PARAM_FIELDS:
-                try:
-                    val = getattr(sampling_params, field)
-                except AttributeError:
-                    if hasattr(SamplingParams, field):
-                        val = getattr(SamplingParams, field)
-                    else:
-                        raise
-                chunked_fields[field] = self._chunk_sampling_param(val)
-            prompt_chunks = (
-                torch.chunk(prompt_tokens, self.data_parallel, 0)
-                if prompt_tokens is not None
-                else [None] * self.data_parallel
-            )
-            output_chunks = (
-                torch.chunk(output_tokens, self.data_parallel, 0)
-                if output_tokens is not None
-                else [None] * self.data_parallel
-            )
-            sampling_params_list = [
-                SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
-                for i in range(self.data_parallel)
-            ]
-            for i in range(self.data_parallel):
-                formatted_params = format_sampling_params(
-                    sampling_params_list[i], 32
-                )  # Sampling needs params padded to 32 regardless of batch_size
-                sampling_module = getattr(self.model[i], "sampling", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                sampling_module.reset_sampling_params(formatted_params)
-                if reset_batch:
-                    sampling_module.reset_seed(formatted_params.seed)
-                    sampling_module.reset_prompt_tokens(prompt_chunks[i])
-                    sampling_module.reset_output_state(output_chunks[i])
 
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "sampling_on_device": sampling_on_device,
+            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_logits = self._easy_trace_text(**decode_kwargs)
         else:
-            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_decode_output)
-            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
-        return tt_decode_output
+            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
+            return to_host
+        else:
+            return tt_logits
 
     def _decode_forward_no_trace_text(
         self,
@@ -561,26 +243,24 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
+        argmax_on_device=False,
     ):
         """
         Performs text decode step.
         Returns tt_logits on device
         """
-        tt_output = []
+        tt_logits = []
+
         tt_tokens = []
         tt_current_pos = []
         tt_rot_mat_idxs = []
         tt_page_table = []
+
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            model_i = self.model[i]
-            (
-                tt_tokens_i,
-                tt_current_pos_i,
-                tt_rot_mat_idxs_i,
-                tt_page_table_i,
-            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
+            tt_tokens_i, tt_current_pos_i, tt_rot_mat_idxs_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
+                tokens[i], current_pos[i], user_page_table
+            )
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
@@ -588,25 +268,25 @@ class Generator:
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
-                sampling_on_device=sampling_on_device,
+                argmax_on_device=argmax_on_device,
             )
-            tt_output.append((tt_logits_i, tt_log_probs_i))
+            tt_logits.append(tt_logits_i)
 
-        return tt_output
+        return tt_logits
 
-    def _capture_decode_trace_text(
+    def _capture_trace_text(
         self,
         tokens,
         current_pos,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
+        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -614,11 +294,7 @@ class Generator:
 
         # Compile run
         self._decode_forward_no_trace_text(
-            tokens,
-            current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            sampling_on_device=sampling_on_device,
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
         )
         logger.info("Done Compiling Model")
 
@@ -628,7 +304,6 @@ class Generator:
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
@@ -637,55 +312,43 @@ class Generator:
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
-            sampling_module = getattr(self.model[i], "sampling", None)
-            split_enabled = (
-                sampling_on_device
-                and sampling_module is not None
-                and getattr(sampling_module, "enable_internal_trace", False)
-            )
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *device_inputs[i],
-                    kv_cache=user_kv_cache,
-                    sampling_on_device=sampling_on_device,
-                    capture_sampling_trace=split_enabled,
+                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
-
-            if split_enabled:
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
-
         return trace_ids, tt_out_trace, *device_inputs
 
-    def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+    def _easy_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        argmax_on_device=False,
     ):
         """
-        Run decode forward text with tracing
+        Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        # The trace is different depending on whether we are doing device sampling or not
-        if not self.trace_ids_decode[sampling_on_device]:
-            trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
+        if not hasattr(self, "trace_ids_text"):
+            trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
-            self.trace_ids_decode[sampling_on_device] = trace_ids
-            self.trace_inputs_decode[sampling_on_device] = device_inputs
-            self.trace_output_decode[sampling_on_device] = tt_out_trace
+            self.trace_ids_text = trace_ids
+            self.trace_inputs_text = device_inputs
+            self.trace_output_text = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode
-        reset_inputs = reset_batch or not sampling_on_device
+        reset_inputs = not argmax_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
-            # If the page table has changed, it means additional pages have been added or inputs are shuffled
             reset_inputs = True
-            if page_table is not None:
-                self.prev_page_table = tuple(pt.clone() for pt in page_table)
+            self.prev_page_table = page_table
 
         if reset_inputs:
             for i in range(self.data_parallel):
@@ -694,27 +357,13 @@ class Generator:
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
+                    device_tensors=self.trace_inputs_text[i],
                 )
-        for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-        outputs = self.trace_output_decode[sampling_on_device]
-        if sampling_on_device:
-            new_outputs = []
-            for i in range(self.data_parallel):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
-                    new_outputs.append(outputs[i])
-                    continue
 
-                new_outputs.append(
-                    sampling_module.sample(
-                        logits=outputs[i],
-                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
-                    )
-                )
-            return new_outputs
-        return outputs
+        for i, trace_id in self.trace_ids_text.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return self.trace_output_text
 
     def _prefill_forward_single_user(
         self,
@@ -818,61 +467,6 @@ class Generator:
         self,
         vision_images,
         vision_masks,
-        tokens,
-        xattn_caches,
-        total_lens,
-        prompt_lens,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-        empty_slots=None,
-        **kwargs,
-    ):
-        if not self.model_args[0].is_llama_vision():
-            logits = self.prefill_forward_text(
-                tokens,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                prompt_lens=prompt_lens,
-                pixel_values=vision_images,
-                **kwargs,
-            )
-
-            return logits, None, None, None, None
-
-        else:
-            (
-                output_logits,
-                prefill_output_xattn_masks,
-                prefill_output_full_text_row_masked_out_masks,
-                decode_output_xattn_masks,
-                decode_output_full_text_row_masked_out_masks,
-            ) = self.prefill_forward_llama_vision(
-                vision_images,
-                vision_masks,
-                tokens,
-                xattn_caches,
-                total_lens,
-                prompt_lens,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                cross_page_table=cross_page_table,
-                empty_slots=empty_slots,
-            )
-
-            return (
-                output_logits,
-                prefill_output_xattn_masks,
-                prefill_output_full_text_row_masked_out_masks,
-                decode_output_xattn_masks,
-                decode_output_full_text_row_masked_out_masks,
-            )
-
-    # Note: This function is called by vLLM
-    def prefill_forward_llama_vision(
-        self,
-        vision_images,
-        vision_masks,
         tokens: torch.Tensor,
         xattn_caches,
         total_lens,
@@ -952,7 +546,7 @@ class Generator:
 
             last_token_idx = prompt_lens[idx] - 1
             output_logits[idx] = self.model[model_id].process_output_prefill(
-                out_list[idx].cpu(), 1, last_token_idx=(last_token_idx % 32)
+                out_list[idx], 1, last_token_idx=(last_token_idx % 32)
             )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -966,7 +560,7 @@ class Generator:
         )
 
     # Note: This function is called by vLLM
-    def decode_forward_llama_vision(
+    def decode_forward(
         self,
         start_pos,
         tokens,
@@ -1025,119 +619,26 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits)
-            return self.process_decode_output_host(to_host)
+            to_host = self.read_decode_output(tt_logits, B)
+            return to_host
         else:
             return tt_logits
 
-    def decode_forward(
-        self,
-        start_pos,
-        tokens,
-        prefill_cross_attention_masks,
-        prefill_full_text_row_masked_out_mask,
-        decode_cross_attention_masks,
-        decode_full_text_row_masked_out_mask,
-        xattn_caches=None,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-        enable_trace=True,
-        read_from_device=True,
-    ):
-        if not self.model_args[0].is_llama_vision():
-            output = self.decode_forward_text(
-                tokens,
-                start_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=kv_cache,
-            )
-        else:
-            output = self.decode_forward_llama_vision(
-                start_pos,
-                tokens,
-                prefill_cross_attention_masks,
-                prefill_full_text_row_masked_out_mask,
-                decode_cross_attention_masks,
-                decode_full_text_row_masked_out_mask,
-                xattn_caches,
-                page_table,
-                kv_cache,
-                cross_page_table,
-                enable_trace,
-                read_from_device,
-            )
-        # skip returning log-probs
-        if isinstance(output, tuple):
-            return output[0]
-        else:
-            return output
-
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, async_read=False):
+    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
         """
-        Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
-
-        """
-        if not async_read:
-            # output is a tuple of (tt_out_tok, tt_log_probs)
-            if isinstance(tt_out[0], tuple):
-                return [
-                    (out[0].cpu(), out[1].cpu() if out[1] is not None else None)  # logits should never be None
-                    for out in tt_out
-                ]
-            elif isinstance(tt_out[0], ttnn.Tensor):
-                return [out.cpu() for out in tt_out]
-
-        host_outputs = []
-        read_events = []
-        for i in range(self.data_parallel):
-            if isinstance(tt_out[i], tuple):
-                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
-                host_outputs.append(outputs)
-            elif isinstance(tt_out[i], ttnn.Tensor):
-                outputs = tt_out[i].cpu(blocking=False)
-                host_outputs.append(outputs)
-
-            read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
-
-        return host_outputs, read_events
-
-    # Note: This function is called by vLLM
-    def process_decode_output_host(self, tt_out, is_tokens=False):
-        """
-        Converts the input ttnn host tensors to a torch tensor.
-        The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
-        log_probs = []
         for i in range(self.data_parallel):
-            if isinstance(tt_out[i], tuple):
-                logits_i = self.model[i].process_output_decode(
-                    tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
-                )
-                log_probs_i = (
-                    self.model[i].process_output_decode(
-                        tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
-                    )
-                    if tt_out[i][1] is not None
-                    else torch.ones(logits_i.shape)
-                )
-                logits.append(logits_i)
-                log_probs.append(log_probs_i)
-            elif isinstance(tt_out[i], ttnn.Tensor):
-                logits_i = self.model[i].process_output_decode(
-                    tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
-                )
-                logits.append(logits_i)
-                # add dummy tensor for log_probs
-                log_probs.append(torch.ones(logits_i.shape))
-            else:
-                raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
-        return (torch.cat(logits, 0), torch.cat(log_probs, 0))
+            logits_i = self.model[i].process_output_decode(
+                tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
+            )
+            logits.append(logits_i)
+
+        return torch.cat(logits, 0)
 
     def _decode_forward_no_trace(
         self,
@@ -1204,11 +705,10 @@ class Generator:
             tt_cross_page_table.append(tt_cross_page_table_i)
 
         tt_logits = []
-        tt_log_probs = []
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1221,9 +721,8 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits.append(tt_logits_i)
-            tt_log_probs.append(tt_log_probs_i)
 
-        return tt_logits, tt_log_probs
+        return tt_logits
 
     def _capture_trace(
         self,
@@ -1285,8 +784,8 @@ class Generator:
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            # tt_logits_rm and tt_log_probs_rm unused later, no need to make a list
-            tt_logits_rm, tt_log_probs_rm = self.model[i].ttnn_decode_forward(
+            # tt_logits_rm unused later, no need to make a list
+            tt_logits_rm = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1367,7 +866,6 @@ class Generator:
         tt_h_trace_input = tt_h
 
         tt_logits_rm = []
-        tt_log_probs_rm = []
         trace_ids = {}
         # Do on-device transformations of inputs before forward
         for i in range(self.data_parallel):
@@ -1391,7 +889,7 @@ class Generator:
                 B=B,
             )
 
-            tt_logits_rm_i, tt_log_probs_rm_i = self.model[i].ttnn_decode_forward(
+            tt_logits_rm_i = self.model[i].ttnn_decode_forward(
                 tt_h_transform,
                 tt_xattn_mask_transform,
                 tt_full_text_mask_expand_1NSH_transform,
@@ -1404,14 +902,12 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits_rm.append(tt_logits_rm_i)
-            tt_log_probs_rm.append(tt_log_probs_rm_i)
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
         return (
             trace_ids,
             tt_logits_rm,
-            tt_log_probs_rm,
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
@@ -1516,7 +1012,6 @@ class Generator:
             (
                 trace_ids,
                 tt_logits_rm,
-                tt_log_probs_rm,
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
@@ -1577,14 +1072,15 @@ class Generator:
 
     def generate(
         self,
-        vision_images,
-        vision_mask,
-        prompt_tokens,
+        model_input,
         max_gen_len: int,
         temperature: float = 0.6,
         top_p: float = 0.9,
     ):
         # Do initial prefill
+        vision_images = model_input.vision.images
+        vision_mask = model_input.vision.mask
+        prompt_tokens = model_input.tokens
         prefill_len = len(prompt_tokens)
         total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
 
@@ -1611,7 +1107,7 @@ class Generator:
         )
 
         last_token_idx = prefill_len - 1
-        logits = self.model[model_id].process_output_prefill(logits.cpu(), 1, last_token_idx=(last_token_idx % 32))
+        logits = self.model[model_id].process_output_prefill(logits, 1, last_token_idx=(last_token_idx % 32))
         logits = logits.view(1, 1, self.model_args[model_id].vocab_size)
 
         prefill_output_xattn_masks = [[] for _ in range(self.data_parallel)]
@@ -1631,8 +1127,7 @@ class Generator:
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
-            decoder = self.tokenizer or self.processor
-            return next_token, decoder.decode(next_token.tolist())
+            return next_token, self.tokenizer.decode(next_token.tolist())
 
         next_token, text = sample(logits)
 
@@ -1672,20 +1167,11 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        encoder = self.processor or self.tokenizer
-        model_input = encoder.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
-        vision_images = extract_images_from_messages(messages) or None
-        vision_mask = None
-        if vision_images is not None:
-            vision_mask = create_vision_mask(model_input["input_ids"][0], encoder.image_token_id) or None
-
         tokens = []
 
         stop_reason = None
         for result in self.generate(
-            vision_images=vision_images,
-            vision_mask=vision_mask,
-            prompt_tokens=model_input["input_ids"][0],
+            model_input=self.formatter.encode_dialog_prompt(messages, tool_prompt_format=False),
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
@@ -1699,64 +1185,41 @@ class Generator:
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
 
-        decoder = self.tokenizer or self.processor
-        message = decoder.decode(tokens, skip_special_tokens=True)
+        message = self.formatter.decode_assistant_message(tokens, stop_reason)
 
-        return CompletionMessage(message)
+        return ChatPrediction(generation=message)
 
     def text_completion(
         self,
-        content,
+        content: InterleavedTextMedia,
         temperature: float = 0.6,
         top_p: float = 0.9,
         max_gen_len=None,
     ):
-        """Supports only vision models at the moment"""
         model_id = 0
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        vision_images = []
-        image_token = getattr(self.processor, "image_token", None) or getattr(self.tokenizer, "image_token", None)
-        text = encode_content(content, vision_images, image_token)
-        vision_images = vision_images or None
-        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
-        vision_mask = None
-        if vision_images is not None:
-            vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
+        model_input = self.formatter.encode_content(content)
 
         tokens = []
 
         for result in self.generate(
-            vision_images=vision_images,
-            vision_mask=vision_mask,
-            prompt_tokens=model_input["input_ids"],
+            model_input=model_input,
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
         ):
             tokens.append(result.token)
 
-        decoder = self.tokenizer or self.processor
-        generation = decoder.decode(tokens, skip_special_tokens=True)
+        generation = self.tokenizer.decode(tokens)
 
-        return generation
+        return CompletionPrediction(generation=generation)
 
-    def _get_prefill_user_page_table(
-        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None
-    ):
+    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
-        num_blocks = 0
-        if trace_enabled:
-            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-        else:
-            num_blocks = num_blocks_in_seq(prefill_len, block_size)
-        if trace_enabled:
-            if page_table.shape[1] < num_blocks:
-                # If page table is too short, pad it with -1
-                padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
-                page_table = torch.cat([page_table, padding], dim=1)
+        num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
 
     ## Destructor
@@ -1779,8 +1242,10 @@ def create_submeshes(mesh_device, data_parallel):
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
+    # Check if the mesh is 8x4 (expected shape for TG) and perfer row split
+    # Submeshes with 8 devices are expected to be in ring topology hence the row split
+    if num_rows == 8 and num_cols == 4 and num_rows % data_parallel == 0:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
         for submesh in submeshes:
             submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
         return submeshes

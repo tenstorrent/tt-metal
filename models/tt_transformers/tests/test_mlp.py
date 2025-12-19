@@ -9,14 +9,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -34,7 +34,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
@@ -51,15 +50,9 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
 
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
-    if model_args.is_90b:
-        # float32 ~3x faster than bfloat16.
-        # bfloat16 fails on CI (32k and 64k seq_len) with "This test seems to have hung... Timing out test case"
-        reference_model.to(torch.float32)
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = MLP(
         mesh_device=mesh_device,
-        tt_ccl=tt_ccl,
         args=model_args,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),

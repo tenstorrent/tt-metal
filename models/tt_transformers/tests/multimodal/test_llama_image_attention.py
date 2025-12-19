@@ -3,53 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
-import torch.nn.functional as F
+from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
-from transformers.models.mllama.modeling_mllama import MllamaVisionAttention
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
-def load_partial_weights(weights_path, layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len(layer_prefix) :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
-
-
-def expand_num_tokens_to_mult8(tensor):
-    num_padding_patches = (8 - (tensor.shape[-2] % 8)) % 8
-    # Compute padding tuple for pad function
-    padding = (0, 0, 0, num_padding_patches)  # (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
-    # Pad the tensor
-    tensor = F.pad(tensor, padding, mode="constant", value=0)
-    slice_index = -num_padding_patches if num_padding_patches > 0 else 0
-    return tensor, slice_index
-
-
-def contract_num_tokens_from_mult8(tensor, slice_index):
-    if slice_index == 0:
-        return tensor
-    return tensor[:, :, :slice_index, :]
-
-
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
@@ -63,7 +30,6 @@ def contract_num_tokens_from_mult8(tensor, slice_index):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -73,23 +39,18 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.attn."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     dim = model_args.vision_dim
+    heads = model_args.vision_attn_n_heads
     ntok = model_args.vision_chunk_ntok
-
-    model_repo_name = os.getenv("HF_MODEL")
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
-    config = AutoConfig.from_pretrained(model_repo_name)
-    config.vision_config._attn_implementation = "sdpa"
-    reference_model = MllamaVisionAttention(config.vision_config)
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(model_repo_name, "model.vision_model.transformer.layers.0.self_attn.")
+    reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageAttention(
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -101,9 +62,10 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     ar = torch.tensor([[1, 2]])
     pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
     tt_attention_input = pt_block_input.clone()
-    pt_block_input, slice_index = expand_num_tokens_to_mult8(pt_block_input)
+    # Do PT padding
+    pt_block_input, npad = encoder_utils.expand_num_tokens_to_mult8(pt_block_input)
     # Create PT attention mask
-    mask = build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
+    mask = encoder_utils.build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
 
     attention_input = model_args.prepare_residual_tensor_prefill(
@@ -116,7 +78,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     fake_x = torch.zeros(
         attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
     )
-    tt_attn_mask = build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+    tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
     # Make striped attention mask to mask out our padding between 8 and 32
     # Striped mask doesn't affect PCC on first layer but is necessary for later layers
     tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
@@ -139,9 +101,9 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-    reference_output = reference_model(pt_block_input, attention_mask=mask)[0]
-    reference_output = reference_output.reshape(batch, num_chunks, ntok - slice_index, dim)
-    reference_output = contract_num_tokens_from_mult8(reference_output, slice_index)
+    reference_output = reference_model(pt_block_input, mask=mask)
+    reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
+    reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
