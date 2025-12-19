@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "compute_kernel_api/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.h"
 #else
 #include "compute_kernel_api/matmul.h"
 #endif
@@ -19,10 +19,17 @@ void MAIN {
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+
+    // REDUCE_OP/DIM is expected to come from add_define
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+        tt::CBIndex::c_0,  // input CB
+        tt::CBIndex::c_2,  // scaler CB
+        tt::CBIndex::c_3,  // output CB
+        Ht,
+        Wt,
+        NC);
 #else
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
-#endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -35,12 +42,7 @@ void MAIN {
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
-                // REDUCE_OP is expected to come from add_define
-#ifndef REDUCE_ROW_SUM_VIA_MM
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
-#else
                 matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0);
-#endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
 
@@ -50,5 +52,6 @@ void MAIN {
             release_dst();
         }
     }
+#endif
 }
 }  // namespace NAMESPACE
