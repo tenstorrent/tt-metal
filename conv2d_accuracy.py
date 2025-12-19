@@ -25,11 +25,33 @@ def ulp_error(res, ref):
         ref: Reference tensor (golden/expected)
 
     Returns:
-        ULP error between res and ref (in ULPs of ref)
-        Formula: |res - ref| / ULP(ref)
+        tuple: (ulp_errors, ulp_details) where:
+            - ulp_errors: ULP error tensor between res and ref (in ULPs of ref)
+              Formula: |res - ref| / ULP(ref)
+            - ulp_details: dict containing:
+                - max_ulp: maximum ULP error value
+                - max_ulp_index: index tuple where max ULP occurs
+                - calculated_value: res value at max ULP location
+                - golden_value: ref value at max ULP location
+                - ulp_value: ULP(ref) value at max ULP location (to detect near-zero division)
     """
     ref_ulp = ulp(ref)
-    return torch.abs((res.to(torch.float64) - ref.to(torch.float64)) / ref_ulp.to(torch.float64))
+    ulp_errors = torch.abs((res.to(torch.float64) - ref.to(torch.float64)) / ref_ulp.to(torch.float64))
+
+    # Track details about max ULP error (similar to comp_ulp)
+    max_ulp = torch.max(ulp_errors)
+    ulp_index = torch.argmax(ulp_errors)
+    ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, ref.shape))
+
+    ulp_details = {
+        "max_ulp": float(max_ulp),
+        "max_ulp_index": ulp_index_tuple,
+        "calculated_value": float(res[ulp_index_tuple]),
+        "golden_value": float(ref[ulp_index_tuple]),
+        "ulp_value": float(ref_ulp[ulp_index_tuple]),
+    }
+
+    return ulp_errors, ulp_details
 
 
 def compute_ulp_statistics(res, ref):
@@ -41,16 +63,16 @@ def compute_ulp_statistics(res, ref):
         ref: Reference tensor (numpy or torch)
 
     Returns:
-        Dictionary with ULP statistics
+        Dictionary with ULP statistics including details about max ULP error
     """
     # Convert numpy to torch if needed
     if isinstance(ref, np.ndarray):
         ref = torch.from_numpy(ref)
 
-    ulp_errors = ulp_error(res, ref)
+    ulp_errors, ulp_details = ulp_error(res, ref)
     ulp_vals = ulp_errors.detach().cpu().numpy().flatten()
 
-    return {
+    stats = {
         "mean": float(np.mean(ulp_vals)),
         "median": float(np.median(ulp_vals)),
         "max": float(np.max(ulp_vals)),
@@ -58,6 +80,11 @@ def compute_ulp_statistics(res, ref):
         "p95": float(np.percentile(ulp_vals, 95)),
         "p99": float(np.percentile(ulp_vals, 99)),
     }
+
+    # Add ULP details to track near-zero division
+    stats.update(ulp_details)
+
+    return stats
 
 
 def run_ttnn_conv2d(
@@ -208,7 +235,14 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
         (torch.float32, True, "fp32+fp32acc"),
     ]
     results = {
-        config[2]: {"k_values": [], "mean_ulp": [], "median_ulp": [], "max_ulp": [], "all_ulp_errors": []}
+        config[2]: {
+            "k_values": [],
+            "mean_ulp": [],
+            "median_ulp": [],
+            "max_ulp": [],
+            "all_ulp_errors": [],
+            "ulp_details": [],  # Track ULP details for each K value
+        }
         for config in configs
     }
 
@@ -282,7 +316,8 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
                 )
 
                 # Compute ULP errors
-                ulp_errors = ulp_error(ttnn_output, reference).detach().cpu().numpy().flatten()
+                ulp_errors_tensor, ulp_details = ulp_error(ttnn_output, reference)
+                ulp_errors = ulp_errors_tensor.detach().cpu().numpy().flatten()
 
                 # Compute statistics for this K
                 ulp_stats = {
@@ -296,11 +331,18 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
                 results[config_name]["median_ulp"].append(ulp_stats["median"])
                 results[config_name]["max_ulp"].append(ulp_stats["max"])
 
-                # Store ULP errors for aggregated analysis
+                # Store ULP errors and details for aggregated analysis
                 results[config_name]["all_ulp_errors"].append(ulp_errors)
+                results[config_name]["ulp_details"].append(ulp_details)
 
+                # Print detailed ULP information including near-zero division detection
                 print(
                     f"    Mean ULP: {ulp_stats['mean']:.2f}, Median ULP: {ulp_stats['median']:.2f}, Max ULP: {ulp_stats['max']:.2f}",
+                    flush=True,
+                )
+                print(
+                    f"    Max ULP details @ {list(ulp_details['max_ulp_index'])}: "
+                    f"|{ulp_details['calculated_value']} - {ulp_details['golden_value']}| / {ulp_details['ulp_value']}",
                     flush=True,
                 )
             except Exception as e:
@@ -333,6 +375,12 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
             # Concatenate all ULP error arrays
             all_ulp_errors = np.concatenate(results[config_name]["all_ulp_errors"])
 
+            # Find the worst-case ULP details across all K values
+            ulp_details_list = results[config_name]["ulp_details"]
+            worst_case_idx = max(range(len(ulp_details_list)), key=lambda i: ulp_details_list[i]["max_ulp"])
+            worst_case_details = ulp_details_list[worst_case_idx]
+            worst_case_k = results[config_name]["k_values"][worst_case_idx]
+
             # Compute statistics on combined ULP errors
             agg_stats = {
                 "mean": float(np.mean(all_ulp_errors)),
@@ -341,6 +389,8 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
                 "min": float(np.min(all_ulp_errors)),
                 "p95": float(np.percentile(all_ulp_errors, 95)),
                 "p99": float(np.percentile(all_ulp_errors, 99)),
+                "worst_case_details": worst_case_details,
+                "worst_case_k": worst_case_k,
             }
             aggregated_stats[config_name] = agg_stats
 
@@ -352,6 +402,12 @@ def run_conv_k_sweep(inner_channels_values, input_generator="rand", use_bias=Fal
             print(f"  Max ULP:    {agg_stats['max']:.4f}", flush=True)
             print(f"  P95 ULP:    {agg_stats['p95']:.4f}", flush=True)
             print(f"  P99 ULP:    {agg_stats['p99']:.4f}", flush=True)
+            print(f"  Worst case ULP details (K={worst_case_k}):", flush=True)
+            print(
+                f"    @ {list(worst_case_details['max_ulp_index'])}: "
+                f"|{worst_case_details['calculated_value']:.6e} - {worst_case_details['golden_value']:.6e}| / {worst_case_details['ulp_value']:.6e}",
+                flush=True,
+            )
 
     results["_aggregated"] = aggregated_stats
 
