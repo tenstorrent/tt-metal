@@ -9,8 +9,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {

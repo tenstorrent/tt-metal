@@ -7,9 +7,10 @@
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 /**
- * @file reduce_helpers.h
+ * @file reduce_helpers.hpp
  * @brief Single unified reduce function with automatic dispatch
  *
  * Provides ONE function that handles all reduce operations:
@@ -23,9 +24,7 @@
  * - Circular buffer manipulation (cb_wait_front, cb_pop_front, cb_reserve_back, cb_push_back)
  * - pack_tile for writing results to output CB
  *
- * DEST register capacity is automatically detected from JIT-generated headers:
- * - DST_SYNC_MODE (Half/Full sync mode)
- * - DST_ACCUM_MODE (16-bit/32-bit accumulation)
+ * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
  * Call compute_kernel_hw_startup() before using.
@@ -33,7 +32,7 @@
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
  *
  * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.h"
+ *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
  *
  *   compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
  *
@@ -52,51 +51,7 @@
 
 namespace compute_kernel_lib {
 
-// =============================================================================
-// DEST Register Capacity - Automatic Detection
-// =============================================================================
-
-// DST_SYNC_MODE is defined in JIT-generated chlkc_dst_sync_mode.h
-// DST_ACCUM_MODE is defined in JIT-generated chlkc_dst_accum_mode.h
-// Both are included via chlkc_list.h -> common_globals.h
-
-// DEST register capacity depends on:
-// 1. Sync mode (Half vs Full) - determined by DST_SYNC_MODE
-// 2. Accumulation mode (16-bit vs 32-bit) - determined by DST_ACCUM_MODE
-//
-// Capacity table:
-// - SyncFull + 16-bit (DST_ACCUM_MODE=false): 16 tiles
-// - SyncFull + 32-bit (DST_ACCUM_MODE=true):  8 tiles
-// - SyncHalf + 16-bit (DST_ACCUM_MODE=false): 8 tiles
-// - SyncHalf + 32-bit (DST_ACCUM_MODE=true):  4 tiles
-
-constexpr uint32_t get_dest_limit() {
-#if defined(DST_SYNC_MODE) && defined(DST_ACCUM_MODE)
-    // Automatically detect from JIT-generated header files
-    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
-        // Full-sync mode
-        if constexpr (DST_ACCUM_MODE) {
-            return 8;  // 32-bit accumulation
-        } else {
-            return 16;  // 16-bit accumulation
-        }
-    } else {
-        // Half-sync mode
-        if constexpr (DST_ACCUM_MODE) {
-            return 4;  // 32-bit accumulation
-        } else {
-            return 8;  // 16-bit accumulation
-        }
-    }
-#else
-    // Fallback if JIT headers not defined (shouldn't happen in real kernels)
-    // Use conservative half-sync 16-bit value
-    return 8;
-#endif
-}
-
-// Auto-detected default dest limit based on current sync and accumulation modes
-constexpr uint32_t DEST_AUTO_LIMIT = get_dest_limit();
+// get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
 // =============================================================================
 // Single Unified Reduce Function

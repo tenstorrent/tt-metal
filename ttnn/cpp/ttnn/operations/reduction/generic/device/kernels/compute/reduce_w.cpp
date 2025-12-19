@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #else
 #include "compute_kernel_api/matmul.h"
 #endif

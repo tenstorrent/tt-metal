@@ -10,7 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
