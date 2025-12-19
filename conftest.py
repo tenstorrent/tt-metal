@@ -328,11 +328,11 @@ def device(request, device_params):
     ttnn.close_device(device)
 
 
-# Session-scoped device fixture for faster test execution
-# Use this for tests that don't require a fresh device state between runs
-# To use: replace `device` fixture with `device_session` in test function signature
-@pytest.fixture(scope="session")
-def device_session(request):
+# Module-scoped device fixture for faster test execution
+# Shares a single device across all tests in a module (file)
+# Use this for parameterized tests that don't need custom device_params
+@pytest.fixture(scope="module")
+def device_module(request):
     import ttnn
 
     device_id = request.config.getoption("device_id")

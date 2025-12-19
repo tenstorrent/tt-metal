@@ -20,8 +20,8 @@ from models.common.utility_functions import is_grayskull, is_blackhole, torch_ra
 @pytest.mark.parametrize("C", [1, 2])
 @pytest.mark.parametrize("H", [32, 448])
 @pytest.mark.parametrize("W", [256, 672])
-def test_untilize(device_session, in_dtype, use_multicore, use_pack_untilize, N, C, H, W):
-    device = device_session  # Use session-scoped device
+def test_untilize(device_module, in_dtype, use_multicore, use_pack_untilize, N, C, H, W):
+    device = device_module
     torch_input_shape = [N, C, H, W]
 
     torch_input = torch.randn(torch_input_shape).bfloat16()
@@ -45,8 +45,8 @@ def test_untilize(device_session, in_dtype, use_multicore, use_pack_untilize, N,
 @pytest.mark.parametrize("W", [32, 416])
 @pytest.mark.parametrize("i_h", [10, 20])
 @pytest.mark.parametrize("i_w", [2, 3])
-def test_untilize_with_unpadding(device_session, in_dtype, use_multicore, use_pack_untilize, N, C, H, W, i_h, i_w):
-    device = device_session  # Use session-scoped device
+def test_untilize_with_unpadding(device_module, in_dtype, use_multicore, use_pack_untilize, N, C, H, W, i_h, i_w):
+    device = device_module
     torch_input_shape = [N, C, H, W]
 
     torch_input = torch.randn(torch_input_shape).bfloat16()
