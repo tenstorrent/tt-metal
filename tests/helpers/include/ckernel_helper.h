@@ -13,6 +13,7 @@ namespace ckernel
 {
 volatile std::uint32_t tt_reg_ptr *pc_buf_base     = reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE);
 volatile std::uint32_t tt_reg_ptr *regfile         = reinterpret_cast<volatile std::uint32_t *>(REGFILE_BASE);
+volatile tt_reg_ptr uint32_t *const instrn_buffer  = reinterpret_cast<volatile uint32_t *>(INSTRN_BUF_BASE);
 volatile std::uint32_t tt_reg_ptr *mailbox_base[4] = {
     reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_MAILBOX0_BASE),
     reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),

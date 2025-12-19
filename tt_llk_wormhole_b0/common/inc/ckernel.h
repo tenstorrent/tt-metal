@@ -55,13 +55,8 @@ constexpr uint KERNEL_COMPLETE    = 1;
 extern volatile uint tt_reg_ptr *reg_base;
 extern volatile uint tt_reg_ptr *pc_buf_base;
 extern volatile uint tt_reg_ptr *regfile;
-} // namespace ckernel
-
-extern volatile uint32_t __instrn_buffer[];
-
-namespace ckernel
-{
-constexpr inline volatile uint32_t(tt_reg_ptr &instrn_buffer)[] = __instrn_buffer;
+#define __INSTRN_BUFFER_TOS 1
+extern volatile uint32_t tt_reg_ptr *const instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 
 extern uint32_t cfg_state_id;
