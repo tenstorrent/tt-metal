@@ -9,6 +9,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 
 #include "generic_op_device_operation.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
@@ -21,6 +22,18 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, mesh_shared_variables_t> mesh_shared_variables;
+
+    distributed::MeshDevice* mesh_device = tensor_args.io_tensors.front().device();
+    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    std::vector<GlobalSemaphore> global_semaphores(operation_attributes.global_semaphores.size());
+    for (size_t i = 0; i < operation_attributes.global_semaphores.size(); i++) {
+        const auto& semaphore = operation_attributes.global_semaphores[i];
+        global_semaphores[i] = ttnn::global_semaphore::create_global_semaphore(
+            mesh_device, semaphore.cores, semaphore.initial_value, semaphore.buffer_type);
+    }
+    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {subdevice_id};
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
 
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
