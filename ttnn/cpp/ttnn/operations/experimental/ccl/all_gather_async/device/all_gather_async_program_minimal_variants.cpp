@@ -290,6 +290,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // op hyperparams
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 0;
+    if (num_workers_per_direction_opt.has_value() && num_workers_per_direction_opt.value() == 1) {
+        num_mux_cores_per_direction_per_link = 0;
+    }
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
     uint32_t output_data_size_bytes = output_tensor.buffer()->size();
@@ -303,6 +306,10 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_directions_per_link,
         num_mux_cores_per_direction_per_link,
         sub_core_grid));
+    if (num_workers_per_direction == 1) {
+        num_mux_cores_per_direction_per_link = 0;
+    }
+    uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
@@ -351,27 +358,64 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    std::vector<CoreRange> mux_core_ranges;
+    std::vector<CoreRange> termination_master_core_ranges;
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
 
-    // collect cores
-    uint32_t core_id = 0;
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                const auto& worker_core = all_cores[core_id++];
+    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+        return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+    };
 
-                if (dir) {
-                    sender_forward_core_ranges.emplace(worker_core);
-                } else {
-                    sender_backward_core_ranges.emplace(worker_core);
+    if (num_mux_cores_per_direction_per_link) {
+        // collect cores
+        uint32_t core_id = 0;
+        for (uint32_t link = 0; link < num_links; link++) {
+            for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+                const auto& mux_core = all_cores[core_id++];
+
+                if (mux_connection_valid(dir)) {
+                    mux_core_ranges.emplace_back(mux_core);
                 }
-                sender_worker_core_ranges.emplace_back(worker_core);
+
+                for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                    const auto& worker_core = all_cores[core_id++];
+
+                    if (worker == 0) {
+                        termination_master_core_ranges.emplace_back(worker_core);
+                    }
+
+                    if (dir) {
+                        sender_forward_core_ranges.emplace(worker_core);
+                    } else {
+                        sender_backward_core_ranges.emplace(worker_core);
+                    }
+                    sender_worker_core_ranges.emplace_back(worker_core);
+                }
+            }
+        }
+    } else {
+        // collect cores
+        uint32_t core_id = 0;
+        for (uint32_t link = 0; link < num_links; link++) {
+            for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+                for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                    const auto& worker_core = all_cores[core_id++];
+
+                    if (dir) {
+                        sender_forward_core_ranges.emplace(worker_core);
+                    } else {
+                        sender_backward_core_ranges.emplace(worker_core);
+                    }
+                    sender_worker_core_ranges.emplace_back(worker_core);
+                }
             }
         }
     }
+
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
+    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -407,6 +451,10 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
 
+    if (num_mux_cores_per_direction_per_link) {
+        writer_compute_defines["USE_WORKER_MUX"] = "1";
+    }
+
     // KERNEL CREATION
     /* All gather fusion */
     if (fuse_op) {
@@ -421,6 +469,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
 
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
 
     auto map_nd_to_4d = [&]() {
         // Here we do a couple of tricks so that the kernels can handle ND tensors
@@ -477,6 +528,17 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
     uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+
+    auto num_full_size_channels = num_workers_per_direction;
+    auto num_header_only_channels = 0;
+    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        0,
+        buffer_size_bytes_full_size_channel,
+        mux_base_l1_address);
 
     // Create Reader Kernels
     std::vector<uint32_t> sender_reader_compile_args = {
@@ -538,6 +600,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         reverse_order,                    // reverse
     };
 
+    if (num_mux_cores_per_direction_per_link) {
+        fabric_mux_connection_ct_args(
+            num_workers_per_direction,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            sender_writer_compile_args);
+    }
+
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     sender_writer_compile_args.insert(
@@ -559,9 +629,44 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         sender_worker_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
+    // create mux kernel
+    auto mux_kernel_id = 0;
+    if (num_mux_cores_per_direction_per_link) {
+        mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range_set,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    }
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
+    auto mux_core_iter = mux_core_range_set.ranges().cbegin();
+    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            CoreCoord termination_master_logical_core = {0, 0};
+            CoreCoord mux_virtual_core = {0, 0};
+            if (num_mux_cores_per_direction_per_link) {
+                if (mux_connection_valid(dir)) {
+                    termination_master_logical_core = *((termination_master_core_iter++)->begin());
+                    auto mux_logical_core = *((mux_core_iter++)->begin());
+                    std::vector<uint32_t> mux_rt_args = {};
+                    const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+                    if (dir) {  // forward
+                        const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                        mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                            src_node_id, dst_node_id, link, program, {mux_logical_core});
+                    } else {
+                        const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                        mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                            src_node_id, dst_node_id, link, program, {mux_logical_core});
+                    }
+                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+                }
+            }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -632,6 +737,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
+                CoreCoord termination_master_virtual_core =
+                    mesh_device->worker_core_from_logical_core(termination_master_logical_core);
+
                 std::vector<uint32_t> writer_rt_args = {
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
@@ -650,27 +758,43 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     start_row_offset,         // start_row_offset
                     chunks_per_sync_val};     // chunks_per_sync
 
+                if (num_mux_cores_per_direction_per_link) {
+                    fabric_mux_connection_rt_args(
+                        mux_connection_valid(dir),
+                        worker == 0,
+                        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                        mux_virtual_core,
+                        worker,
+                        core,
+                        mux_kernel_config,
+                        program,
+                        termination_master_virtual_core,
+                        writer_rt_args);
+                }
+
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
                 }
-                if (dir) {  // forward
-                    writer_rt_args.push_back(false);
-                    writer_rt_args.push_back(backward_coord.has_value());
-                    if (backward_coord.has_value()) {
-                        const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-                        const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                        tt::tt_fabric::append_fabric_connection_rt_args(
-                            src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                if (!num_mux_cores_per_direction_per_link) {
+                    if (dir) {  // forward
+                        writer_rt_args.push_back(false);
+                        writer_rt_args.push_back(backward_coord.has_value());
+                        if (backward_coord.has_value()) {
+                            const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+                            const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                            tt::tt_fabric::append_fabric_connection_rt_args(
+                                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        }
+                    } else {
+                        writer_rt_args.push_back(forward_coord.has_value());
+                        if (forward_coord.has_value()) {
+                            const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+                            const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                            tt::tt_fabric::append_fabric_connection_rt_args(
+                                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        }
+                        writer_rt_args.push_back(false);
                     }
-                } else {
-                    writer_rt_args.push_back(forward_coord.has_value());
-                    if (forward_coord.has_value()) {
-                        const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-                        const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                        tt::tt_fabric::append_fabric_connection_rt_args(
-                            src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
-                    }
-                    writer_rt_args.push_back(false);
                 }
                 if (fuse_op) {
                     writer_rt_args.push_back(self_write_done_semaphore);
