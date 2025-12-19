@@ -391,6 +391,17 @@ def run_reduce_scatter_impl(
             True,
         ),  # check, barrier_with_persistent
         (
+            [8, 1, 512, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            True,
+        ),  # check, barrier_with_persistent, experimental
+        (
             [4, 1, 1024, 2560],
             3,
             ttnn.TILE_LAYOUT,
@@ -504,6 +515,7 @@ def run_reduce_scatter_impl(
         "padded_dim_2_test_one-check-barrier_without_persistent",
         "padded_dim_2_test_two-perf-no_barrier_with_persistent",
         "batch_8-check-barrier_with_persistent",
+        "batch_8-check-barrier_with_persistent_experimental",
         "batch_4-perf-barrier_without_persistent",
         "batch_1_sd35_spatial-check-no_barrier_with_persistent",
         "batch_1_sd35_prompt-perf-barrier_with_persistent",
