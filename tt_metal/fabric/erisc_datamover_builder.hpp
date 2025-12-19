@@ -465,6 +465,10 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
+    // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(
+        uint32_t vc, uint32_t absolute_channel_id, uint32_t vc_relative_channel_id) const;
+    // Base class override (for backward compatibility, treats channel_id as VC0-relative)
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
 
@@ -566,13 +570,16 @@ private:
     // Shared helper for setting up VC connections
     // upstream_vc_idx: VC of this router's receiver channel
     // downstream_vc_idx: VC of downstream router's sender channel
+    // absolute_channel_id: flattened channel index across all VCs (for flat arrays)
+    // vc_relative_channel_id: 0-based index within the VC (for allocator calls)
     // For normal connections: upstream_vc_idx == downstream_vc_idx
     // For crossover (inter-mesh to intra-mesh): upstream_vc_idx=0, downstream_vc_idx=1
     void setup_downstream_vc_connection(
         FabricDatamoverBuilderBase* downstream_builder,
         uint32_t upstream_vc_idx,
         uint32_t downstream_vc_idx,
-        uint32_t channel_id);
+        uint32_t absolute_channel_id,
+        uint32_t vc_relative_channel_id);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);

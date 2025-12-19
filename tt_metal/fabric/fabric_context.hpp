@@ -35,7 +35,7 @@ class FabricBuilderContext;
 class FabricContext {
 public:
     static constexpr auto routing_directions = {
-        RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+        RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z};
 
     explicit FabricContext(tt::tt_fabric::FabricConfig fabric_config);
     ~FabricContext();
