@@ -14,6 +14,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -127,23 +128,16 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_ex_partial2);
-
-    cb_ex_partial2_obj.reserve_back(block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_ex_partial2_obj.push_back(block_h);
+    compute_kernel_lib::
+        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
+            cb_in,
+            cb_scaler,
+            cb_ex_partial2,
+            block_h,
+            num_reduce_tiles_per_block_h,  // Wt
+            1,                             // num_batches
+            0,                             // row_chunk (default)
+            block_w);                      // input_stride
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -184,25 +178,18 @@ void kernel_main() {
     cb_scaler_obj.wait_front(1);
 #endif  // RMSNORM
 
-    cb_ex_partial2_obj.reserve_back(block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
-
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, cb_ex_partial2);
-    index_h_offset = 0;
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_x2_obj.pop_front(num_tiles_per_block);
-    cb_ex_partial2_obj.push_back(block_h);
+    // RMS E(x2) #Layernorm //E(x) and E(x^2)
+    compute_kernel_lib::
+        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
+            cb_x2,
+            cb_scaler,
+            cb_ex_partial2,
+            block_h,
+            num_reduce_tiles_per_block_h,  // Wt
+            1,                             // num_batches
+            0,                             // row_chunk (default)
+            block_w);                      // input_stride
+    cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {

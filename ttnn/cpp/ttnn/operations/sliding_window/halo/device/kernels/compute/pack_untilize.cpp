@@ -9,7 +9,7 @@
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
