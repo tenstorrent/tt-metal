@@ -5,8 +5,6 @@
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 #include "untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 
-#include <math.h>
-
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -20,13 +18,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
 
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -118,9 +116,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     /** writer
      */
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                        input_cb_data_format == tt::DataFormat::UInt32 or
-                        input_cb_data_format == tt::DataFormat::Int32),
+        (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
+         input_cb_data_format == tt::DataFormat::Int32),
         unpadded_row_size_bytes};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
@@ -242,9 +239,9 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     const auto& ncores = shared_vars.ncores;
@@ -267,4 +264,4 @@ void UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::override_runtime_a
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program

@@ -8,7 +8,7 @@
 #include "untilize_with_unpadding_multi_core_shared_variables.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
 
 struct UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory {
     using shared_variables_t = UntilizeWithUnpaddingMultiCoreSharedVariables;
@@ -16,18 +16,15 @@ struct UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t&
-            operation_attributes,
-        const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-        ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output);
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t&
-            operation_attributes,
-        const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-        const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t&
-            tensor_return_value);
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program

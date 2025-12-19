@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding_types {
+namespace ttnn::operations::data_movement::untilize_with_unpadding {
 
 struct operation_attributes_t {
     ttnn::Shape output_tensor_end{};
@@ -20,10 +20,10 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const ttnn::Tensor input_tensor;
+    Tensor input_tensor;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding_types
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding

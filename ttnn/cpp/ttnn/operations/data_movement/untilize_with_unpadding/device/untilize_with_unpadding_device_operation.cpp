@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::untilize_with_unpadding {
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -18,15 +18,15 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded untilize does not support sub core grid specification");
-        return detail::UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
+        return program::UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        return detail::UntilizeWithUnpaddingSingleCoreProgramFactory{};
+        return program::UntilizeWithUnpaddingSingleCoreProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return detail::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+        return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
     }
-    return detail::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
+    return program::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_hit(
@@ -176,6 +176,31 @@ UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t UntilizeWithUnpaddin
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
+    return result;
+}
+
 std::tuple<
     UntilizeWithUnpaddingDeviceOperation::operation_attributes_t,
     UntilizeWithUnpaddingDeviceOperation::tensor_args_t>
@@ -204,4 +229,4 @@ UntilizeWithUnpaddingDeviceOperation::invoke(
     return std::make_tuple(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding

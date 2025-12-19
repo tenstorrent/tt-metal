@@ -4,8 +4,6 @@
 
 #include "untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 
-#include <math.h>
-
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -19,18 +17,18 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
 
 UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
-    tt::tt_metal::Program program{};
+    Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -74,7 +72,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
-    uint32_t el_size = a.element_size();
+    uint32_t el_size;
     if (a.dtype() == DataType::BFLOAT8_B) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
@@ -82,6 +80,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     } else {
         padded_row_size_bytes = input_shape[-1] * a.element_size();
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+        el_size = a.element_size();
     }
 
     if (!core_range.empty()) {
@@ -327,9 +326,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto* src_buffer = tensor_args.input_tensor.buffer();
@@ -353,4 +352,4 @@ void UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::override_runt
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program

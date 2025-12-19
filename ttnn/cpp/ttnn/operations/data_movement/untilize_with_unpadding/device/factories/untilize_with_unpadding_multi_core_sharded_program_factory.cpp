@@ -19,13 +19,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
 
 UntilizeWithUnpaddingMultiCoreShardedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -135,10 +135,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        std::vector<uint32_t> writer_ct_args;
-        writer_ct_args.push_back(output_cb_index);
-        writer_ct_args.push_back(sharded_output_cb_index);
-        writer_ct_args.push_back(aligned_page_size);
+        std::vector<uint32_t> writer_ct_args{output_cb_index, sharded_output_cb_index, aligned_page_size};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16
@@ -150,8 +147,8 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                       input_cb_data_format == tt::DataFormat::UInt32 or input_cb_data_format == tt::DataFormat::Int32),
+            (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
+             input_cb_data_format == tt::DataFormat::Int32),
             output_row_size};
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
@@ -315,9 +312,9 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
 
 void UntilizeWithUnpaddingMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_with_unpadding_types::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto* src_buffer = tensor_args.input_tensor.buffer();
@@ -338,4 +335,4 @@ void UntilizeWithUnpaddingMultiCoreShardedProgramFactory::override_runtime_argum
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program
