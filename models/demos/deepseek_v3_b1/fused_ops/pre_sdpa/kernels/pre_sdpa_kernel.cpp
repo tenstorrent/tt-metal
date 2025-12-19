@@ -78,7 +78,8 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("gather_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather_row_major"),
-        get_arg_val<uint32_t>(2),  // receiver_data_addr
+        get_write_ptr(
+            get_named_compile_time_arg_val("gather_dst_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
     };
 
     // Gather dst CB args for copy operation (receiver CB, used on input core)
@@ -89,7 +90,7 @@ KERNEL_ENTRY {
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
         get_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
-        get_arg_val<uint32_t>(3),  // scalar2 (1/sqrt(1536))
+        get_arg_val<uint32_t>(2),  // scalar2 (1/sqrt(1536))
     };
 
     // Matmul2 reader args (NCRISC is no-op)

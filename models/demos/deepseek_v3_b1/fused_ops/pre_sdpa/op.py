@@ -560,8 +560,14 @@ class PreSDPA:
         # CB 16: Matmul2 output buffer (width sharded, mapped to output_tensor)
         matmul2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_output_cb, output_tensor)
 
-        # CB 7: Gather output buffer (dynamically allocated on input core)
+        # CB 7: Gather output buffer
         # Receives gather data from matmul cores (one 1x32 tile per sender)
+        # Senders will query the write pointer of this CB to get the receiver address.
+        # Constraints on CB creation:
+        # - Must be allocated and visible on the union of sender and receiver grids, even though the sender never uses the space allocated for this CB
+        # - Must be single-buffered so senders can use get_write_ptr to get receiver address
+        # Alternatively, can setup a global sharded buffer, but the end effect is the same (ie. single-buffer + visible on all cores)
+        # - Dynamically allocated CB is better because less inputs to OP and technically uses minimal grid (ie. we can still use the same CB id for cores not in the union of sender and receiver grid)
         gather_output_total_size = gather_dst_num_pages * matmul_input_page_size
         gather_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=gather_output_cb,
@@ -569,9 +575,10 @@ class PreSDPA:
             page_size=matmul_input_page_size,
             tile=matmul_input_tile_descriptor,
         )
+        gather_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
         gather_output_cb_descriptor = ttnn.CBDescriptor(
             total_size=gather_output_total_size,
-            core_ranges=rmsnorm_core_grid,
+            core_ranges=gather_cb_core_ranges,
             format_descriptors=[gather_output_cb_format],
         )
 
@@ -629,11 +636,10 @@ class PreSDPA:
             + rmsnorm2_ncrisc_named_compile_time_args
             + matmul2_ncrisc_named_compile_time_args
             + mcast2_ncrisc_named_compile_time_args,
-            # NCRISC common runtime args: epsilon + scalar + gather output address + scalar2
+            # NCRISC common runtime args: epsilon + scalar + scalar2
             ncrisc_common_runtime_args=[
                 epsilon_packed,
                 scalar_packed,
-                output_tensor.buffer_address(),  # gather receiver data address
                 scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
             ],
             # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver + matmul2 + mcast2
