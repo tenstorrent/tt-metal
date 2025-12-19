@@ -1036,6 +1036,9 @@ jobs:
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
           fi
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
+          fi
 
           if [[ -n "$MEMORY_FLAG" ]]; then
             CMD+=("$MEMORY_FLAG")
