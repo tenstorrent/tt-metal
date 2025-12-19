@@ -330,13 +330,13 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
 
                         // Source position in row-major input
                         const size_t src_row_start = (tile_row * tile_H) + face_row_idx * face_H;
-                        const size_t src_col_start = tile_col * tile_W + face_col_idx * face_W;
+                        const size_t src_col_start = tile_col * tile_W + (face_col_idx * face_W);
 
                         if (can_use_avx) {
                             // AVX path: each row is exactly 32 bytes
                             for (size_t row = 0; row < face_H; row++) {
-                                const T* src_row = batch_src + (src_row_start + row) * W + src_col_start;
-                                T* dst_row = face_dst + row * face_W;
+                                const T* src_row = batch_src + ((src_row_start + row) * W) + src_col_start;
+                                T* dst_row = face_dst + (row * face_W);
 
                                 // Load 32 bytes and store (unaligned)
                                 simde__m256i data =
@@ -346,8 +346,8 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
                         } else {
                             // Fallback: use memcpy
                             for (size_t row = 0; row < face_H; row++) {
-                                const T* src_row = batch_src + (src_row_start + row) * W + src_col_start;
-                                T* dst_row = face_dst + row * face_W;
+                                const T* src_row = batch_src + ((src_row_start + row) * W) + src_col_start;
+                                T* dst_row = face_dst + (row * face_W);
                                 std::memcpy(dst_row, src_row, face_row_bytes);
                             }
                         }
