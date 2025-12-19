@@ -178,8 +178,8 @@ jobs:
               "owner_id": "U08E1JCDVNX" # Pavle Petrovic
             },
             {
-              "name": "t3k dit tests",
-              "model": "DiTs Image and Video Generation",
+              "name": "t3k DiTs Image and Video Generation",
+              "model": "dits",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_dit_tests",
               "timeout": 20,
