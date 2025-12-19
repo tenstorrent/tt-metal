@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 #include <optional>
-#include <any>
+#include <utility>
 #include "tt_metal/udm/types.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -72,7 +72,35 @@ public:
      * Note: The shape is in page units, not elements, as this is what the device-side
      * MeshTensorAccessor expects for proper work distribution and memory access.
      */
-    const tt::tt_metal::Shape& get_mesh_tensor_shape_in_pages() const;
+    tt::tt_metal::Shape get_mesh_tensor_shape_in_pages() const;
+
+    /**
+     * @brief Get the local tensor shape in pages (per device)
+     */
+    tt::tt_metal::Shape get_local_tensor_shape_in_pages() const;
+
+    /**
+     * @brief Get the mesh shape (mesh_tensor_shape / tensor_shape for each dimension)
+     * This represents how tensor pages are distributed across the mesh.
+     */
+    tt::tt_metal::Shape get_mesh_shape() const;
+
+    /**
+     * @brief Get the distribution shape (mesh device shape used for distribution)
+     */
+    const tt::tt_metal::distributed::MeshShape& get_distribution_shape() const;
+
+    /**
+     * @brief Get the shard dimensions
+     * @return Vector of optional ints - nullopt means replicate, value means shard on that tensor dim
+     */
+    const std::vector<std::optional<int>>& get_shard_dims() const;
+
+    /**
+     * @brief Get fabric node IDs reordered for tensor-space iteration
+     * @return Pair of vectors: (reordered_fabric_mesh_ids, reordered_fabric_chip_ids)
+     */
+    std::pair<std::vector<uint32_t>, std::vector<uint32_t>> get_reordered_fabric_node_ids() const;
 
     /**
      * @brief Get the input mesh buffer

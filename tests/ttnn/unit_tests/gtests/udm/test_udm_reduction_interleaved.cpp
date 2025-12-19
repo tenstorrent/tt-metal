@@ -157,8 +157,9 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
  * For input tensor of shape (H, W), output should be (H, 1) where
  * output[h] = sum(input[h, :])
  *
- * Output tensor is replicated across devices. Each device wrote its assigned
- * height tiles based on work partitioning. We aggregate from all devices.
+ * Output tensor is height-sharded + replicated across mesh columns.
+ * After aggregation with height_sharded_composer, output shape is [H, W * num_replicas].
+ * We use the first replica (first W_original elements per row) for validation.
  */
 void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor, ShardStrategy shard_strategy) {
     auto* mesh_device = input_tensor.device();
@@ -176,7 +177,8 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
         case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
     }
 
-    // Output tensor is height-distributed - use height sharded composer
+    // Output tensor is height-distributed (Shard{height}, Replicate{})
+    // Composer produces [H, W * num_replicas] - we use the first W_original elements per row
     auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank());
 
     // Aggregate tensors
@@ -187,12 +189,22 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
     auto output_data = output_aggregated.to_vector<bfloat16>();
 
     // Get dimensions
+    // Input is 2D: [H, W]
     uint32_t input_height = input_aggregated.padded_shape()[-2];
     uint32_t input_width = input_aggregated.padded_shape()[-1];
-    uint32_t output_width = output_aggregated.padded_shape()[-1];
+
+    // Output is 2D after aggregation: [H, W * num_replicas]
+    // We use the first replica, so stride is the full aggregated width
+    uint32_t output_aggregated_width = output_aggregated.padded_shape()[-1];
+    // Original output width (before replication) from the local tensor
+    uint32_t output_original_width = output_tensor.padded_shape()[-1];
 
     log_info(tt::LogTest, "Input shape: {}x{}", input_height, input_width);
-    log_info(tt::LogTest, "Output shape: {}x{}", input_height, output_width);
+    log_info(
+        tt::LogTest,
+        "Output aggregated shape: {} (using first {} elements per row)",
+        output_aggregated.padded_shape(),
+        output_original_width);
 
     // Build expected and actual vectors for PCC
     std::vector<bfloat16> expected_values;
@@ -209,19 +221,20 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
         }
         expected_values.push_back(bfloat16(expected_sum));
 
-        // Get actual value (first element of output row)
-        uint32_t output_idx = row * output_width;
+        // Get actual value from first replica (first element of row in aggregated output)
+        // Output layout: [H, W * num_replicas] -> index = row * aggregated_width + 0
+        uint32_t output_idx = row * output_aggregated_width;
         actual_values.push_back(output_data[output_idx]);
 
         // Debug: Print first few rows
-        // if (row < 8) {
-        log_info(
-            tt::LogTest,
-            "  Row {}: expected={:.4f}, actual={:.4f}",
-            row,
-            expected_sum,
-            static_cast<float>(output_data[output_idx]));
-        // }
+        if (row < 8) {
+            log_info(
+                tt::LogTest,
+                "  Row {}: expected={:.4f}, actual={:.4f}",
+                row,
+                expected_sum,
+                static_cast<float>(output_data[output_idx]));
+        }
     }
 
     // Check PCC
