@@ -9,8 +9,6 @@ with the documented operations in docs/source/ttnn/ttnn/api.rst. It identifies a
 but missing from the documentation file.
 """
 
-import ast
-import os
 import sys
 from pathlib import Path
 
