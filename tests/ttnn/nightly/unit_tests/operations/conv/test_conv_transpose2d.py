@@ -214,9 +214,10 @@ def run_conv_transpose2d(
         logger.info(f"Threshold: {threshold}")
         diff = torch.abs(ref - out) / ref.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
-    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-    assert passing
+    else:
+        passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
+        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+        assert passing
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
