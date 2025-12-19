@@ -26,11 +26,12 @@ template <
     bool rsqrt_fast_approx,
     bool pop_input>
 void compute_rmsnorm() {
+    // TODO: #32998: Fuse this without having to spill output of square to interm cb
     {
         // Square the input
         mul_tiles_init(input_cb, input_cb);
         cb_wait_front(input_cb, num_tiles);
-        cb_reserve_back(interm_cb, num_tiles + 1);  // Plus 1 for the RMS tile
+        cb_reserve_back(interm_cb, num_tiles);  // Plus 1 for the RMS tile
         tile_regs_acquire();
         for (uint32_t i = 0; i < num_tiles; i++) {
             mul_tiles(input_cb, input_cb, i, i, i);
@@ -46,31 +47,25 @@ void compute_rmsnorm() {
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, interm_cb);
         tile_regs_acquire();
         for (uint32_t i = 0; i < num_tiles; i++) {
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(interm_cb, scalars_cb, i, scalar_index, 0);
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, fp32_acc>(
+                interm_cb, scalars_cb, i, scalar_index, num_tiles);
         }
+        reduce_uninit();
+        cb_pop_front(interm_cb, num_tiles);
     }
     {
         // Add epsilon
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb);
-        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb, epsilon_index, 0);
+        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb, epsilon_index, num_tiles);
         // Calculate the 1/RMS
-        rsqrt_tile<false, rsqrt_fast_approx>(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, interm_cb);
-        tile_regs_release();
-        reduce_uninit();
-        cb_pop_front(interm_cb, num_tiles);
-        cb_push_back(interm_cb, 1);  // 1/RMS tile should now be index 0
+        rsqrt_tile<false, rsqrt_fast_approx>(num_tiles);
     }
     {
         // Multiply input by 1/RMS
-        cb_wait_front(interm_cb, 1);
         cb_reserve_back(output_cb, num_tiles);
-        mul_tiles_bcast_scalar_init_short(input_cb, interm_cb);
-        tile_regs_acquire();
+        mul_tiles_bcast_scalar_dest_reuse_init(input_cb);
         for (uint32_t i = 0; i < num_tiles; i++) {
-            mul_tiles_bcast_scalar(input_cb, interm_cb, i, 0, i);
+            mul_tiles_bcast_scalar_dest_reuse(input_cb, i, num_tiles, i);
         }
         if constexpr (pop_input) {
             cb_pop_front(input_cb, num_tiles);
@@ -86,7 +81,6 @@ void compute_rmsnorm() {
         tile_regs_wait();
         pack_tile_block(0, output_cb, num_tiles);
         tile_regs_release();
-        cb_pop_front(interm_cb, 1);
         cb_push_back(output_cb, num_tiles);
     }
 }

@@ -43,6 +43,7 @@ class RMSNormSingleCore:
         numel=None,
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
+        v2=True,
     ):
         """
         Execute RMS norm operation using generic_op.
@@ -134,7 +135,7 @@ class RMSNormSingleCore:
             tile=tile_descriptor,
         )
         interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=(num_tiles + 1) * cb_page_size,
+            total_size=num_tiles * cb_page_size if v2 else (num_tiles + 1) * cb_page_size,
             core_ranges=core_grid,
             format_descriptors=[interm_cb_format],
         )
@@ -206,7 +207,9 @@ class RMSNormSingleCore:
         ]
 
         compute_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_compute.cpp",
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_compute_v2.cpp"
+            if v2
+            else "models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=compute_compile_time_args,
