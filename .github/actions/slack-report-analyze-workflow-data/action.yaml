@@ -47,9 +47,9 @@ runs:
         echo "has_regressions=true" >> "$GITHUB_OUTPUT"
 
         # Slack has a 3000 character limit per text block
-        # Be very conservative: use 2500 to leave plenty of room for chunk indicators and formatting
-        # The chunk indicator (e.g., "*[Part 1/2]*\n") adds ~20 chars, plus we want buffer for safety
-        MAX_BLOCK_TEXT_LENGTH=2500
+        # Be super conservative: use 1500 to ensure we stay well under the limit
+        # This will naturally create more chunks (3+ messages) but ensures reliability
+        MAX_BLOCK_TEXT_LENGTH=1500
         HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
 
         # Function to format regression array to text (takes file path as argument)
@@ -117,8 +117,8 @@ runs:
           test_length=$(printf '%s' "$test_full_text" | wc -c)
 
           # Reserve space for chunk indicator (we don't know total chunks yet, so be conservative)
-          # Worst case: "*[Part 99/99]*\n" = ~18 chars, use 30 chars buffer for safety
-          CHUNK_INDICATOR_BUFFER=30
+          # Worst case: "*[Part 99/99]*\n" = ~18 chars, use 20 chars buffer
+          CHUNK_INDICATOR_BUFFER=20
           test_length_with_indicator=$((test_length + CHUNK_INDICATOR_BUFFER))
 
           # If adding this regression would exceed the limit and we have regressions in current chunk, save it
@@ -195,10 +195,17 @@ runs:
           # Verify the final text length doesn't exceed Slack's limit
           final_text_length=$(printf '%s' "$chunk_full_text" | wc -c)
           if [ "$final_text_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
-            echo "⚠️ Warning: Chunk $((i + 1)) text length ($final_text_length) exceeds limit ($MAX_BLOCK_TEXT_LENGTH)"
-            echo "This chunk may fail to send. Consider splitting regressions further."
-            # Try to truncate at a safe point (remove last incomplete regression)
-            # For now, we'll let it try to send and see the error, but log the warning
+            echo "⚠️ Warning: Chunk $((i + 1)) text length ($final_text_length) exceeds our limit ($MAX_BLOCK_TEXT_LENGTH)"
+            echo "This chunk may fail to send. Splitting further..."
+            # This shouldn't happen with our conservative limit, but if it does, we need to handle it
+          fi
+
+          # Also verify the actual block text length in the payload (after JSON encoding)
+          # Extract the body block text length from the payload to double-check
+          body_block_text_length=$(echo "$PAYLOAD" | jq -r '.blocks[1].text.text // .blocks[1].text // ""' 2>/dev/null | wc -c || echo "0")
+          if [ "$body_block_text_length" -gt 3000 ]; then
+            echo "⚠️ CRITICAL: Chunk $((i + 1)) block text length ($body_block_text_length) exceeds Slack's 3000 char limit!"
+            echo "This will definitely fail. The chunking logic needs to be more aggressive."
           fi
 
           # Add failing workflows count message only to the last chunk
@@ -307,8 +314,21 @@ runs:
               continue
             fi
 
+            # Verify the block text length before sending
+            # Check the body block (index 1) text length
+            body_text=$(echo "$PAYLOAD" | jq -r '.blocks[1].text.text // .blocks[1].text // ""' 2>/dev/null || echo "")
+            body_text_length=$(printf '%s' "$body_text" | wc -c)
+
             echo "Sending message part $((i + 1))/$TOTAL_CHUNKS..."
             echo "Payload file size: $(wc -c < "$payload_file" 2>/dev/null || echo 0) bytes"
+            echo "Body block text length: $body_text_length characters (limit: 3000)"
+
+            if [ "$body_text_length" -gt 3000 ]; then
+              echo "⚠️ ERROR: Body text length ($body_text_length) exceeds Slack's 3000 character limit!"
+              echo "This message will fail. Skipping to prevent API error."
+              SEND_ERRORS=$((SEND_ERRORS + 1))
+              continue
+            fi
 
             # Build request body with channel and optional thread_ts
             REQUEST_BODY=""
