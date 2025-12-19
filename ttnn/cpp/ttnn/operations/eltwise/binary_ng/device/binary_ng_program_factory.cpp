@@ -173,13 +173,6 @@ bool should_use_row_major_path(
     bool has_sharding) {
     if (!b.has_value() || operation_attributes.input_layout_a != Layout::ROW_MAJOR ||
         operation_attributes.input_layout_b != Layout::ROW_MAJOR || has_sharding) {
-        log_info(
-            tt::LogOp,
-            "has_sharding: {}, !b.has_value: {}, a: {}, b: {}",
-            has_sharding,
-            !b.has_value(),
-            operation_attributes.input_layout_a,
-            operation_attributes.input_layout_b);
         return false;
     }
     return true;
@@ -437,7 +430,7 @@ void set_or_update_runtime_arguments(
                 // this is a hack but works
                 // we need to fill the tile to aim for max utlizotn
                 num_rows = std::max<DeviceAddr>(1, tile_hw / row_width);
-                // numrows can be greater than the height of the tensor 
+                // numrows can be greater than the height of the tensor
             }
         }
 
@@ -458,20 +451,36 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
-            std::array writer_runtime_args = {
-                c.buffer()->address(),
-                c_start_id,
-                c_num_tiles,
-                c_current_shard_width,
-                cD,
-                cN,
-                cC,
-                cHt,
-                cWt,
-                cND,
-                current_row,
-                num_rows,
-                static_cast<uint32_t>(c_buffer->page_size())};
+            std::vector<uint32_t> writer_runtime_args;
+            if (row_major_inputs) {
+                writer_runtime_args = {
+                    c.buffer()->address(),
+                    c_start_id,
+                    c_num_tiles,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    current_row,
+                    num_rows,
+                    static_cast<uint32_t>(c_buffer->page_size())};
+            } else {
+                writer_runtime_args = {
+                    c.buffer()->address(),
+                    c_start_id,
+                    c_num_tiles,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    0u};
+            }
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -481,6 +490,10 @@ void set_or_update_runtime_arguments(
                 compute_scalar_value = pack_scalar_runtime_arg(
                     operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
             }
+            if (row_major_inputs) {
+                freq = 1;
+                counter = 0;
+            }
             std::array compute_runtime_args = {c_num_tiles, freq, counter, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
@@ -489,53 +502,71 @@ void set_or_update_runtime_arguments(
             // only quant ops have different dtypes for a & b and we want to force f32 for better accuracy when
             // scale is passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
-            std::array writer_runtime_args = {
-                packed_scalar,
-                c.buffer()->address(),
-                c_start_id,
-                c_num_tiles,
-                c_current_shard_width,
-                cD,
-                cN,
-                cC,
-                cHt,
-                cWt,
-                cND,
-                current_row,
-                num_rows,
-                static_cast<uint32_t>(c_buffer->page_size())};
+            std::vector<uint32_t> writer_runtime_args;
+            if (row_major_inputs) {
+                writer_runtime_args = {
+                    packed_scalar,
+                    c.buffer()->address(),
+                    c_start_id,
+                    c_num_tiles,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    current_row,
+                    num_rows,
+                    static_cast<uint32_t>(c_buffer->page_size())};
+            } else {
+                writer_runtime_args = {
+                    packed_scalar,
+                    c.buffer()->address(),
+                    c_start_id,
+                    c_num_tiles,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    0u};
+            }
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
-        std::array<uint32_t, 26> reader_runtime_args;  // 26 is the size here, but what do we choose ?
+        std::vector<uint32_t> reader_runtime_args;
+
         if (row_major_inputs) {
-            reader_runtime_args = {// remove the extra arguments here 
-                                   a.buffer()->address(),
-                                   c_start_id,
-                                   a_num_tiles,  // we dont use this in row major
-                                   c_num_tiles,
-                                   c_current_shard_width,
-                                   aHt * aWt * aC * aN * aD * (aND > 1),
-                                   aHt * aWt * aC * aN * (aD > 1),
-                                   aD,
-                                   aN,
-                                   aC,
-                                   aHt_r,
-                                   aWt_r,
-                                   aND,
-                                   b.has_value() ? b->buffer()->address() : 0u,
-                                   bD,
-                                   bN,
-                                   bC,
-                                   bHt_r,
-                                   bWt_r,
-                                   bND,
-                                   b_num_tiles,
-                                   current_row,
-                                   num_rows,
-                                   static_cast<uint32_t>(c_buffer->page_size())};
+            reader_runtime_args = {
+                a.buffer()->address(),
+                c_start_id,
+                a_num_tiles,  // we dont use this in row major
+                c_num_tiles,
+                c_current_shard_width,
+                aHt * aWt * aC * aN * aD * (aND > 1),
+                aHt * aWt * aC * aN * (aD > 1),
+                aD,
+                aN,
+                aC,
+                aHt_r,
+                aWt_r,
+                aND,
+                b.has_value() ? b->buffer()->address() : 0u,
+                bD,
+                bN,
+                bC,
+                bHt_r,
+                bWt_r,
+                bND,
+                b_num_tiles,
+                current_row,
+                num_rows,
+                static_cast<uint32_t>(c_buffer->page_size())};
         } else {
             reader_runtime_args = {
                 a.buffer()->address(),
@@ -935,7 +966,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
+    const bool use_llk_bcast =
+        !inputs_row_major &&
+        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+    if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";

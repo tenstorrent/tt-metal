@@ -390,15 +390,21 @@ inline auto invoke_binary_ng(
     if (not typecast_a and not typecast_b) {
         const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
         const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-        // To benchmark and test both branches
+        const auto input_a_sharded = lhs.memory_config().is_sharded();
+        const auto input_b_sharded = [&]() {
+            if constexpr (requires { rhs.memory_config(); }) {
+                return rhs.memory_config().is_sharded();
+            } else {
+                return false;
+            }
+        }();
+        // we don't support to_layout with optional output tensor
+        TT_FATAL(
+            !(output_preallocated && input_a_rm && input_b_rm),
+            "Optional output tensor with Row Major input is not supported"
+            "right now for Elementwise operations");
         static const bool force_tilize_rm = std::getenv("TTNN_FORCE_TILIZE") != nullptr;
-        if (input_a_rm and input_b_rm and not force_tilize_rm) {
-            // we don't support to_layout with optional output tensor
-            TT_FATAL(
-                !output_preallocated,
-                "Optional output tensor with Row Major input is not supported"
-                "right now for Elementwise operations");
-
+        if (input_a_rm and input_b_rm and not force_tilize_rm and not input_a_sharded and not input_b_sharded) {
             auto result = ttnn::prim::binary_ng(
                 lhs,
                 rhs,

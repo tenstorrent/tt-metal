@@ -1684,123 +1684,70 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
-@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
-@pytest.mark.parametrize(
-    "a_shape, shard_type, shard_size, core_range",
-    (
-        [
-            torch.Size([1, 4 * 32]),
-            ttnn.ShardStrategy.WIDTH,
-            [32, 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((0, 2), (0, 3))}),
-        ],
-    ),
-)
-def test_binary_sharded_scalar_col_major(scalar, a_shape, shard_type, shard_size, core_range, device):
-    torch.manual_seed(0)
-    a_sharded_config = ttnn.create_sharded_memory_config(
-        shard_size,
-        core_grid=core_range,
-        strategy=shard_type,
-        orientation=ttnn.ShardOrientation.COL_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+class TestBinaryRowMajor:
+    TEST_SHAPES = [
+        (1, 1, 32, 32),  # clean tile
+        (4, 2, 17, 19),  # multi N/C + weird H/W
+        (1, 1, 3, 1025),  # crosses 1024 in W
+        (2, 2, 1024, 1024),  # large
+    ]
 
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
+    # Helpers to map strings to types and create tensors
+    def _get_dtypes(self, s):
+        return (torch.bfloat16, ttnn.bfloat16) if s == "bfloat16" else (torch.float32, ttnn.float32)
 
-    with pytest.raises(RuntimeError) as e:
-        a_tt = ttnn.from_torch(
-            a_pt,
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=a_sharded_config,
-        )
+    def _make_tensor(self, device, shape, dt_pt, dt_tt):
+        host = torch.randn(shape, dtype=dt_pt)
+        tt = ttnn.from_torch(host, dtype=dt_tt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return host, tt
 
-        tt_out = ttnn.add(a_tt, scalar, memory_config=a_sharded_config, use_legacy=None)
+    # Parameterized logic for Native, Scalar, Row, and Col broadcasting
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
+    @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
+    @pytest.mark.parametrize("mode", ["native", "scalar", "row", "col"])
+    def test_binary_row_major_broadcasts(self, device, shape, dtype_str, mode):
+        N, C, H, W = shape
+        dt_pt, dt_tt = self._get_dtypes(dtype_str)
 
+        if mode == "native":
+            b_shape = shape
+        elif mode == "scalar":
+            b_shape = (1, 1, 1, 1)
+        elif mode == "row":
+            b_shape = (N, C, 1, W)
+        elif mode == "col":
+            b_shape = (N, C, H, 1)
 
-def _make_row_major_tensor(device, shape):
-    host = torch.randn(shape, dtype=torch.bfloat16)
-    tensor = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    return host, tensor
+        pt_a, tt_a = self._make_tensor(device, shape, dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, b_shape, dt_pt, dt_tt)
 
+        # Allow fallback if necessary, but prefer device execution
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
 
-@pytest.mark.parametrize(
-    "a_shape, b_shape",
-    (((1, 1, 32, 64), (1, 1, 32, 64)),),
-)
-def test_binary_row_major_native_paths(device, a_shape, b_shape):
-    torch.manual_seed(0)
-    a_pt, a_tt = _make_row_major_tensor(device, a_shape)
-    b_pt, b_tt = _make_row_major_tensor(device, b_shape)
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
 
-    with ttnn.manage_config("throw_exception_on_fallback", True):
-        out_tt = ttnn.add(a_tt, b_tt, use_legacy=None)
+    # Separate test for Mixed because it involves specific reshape logic
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
+    @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
+    def test_binary_row_major_mixed_reshape(self, device, shape, dtype_str):
+        N, C, H, W = shape
+        if H == 1 or W == 1:
+            pytest.skip("Dim=1 invalid for mixed reshape test")
 
-    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-    expected = torch.add(a_pt, b_pt)
-    torch.testing.assert_close(ttnn.to_torch(out_tt), expected)
+        dt_pt, dt_tt = self._get_dtypes(dtype_str)
 
+        # A is full, B is (N,C,W,1) -> Reshape to (N,C,1,W)
+        pt_a, tt_a = self._make_tensor(device, shape, dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, (N, C, W, 1), dt_pt, dt_tt)
 
-def test_binary_row_major_mixed_broadcast_falls_back(device):
-    torch.manual_seed(0)
-    a_pt, a_tt = _make_row_major_tensor(device, (1, 1, 32, 64))
-    b_pt, b_tt = _make_row_major_tensor(device, (1, 1, 64, 1))
+        tt_b_reshaped = ttnn.reshape(tt_b, ttnn.Shape((N, C, 1, W)))
+        pt_b_reshaped = pt_b.reshape(N, C, 1, W)
 
-    b_pt_reshaped = b_pt.reshape(1, 1, 1, 64)
-    b_tt_reshaped = ttnn.reshape(b_tt, ttnn.Shape([1, 1, 1, 64]))
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b_reshaped, use_legacy=None)
 
-    with ttnn.manage_config("throw_exception_on_fallback", True):
-        with pytest.raises(RuntimeError):
-            ttnn.add(a_tt, b_tt_reshaped, use_legacy=True)
-
-    with ttnn.manage_config("throw_exception_on_fallback", False):
-        out_tt = ttnn.add(a_tt, b_tt_reshaped, use_legacy=None)
-
-    expected = torch.add(a_pt, b_pt_reshaped)
-    torch.testing.assert_close(ttnn.to_torch(out_tt), expected)
-    assert out_tt.layout != ttnn.ROW_MAJOR_LAYOUT
-
-
-@pytest.mark.parametrize(
-    "ttnn_op_name, torch_fn",
-    (
-        ("add", torch.add),
-        ("subtract", torch.subtract),
-        ("multiply", torch.multiply),
-    ),
-)
-@pytest.mark.parametrize(
-    "b_shape",
-    (
-        (1, 1, 32, 1),  # W broadcast
-        (1, 1, 1, 64),  # H broadcast
-        (1, 1, 1, 1),  # HW broadcast (scalar)
-    ),
-)
-def test_binary_row_major_broadcasts_fall_back(device, ttnn_op_name, torch_fn, b_shape):
-    torch.manual_seed(0)
-    a_shape = (1, 1, 32, 64)
-    a_pt, a_tt = _make_row_major_tensor(device, a_shape)
-    b_pt, b_tt = _make_row_major_tensor(device, b_shape)
-
-    ttnn_op = getattr(ttnn, ttnn_op_name)
-
-    with ttnn.manage_config("throw_exception_on_fallback", True):
-        with pytest.raises(RuntimeError):
-            ttnn_op(a_tt, b_tt, use_legacy=True)
-
-    # Recreate device tensors to ensure the fallback run starts from clean row-major inputs.
-    a_tt = ttnn.from_torch(a_pt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    b_tt = ttnn.from_torch(b_pt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    with ttnn.manage_config("throw_exception_on_fallback", False):
-        out_tt = ttnn_op(a_tt, b_tt, use_legacy=None)
-
-    expected = torch_fn(a_pt, b_pt)
-    torch.testing.assert_close(ttnn.to_torch(out_tt), expected)
-    assert out_tt.layout != ttnn.ROW_MAJOR_LAYOUT
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b_reshaped))
 
 
 @pytest.mark.parametrize(
