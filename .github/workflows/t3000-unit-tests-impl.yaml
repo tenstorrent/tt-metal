@@ -176,6 +176,14 @@ jobs:
               "cmd": "run_t3000_gemma3-small_tests",
               "timeout": 30,
               "owner_id": "U08E1JCDVNX" # Pavle Petrovic
+            },
+            {
+              "name": "t3k dit tests",
+              "model": "DiTs Image and Video Generation",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_dit_tests",
+              "timeout": 20,
+              "owner_id": "U08TED0JM9D" # Samuel Adesoye
             }
           ]')
 
