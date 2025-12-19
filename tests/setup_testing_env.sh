@@ -47,7 +47,7 @@ download_headers() {
     fi
 
     echo "Downloading headers for ${chip_arch}..."
-    mkdir -p "$header_dir"
+    mkdir -p "$header_dir/internal"
 
     local base_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/tt-1xx/${chip_arch}"
     local headers=("cfg_defines.h" "dev_mem_map.h" "tensix.h" "tensix_types.h")
@@ -77,7 +77,7 @@ download_headers() {
     done
 
     local download_url="${risc_attribs_url}"
-    if ! wget -O "${header_dir}/risc_attribs.h" --waitretry=5 --retry-connrefused "$download_url" > /dev/null; then
+    if ! wget -O "${header_dir}/internal/risc_attribs.h" --waitretry=5 --retry-connrefused "$download_url" > /dev/null; then
         echo "ERROR: Failed to download risc_attribs.h from ${download_url}" >&2
         exit 1
     fi
