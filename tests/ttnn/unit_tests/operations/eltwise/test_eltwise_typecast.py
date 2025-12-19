@@ -126,7 +126,8 @@ class TestTypecast:
 
 
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
-def test_typecast_bf16_to_bfp8_b(device):
+def test_typecast_bf16_to_bfp8_b(device_module):
+    device = device_module
     torch.manual_seed(0)
     shape = [32, 32]
 
@@ -160,7 +161,8 @@ def print_mismatches(cpu, npu, num_max_print):
 @pytest.mark.parametrize("seed", [0, 2, 4, 6, 8])
 @pytest.mark.parametrize("scale", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512])
 @pytest.mark.parametrize("bias", [0, 1, 2, 4, 8, 16, 32, 64, 128])
-def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
+def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device_module):
+    device = device_module
     torch.manual_seed(seed)
     shape = [1024, 1024]
 
@@ -193,7 +195,8 @@ def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
 @pytest.mark.parametrize("bias", [2])
 # NaN becomes -Inf when converted to bfloat8_b format, skip testing
 @pytest.mark.parametrize("insert_inf, insert_nan", [[True, False]])  # , [False, True], [True, True]])
-def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, insert_nan, device):
+def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, insert_nan, device_module):
+    device = device_module
     torch.manual_seed(seed)
     shape = [1024, 1024]
 
@@ -228,7 +231,8 @@ def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, ins
     assert passed
 
 
-def test_typecast_bfp8_b_to_bf16(device):
+def test_typecast_bfp8_b_to_bf16(device_module):
+    device = device_module
     torch.manual_seed(0)
     shape = [1024, 1024]
 
@@ -247,7 +251,8 @@ def test_typecast_bfp8_b_to_bf16(device):
     assert passed
 
 
-def test_typecast_fp32_to_bfp8_b(device):
+def test_typecast_fp32_to_bfp8_b(device_module):
+    device = device_module
     torch.manual_seed(0)
     shape = [32, 32]
 
@@ -267,7 +272,8 @@ def test_typecast_fp32_to_bfp8_b(device):
     assert passed
 
 
-def test_typecast_bfp8_b_to_fp32(device):
+def test_typecast_bfp8_b_to_fp32(device_module):
+    device = device_module
     torch.manual_seed(0)
     shape = [1024, 1024]
 

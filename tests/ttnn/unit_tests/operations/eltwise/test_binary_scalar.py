@@ -29,7 +29,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
         (ttnn.bias_gelu),
     ),
 )
-def test_binary_scalar_ops(input_shapes, device, ttnn_fn):
+def test_binary_scalar_ops(input_shapes, device_module, ttnn_fn):
+    device = device_module
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     cq_id = 0

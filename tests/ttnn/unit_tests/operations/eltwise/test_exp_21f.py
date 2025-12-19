@@ -9,7 +9,8 @@ import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
-def test_exp_arange_masking(device):
+def test_exp_arange_masking(device_module):
+    device = device_module
     # Exp Working range - Overflow from 88.5(inf), Underflow till -87(<0)
     low = -87.0
     high = 88.5
@@ -93,7 +94,8 @@ def test_exp_arange_masking(device):
         (-87.0, 88.5),
     ],
 )
-def test_exp_ULP_subcoregrid(input_shapes, sub_core_grid, low, high, device):
+def test_exp_ULP_subcoregrid(input_shapes, sub_core_grid, low, high, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -129,7 +131,8 @@ def test_exp_ULP_subcoregrid(input_shapes, sub_core_grid, low, high, device):
         (-87.3, 88.7, "float32", 1e-2, 1e-3),
     ],
 )
-def test_exp_atol(input_shapes, low, high, testing_dtype, expected_rtol, expected_atol, device):
+def test_exp_atol(input_shapes, low, high, testing_dtype, expected_rtol, expected_atol, device_module):
+    device = device_module
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
@@ -152,7 +155,8 @@ def test_exp_atol(input_shapes, low, high, testing_dtype, expected_rtol, expecte
     assert_allclose(tt_result, golden, rtol=expected_rtol, atol=expected_atol)
 
 
-def test_exp_fp32(device):
+def test_exp_fp32(device_module):
+    device = device_module
     # Exp Working range for fp32 - Overflow from 88.7(inf), Underflow till -87.3(<0)
     low = -87.3
     high = 88.7

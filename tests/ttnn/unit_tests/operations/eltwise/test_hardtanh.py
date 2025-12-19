@@ -14,7 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "shapes",
     [[1, 1, 32, 32], [64, 64], [2, 2, 3, 256, 256]],
 )
-def test_hardtanh_default(device, shapes):
+def test_hardtanh_default(device_module, shapes):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn(shapes[0], dtype=torch.bfloat16) * 10
@@ -44,7 +45,8 @@ def test_hardtanh_default(device, shapes):
     "max",
     [1, 2.5, 3, 6.6],
 )
-def test_hardtanh_args(device, shapes, min, max):
+def test_hardtanh_args(device_module, shapes, min, max):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn(shapes[0], dtype=torch.bfloat16) * 10

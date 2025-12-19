@@ -26,7 +26,8 @@ from models.common.utility_functions import torch_random
     "dtype",
     ([ttnn.int32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.bfloat4_b]),
 )
-def test_binary_scalar_ops(input_shapes, dtype, device):
+def test_binary_scalar_ops(input_shapes, dtype, device_module):
+    device = device_module
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 

@@ -55,18 +55,21 @@ def _ttt_where_test_impl(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-def test_ttt_where_0d(device):
+def test_ttt_where_0d(device_module):
+    device = device_module
     _ttt_where_test_impl(device, ())
 
 
 @pytest.mark.parametrize("h", [16, 32, 64, 65, 1024])
-def test_ttt_where_1d(device, h):
+def test_ttt_where_1d(device_module, h):
+    device = device_module
     _ttt_where_test_impl(device, (h))
 
 
 @pytest.mark.parametrize("h", [0, 16, 32, 64, 65, 1024])
 @pytest.mark.parametrize("w", [0, 16, 32, 64, 65, 1024])
-def test_ttt_where_2d(device, h, w):
+def test_ttt_where_2d(device_module, h, w):
+    device = device_module
     _ttt_where_test_impl(device, (h, w))
 
 
@@ -74,7 +77,8 @@ def test_ttt_where_2d(device, h, w):
 @pytest.mark.parametrize("d3", [16])
 @pytest.mark.parametrize("h", [16])
 @pytest.mark.parametrize("w", [16])
-def test_ttt_where_4d(device, d4, d3, h, w):
+def test_ttt_where_4d(device_module, d4, d3, h, w):
+    device = device_module
     _ttt_where_test_impl(device, (d4, d3, h, w))
 
 
@@ -83,29 +87,34 @@ def test_ttt_where_4d(device, d4, d3, h, w):
 @pytest.mark.parametrize("d3", [16])
 @pytest.mark.parametrize("h", [16])
 @pytest.mark.parametrize("w", [16])
-def test_ttt_where_5d(device, d5, d4, d3, h, w):
+def test_ttt_where_5d(device_module, d5, d4, d3, h, w):
+    device = device_module
     _ttt_where_test_impl(device, (d5, d4, d3, h, w))
 
 
 @pytest.mark.parametrize("shape", [tuple([32] * i) for i in range(6)])
-def test_ttt_where_shapes(device, shape):
+def test_ttt_where_shapes(device_module, shape):
+    device = device_module
     _ttt_where_test_impl(device, shape)
 
 
 @pytest.mark.xfail(reason="Integer data types are not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32])
-def test_ttt_where_int_types(device, tt_dtype):
+def test_ttt_where_int_types(device_module, tt_dtype):
+    device = device_module
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_ttt_where_float_types(device, tt_dtype):
+def test_ttt_where_float_types(device_module, tt_dtype):
+    device = device_module
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported.")
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_ttt_where_layouts(device, layout):
+def test_ttt_where_layouts(device_module, layout):
     # Missing parameters in from_torch() for layout test coverage: tile, pad_value
+    device = device_module
     _ttt_where_test_impl(device, DEFAULT_SHAPE, layout=layout)

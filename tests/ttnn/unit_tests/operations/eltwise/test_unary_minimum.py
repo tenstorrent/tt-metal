@@ -28,7 +28,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (-3.4 * 10**38, -float("inf")),
     ],
 )
-def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
+def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device_module):
+    device = device_module
     torch_input = torch.ones(input_shapes, dtype=torch.float32) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)
@@ -62,7 +63,8 @@ def test_unary_min_fill_val_fp32(input_shapes, input_val, scalar, device):
     ],
 )
 @pytest.mark.parametrize("scalar", [0.5, 0.0, 20.0, 3.4 * 10**38, -3.4 * 10**38])
-def test_unary_min_bf16(input_shapes, low, high, scalar, device):
+def test_unary_min_bf16(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes).nan_to_num(0.0)
@@ -95,7 +97,8 @@ def test_unary_min_bf16(input_shapes, low, high, scalar, device):
     ],
 )
 @pytest.mark.parametrize("scalar", [0.5, 0.1, 0.0, 1.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
-def test_unary_min_fp32(input_shapes, low, high, scalar, device):
+def test_unary_min_fp32(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.float32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -117,7 +120,8 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
 
 
 @pytest.mark.parametrize("scalar", [-2, 0, 10, 2147483647, -2147483647])
-def test_unary_min_int32_test(scalar, device):
+def test_unary_min_int32_test(scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
     torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 1, 32, 32]))
@@ -152,7 +156,8 @@ def test_unary_min_int32_test(scalar, device):
     ],
 )
 @pytest.mark.parametrize("scalar", [-5, 3, 0, -2147483647, 2147483647])
-def test_unary_min_int32(input_shapes, low, high, scalar, device):
+def test_unary_min_int32(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -187,7 +192,8 @@ def test_unary_min_int32(input_shapes, low, high, scalar, device):
         (11, 53),
     ],
 )
-def test_unary_min_fill_val_int32(input_shapes, input_val, scalar, device):
+def test_unary_min_fill_val_int32(input_shapes, input_val, scalar, device_module):
+    device = device_module
     torch_input = torch.ones(input_shapes, dtype=torch.int32) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)

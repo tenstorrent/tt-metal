@@ -28,43 +28,50 @@ def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hardtanh(device, h, w):
+def test_hardtanh(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.hardtanh)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sigmoid_accurate(device, h, w):
+def test_sigmoid_accurate(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.sigmoid_accurate)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hardswish(device, h, w):
+def test_hardswish(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.hardswish)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log_sigmoid(device, h, w):
+def test_log_sigmoid(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.log_sigmoid)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_mish(device, h, w):
+def test_mish(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.mish)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu6(device, h, w):
+def test_relu6(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.relu6)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w):
+def test_gelu(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.gelu)
 
 
@@ -85,7 +92,8 @@ def test_gelu(device, h, w):
         (3, 6, 1e-3, 1e-3),  # Positive saturation region
     ],
 )
-def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device):
+def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device_module):
+    device = device_module
     """Test GELU accuracy using allclose for different input regions matching analysis ranges"""
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
@@ -110,31 +118,36 @@ def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_hardsigmoid(device, h, w):
+def test_hardsigmoid(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.hardsigmoid)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sigmoid(device, h, w):
+def test_sigmoid(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.sigmoid)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sign(device, h, w):
+def test_sign(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.sign)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_softsign(device, h, w):
+def test_softsign(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.softsign)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_swish(device, h, w):
+def test_swish(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.swish)
 
 
@@ -161,13 +174,15 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, p
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("beta", [-1, 0.5, 1, 2])
 @pytest.mark.parametrize("threshold", [-20, 5, 10, 20, 40])
-def test_softplus(device, h, w, beta, threshold):
+def test_softplus(device_module, h, w, beta, threshold):
+    device = device_module
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_tanhshrink(device, h, w):
+def test_tanhshrink(device_module, h, w):
+    device = device_module
     run_activation_unary_test(device, h, w, ttnn.tanhshrink)
 
 
@@ -191,7 +206,8 @@ def run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn_function, 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dim", [-1, 3])
-def test_glu(device, batch_size, h, w, dim):
+def test_glu(device_module, batch_size, h, w, dim):
+    device = device_module
     run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.glu)
 
 
@@ -199,7 +215,8 @@ def test_glu(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dim", [-1, 3])
-def test_reglu(device, batch_size, h, w, dim):
+def test_reglu(device_module, batch_size, h, w, dim):
+    device = device_module
     run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.reglu)
 
 
@@ -207,7 +224,8 @@ def test_reglu(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dim", [-1, 3])
-def test_swiglu(device, batch_size, h, w, dim):
+def test_swiglu(device_module, batch_size, h, w, dim):
+    device = device_module
     run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.swiglu)
 
 
@@ -215,7 +233,8 @@ def test_swiglu(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dim", [-1, 3])
-def test_geglu(device, batch_size, h, w, dim):
+def test_geglu(device_module, batch_size, h, w, dim):
+    device = device_module
     run_activation_unary_test_glu(device, batch_size, h, w, dim, ttnn.geglu)
 
 
@@ -291,7 +310,8 @@ def run_activation_test_scalarB_key(device, h, w, value, ttnn_function, pcc=0.99
 @pytest.mark.parametrize("scalar", [-0.5, 0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_elu(device, h, w, scalar):
+def test_scalarB_elu(device_module, h, w, scalar):
+    device = device_module
     run_activation_test_elu(device, h, w, scalar, ttnn.elu)
 
 
@@ -302,7 +322,8 @@ def test_scalarB_elu(device, h, w, scalar):
     "torch_dtype,ttnn_dtype",
     [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat4_b)],
 )
-def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
+def test_scalarB_celu(device_module, h, w, alpha, torch_dtype, ttnn_dtype):
+    device = device_module
     if alpha == 0:
         pytest.skip("alpha=0 is not supported")
 
@@ -327,7 +348,8 @@ def test_scalarB_celu(device, h, w, alpha, torch_dtype, ttnn_dtype):
 @pytest.mark.parametrize("scalar", [0.5, 1.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_hardshrink(device, h, w, scalar):
+def test_scalarB_hardshrink(device_module, h, w, scalar):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -345,21 +367,24 @@ def test_scalarB_hardshrink(device, h, w, scalar):
 @pytest.mark.parametrize("value", [0.88])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_heaviside(device, h, w, value):
+def test_scalarB_heaviside(device_module, h, w, value):
+    device = device_module
     run_activation_test_scalarB_key(device, h, w, value, ttnn.heaviside)
 
 
 @pytest.mark.parametrize("scalar", [-0.5, 0, 0.1, 0.01, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_leaky_relu(device, h, w, scalar):
+def test_scalarB_leaky_relu(device_module, h, w, scalar):
+    device = device_module
     run_activation_test_leaky_relu(device, h, w, scalar, ttnn.leaky_relu)
 
 
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_prelu(device, h, w, weight):
+def test_scalarB_prelu(device_module, h, w, weight):
+    device = device_module
     torch.manual_seed(0)
     ttnn_function = ttnn.prelu
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -377,7 +402,8 @@ def test_scalarB_prelu(device, h, w, weight):
 @pytest.mark.parametrize("scalar", [0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_softshrink(device, h, w, scalar):
+def test_scalarB_softshrink(device_module, h, w, scalar):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -413,7 +439,8 @@ def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_functi
 @pytest.mark.parametrize("max", [0.5, 1.5, 27.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarBC_clip(device, h, w, min, max):
+def test_scalarBC_clip(device_module, h, w, min, max):
+    device = device_module
     run_activation_test_scalarBC_key(device, h, w, min, max, ttnn.clip)
 
 
@@ -438,12 +465,14 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("threshold", [-0.5, 1.5, 27.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_threshold(device, h, w, value, threshold):
+def test_threshold(device_module, h, w, value, threshold):
+    device = device_module
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
 
 
 @pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
-def test_mish_golden_verification(ttnn_dtype, torch_dtype, device):
+def test_mish_golden_verification(ttnn_dtype, torch_dtype, device_module):
+    device = device_module
     input_data = torch.tensor(
         [
             [-1.1258, -1.1524, -0.2506, 1.5863, 0.9463, -0.8437],

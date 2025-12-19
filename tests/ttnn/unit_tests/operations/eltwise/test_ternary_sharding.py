@@ -1439,7 +1439,8 @@ def test_where_ttt_scalar_bcast_with_block_sharding_uneven(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
+def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device_module):
+    device = device_module
     torch.manual_seed(0)
     dram_grid_size = device.dram_grid_size()
     input_shape = (1, 1, dram_grid_size.x * dram_grid_size.y * 32, 32)
@@ -1635,7 +1636,8 @@ def test_where_ttt_identical_mixed_strategy(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_where_ttt_height_bcast_mixed_strategy_mixed_L1(device, dtype_pt, dtype_tt):
+def test_where_ttt_height_bcast_mixed_strategy_mixed_L1(device_module, dtype_pt, dtype_tt):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = torch.Size([2, 7, 32 * 2, 4 * 32])  # [2, 7, 64, 128]
     true_shape = torch.Size([1, 7, 1, 4 * 32])  # [1, 7, 1, 128] - height broadcast

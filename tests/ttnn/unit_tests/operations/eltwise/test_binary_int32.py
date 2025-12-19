@@ -62,7 +62,8 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
     ],
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device):
+def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
@@ -130,7 +131,8 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_l
         ttnn.rsub,
     ],
 )
-def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
+def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape)
@@ -203,7 +205,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 @pytest.mark.parametrize(
     "ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul", "squared_difference", "rsub")
 )
-def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
+def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device_module):
+    device = device_module
     ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(-100, 100, num_elements, dtype=torch.int32)
@@ -247,7 +250,8 @@ def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device)
         ttnn.logical_and,
     ],
 )
-def test_binary_logical_int32_edge_cases(logical_op, device):
+def test_binary_logical_int32_edge_cases(logical_op, device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor(
         [0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896]
     )
@@ -293,8 +297,9 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
         ttnn.uint32,
     ],
 )
-def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
+def test_binary_left_shift(device_module, ttnn_function, ttnn_dtype):
     # Test with regular values and extreme values for both int32 and uint32
+    device = device_module
     if ttnn_dtype == ttnn.int32:
         x_torch = torch.tensor(
             [[99, 3, 100, 1, 72, 0, -100, 22, 12, 1000, 2147483647, -2147483648, -1, 1]], dtype=torch.int32
@@ -338,7 +343,8 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
         ttnn.uint32,
     ],
 )
-def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
+def test_bitwise_right_shift(device_module, ttnn_function, ttnn_dtype):
+    device = device_module
     x_torch = torch.tensor(
         [
             [
@@ -396,7 +402,8 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
+def test_logical_right_shift(device_module, ttnn_function, ttnn_dtype, use_legacy):
+    device = device_module
     x_torch = torch.tensor(
         [
             [
@@ -464,7 +471,8 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
         (-1, 1, -2147483648, -1073741823),
     ],
 )
-def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     if high_a in (3, 2, 1):
         values_a = torch.arange(low_a, high_a + 1, dtype=torch.int32)
@@ -507,7 +515,8 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
 
 
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_mul_int32_edge_cases(use_legacy, device):
+def test_binary_mul_int32_edge_cases(use_legacy, device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor(
         [
             0,
@@ -600,7 +609,8 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
         ttnn.div,
     ],
 )
-def test_binary_implicit_broadcast(device, shapes, ttnn_op):
+def test_binary_implicit_broadcast(device_module, shapes, ttnn_op):
+    device = device_module
     torch.manual_seed(0)
 
     min_int = torch.iinfo(torch.int32).min
@@ -644,7 +654,8 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
         ttnn.le,
     ],
 )
-def test_comp_ops_edge_cases(ttnn_op, device):
+def test_comp_ops_edge_cases(ttnn_op, device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor(
         [0, 1, 0, 0, 1254, 43, 2147483647, -2147483648, 2147483647, 0, -123456789, -56738943, 2147483647, -2147483648]
     )
@@ -680,7 +691,8 @@ def test_comp_ops_edge_cases(ttnn_op, device):
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
 )
-def test_binary_div_int32_full_range(input_shapes, device):
+def test_binary_div_int32_full_range(input_shapes, device_module):
+    device = device_module
     value_ranges_a = [
         (-300, 300),
         (-500, 500),
@@ -746,7 +758,8 @@ def test_binary_div_int32_full_range(input_shapes, device):
     assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2.0)
 
 
-def test_div_int32_optional_output(device):
+def test_div_int32_optional_output(device_module):
+    device = device_module
     torch_input_tensor_a = torch.arange(-(2**23), 2**23, 1024, dtype=torch.int32)
     torch_input_tensor_b = torch.arange(-(2**23) - 1, 2**23 - 1, 1024, dtype=torch.int32)
     torch_input_tensor_b[torch_input_tensor_b == 0] = 1
@@ -790,7 +803,8 @@ def test_div_int32_optional_output(device):
     ],
 )
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round_mode, device):
+def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round_mode, device_module):
+    device = device_module
     # Skip some cases for rounding_mode==None that aren't supported due to:
     # https://github.com/tenstorrent/tt-metal/issues/33334
     if round_mode is None and low_a == -2147483648:
@@ -838,7 +852,8 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
 
 
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_div_edge_cases(round_mode, device):
+def test_div_edge_cases(round_mode, device_module):
+    device = device_module
     pairs = [
         (16777215, 1),
         (16777216, 2),
@@ -893,7 +908,8 @@ def test_div_edge_cases(round_mode, device):
         assert torch.equal(torch_output_tensor, output_tensor)
 
 
-def test_div_inf_nan_cases(device):
+def test_div_inf_nan_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -925,7 +941,8 @@ def test_div_inf_nan_cases(device):
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
 )
-def test_binary_divide_int32_full_range(input_shapes, device):
+def test_binary_divide_int32_full_range(input_shapes, device_module):
+    device = device_module
     value_ranges_a = [
         (-300, 300),
         (-750, 500),
@@ -993,7 +1010,8 @@ def test_binary_divide_int32_full_range(input_shapes, device):
         assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
-def test_divide_edge_cases(device):
+def test_divide_edge_cases(device_module):
+    device = device_module
     pairs = [
         (3, 2),
         (2, 2),
@@ -1037,7 +1055,8 @@ def test_divide_edge_cases(device):
     assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
-def test_divide_inf_nan_cases(device):
+def test_divide_inf_nan_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

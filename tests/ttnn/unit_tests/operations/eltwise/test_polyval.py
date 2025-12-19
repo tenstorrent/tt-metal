@@ -20,7 +20,8 @@ def torch_polyval(input_tensor, coeff):
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("coeff", [(1.5, 2.4, 6.7, 9.1)])
-def test_polyval(device, shape, coeff):
+def test_polyval(device_module, shape, coeff):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
