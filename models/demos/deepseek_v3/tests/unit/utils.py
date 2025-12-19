@@ -23,7 +23,6 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
         return torch.rand(shape, dtype=torch.bfloat16)
-    # return torch.rand(shape).bfloat16().float()
     assert False, f"Unsupported dtype {dtype}"
 
 
