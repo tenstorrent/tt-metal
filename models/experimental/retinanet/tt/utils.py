@@ -46,25 +46,25 @@ class TTConv2D:
         elif isinstance(kernel_size, tuple):
             self.kernel_size = kernel_size
         else:
-            ValueError("Invalid config")
+            raise ValueError("Invalid config: kernel_size must be int or tuple")
         if isinstance(stride, int):
             self.stride = (stride, stride)
         elif isinstance(stride, tuple):
             self.stride = stride
         else:
-            ValueError("Invalid config")
+            raise ValueError("Invalid config: stride must be int or tuple")
         if isinstance(padding, int):
             self.padding = (padding, padding, padding, padding)
         elif isinstance(padding, tuple):
             self.padding = padding
         else:
-            ValueError("Invalid config")
+            raise ValueError("Invalid config: padding must be int or tuple")
         if isinstance(dilation, int):
             self.dilation = (dilation, dilation)
         elif isinstance(dilation, tuple):
             self.dilation = dilation
         else:
-            ValueError("Invalid config")
+            raise ValueError("Invalid config: dilation must be int or tuple")
 
         self.kernel_fidelity = kernel_fidelity
         self.weights = parameters["weight"]

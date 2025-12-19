@@ -209,7 +209,7 @@ class Resnet50FpnTestInfra:
 
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
         logger.info(
-            f"\nResNet52 fpn - batch_size={self.batch_size}, "
+            f"\nResNet50 fpn - batch_size={self.batch_size}, "
             f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
             f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
             f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "

@@ -17,7 +17,7 @@ The demo currently uses default pre-trained weights (RetinaNet_ResNet50_FPN_V2_W
 
 
 ## Repository Layout
-s
+
 | Directory | Purpose |
 |------------|----------|
 | `tt/` | Core Tenstorrent native modules of **Retinanet** |
@@ -49,7 +49,7 @@ Note: GroupNorm in the head is set to fall back to the PyTorch implementation be
 ```bash
 pytest models/experimental/retinanet/tests/perf/test_perf.py
 ```
-- End-to-end performance: 36.3 FPS
+- End-to-end performance: 35.75 FPS
 
 ### Run the Demo
 ```bash
@@ -58,7 +58,7 @@ python models/experimental/retinanet/demo/demo.py \
   --output <path/to/output_dir>
 ```
 Note: Currently, the default input image directory path for the demo: models/experimental/retinanet/resources
-Default directory path for output image: models/experimental/retnanet/resources/output/
+Default directory path for output image: models/experimental/retinanet/resources/outputs/
 The demo generates output files for each processed image:
 - `{result}.jpg`: TTNN detection results with bounding boxes and labels
 

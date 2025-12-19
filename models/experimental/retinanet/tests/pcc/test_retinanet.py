@@ -68,7 +68,7 @@ class RetinaNetTestInfra:
         # Run PyTorch regression head to get golden output
         torch_regression_output = self.torch_regression_head(list(backbone_features.values()))
 
-        # Run PyTorch classifiction head to get golden output
+        # Run PyTorch classification head to get golden output
         torch_classification_output = self.torch_classification_head(list(backbone_features.values()))
 
         # Store all outputs (backbone + regression head)

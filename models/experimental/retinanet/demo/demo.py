@@ -260,6 +260,7 @@ class Demo:
 
         return image_tensor, og_size
 
+    @staticmethod
     def decode_boxes(anchors, deltas):
         """
         Decode regression deltas to boxes.
@@ -399,9 +400,9 @@ class Demo:
             "ACTIVATIONS_DTYPE": ttnn.bfloat16,
         }
 
-        torch_output = self.run_torch_inference(self.torch_input, model_config)
+        self.run_torch_inference(self.torch_input, model_config)  # Sets up parameters as side effect
         torch_output = self.run_ttnn_inference(self.ttnn_input, model_config, device)
-        # Posstprocess detections
+        # Postprocess detections
         anchor_sizes = tuple((x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3))) for x in [32, 64, 128, 256, 512])
         aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
         anchor_generator = AnchorGenerator(anchor_sizes, aspect_ratios)
@@ -447,6 +448,7 @@ class Demo:
 
         logger.info("Demo completed. Output dir: {}", output_dir)
 
+    @staticmethod
     def resize_boxes(boxes: Tensor, original_size: List[int], new_size: List[int]) -> Tensor:
         ratios = [
             torch.tensor(s, dtype=torch.float32, device=boxes.device)

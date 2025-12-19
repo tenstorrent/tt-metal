@@ -271,9 +271,6 @@ class Conv2dNormActivation:
 
             x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
 
-        H_out = input_height
-        W_out = input_width
-
         # ReLU activation
         x = ttnn.relu(x)
 

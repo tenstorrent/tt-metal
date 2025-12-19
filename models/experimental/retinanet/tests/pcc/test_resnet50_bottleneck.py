@@ -113,12 +113,6 @@ class BottleneckTestInfra:
         torch_model.eval()
 
         self.torch_input_tensor = load_input(name)
-        tt_host_tensor = ttnn.from_torch(
-            self.torch_input_tensor,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=self.inputs_mesh_mapper,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
         # Preprocess model params
