@@ -69,7 +69,7 @@ def run_all_reduce_impl(
     profiler=BenchmarkProfiler(),
     linear=True,
 ):
-    cluster_shape = (1, 4)
+    cluster_shape = (4, 1)
 
     if output_dtype is None:
         output_dtype = input_dtype
@@ -304,12 +304,12 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 1, 2, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 2, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 2, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
+        ([1, 1, 32, 1280], 0, 2, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 0, 2, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
+        ([1, 1, 32, 16 * 1024], 0, 2, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
+        ([1, 1, 32, 1280], 0, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 0, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
+        ([1, 1, 32, 16 * 1024], 0, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -337,15 +337,8 @@ def run_all_reduce_impl(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (1, 4),
-    ],
-    indirect=True,
-)
 def test_all_reduce(
-    mesh_device,
+    bh_1d_mesh_device,
     output_shape,
     cluster_axis,
     input_dtype,
@@ -359,13 +352,15 @@ def test_all_reduce(
     trace_mode,
     function_level_defaults,
 ):
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
+
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
 
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(
-        mesh_device,
+        submesh_device,
         output_shape,
         cluster_axis,
         input_dtype,
@@ -394,8 +389,8 @@ def test_all_reduce(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 0, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 0, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -422,15 +417,8 @@ def test_all_reduce(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (1, 4),
-    ],
-    indirect=True,
-)
 def test_all_reduce_loopback(
-    mesh_device,
+    bh_1d_mesh_device,
     output_shape,
     cluster_axis,
     input_dtype,
@@ -444,8 +432,9 @@ def test_all_reduce_loopback(
     trace_mode,
     function_level_defaults,
 ):
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
     run_all_reduce_impl(
-        mesh_device,
+        submesh_device,
         output_shape,
         cluster_axis,
         input_dtype,
