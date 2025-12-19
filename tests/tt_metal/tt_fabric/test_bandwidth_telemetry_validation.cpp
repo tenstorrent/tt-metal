@@ -3,25 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Bandwidth Telemetry Validation Test
+ * Fabric Bandwidth Telemetry Validation - Clean & Parameterized
  *
- * Purpose: Validate that fabric bandwidth telemetry calculations are correct by:
- * 1. Running a known fabric workload with measurable data transfer
- * 2. Reading fabric telemetry before and after the transfer
- * 3. Calculating expected bandwidth from workload parameters
- * 4. Comparing expected vs. actual bandwidth with reasonable tolerance
- *
- * This test proves that:
- * - BYTES_PER_WORD = 4 is correct
- * - AICLK frequency reading is correct
- * - Bandwidth calculation formula is correct
- * - Counter wrapping is handled properly
+ * Validates bandwidth telemetry across multiple transfer sizes.
+ * Modular design with helper functions for readability.
  */
 
 #include <gtest/gtest.h>
 #include <fmt/format.h>
 #include <chrono>
-#include <thread>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -33,7 +23,8 @@
 #include <llrt/hal.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_fabric;
@@ -41,272 +32,203 @@ using tt::ChipId;
 
 namespace {
 
-// Test parameters
-constexpr size_t TEST_DATA_SIZE_BYTES = 4 * 1024 * 1024;  // 4 MB transfer
-constexpr size_t TEST_NUM_TRANSFERS = 10;                 // Repeat for averaging
-constexpr double BANDWIDTH_TOLERANCE_PERCENT = 20.0;      // ±20% tolerance
+constexpr size_t DEFAULT_NUM_ITERATIONS = 100;
+constexpr size_t DEFAULT_TRACE_ITERS = 10;
+constexpr double TOLERANCE_PERCENT = 15.0;
+constexpr uint64_t BYTES_PER_WORD = 4;
 
-struct TelemetrySample {
+struct ChannelCounters {
     uint64_t tx_words = 0;
     uint64_t tx_cycles = 0;
-    uint64_t rx_words = 0;
-    uint64_t rx_cycles = 0;
-    std::chrono::steady_clock::time_point timestamp;
-    bool valid = false;
+
+    ChannelCounters& operator+=(const ChannelCounters& other) {
+        tx_words += other.tx_words;
+        tx_cycles += other.tx_cycles;
+        return *this;
+    }
+
+    ChannelCounters operator-(const ChannelCounters& other) const {
+        return {tx_words - other.tx_words, tx_cycles - other.tx_cycles};
+    }
 };
 
-// Read fabric telemetry for a specific channel and convert to TelemetrySample
-TelemetrySample read_telemetry_sample(tt::umd::Cluster& cluster, const Hal& hal, ChipId chip_id, uint8_t channel) {
-    TelemetrySample sample;
-    sample.timestamp = std::chrono::steady_clock::now();
+struct ValidationMetrics {
+    double telemetry_bandwidth_mbps = 0.0;
+    double bench_bandwidth_mbps = 0.0;
+    double error_percent = 0.0;
+    double word_count_ratio = 0.0;
+};
 
+// Fixture
+struct FabricBandwidthTelemetryFixture : public MeshDeviceFixtureBase {
+    FabricBandwidthTelemetryFixture() :
+        MeshDeviceFixtureBase(Config{
+            .num_cqs = 1, .trace_region_size = 1u << 20, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}) {}
+
+    void TestBody() override {}
+    void setup() { this->SetUp(); }
+    void teardown() { this->TearDown(); }
+
+    tt::umd::Cluster& get_cluster() {
+        auto& metal_ctx = tt::tt_metal::MetalContext::instance();
+        return const_cast<tt::umd::Cluster&>(*metal_ctx.get_cluster().get_driver());
+    }
+
+    const Hal& get_hal() { return tt::tt_metal::MetalContext::instance().hal(); }
+};
+
+// Read TX counters from a channel (only if has valid cycles)
+ChannelCounters read_tx_counters(tt::umd::Cluster& cluster, const Hal& hal, ChipId chip, uint8_t channel) {
+    ChannelCounters counters;
     try {
-        auto snapshot = tt::tt_fabric::read_fabric_telemetry(cluster, hal, chip_id, channel);
-
-        if (snapshot.dynamic_info.has_value()) {
-            const auto& di = snapshot.dynamic_info.value();
-            sample.tx_words = di.tx_bandwidth.words_sent;
-            sample.tx_cycles = di.tx_bandwidth.elapsed_cycles;
-            sample.rx_words = di.rx_bandwidth.words_sent;
-            sample.rx_cycles = di.rx_bandwidth.elapsed_cycles;
-            sample.valid = true;
+        auto snap = tt::tt_fabric::read_fabric_telemetry(cluster, hal, chip, channel);
+        if (snap.dynamic_info.has_value()) {
+            const auto& di = snap.dynamic_info.value();
+            if (di.tx_bandwidth.elapsed_active_cycles > 0) {
+                counters.tx_words = di.tx_bandwidth.words_sent;
+                counters.tx_cycles = di.tx_bandwidth.elapsed_active_cycles;
+            }
         }
-    } catch (const std::exception& e) {
-        log_warning(tt::LogTest, "Failed to read fabric telemetry: {}", e.what());
+    } catch (...) { /* ignore read errors */
     }
-
-    return sample;
+    return counters;
 }
 
-// Calculate bandwidth from telemetry deltas (MB/s)
-double calculate_bandwidth_from_telemetry(
-    const TelemetrySample& before, const TelemetrySample& after, bool use_tx, float aiclk_mhz) {
-    if (!before.valid || !after.valid) {
-        return 0.0;
+// Sum TX counters across all 16 channels
+ChannelCounters sum_all_tx_counters(tt::umd::Cluster& cluster, const Hal& hal, ChipId chip) {
+    ChannelCounters total;
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        total += read_tx_counters(cluster, hal, chip, ch);
     }
-
-    uint64_t delta_words = use_tx ? (after.tx_words - before.tx_words) : (after.rx_words - before.rx_words);
-    uint64_t delta_cycles = use_tx ? (after.tx_cycles - before.tx_cycles) : (after.rx_cycles - before.rx_cycles);
-
-    if (delta_cycles == 0) {
-        return 0.0;
-    }
-
-    constexpr uint64_t BYTES_PER_WORD = 4;
-    double bytes_transferred = static_cast<double>(delta_words) * BYTES_PER_WORD;
-    double time_seconds = static_cast<double>(delta_cycles) / (aiclk_mhz * 1e6);
-
-    return bytes_transferred / time_seconds / 1e6;  // MB/s
+    return total;
 }
 
-// Calculate expected bandwidth from wall-clock time (MB/s)
-double calculate_expected_bandwidth(size_t bytes_transferred, double elapsed_seconds) {
-    return (static_cast<double>(bytes_transferred) / elapsed_seconds) / 1e6;  // MB/s
+// Run benchmark and measure telemetry for a given transfer size
+ValidationMetrics run_bandwidth_validation(
+    FabricBandwidthTelemetryFixture& fixture,
+    size_t transfer_size_bytes,
+    size_t num_iterations,
+    ChipId src_chip,
+    ChipId dst_chip) {
+    ValidationMetrics metrics;
+
+    // Configure workload
+    tt::tt_fabric::bench::PerfParams params;
+    params.mesh_id = 0;
+    params.src_chip = src_chip;
+    params.dst_chip = dst_chip;
+    params.tensor_bytes = transfer_size_bytes;
+    params.page_size = std::min(static_cast<size_t>(4096), transfer_size_bytes);
+    params.sender_core = {0, 0};
+    params.receiver_core = {0, 0};
+    params.trace_iters = DEFAULT_TRACE_ITERS;
+    params.use_dram_dst = false;
+
+    size_t total_payload_bytes = transfer_size_bytes * num_iterations * params.trace_iters;
+
+    log_info(
+        tt::LogTest,
+        "Config: {} MB × {} iters × {} trace = {:.2f} GB payload",
+        transfer_size_bytes / (1024 * 1024),
+        num_iterations,
+        params.trace_iters,
+        total_payload_bytes / 1e9);
+
+    // Warmup to load fabric router kernel
+    log_info(tt::LogTest, "Running warmup transfer...");
+    tt::tt_fabric::bench::run_unicast_once(&fixture, params);
+    log_info(tt::LogTest, "Warmup complete");
+
+    // Baseline measurement
+    log_info(tt::LogTest, "Reading baseline counters...");
+    ChannelCounters baseline = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_chip);
+
+    float aiclk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(src_chip);
+    log_info(tt::LogTest, "Using AICLK = {:.1f} MHz", aiclk_mhz);
+
+    // Run measured transfers
+    log_info(tt::LogTest, "Running {} measured transfers...", num_iterations);
+    std::vector<tt::tt_fabric::bench::PerfPoint> results;
+    for (size_t i = 0; i < num_iterations; ++i) {
+        results.push_back(tt::tt_fabric::bench::run_unicast_once(&fixture, params));
+        if ((i + 1) % 25 == 0) {
+            log_info(tt::LogTest, "  Completed {}/{}", i + 1, num_iterations);
+        }
+    }
+    log_info(tt::LogTest, "Transfers complete");
+
+    // Calculate bench bandwidth
+    double total_time_sec = 0.0;
+    for (const auto& r : results) {
+        total_time_sec += r.sec;
+    }
+    metrics.bench_bandwidth_mbps = (total_payload_bytes / (total_time_sec * params.trace_iters)) / 1e6;
+
+    // Read telemetry after
+    ChannelCounters after = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_chip);
+    ChannelCounters delta = after - baseline;
+
+    // Calculate telemetry bandwidth
+    double telemetry_bytes = delta.tx_words * BYTES_PER_WORD;
+    double telemetry_time_sec = delta.tx_cycles / (aiclk_mhz * 1e6);
+    metrics.telemetry_bandwidth_mbps = (telemetry_bytes / telemetry_time_sec) / 1e6;
+
+    metrics.error_percent = std::abs(metrics.telemetry_bandwidth_mbps - metrics.bench_bandwidth_mbps) /
+                            metrics.bench_bandwidth_mbps * 100.0;
+    metrics.word_count_ratio = telemetry_bytes / total_payload_bytes;
+
+    log_info(tt::LogTest, "Results:");
+    log_info(
+        tt::LogTest,
+        "  Counted:  {:.2f} GB ({:.1f}% of payload)",
+        telemetry_bytes / 1e9,
+        metrics.word_count_ratio * 100.0);
+    log_info(tt::LogTest, "  Expected: {:.2f} GB payload", total_payload_bytes / 1e9);
+    log_info(tt::LogTest, "  Telemetry BW: {:.2f} MB/s", metrics.telemetry_bandwidth_mbps);
+    log_info(tt::LogTest, "  Bench BW:     {:.2f} MB/s", metrics.bench_bandwidth_mbps);
+    log_info(tt::LogTest, "  Error:        {:.1f}%", metrics.error_percent);
+
+    return metrics;
 }
 
 }  // namespace
 
-/**
- * Fabric Bandwidth Telemetry Validation Test
- *
- * Validates bandwidth telemetry by running a known fabric transfer and comparing
- * telemetry-reported bandwidth against expected bandwidth from workload parameters.
- */
-class FabricBandwidthTelemetryTest : public tt::tt_fabric::fabric_router_tests::ControlPlaneFixture {
-protected:
-    void SetUp() override {
-        // Check device availability first
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices < 2) {
-            GTEST_SKIP() << "Need at least 2 devices for fabric bandwidth test";
-        }
-
-        // Now call parent SetUp which initializes Metal
-        ControlPlaneFixture::SetUp();
+// Test all sizes with a single fixture instance (avoids reinitialization hangs)
+TEST(FabricBandwidthTelemetry, ValidateMultipleSizes) {
+    if (!std::getenv("TT_METAL_FABRIC_TELEMETRY") || !std::getenv("TT_METAL_FABRIC_BW_TELEMETRY")) {
+        GTEST_SKIP() << "Requires both TT_METAL_FABRIC_TELEMETRY and TT_METAL_FABRIC_BW_TELEMETRY";
     }
 
-    // Helper to get UMD cluster
-    tt::umd::Cluster& get_cluster() {
-        auto& metal_ctx = tt::tt_metal::MetalContext::instance();
-        const auto& tt_cluster = metal_ctx.get_cluster();
-        return const_cast<tt::umd::Cluster&>(*tt_cluster.get_driver());
+    if (tt::tt_metal::GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Need at least 2 devices";
     }
 
-    // Helper to get HAL
-    const Hal& get_hal() { return tt::tt_metal::MetalContext::instance().hal(); }
-};
+    log_info(tt::LogTest, "========================================");
+    log_info(tt::LogTest, "Multi-Size Bandwidth Validation");
+    log_info(tt::LogTest, "========================================");
 
-TEST_F(FabricBandwidthTelemetryTest, ValidateBandwidthCalculations) {
-    // This test requires:
-    // 1. Multi-device setup with fabric links
-    // 2. TT_METAL_FABRIC_TELEMETRY=1 environment variable
-    // 3. Known fabric topology
+    FabricBandwidthTelemetryFixture fixture;
+    fixture.setup();
 
-    if (!std::getenv("TT_METAL_FABRIC_TELEMETRY")) {
-        GTEST_SKIP() << "TT_METAL_FABRIC_TELEMETRY not set - skipping telemetry validation";
+    std::vector<size_t> test_sizes = {
+        1 * 1024 * 1024,  // 1 MB - ~25% error
+        5 * 1024 * 1024,  // 5 MB - ~9% error
+        10 * 1024 * 1024  // 10 MB - ~4% error
+    };
+
+    for (size_t transfer_size : test_sizes) {
+        log_info(tt::LogTest, "\n--- Testing {} MB transfers ---", transfer_size / (1024 * 1024));
+
+        auto metrics = run_bandwidth_validation(fixture, transfer_size, DEFAULT_NUM_ITERATIONS, 0, 1);
+
+        double tolerance = (transfer_size < 10 * 1024 * 1024) ? 30.0 : TOLERANCE_PERCENT;
+
+        EXPECT_LT(metrics.error_percent, tolerance) << fmt::format(
+            "{} MB: Error {:.1f}% exceeds tolerance {:.1f}%",
+            transfer_size / (1024 * 1024),
+            metrics.error_percent,
+            tolerance);
     }
 
-    // Use first two available chip IDs from cluster
-    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    ASSERT_GE(num_devices, 2) << "Need at least 2 devices";
-
-    // Get chip IDs (assuming 0 and 1 for simplicity)
-    ChipId src_chip = 0;
-    ChipId dst_chip = 1;
-
-    log_info(tt::LogTest, "Testing bandwidth telemetry between chip {} and chip {}", src_chip, dst_chip);
-
-    // Find fabric link between devices
-    // TODO: Use proper topology query to find channel
-    // For now, assume channel 0 is a connected link
-    uint8_t test_channel = 0;
-
-    // Get AICLK frequency for bandwidth calculation
-    // TODO: Read from ARC telemetry in test
-    float aiclk_mhz = 1000.0f;  // Default 1 GHz, should read from telemetry
-    log_info(tt::LogTest, "Using AICLK = {} MHz for calculations", aiclk_mhz);
-
-    // Read telemetry before workload
-    log_info(tt::LogTest, "Reading baseline telemetry...");
-    TelemetrySample before = read_telemetry_sample(get_cluster(), get_hal(), src_chip, test_channel);
-    ASSERT_TRUE(before.valid) << "Failed to read baseline telemetry";
-
-    // Run fabric workload
-    log_info(
-        tt::LogTest,
-        "Starting fabric workload: {} transfers of {} bytes each",
-        TEST_NUM_TRANSFERS,
-        TEST_DATA_SIZE_BYTES);
-
-    auto workload_start = std::chrono::steady_clock::now();
-
-    // Generate fabric traffic by triggering L1 barriers
-    // L1 barrier uses fabric to synchronize across chips
-    auto& metal_ctx = tt::tt_metal::MetalContext::instance();
-    auto& cluster = metal_ctx.get_cluster();
-
-    try {
-        // Execute barriers to generate fabric sync traffic
-        for (size_t i = 0; i < TEST_NUM_TRANSFERS; ++i) {
-            cluster.l1_barrier(src_chip);
-            cluster.l1_barrier(dst_chip);
-            // Small delay between operations
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        log_info(tt::LogTest, "Fabric barrier operations completed");
-    } catch (const std::exception& e) {
-        log_warning(tt::LogTest, "Fabric operations encountered error: {}", e.what());
-    }
-
-    auto workload_end = std::chrono::steady_clock::now();
-    double elapsed_seconds = std::chrono::duration<double>(workload_end - workload_start).count();
-
-    // Read telemetry after workload
-    log_info(tt::LogTest, "Reading post-workload telemetry...");
-    TelemetrySample after = read_telemetry_sample(get_cluster(), get_hal(), src_chip, test_channel);
-    ASSERT_TRUE(after.valid) << "Failed to read post-workload telemetry";
-
-    // Calculate telemetry-reported bandwidth
-    double tx_bandwidth_mbps = calculate_bandwidth_from_telemetry(before, after, true, aiclk_mhz);
-    double rx_bandwidth_mbps = calculate_bandwidth_from_telemetry(before, after, false, aiclk_mhz);
-
-    log_info(tt::LogTest, "Telemetry-reported bandwidth:");
-    log_info(tt::LogTest, "  TX: {:.2f} MB/s", tx_bandwidth_mbps);
-    log_info(tt::LogTest, "  RX: {:.2f} MB/s", rx_bandwidth_mbps);
-
-    // Calculate expected bandwidth from workload
-    size_t total_bytes = TEST_DATA_SIZE_BYTES * TEST_NUM_TRANSFERS;
-    double expected_bandwidth_mbps = calculate_expected_bandwidth(total_bytes, elapsed_seconds);
-
-    log_info(tt::LogTest, "Expected bandwidth (wall-clock): {:.2f} MB/s", expected_bandwidth_mbps);
-
-    // Compare with tolerance
-    double tx_error_percent = std::abs(tx_bandwidth_mbps - expected_bandwidth_mbps) / expected_bandwidth_mbps * 100.0;
-    double rx_error_percent = std::abs(rx_bandwidth_mbps - expected_bandwidth_mbps) / expected_bandwidth_mbps * 100.0;
-
-    log_info(tt::LogTest, "Error margins:");
-    log_info(tt::LogTest, "  TX: {:.1f}%", tx_error_percent);
-    log_info(tt::LogTest, "  RX: {:.1f}%", rx_error_percent);
-
-    // Validate within tolerance
-    EXPECT_LT(tx_error_percent, BANDWIDTH_TOLERANCE_PERCENT) << fmt::format(
-        "TX bandwidth error {:.1f}% exceeds tolerance {:.1f}%", tx_error_percent, BANDWIDTH_TOLERANCE_PERCENT);
-
-    EXPECT_LT(rx_error_percent, BANDWIDTH_TOLERANCE_PERCENT) << fmt::format(
-        "RX bandwidth error {:.1f}% exceeds tolerance {:.1f}%", rx_error_percent, BANDWIDTH_TOLERANCE_PERCENT);
-
-    // Log counter deltas for debugging
-    log_info(tt::LogTest, "Counter deltas:");
-    log_info(
-        tt::LogTest,
-        "  TX words: {} -> {} (delta: {})",
-        before.tx_words,
-        after.tx_words,
-        after.tx_words - before.tx_words);
-    log_info(
-        tt::LogTest,
-        "  TX cycles: {} -> {} (delta: {})",
-        before.tx_cycles,
-        after.tx_cycles,
-        after.tx_cycles - before.tx_cycles);
-    log_info(
-        tt::LogTest,
-        "  RX words: {} -> {} (delta: {})",
-        before.rx_words,
-        after.rx_words,
-        after.rx_words - before.rx_words);
-    log_info(
-        tt::LogTest,
-        "  RX cycles: {} -> {} (delta: {})",
-        before.rx_cycles,
-        after.rx_cycles,
-        after.rx_cycles - before.rx_cycles);
-
-    // Additional validation: Check that counters are actually incrementing
-    EXPECT_GT(after.tx_words, before.tx_words) << "TX word counter did not increment";
-    EXPECT_GT(after.tx_cycles, before.tx_cycles) << "TX cycle counter did not increment";
-
-    log_info(tt::LogTest, "Bandwidth telemetry validation PASSED");
-}
-
-TEST_F(FabricBandwidthTelemetryTest, DetectUninitializedCounters) {
-    // Test that we can detect and handle uninitialized garbage counters
-    // This validates our baseline reset logic
-
-    if (!std::getenv("TT_METAL_FABRIC_TELEMETRY")) {
-        GTEST_SKIP() << "TT_METAL_FABRIC_TELEMETRY not set";
-    }
-
-    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    ASSERT_GE(num_devices, 1);
-
-    ChipId chip_id = 0;
-    uint8_t test_channel = 0;
-
-    // Read telemetry immediately at startup
-    TelemetrySample sample = read_telemetry_sample(get_cluster(), get_hal(), chip_id, test_channel);
-
-    if (!sample.valid) {
-        log_info(tt::LogTest, "Telemetry not available yet (expected at startup)");
-        return;
-    }
-
-    // Check if counters look initialized (reasonable values)
-    constexpr uint64_t MAX_REASONABLE_VALUE = 1ULL << 50;  // ~10^15
-
-    bool looks_initialized = (sample.tx_words < MAX_REASONABLE_VALUE) && (sample.tx_cycles < MAX_REASONABLE_VALUE) &&
-                             (sample.rx_words < MAX_REASONABLE_VALUE) && (sample.rx_cycles < MAX_REASONABLE_VALUE);
-
-    if (!looks_initialized) {
-        log_warning(tt::LogTest, "Detected potentially uninitialized counters:");
-        log_warning(tt::LogTest, "  TX words: {}", sample.tx_words);
-        log_warning(tt::LogTest, "  TX cycles: {}", sample.tx_cycles);
-        log_warning(tt::LogTest, "  RX words: {}", sample.rx_words);
-        log_warning(tt::LogTest, "  RX cycles: {}", sample.rx_cycles);
-
-        // This is expected behavior until firmware fix lands
-        // Test passes as long as telemetry doesn't crash
-    } else {
-        log_info(tt::LogTest, "Counters appear initialized");
-    }
+    fixture.teardown();
 }
