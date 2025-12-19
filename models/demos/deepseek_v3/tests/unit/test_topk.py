@@ -16,7 +16,7 @@ TOPK_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8, 9))])
 
 
-# k=32 matches model usage patterns
+# k=32 matches the DeepSeek v3 MoE gating configuration, where the gate selects 32 experts per token.
 K_VALUE = 32
 
 
