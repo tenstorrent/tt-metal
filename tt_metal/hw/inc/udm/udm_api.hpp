@@ -6,12 +6,12 @@
 
 #include <stdint.h>
 #include <utility>
-#include "tt_metal/hw/inc/dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "udm/accessor/mesh_gcore_accessor.h"
 #include "udm/accessor/mesh_tensor_accessor.h"
 #include <type_traits>
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 namespace tt::tt_fabric::experimental::udm {
 
