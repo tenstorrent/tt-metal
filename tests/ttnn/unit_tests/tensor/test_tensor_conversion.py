@@ -30,7 +30,8 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("python_lib", [torch, np])
-def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to_device, device):
+def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to_device, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if python_lib == torch:
@@ -118,7 +119,8 @@ string_to_np_dtype = {
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 @pytest.mark.parametrize("python_lib", [torch, np])
-def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str, convert_to_device, device):
+def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str, convert_to_device, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if python_lib == torch:

@@ -60,7 +60,8 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pc
         ttnn.bfloat4_b,
     ],
 )
-def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_type, tt_dtype, device):
+def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_type, tt_dtype, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:

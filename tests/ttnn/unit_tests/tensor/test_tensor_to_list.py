@@ -33,7 +33,8 @@ TEST_SHAPES = [(5, 5), (32, 32), (50, 50), (16, 16, 16), (16, 16, 16, 16), (16, 
 @pytest.mark.parametrize("dtype", ALL_TYPES)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("is_device", [False, True])
-def test_to_list_all_types(device, is_device, shape, dtype, layout):
+def test_to_list_all_types(device_module, is_device, shape, dtype, layout):
+    device = device_module
     if dtype == ttnn.bfloat4_b or dtype == ttnn.bfloat8_b and layout != ttnn.TILE_LAYOUT:
         pytest.skip("types `bfloat4_b` and `bfloat8_b` can only be used with tile layout")
 

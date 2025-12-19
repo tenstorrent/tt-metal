@@ -35,7 +35,8 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
     ],
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_creation(shape, tt_dtype, layout, device):
+def test_tensor_creation(shape, tt_dtype, layout, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -88,7 +89,8 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
     ],
 )
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_creation_api_parity(shape, tt_dtype, layout, device):
+def test_tensor_creation_api_parity(shape, tt_dtype, layout, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -180,7 +182,8 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
         "width_sharded",
     ],
 )
-def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
+def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -288,7 +291,8 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
         ),
     ],
 )
-def test_tensor_creation_with_tensor_spec(tensor_spec, device):
+def test_tensor_creation_with_tensor_spec(tensor_spec, device_module):
+    device = device_module
     torch.manual_seed(0)
     dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype]
     py_tensor = torch.rand(list(tensor_spec.shape), dtype=dtype)
@@ -385,7 +389,8 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
         ),
     ],
 )
-def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
+def test_tensor_creation_from_buffer(dtype, shape, buffer, device_module):
+    device = device_module
     tt_tensor = ttnn.from_buffer(buffer, shape, dtype=dtype, device=device)
     assert tt_tensor.shape == shape
     assert tt_tensor.dtype == dtype
@@ -416,7 +421,8 @@ def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
         (ttnn.DataType.INVALID, [[1, 2, 3], [4, 5, 6]]),
     ],
 )
-def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device):
+def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device_module):
+    device = device_module
     try:
         tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
     except Exception as e:
@@ -439,7 +445,8 @@ def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, devic
         (ttnn.float32, [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 1, 1, 1, 4]),  # 2 x 1 x 1 x 1 x 4 # 6d!
     ],
 )
-def test_tensor_creation_with_multiple_buffer_sizes(dtype, buffer, device, shape):
+def test_tensor_creation_with_multiple_buffer_sizes(dtype, buffer, device_module, shape):
+    device = device_module
     tt_tensor = ttnn.Tensor(
         buffer,
         shape,
@@ -616,7 +623,8 @@ def flatten_list(nested_list):
     ],
 )
 @pytest.mark.parametrize("shape", [(2, 8), (2, 2, 2, 2)])
-def test_tensor_creation_from_list(shape, tt_dtype, data, layout, atol, device):
+def test_tensor_creation_from_list(shape, tt_dtype, data, layout, atol, device_module):
+    device = device_module
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
@@ -701,7 +709,8 @@ def test_tensor_creation_from_list(shape, tt_dtype, data, layout, atol, device):
     ],
     ids=["bfloat8_b", "bfloat4_b"],
 )
-def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
+def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device_module):
+    device = device_module
     """Test creating block float tensors (bfloat8_b, bfloat4_b) from Python lists"""
 
     # Block float types require TILE_LAYOUT and tile-aligned shapes
@@ -805,7 +814,8 @@ def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
         (ttnn.int32, int),
     ],
 )
-def test_tensor_creation_from_list_with_mem_config(shape, tt_dtype, data_type, memory_config, device):
+def test_tensor_creation_from_list_with_mem_config(shape, tt_dtype, data_type, memory_config, device_module):
+    device = device_module
     """Test creating tensors from Python lists with different memory configs"""
 
     total_elements = int(np.prod(shape))

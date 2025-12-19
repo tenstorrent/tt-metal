@@ -8,7 +8,8 @@ import torch
 import ttnn
 
 
-def test_tensor_accessor_args(device):
+def test_tensor_accessor_args(device_module):
+    device = device_module
     shape = [3, 128, 160]
     shard_shape = [3, 128, 32]
     py_tensor = torch.rand(shape).to(torch.bfloat16)
