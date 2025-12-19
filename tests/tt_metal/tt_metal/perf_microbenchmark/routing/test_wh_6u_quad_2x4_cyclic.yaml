@@ -37,7 +37,7 @@ Tests:
           - destination:
               device: [0, 4]
 
-  - name: "FlowControCyclicMultiMesh"
+  - name: "FlowControlCyclicMultiMesh"
     enable_flow_control: true
     sync: true
     fabric_setup:

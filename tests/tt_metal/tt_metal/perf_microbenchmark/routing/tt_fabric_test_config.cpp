@@ -1392,7 +1392,6 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else if (is_multi_mesh()) {
         const auto& global_nodes = device_info_provider_.get_global_node_ids();
-        const auto& local_nodes = device_info_provider_.get_local_node_ids();
 
         std::unordered_map<MeshId, std::vector<MeshId>> mesh_adjacency_map;
         const std::vector<RoutingDirection> directions = {
@@ -1886,7 +1885,9 @@ uint32_t TestConfigBuilder::get_random_in_range(uint32_t min, uint32_t max) {
     return distrib(this->gen_);
 }
 
-bool TestConfigBuilder::is_multi_mesh() const { return device_info_provider_.get_global_node_ids().size() > 1; }
+bool TestConfigBuilder::is_multi_mesh() const {
+    return device_info_provider_.get_global_node_ids().size() > device_info_provider_.get_local_node_ids().size();
+}
 
 // YamlTestConfigSerializer methods
 void YamlTestConfigSerializer::dump(const PhysicalMeshConfig& physical_mesh_config, std::ofstream& fout) {
