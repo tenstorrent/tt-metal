@@ -8,8 +8,7 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/device_operation.hpp"
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
@@ -45,12 +44,12 @@ struct TilizeWithValPaddingDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const ttnn::Shape& output_padded_shape,
-        const tt::tt_metal::PadValue pad_value,
+        const tt::tt_metal::PadValue& pad_value,
         const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
         const std::optional<tt::tt_metal::DataType>& output_dtype,
-        const bool use_multicore,
-        const bool enough_space_width,
-        const bool enough_space_height,
+        bool use_multicore,
+        bool enough_space_width,
+        bool enough_space_height,
         const std::optional<CoreRangeSet>& sub_core_grids);
 };
 

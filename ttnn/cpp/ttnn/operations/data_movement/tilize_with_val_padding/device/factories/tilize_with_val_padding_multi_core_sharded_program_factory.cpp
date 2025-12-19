@@ -7,15 +7,11 @@
 #include <math.h>
 
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
 using namespace tt::constants;
@@ -140,12 +136,13 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
     const std::array writer_rt_args = {ntiles_per_core};
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
 
-    shared_variables_t shared_variables{
-        .reader_kernel_id = unary_reader_kernel_id,
-        .writer_kernel_id = unary_writer_kernel_id,
-        .cb_src0 = cb_src0,
-        .cb_output = cb_output};
-    return cached_program_t(std::move(program), std::move(shared_variables));
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = unary_reader_kernel_id,
+            .writer_kernel_id = unary_writer_kernel_id,
+            .cb_src0 = cb_src0,
+            .cb_output = cb_output});
 }
 
 void TilizeWithValPaddingMultiCoreShardedFactory::override_runtime_arguments(

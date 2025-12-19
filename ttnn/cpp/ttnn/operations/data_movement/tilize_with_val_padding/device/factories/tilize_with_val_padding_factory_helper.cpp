@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::detail {
 
-uint32_t get_packed_value(const Tensor tensor, const PadValue pad_value) {
+uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
     return std::visit(
         [&tensor](auto&& pad_value) {
             using T = std::decay_t<decltype(pad_value)>;

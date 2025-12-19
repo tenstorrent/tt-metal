@@ -4,8 +4,6 @@
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
@@ -148,7 +146,7 @@ std::tuple<
 TilizeWithValPaddingDeviceOperation::invoke(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const PadValue pad_value,
+    const PadValue& pad_value,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     const bool use_multicore,

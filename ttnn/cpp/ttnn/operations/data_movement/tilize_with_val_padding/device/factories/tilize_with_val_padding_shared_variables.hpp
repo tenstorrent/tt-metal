@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 struct shared_variables_interleaved {
