@@ -22,10 +22,11 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 from ttexalens.cli.debug_bus import _format_signal_value
+import os
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
-    disabled=True,
+    disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None
 )
 
 
