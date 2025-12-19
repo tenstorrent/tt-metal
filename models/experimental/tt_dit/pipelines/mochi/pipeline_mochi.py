@@ -235,7 +235,7 @@ class MochiPipeline(DiffusionPipeline):
                 )
             else:
                 logger.info("Loading transformer weights from PyTorch state dict")
-                self.transformer.load_state_dict(torch_transformer.state_dict())
+                self.transformer.load_torch_state_dict(torch_transformer.state_dict())
 
         # Load pretrained VAE (Torch)
         torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
