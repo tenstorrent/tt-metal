@@ -2,7 +2,7 @@ name: "Profiler CI"
 run-name: >-
   ${{
     github.event_name == 'push' &&
-    'Profiler CI (push → N150)' ||
+    'Profiler CI (push → all)' ||
     'Profiler CI'
   }}
 
@@ -107,7 +107,7 @@ jobs:
   t3k-profiler-tests:
     if: >-
       ${{
-        github.event_name != 'push' &&
+        github.event_name == 'push' ||
         (github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true)
       }}
     needs: build-artifact-profiler
@@ -123,7 +123,7 @@ jobs:
   galaxy-profiler-tests:
     if: >-
       ${{
-        github.event_name != 'push' &&
+        github.event_name == 'push' ||
         (github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true)
       }}
     needs: build-artifact-profiler
@@ -139,7 +139,7 @@ jobs:
   blackhole-profiler:
     if: >-
       ${{
-        github.event_name != 'push' &&
+        github.event_name == 'push' ||
         (github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true)
       }}
     needs: build-artifact-profiler
@@ -158,7 +158,7 @@ jobs:
   n300-profiler:
     if: >-
       ${{
-        github.event_name != 'push' &&
+        github.event_name == 'push' ||
         (github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true)
       }}
     needs: build-artifact-profiler
@@ -167,6 +167,8 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: N300
+      # Full profiler regression (non post-commit)
+      post_commit: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
