@@ -7,9 +7,61 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_sigmoid.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
+
+/*
+ * Accurate tanh for fp32 using sigmoid: tanh(x) = 2*sigmoid(2x) - 1
+ * For small |x| < 0.6, uses minimax polynomial for better accuracy
+ *
+ * Algorithm:
+ * - For |x| < 0.6: Use minimax polynomial (Sollya-optimized)
+ * - For |x| >= 0.6: Use 2*sigmoid(2x) - 1
+ *
+ * Target accuracy: < 5 ULP for float32 (0.5 ULP for bfloat16)
+ */
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
+    sfpi::vFloat result;
+
+    constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
+
+    sfpi::vFloat abs_val = sfpi::abs(val);
+
+    v_if(abs_val < POLYNOMIAL_THRESHOLD) {
+        // Small |x|: Use minimax polynomial for better accuracy
+        // Polynomial coefficients found with Sollya using the following command:
+        // fpminimax(tanh(x)/x, [|0,2,4,6,8|], [|single...|], [-0.6; -2^(-40)] + [2^(-40); 0.6], relative);
+        sfpi::vFloat x2 = val * val;
+
+        sfpi::vFloat p = PolynomialEvaluator::eval(
+            x2,
+            0.999999940395355224609375f,
+            -0.33332359790802001953125f,
+            0.13310669362545013427734375f,
+            -5.21197654306888580322265625e-2f,
+            1.5497927553951740264892578125e-2f);
+
+        result = val * p;
+    }
+    v_else {
+        // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
+        sfpi::vFloat two_x = 2.f * val;
+
+        // Perform sigmoid manually as 1/(1+exp(-x))
+        // (TODO: https://github.com/tenstorrent/tt-metal/pull/34862#discussion_r2639909601)
+        sfpi::vFloat exp_neg_x = _sfpu_exp_f32_accurate_(-two_x);
+        sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+        sfpi::vFloat sig = _sfpu_reciprocal_<2>(denominator);
+
+        // Compute 2*sigmoid(2x) - 1
+        result = 2.f * sig - sfpi::vConst1;
+    }
+    v_endif;
+
+    return result;
+}
 
 template <bool is_fp32_acc_to_dest_mode = true>
 sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
@@ -33,10 +85,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vec_min_max(result, threshold_value);
 
     result = sfpi::setsgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
-
-    if constexpr (!is_fp32_acc_to_dest_mode) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
 
     return result;
 }
@@ -66,10 +114,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     sfpi::vec_min_max(result, threshold_value);
 
     result = sfpi::setsgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
-
-    if constexpr (!is_fp32_acc_to_dest_mode) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
 
     return result;
 }
@@ -102,9 +146,11 @@ inline void calculate_tanh() {
             sfpi::vFloat result;
 
             if constexpr (is_fp32_dest_acc_en) {
-                result = _sfpu_tanh_continued_fraction_<is_fp32_dest_acc_en>(val);
+                // Use accurate sigmoid-based tanh for fp32
+                result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
             }
 
             sfpi::dst_reg[0] = result;
@@ -124,8 +170,8 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            // Continued fraction
-            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+            // Accurate tanh uses sigmoid which requires reciprocal
+            _init_reciprocal_<false, false>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
@@ -136,5 +182,4 @@ inline void tanh_init() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
