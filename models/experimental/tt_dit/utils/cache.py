@@ -66,11 +66,13 @@ def initialize_from_cache(tt_model, torch_state_dict, model_name, subfolder, par
         if cache_dict_exists(cache_path):
             logger.info(f"loading {subfolder} from cache... {cache_path}")
             tt_model.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
+        elif torch_state_dict is not None:
             logger.info(
                 f"Cache does not exist. Creating cache: {cache_path} and loading {subfolder} from PyTorch state dict"
             )
             tt_model.load_torch_state_dict(torch_state_dict)
             save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
+        else:
+            return False
         return True
     return False

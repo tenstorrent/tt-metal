@@ -41,8 +41,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
     auto [T_out, H_out, W_out] = ttnn::operations::experimental::conv3d::detail::compute_output_dims(
-        T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
-    uint32_t C_out = config.output_channels;
+        T_in, H_in, W_in, operation_attributes.padding, operation_attributes.stride, operation_attributes.kernel_size);
+    uint32_t C_out = operation_attributes.output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
@@ -72,7 +72,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : C_out;
     uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
 
-    uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in_block;
+    uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
+                          operation_attributes.kernel_size[2] * C_in_block;
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
@@ -168,17 +169,32 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
-    bool is_padding_zeros = config.padding_mode == "zeros";
+    bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
     log_debug(tt::LogOp, "Input tensor shape: N={}, T={}, H={}, W={}, C={}", N, T_in, H_in, W_in, C_in);
     log_debug(tt::LogOp, "Output tensor shape: T={}, H={}, W={}, C={}", T_out, H_out, W_out, C_out);
-    log_debug(tt::LogOp, "Kernel size: {}x{}x{}", config.kernel_size[0], config.kernel_size[1], config.kernel_size[2]);
-    log_debug(tt::LogOp, "Stride: {}x{}x{}", config.stride[0], config.stride[1], config.stride[2]);
-    log_debug(tt::LogOp, "Padding: {}x{}x{}", config.padding[0], config.padding[1], config.padding[2]);
-    log_debug(tt::LogOp, "Groups: {}", config.groups);
+    log_debug(
+        tt::LogOp,
+        "Kernel size: {}x{}x{}",
+        operation_attributes.kernel_size[0],
+        operation_attributes.kernel_size[1],
+        operation_attributes.kernel_size[2]);
+    log_debug(
+        tt::LogOp,
+        "Stride: {}x{}x{}",
+        operation_attributes.stride[0],
+        operation_attributes.stride[1],
+        operation_attributes.stride[2]);
+    log_debug(
+        tt::LogOp,
+        "Padding: {}x{}x{}",
+        operation_attributes.padding[0],
+        operation_attributes.padding[1],
+        operation_attributes.padding[2]);
+    log_debug(tt::LogOp, "Groups: {}", operation_attributes.groups);
     log_debug(tt::LogOp, "Patch size: {}", patch_size);
     log_debug(tt::LogOp, "Input row size (bytes): {}", in_row_size_bytes);
     log_debug(tt::LogOp, "Output row size (bytes): {}", out_row_size_bytes);
@@ -200,12 +216,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         H_out,
         W_out,
         C_out,
-        config.padding[0],
-        config.padding[1],
-        config.padding[2],
-        config.kernel_size[0],
-        config.kernel_size[1],
-        config.kernel_size[2],
+        operation_attributes.padding[0],
+        operation_attributes.padding[1],
+        operation_attributes.padding[2],
+        operation_attributes.kernel_size[0],
+        operation_attributes.kernel_size[1],
+        operation_attributes.kernel_size[2],
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
@@ -215,9 +231,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_row_size_bytes,
         is_padding_zeros,
         semaphore_id,
-        config.stride[0],
-        config.stride[1],
-        config.stride[2]};
+        operation_attributes.stride[0],
+        operation_attributes.stride[1],
+        operation_attributes.stride[2]};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(

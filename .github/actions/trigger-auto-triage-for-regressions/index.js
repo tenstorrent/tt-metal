@@ -72,6 +72,9 @@ async function run() {
     const slackChannelId = core.getInput('slack_channel_id') || '';
     const slackBotToken = core.getInput('slack_bot_token') || '';
     // Whether downstream auto-triage workflows should send their own Slack message.
+    // Note: core.getInput() always returns a string, and GitHub API's createWorkflowDispatch
+    // requires all inputs to be strings (even if the target workflow defines them as booleans).
+    // The action.yml default is true, so we default to 'true' string here.
     const sendSlackMessageFlag = core.getInput('send-slack-message') || 'true';
 
     // Use the same ref as the workflow that is invoking this action so that
@@ -115,24 +118,26 @@ async function run() {
         continue;
       }
 
-      for (const jobName of failingJobs) {
+      for (const job of failingJobs) {
+        // Handle both old format (string) and new format ({name, url} object)
+        const jobName = (typeof job === 'object' && job !== null && job.name) ? job.name : String(job);
         core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
 
         try {
-          await octokit.rest.actions.createWorkflowDispatch({
-            owner: github.context.repo.owner,
-            repo: github.context.repo.repo,
-            workflow_id: 'auto-triage.yml',
-            ref: dispatchRef,
-            inputs: {
-              workflow_name: workflowFileName,
-              job_name: jobName,
-              slack_ts: slackTs,
-              'send-slack-message': sendSlackMessageFlag
-            }
-          });
-
-          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName}`);
+          // await octokit.rest.actions.createWorkflowDispatch({
+          //   owner: github.context.repo.owner,
+          //   repo: github.context.repo.repo,
+          //   workflow_id: 'auto-triage.yml',
+          //   ref: dispatchRef,
+          //   inputs: {
+          //     workflow_name: workflowFileName,
+          //     job_name: jobName,
+          //     slack_ts: slackTs,
+          //     'send-slack-message': sendSlackMessageFlag,
+          //     slack_channel_id: slackChannelId
+          //   }
+          // });
+          core.info(`✓ Successfully mock triggered auto-triage for ${workflowFileName} / ${jobName}`);
 
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));

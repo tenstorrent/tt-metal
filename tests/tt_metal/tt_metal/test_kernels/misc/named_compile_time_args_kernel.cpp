@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t buffer_size = get_named_compile_time_arg_val("buffer_size");
