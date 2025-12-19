@@ -16,7 +16,8 @@ Description:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess
+from ttexalens.elf import MemoryAccess, ParsedElfFile
+from ttexalens.elf.variable import L1MemoryAccess
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
@@ -35,9 +36,9 @@ class CoreMagicValues:
 
     def __init__(self, fw_elf):
         # Read CoreMagicNumber enum values from firmware
-        self.worker = fw_elf.enumerators["CoreMagicNumber::WORKER"].value
-        self.active_eth = fw_elf.enumerators["CoreMagicNumber::ACTIVE_ETH"].value
-        self.idle_eth = fw_elf.enumerators["CoreMagicNumber::IDLE_ETH"].value
+        self.worker = fw_elf.get_enum_value("CoreMagicNumber::WORKER")
+        self.active_eth = fw_elf.get_enum_value("CoreMagicNumber::ACTIVE_ETH")
+        self.idle_eth = fw_elf.get_enum_value("CoreMagicNumber::IDLE_ETH")
 
         self.magic_to_name = {
             self.worker: "WORKER",
@@ -66,18 +67,18 @@ def get_expected_magic_for_location(location: OnChipCoordinate, magic_values: Co
         return magic_values.worker, "WORKER"
 
 
-def try_read_magic_with_elf(
+def try_read_magic_with_dispatcher_data(
     location: OnChipCoordinate,
     risc_name: str,
-    fw_elf,
+    dispatcher_data: DispatcherData,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
     Returns the magic value or None if reading fails.
     """
     try:
-        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-        return fw_elf.get_global("mailboxes", loc_mem_access).core_info.core_magic_number.read_value()
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        return dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value()
     except Exception as e:
         log_check_location(
             location,
@@ -87,11 +88,21 @@ def try_read_magic_with_elf(
         return None
 
 
+def try_read_magic_with_elf(
+    l1_mem_access: L1MemoryAccess,
+    fw_elf: ParsedElfFile,
+) -> int | None:
+    """
+    Attempt to read core_magic_number using the given firmware ELF.
+    Returns the magic value or None if reading fails.
+    """
+    return fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value()
+
+
 def check_core_magic(
     location: OnChipCoordinate,
     risc_name: str,
     dispatcher_data: DispatcherData,
-    elfs_cache: ElfsCache,
     magic_values: CoreMagicValues,
 ):
     """
@@ -100,20 +111,8 @@ def check_core_magic(
     """
     expected_magic, expected_type = get_expected_magic_for_location(location, magic_values)
 
-    # Get the firmware ELF for the expected type
-    try:
-        fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
-        fw_elf = elfs_cache[fw_elf_path]
-    except Exception as e:
-        log_check_location(
-            location,
-            False,
-            f"{risc_name}: Failed to get firmware ELF: {e}",
-        )
-        return
-
     # Read the magic number from the expected mailbox location
-    actual_magic = try_read_magic_with_elf(location, risc_name, fw_elf)
+    actual_magic = try_read_magic_with_dispatcher_data(location, risc_name, dispatcher_data)
 
     if actual_magic is None:
         return
@@ -140,7 +139,8 @@ def check_core_magic(
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        other_magic = try_read_magic_with_elf(location, risc_name, other_elf)
+        l1_mem_access = MemoryAccess.get_l1(location)
+        other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
             if other_type_name == type_name:
@@ -178,7 +178,7 @@ def run(args, context: Context):
     magic_values = CoreMagicValues(dispatcher_data._brisc_elf)
 
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, elfs_cache, magic_values),
+        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, magic_values),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )

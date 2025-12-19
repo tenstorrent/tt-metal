@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.0.0"
+        default: "v1.1.0"
       job-timeout:
         required: false
         type: number
@@ -363,14 +363,11 @@ jobs:
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
-            # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
-            if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
-              # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
-              # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
-            fi
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"

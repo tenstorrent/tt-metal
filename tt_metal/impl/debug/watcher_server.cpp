@@ -21,7 +21,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -475,7 +475,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values

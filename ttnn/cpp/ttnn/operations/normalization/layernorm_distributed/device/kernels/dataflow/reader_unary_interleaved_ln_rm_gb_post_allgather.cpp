@@ -7,17 +7,15 @@
  */
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
-template <uint32_t t>
-void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr);
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
     const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
-    // const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
+    const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
     const uint32_t stats_tile_offset =
         get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and
@@ -42,12 +40,7 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
     constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
-    constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
-    constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_length = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr auto src_args = TensorAccessorArgs<3>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -60,7 +53,7 @@ void kernel_main() {
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr, gamma_stick_size);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 
@@ -73,10 +66,6 @@ void kernel_main() {
     uint32_t inp_tile_idx = tile_offset;
     uint32_t stats_tile_idx = stats_tile_offset;
 
-    constexpr uint32_t cb_iterations = Wt / cb_length;
-    constexpr uint32_t cb_leftovers = Wt % cb_length;
-    constexpr uint32_t blk_iterations = cb_length / blk;
-    constexpr uint32_t blk_leftovers = cb_length % blk;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Read stats tiles
         cb_reserve_back(cb_stats, stats_tiles_cols);
@@ -88,86 +77,60 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_stats, stats_tiles_cols);
-        uint32_t gamma_tile_count = 0;
-        uint32_t beta_tile_count = 0;
-        for (uint32_t i = 0; i < cb_iterations; i++) {
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_reserve_back(cb_inp, 1);
-                uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
-                inp_tile_idx++;
-                noc_async_read_barrier();
-                cb_push_back(cb_inp, 1);
-            }
-#if defined FUSE_GAMMA || defined FUSE_BETA
-#ifdef FUSE_GAMMA
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_reserve_back(cb_gamma, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                uint64_t gamma_noc_addr = get_noc_addr(gamma_tile_count, addrg);
-                gamma_tile_count++;
-                async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_gamma, 1);
-            }
-#endif
-#ifdef FUSE_BETA
-            for (uint32_t j = 0; j < cb_length; j++) {
-                cb_reserve_back(cb_beta, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_beta);
-                uint64_t beta_noc_addr = get_noc_addr(beta_tile_count, addrb);
-                beta_tile_count++;
-                async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_beta, 1);
-            }
-#endif
-#endif
-        }
-        for (uint32_t i = 0; i < cb_leftovers; i++) {
-            cb_reserve_back(cb_inp, 1);
+
+        // read input tiles
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_reserve_back(cb_inp, blk);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
-            noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
-            inp_tile_idx++;
+
+            for (uint32_t r = 0; r < blk; r++) {
+                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
+                inp_wr_ptr += src0_tile_bytes;
+                inp_tile_idx++;
+            }
             noc_async_read_barrier();
-            cb_push_back(cb_inp, 1);
-        }
+            cb_push_back(cb_inp, blk);
+
+        }  // wt loop
+
 #if defined FUSE_GAMMA || defined FUSE_BETA
+        if (ncht == 0) {
+            for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
-        for (uint32_t i = 0; i < cb_leftovers; i++) {
-            cb_reserve_back(cb_gamma, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-            uint64_t gamma_noc_addr = get_noc_addr(gamma_tile_count, addrg);
-            gamma_tile_count++;
-            async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma, 1);
-        }
+                {
+                    cb_reserve_back(cb_gamma, blk);
+                    uint32_t l1_write_addr = get_write_ptr(cb_gamma);
+                    for (uint32_t r = 0; r < blk; r++) {
+                        uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
+                        noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
+                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        noc_async_read_barrier();
+                        noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
+                        l1_write_addr += gamma_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_gamma, blk);
+                }
 #endif
+
 #ifdef FUSE_BETA
-        for (uint32_t i = 0; i < cb_leftovers; i++) {
-            cb_reserve_back(cb_beta, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_beta);
-            uint64_t beta_noc_addr = get_noc_addr(beta_tile_count, addrb);
-            beta_tile_count++;
-            async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_beta, 1);
-        }
+                {
+                    cb_reserve_back(cb_beta, blk);
+                    uint32_t l1_write_addr = get_write_ptr(cb_beta);
+                    for (uint32_t r = 0; r < blk; r++) {
+                        uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                        noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
+                        beta_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        noc_async_read_barrier();
+                        noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
+                        l1_write_addr += beta_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_beta, blk);
+                }
 #endif
+            }  // wt loop
+        }
 #endif
     }  // ncht loop
-}
-template <uint32_t t>
-void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
-    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 usefull, the next bad
-    if constexpr (t == 0) {  // TILE LAYOUT
-        noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);  // Fills the second face with next 16 elements
-    } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
-        noc_async_read_barrier();
-        uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);  // 16 elements from DRAM to L1.  L1->L1
-        noc_async_read(noc_addr, L1_dst_addr + 512, 64);
-    } else {
-        static_assert(false, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
-    }
 }

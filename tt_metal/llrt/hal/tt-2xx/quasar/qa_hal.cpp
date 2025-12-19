@@ -116,10 +116,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/tt-2xx");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 

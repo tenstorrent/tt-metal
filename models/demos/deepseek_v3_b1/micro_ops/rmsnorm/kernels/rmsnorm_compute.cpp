@@ -23,6 +23,7 @@ template <
     uint32_t num_tiles,
     uint32_t epsilon_index,
     uint32_t scalar_index,
+    bool rsqrt_fast_approx,
     bool pop_input>
 void compute_rmsnorm() {
     // TODO: #32998: Fuse this without having to spill output of square to interm cb
@@ -57,7 +58,7 @@ void compute_rmsnorm() {
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb, epsilon_index, 0);
         // Calculate the 1/RMS
         // TODO: #32998: Use index num_tiles + 1 once bcast reuse is supported
-        rsqrt_tile<false, true>(0);
+        rsqrt_tile<false, rsqrt_fast_approx>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, interm_cb);
@@ -107,13 +108,13 @@ void MAIN {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t epsilon_index = get_compile_time_arg_val(7);
     constexpr uint32_t scalar_index = get_compile_time_arg_val(8);
+    constexpr bool rsqrt_fast_approx = get_compile_time_arg_val(9);
 
     // Init block done only once
     binary_op_init_common(input_cb, input_cb, output_cb);
     cb_wait_front(scalars_cb, 2);
     cb_wait_front(gamma_cb, num_tiles);  // we don't pop, only wait once and reuse
     rsqrt_tile_init();                   // this is the only sfpu op we use, so we init once
-
     compute_rmsnorm<
         input_cb,
         scalars_cb,
@@ -124,6 +125,7 @@ void MAIN {
         num_tiles,
         epsilon_index,
         scalar_index,
+        rsqrt_fast_approx,
         true>();
 }
 }  // namespace NAMESPACE
