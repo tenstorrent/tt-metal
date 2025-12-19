@@ -2,28 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 
-#include "joint_sdpa_program_factory.hpp"
-#include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device.hpp"
+
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa {
 
-void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
+JointSDPADeviceOperation::program_factory_t JointSDPADeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return program::JointSDPAProgramFactory{};
+}
 
-    const auto& input_tensor_q = input_tensors.at(0);
-    const auto& input_tensor_k = input_tensors.at(1);
-    const auto& input_tensor_v = input_tensors.at(2);
-    const auto& joint_tensor_q = input_tensors.at(3);
-    const auto& joint_tensor_k = input_tensors.at(4);
-    const auto& joint_tensor_v = input_tensors.at(5);
+void JointSDPADeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void JointSDPADeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor_q = tensor_args.input_q;
+    const auto& input_tensor_k = tensor_args.input_k;
+    const auto& input_tensor_v = tensor_args.input_v;
+    const auto& joint_tensor_q = tensor_args.joint_q;
+    const auto& joint_tensor_k = tensor_args.joint_k;
+    const auto& joint_tensor_v = tensor_args.joint_v;
+
+    const std::vector<Tensor> input_tensors = {
+        input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v};
 
     // Validate joint strategy is 'rear'
-    TT_FATAL(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
+    TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
     // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
@@ -117,8 +132,8 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
         joint_nkv == nkv, "Joint K num_heads must be equal to K num_heads. Got Joint K: {}, K: {}", joint_nkv, nkv);
 
     // Validate chunk sizes if program config is provided
-    auto q_chunk_size = this->get_q_chunk_size();
-    auto k_chunk_size = this->get_k_chunk_size();
+    auto q_chunk_size = args.get_q_chunk_size();
+    auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
@@ -145,58 +160,57 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     }
 }
 
-std::uint32_t JointScaledDotProductAttention::get_q_chunk_size() const {
-    return this->program_config ? this->program_config->q_chunk_size : 32;
-}
-
-std::uint32_t JointScaledDotProductAttention::get_k_chunk_size() const {
-    return this->program_config ? this->program_config->k_chunk_size : 32;
-}
-
-std::vector<TensorSpec> JointScaledDotProductAttention::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input = input_tensors.at(0);
-    const auto& joint_input = input_tensors.at(3);
+spec_return_value_t JointSDPADeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_q;
+    const auto& joint_input = tensor_args.joint_q;
     return {
-        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(
+        .output = TensorSpec(
+            input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config)),
+        .joint_output = TensorSpec(
             joint_input.logical_shape(),
-            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
-operation::ProgramWithCallbacks JointScaledDotProductAttention::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_q = input_tensors.at(0);
-    const auto& input_tensor_k = input_tensors.at(1);
-    const auto& input_tensor_v = input_tensors.at(2);
-    const auto& joint_tensor_q = input_tensors.at(3);
-    const auto& joint_tensor_k = input_tensors.at(4);
-    const auto& joint_tensor_v = input_tensors.at(5);
-    auto& output_tensor = output_tensors.at(0);
-    auto& joint_output_tensor = output_tensors.at(1);
-
-    auto scale = this->scale;
-    if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
-    }
-
-    std::size_t q_chunk_size = this->get_q_chunk_size();
-    std::size_t k_chunk_size = this->get_k_chunk_size();
-
-    return detail::joint_sdpa(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
-        output_tensor,
-        joint_output_tensor,
-        scale,
-        q_chunk_size,
-        k_chunk_size,
-        this->compute_kernel_config,
-        this->program_config);
+tensor_return_value_t JointSDPADeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto output_specs = compute_output_specs(args, tensor_args);
+    return {
+        .output = create_device_tensor(output_specs.output, tensor_args.input_q.device()),
+        .joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.device())};
 }
 
-}  // namespace ttnn::operations::transformer
+std::tuple<JointSDPADeviceOperation::operation_attributes_t, JointSDPADeviceOperation::tensor_args_t>
+JointSDPADeviceOperation::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    const std::string& joint_strategy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<float> scale,
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    auto scale_val = scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
+
+    return {
+        operation_attributes_t{
+            joint_strategy,
+            scale_val,
+            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            program_config,
+            kernel_config_val},
+        tensor_args_t{
+            .input_q = input_tensor_q,
+            .input_k = input_tensor_k,
+            .input_v = input_tensor_v,
+            .joint_q = joint_tensor_q,
+            .joint_k = joint_tensor_k,
+            .joint_v = joint_tensor_v}};
+}
+
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -10,19 +12,19 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 
 using namespace tt;
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace llama_agmm_fusion_helpers {
+namespace ttnn::operations::llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -698,19 +700,7 @@ inline void override_agmm_fusion_program_parameters(
     }
 }
 
-void override_program_parameters(
-    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const void* operation,
-    tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    // Only GATHER_IN0 is supported now
-    override_agmm_fusion_program_parameters(
-        override_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
-}
-
-}  // namespace llama_agmm_fusion_helpers
+}  // namespace ttnn::operations::llama_agmm_fusion_helpers
 
 namespace ttnn::operations::llama_matmul {
 
@@ -923,9 +913,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool broadcast_batch,
+    const bool broadcast_batch,
     CoreCoord compute_with_storage_grid_size,
-    DeviceComputeKernelConfig compute_kernel_config,
+    const DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -986,7 +976,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            llama_agmm_fusion_helpers::override_program_parameters(
+            llama_agmm_fusion_helpers::override_agmm_fusion_program_parameters(
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
@@ -1051,10 +1041,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool broadcast_batch,
-    DeviceComputeKernelConfig compute_kernel_config,
+    const bool broadcast_batch,
+    const DeviceComputeKernelConfig compute_kernel_config,
     const matmul::MatmulProgramConfig& program_config,
-    bool untilize_out,
+    const bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
@@ -1074,6 +1064,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
             sub_device_id,
             fused_op_signaler->start_cb_index,
             std::nullopt);
+
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -1081,7 +1072,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            llama_agmm_fusion_helpers::override_program_parameters(
+            llama_agmm_fusion_helpers::override_agmm_fusion_program_parameters(
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
