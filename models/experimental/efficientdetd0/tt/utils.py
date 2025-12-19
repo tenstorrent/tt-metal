@@ -4,6 +4,7 @@
 
 import ttnn
 import math
+import torch
 
 from typing import Union
 from dataclasses import replace
@@ -97,9 +98,52 @@ class TtMaxPool2dDynamicSamePadding(TtMaxPool2d):
         self,
         configuration: MaxPool2dConfiguration,
         device: ttnn.Device,
+        use_torch_maxpool: bool = False,
     ):
         super().__init__(configuration, device)
         self.configuration = replace(self.configuration, padding=_get_dynamic_padding(self.configuration))
+        self.use_torch_maxpool = use_torch_maxpool
+        if self.use_torch_maxpool:
+            self.maxpool = torch.nn.MaxPool2d(
+                kernel_size=self.configuration.kernel_size,
+                stride=self.configuration.stride,
+                dilation=self.configuration.dilation,
+            )
+
+    def __call__(self, x):
+        if self.use_torch_maxpool:
+            x_torch = (
+                ttnn.to_torch(x)
+                .permute(0, 3, 1, 2)
+                .reshape(
+                    self.configuration.batch_size,
+                    self.configuration.channels,
+                    self.configuration.input_height,
+                    self.configuration.input_width,
+                )
+            )
+            x_padded_output_torch = torch.nn.functional.pad(x_torch, self.configuration.padding)
+            x_maxpool_output_torch = self.maxpool(x_padded_output_torch).permute(0, 2, 3, 1)
+            x = ttnn.from_torch(
+                x_maxpool_output_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return x
+        else:
+            if not self.use_channel_slicing:
+                # No slicing
+                x = ttnn.max_pool2d(
+                    input_tensor=x,
+                    channels=self.configuration.channels,
+                    **self.get_maxpool2d_kwargs(),
+                )
+            else:
+                x = self._apply_channel_slicing(x)
+
+            return x
 
 
 class TtConv2dDynamicSamePadding(TtConv2d):

@@ -67,7 +67,8 @@ class TtEfficientDetBackbone:
         device: TTNN device instance
         parameters: Model parameters containing weights for all components
         module_args: Configuration parameters for all operations
-        num_classes: Number of object classes (default: 80)
+        num_classes: Number of object classes (default: 90)
+        use_torch_maxpool: Runs Maxpool in torch
         **kwargs: Additional arguments (ratios, scales, etc.)
     """
 
@@ -76,12 +77,14 @@ class TtEfficientDetBackbone:
         device: ttnn.Device,
         parameters,
         module_args,
-        num_classes: int = 80,
+        num_classes: int = 90,
         compound_coef: int = 0,
+        use_torch_maxpool: bool = False,
         **kwargs,
     ):
         self.device = device
         self.num_classes = num_classes
+        self.use_torch_maxpool = use_torch_maxpool
 
         # Anchor configuration
         self.aspect_ratios = kwargs.get("ratios", DEFAULT_ASPECT_RATIOS)
@@ -99,9 +102,7 @@ class TtEfficientDetBackbone:
 
         # Initialize BiFPN layers
         self.bifpn_layers = self._create_bifpn_layers(
-            device=device,
-            parameters=parameters,
-            module_args=module_args,
+            device=device, parameters=parameters, module_args=module_args, use_torch_maxpool=self.use_torch_maxpool
         )
 
         # Initialize detection head components
@@ -122,6 +123,7 @@ class TtEfficientDetBackbone:
         device: ttnn.Device,
         parameters,
         module_args,
+        use_torch_maxpool,
     ) -> List[TtBiFPN]:
         """
         Create BiFPN layers for EfficientDet D0.
@@ -154,6 +156,7 @@ class TtEfficientDetBackbone:
                 use_p8=USE_P8,
                 sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
                 deallocate_activation=True,
+                use_torch_maxpool=use_torch_maxpool,
             )
             bifpn_layers.append(bifpn)
 

@@ -54,6 +54,7 @@ class TtBiFPN:
         use_p8: bool = False,
         sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
         deallocate_activation: bool = False,
+        use_torch_maxpool: bool = False,
     ):
         """
         Args:
@@ -73,6 +74,7 @@ class TtBiFPN:
         self.attention = attention
         self.first_time = first_time
         self.sharding_strategy = sharding_strategy
+        self.use_torch_maxpool = use_torch_maxpool
 
         # Initialize separable conv blocks for upsampling path
         self.conv6_up = TtSeparableConvBlock(
@@ -159,6 +161,7 @@ class TtBiFPN:
                 output_layout=ttnn.TILE_LAYOUT,
             ),
             device=device,
+            use_torch_maxpool=self.use_torch_maxpool,
         )
         self.p5_downsample = TtMaxPool2dDynamicSamePadding(
             configuration=generate_maxpool_configuration_from_args(
@@ -166,6 +169,7 @@ class TtBiFPN:
                 output_layout=ttnn.TILE_LAYOUT,
             ),
             device=device,
+            use_torch_maxpool=self.use_torch_maxpool,
         )
         self.p6_downsample = TtMaxPool2dDynamicSamePadding(
             configuration=generate_maxpool_configuration_from_args(
@@ -173,6 +177,7 @@ class TtBiFPN:
                 output_layout=ttnn.TILE_LAYOUT,
             ),
             device=device,
+            use_torch_maxpool=self.use_torch_maxpool,
         )
         self.p7_downsample = TtMaxPool2dDynamicSamePadding(
             configuration=generate_maxpool_configuration_from_args(
@@ -180,6 +185,7 @@ class TtBiFPN:
                 output_layout=ttnn.TILE_LAYOUT,
             ),
             device=device,
+            use_torch_maxpool=self.use_torch_maxpool,
         )
 
         # Initialize channel reduction layers for first_time
@@ -228,6 +234,7 @@ class TtBiFPN:
                     output_layout=ttnn.TILE_LAYOUT,
                 ),
                 device=device,
+                use_torch_maxpool=self.use_torch_maxpool,
             )
 
             # P6 to P7 conversion (maxpool only)
@@ -237,6 +244,7 @@ class TtBiFPN:
                     output_layout=ttnn.TILE_LAYOUT,
                 ),
                 device=device,
+                use_torch_maxpool=self.use_torch_maxpool,
             )
 
             # Additional channel reduction for bottom-up path

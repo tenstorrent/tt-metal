@@ -112,6 +112,7 @@ def evaluate_coco(
     threshold=0.05,
     iou_threshold=0.5,
     use_ttnn=True,
+    use_torch_maxpool=False,
 ):
     """
     Evaluate EfficientDet on COCO validation set.
@@ -164,6 +165,7 @@ def evaluate_coco(
             module_args=module_args,
             num_classes=num_classes,
             compound_coef=0,
+            use_torch_maxpool=use_torch_maxpool,
         )
 
     # Post-processing modules
@@ -363,6 +365,12 @@ def main():
         action="store_true",
         help="Use PyTorch reference model instead of TTNN",
     )
+    parser.add_argument(
+        "--use_torch_maxpool",
+        type=bool,
+        default=True,
+        help="Run MaxPool in torch (default: True)",
+    )
 
     args = parser.parse_args()
 
@@ -388,6 +396,7 @@ def main():
             threshold=args.threshold,
             iou_threshold=args.iou_threshold,
             use_ttnn=not args.pytorch_only,
+            use_torch_maxpool=args.use_torch_maxpool,
         )
     finally:
         if device is not None:
