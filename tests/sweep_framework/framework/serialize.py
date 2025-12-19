@@ -139,27 +139,45 @@ def serialize_structured(object, warnings=[]):
 
 def deserialize_structured(object):
     try:
-        if isinstance(object, dict):
-            type = eval(object["type"])
-            data = object["data"]
-            # If data is a dict/object, convert it back to JSON string for from_json method
-            if isinstance(data, (dict, list)):
-                # Convert string enum values back to integers for from_json
-                data = convert_enum_strings_to_values(data)
-                data = json.dumps(data)
-            return type.from_json(data)
+        # Handle JSON-native primitives directly (no deserialization needed)
+        if isinstance(object, (int, float, bool, type(None))):
+            return object
 
-        elif isinstance(object, str):
+        # Handle lists by recursively deserializing elements
+        if isinstance(object, list):
+            return [deserialize_structured(item) for item in object]
+
+        # Handle dicts - check if it's a serialized ttnn object or a plain dict
+        if isinstance(object, dict):
+            if "type" in object and "data" in object:
+                # This is a serialized ttnn object
+                obj_type = eval(object["type"])
+                data = object["data"]
+                # If data is a dict/object, convert it back to JSON string for from_json method
+                if isinstance(data, (dict, list)):
+                    # Convert string enum values back to integers for from_json
+                    data = convert_enum_strings_to_values(data)
+                    data = json.dumps(data)
+                return obj_type.from_json(data)
+            else:
+                # Plain dict - recursively deserialize values
+                return {k: deserialize_structured(v) for k, v in object.items()}
+
+        # Handle strings
+        if isinstance(object, str):
             if "." in object:
                 maybe_enum = _deserialize_ttnn_enum(object)
                 if maybe_enum is not None:
                     return maybe_enum
             elif object in ["sum", "mean", "max", "min", "std", "var"]:
                 return object
-        try:
-            return eval(object)
-        except (SyntaxError, NameError):
-            return str(object)
+            try:
+                return eval(object)
+            except (SyntaxError, NameError):
+                return str(object)
+
+        # Fallback - return as-is
+        return object
     except Exception as e:
         logger.exception(f"Deserialize structured failed {e}")
         raise
