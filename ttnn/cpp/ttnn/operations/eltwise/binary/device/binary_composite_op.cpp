@@ -519,7 +519,7 @@ Tensor run_remainder(
             ttnn::div(
                 input_a,
                 input_b,
-                true,
+                false,
                 "floor",
                 std::nullopt,
                 output_mem_config,
@@ -645,7 +645,7 @@ Tensor ExecuteBinaryFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
-    Tensor div_res = ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config);
+    Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
@@ -680,8 +680,8 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor temp = ttnn::div(input_a, input_b, true, std::nullopt, std::nullopt, output_mem_config);
-    Tensor result = ttnn::div(input_a, input_b, true, "floor", std::nullopt, output_mem_config);
+    Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
+    Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
     return ttnn::where(
         ttnn::logical_or(
