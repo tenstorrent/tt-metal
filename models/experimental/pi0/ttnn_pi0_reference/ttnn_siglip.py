@@ -1143,7 +1143,7 @@ class SigLIPVisionTowerTTNN:
                 import torch.nn.functional as F
                 
                 print(f"[INFO] Dynamic position embedding interpolation needed: {num_patches_expected} → {num_patches_actual}")
-                
+        
                 # Convert position embeddings back to torch for interpolation
                 pos_emb_torch = ttnn.to_torch(self.pos_emb_weights)  # (num_patches_expected, hidden_size)
                 
@@ -1163,7 +1163,7 @@ class SigLIPVisionTowerTTNN:
                 )
                 
                 pos_emb_resized = pos_emb_interpolated.permute(0, 2, 3, 1).flatten(0, 2)  # (num_patches_actual, hidden_size)
-                
+        
                 # Create new position IDs for actual number of patches
                 position_ids_new = ttnn.arange(0, num_patches_actual, 1, dtype=ttnn.uint32, device=self.device)
                 position_ids_new = ttnn.reshape(position_ids_new, (1, -1))

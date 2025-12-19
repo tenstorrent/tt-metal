@@ -23,7 +23,6 @@ import torch.nn.functional as F
 
 try:
     import ttnn
-
     TTNN_AVAILABLE = True
 except ImportError:
     TTNN_AVAILABLE = False
@@ -39,7 +38,6 @@ from .ttnn_common import (
 @dataclass
 class SuffixConfig:
     """Configuration for suffix embedding."""
-
     action_dim: int = 32
     action_horizon: int = 50
     expert_width: int = 1024
@@ -50,10 +48,10 @@ class SuffixConfig:
 class SuffixEmbeddingTorch:
     """
     PyTorch implementation of suffix embedding.
-
+    
     Embeds state + noisy actions + timestep for the action expert.
     """
-
+    
     def __init__(
         self,
         config: SuffixConfig,
@@ -61,7 +59,7 @@ class SuffixEmbeddingTorch:
     ):
         """
         Initialize suffix embedding.
-
+        
         Args:
             config: Suffix configuration
             weights: Dictionary with projection weights:
@@ -73,13 +71,13 @@ class SuffixEmbeddingTorch:
         """
         self.config = config
         self.weights = weights
-
+        
         # Extract weights
         self.action_in_weight = weights["action_in_proj.weight"]
         self.action_in_bias = weights["action_in_proj.bias"]
         self.action_out_weight = weights["action_out_proj.weight"]
         self.action_out_bias = weights["action_out_proj.bias"]
-
+        
         if not config.pi05:
             self.state_weight = weights["state_proj.weight"]
             self.state_bias = weights["state_proj.bias"]
@@ -87,14 +85,14 @@ class SuffixEmbeddingTorch:
             self.time_mlp_in_bias = weights["action_time_mlp_in.bias"]
             self.time_mlp_out_weight = weights["action_time_mlp_out.weight"]
             self.time_mlp_out_bias = weights["action_time_mlp_out.bias"]
-
+    
     def embed_actions(self, noisy_actions: torch.Tensor) -> torch.Tensor:
         """
         Embed noisy actions.
-
+        
         Args:
             noisy_actions: (batch_size, action_horizon, action_dim)
-
+        
         Returns:
             (batch_size, action_horizon, expert_width)
         """
@@ -102,33 +100,33 @@ class SuffixEmbeddingTorch:
         action_in_weight = self.action_in_weight.to(noisy_actions.dtype)
         action_in_bias = self.action_in_bias.to(noisy_actions.dtype) if self.action_in_bias is not None else None
         return F.linear(noisy_actions, action_in_weight, action_in_bias)
-
+    
     def embed_state(self, state: torch.Tensor) -> Optional[torch.Tensor]:
         """
         Embed robot state (PI0 only).
-
+        
         Args:
             state: (batch_size, state_dim)
-
+        
         Returns:
             (batch_size, 1, expert_width) or None for PI05
         """
         if self.config.pi05:
             return None
-
+        
         # Ensure dtype compatibility
         state_weight = self.state_weight.to(state.dtype)
         state_bias = self.state_bias.to(state.dtype) if self.state_bias is not None else None
         state_emb = F.linear(state, state_weight, state_bias)
         return state_emb.unsqueeze(1)  # Add sequence dimension
-
+    
     def embed_timestep(self, timestep: torch.Tensor) -> torch.Tensor:
         """
         Create timestep embedding using sinusoidal encoding.
-
+        
         Args:
             timestep: (batch_size,) with values in [0, 1]
-
+        
         Returns:
             (batch_size, expert_width)
         """
@@ -138,7 +136,7 @@ class SuffixEmbeddingTorch:
             min_period=4e-3,
             max_period=4.0,
         ).to(timestep.dtype)
-
+    
     def fuse_action_time(
         self,
         action_emb: torch.Tensor,
@@ -146,14 +144,14 @@ class SuffixEmbeddingTorch:
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Fuse action and time embeddings.
-
+        
         For PI0: Concatenate and apply MLP
         For PI05: Process time separately for adaRMS
-
+        
         Args:
             action_emb: (batch_size, action_horizon, expert_width)
             time_emb: (batch_size, expert_width)
-
+        
         Returns:
             Tuple of (fused_emb, adarms_cond):
                 - fused_emb: (batch_size, action_horizon, expert_width)
@@ -167,10 +165,10 @@ class SuffixEmbeddingTorch:
             # PI0: Concatenate action and time, apply MLP
             # Expand time to match action sequence length
             time_expanded = time_emb.unsqueeze(1).expand_as(action_emb)
-
+            
             # Concatenate along feature dimension
             concat = torch.cat([action_emb, time_expanded], dim=-1)
-
+            
             # Apply MLP: Linear -> SiLU -> Linear (ensure dtype compatibility)
             time_mlp_in_weight = self.time_mlp_in_weight.to(concat.dtype)
             time_mlp_in_bias = self.time_mlp_in_bias.to(concat.dtype) if self.time_mlp_in_bias is not None else None
@@ -179,9 +177,9 @@ class SuffixEmbeddingTorch:
             time_mlp_out_weight = self.time_mlp_out_weight.to(x.dtype)
             time_mlp_out_bias = self.time_mlp_out_bias.to(x.dtype) if self.time_mlp_out_bias is not None else None
             x = F.linear(x, time_mlp_out_weight, time_mlp_out_bias)
-
+            
             return x, None
-
+    
     def embed_suffix(
         self,
         state: torch.Tensor,
@@ -190,12 +188,12 @@ class SuffixEmbeddingTorch:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
         Main embedding function for suffix (state + actions + timestep).
-
+        
         Args:
             state: (batch_size, state_dim)
             noisy_actions: (batch_size, action_horizon, action_dim)
             timestep: (batch_size,) with values in [0, 1]
-
+        
         Returns:
             Tuple of (suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond):
                 - suffix_embs: (batch_size, suffix_len, expert_width)
@@ -205,10 +203,10 @@ class SuffixEmbeddingTorch:
         """
         batch_size = noisy_actions.shape[0]
         device = noisy_actions.device
-
+        
         embs = []
         att_masks = []
-
+        
         # Embed state (PI0 only)
         if not self.config.pi05:
             state_emb = self.embed_state(state)
@@ -216,41 +214,41 @@ class SuffixEmbeddingTorch:
                 embs.append(state_emb)
                 # State token starts causal attention boundary
                 att_masks.append(1)
-
+        
         # Embed timestep
         time_emb = self.embed_timestep(timestep)
-
+        
         # Embed actions
         action_emb = self.embed_actions(noisy_actions)
-
+        
         # Fuse action and time
         action_time_emb, adarms_cond = self.fuse_action_time(action_emb, time_emb)
-
+        
         # Add action-time embeddings
         embs.append(action_time_emb)
-
+        
         # First action token continues causal boundary, rest are causal
         att_masks.append(1)
         att_masks.extend([0] * (self.config.action_horizon - 1))
-
+        
         # Concatenate embeddings
         suffix_embs = safe_cat_torch(embs, dim=1)
-
+        
         # Create masks
         suffix_len = suffix_embs.shape[1]
         suffix_pad_masks = torch.ones(batch_size, suffix_len, dtype=torch.bool, device=device)
         suffix_att_masks = torch.tensor(att_masks, dtype=torch.bool, device=device)
         suffix_att_masks = suffix_att_masks.unsqueeze(0).expand(batch_size, -1)
-
+        
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
-
+    
     def project_output(self, expert_output: torch.Tensor) -> torch.Tensor:
         """
         Project expert output back to action dimension.
-
+        
         Args:
             expert_output: (batch_size, action_horizon, expert_width)
-
+        
         Returns:
             (batch_size, action_horizon, action_dim)
         """
@@ -263,10 +261,10 @@ class SuffixEmbeddingTorch:
 class SuffixEmbeddingTTNN:
     """
     TTNN implementation of suffix embedding.
-
+    
     Uses TTNN operations for efficient execution on Tenstorrent hardware.
     """
-
+    
     def __init__(
         self,
         config: SuffixConfig,
@@ -275,7 +273,7 @@ class SuffixEmbeddingTTNN:
     ):
         """
         Initialize suffix embedding with TTNN weights.
-
+        
         Args:
             config: Suffix configuration
             weights: Dictionary with TTNN weight tensors
@@ -283,18 +281,18 @@ class SuffixEmbeddingTTNN:
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
-
+        
         self.config = config
         self.device = device
         self.weights = weights
-
+    
     def embed_actions(self, noisy_actions: "ttnn.Tensor") -> "ttnn.Tensor":
         """
         Embed noisy actions using ttnn.linear.
-
+        
         Args:
             noisy_actions: TTNN tensor (batch_size, action_horizon, action_dim)
-
+        
         Returns:
             TTNN tensor (batch_size, action_horizon, expert_width)
         """
@@ -304,38 +302,38 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_in_proj.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
+    
     def embed_state(self, state: "ttnn.Tensor") -> Optional["ttnn.Tensor"]:
         """
         Embed robot state (PI0 only).
-
+        
         Args:
             state: TTNN tensor (batch_size, state_dim)
-
+        
         Returns:
             TTNN tensor (batch_size, 1, expert_width) or None for PI05
         """
         if self.config.pi05:
             return None
-
+        
         state_emb = ttnn.linear(
             state,
             self.weights["state_proj.weight"],
             bias=self.weights["state_proj.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
+        
         # Add sequence dimension
         shape = state_emb.shape
         return ttnn.reshape(state_emb, (shape[0], 1, shape[-1]))
-
+    
     def embed_timestep(self, timestep: "ttnn.Tensor") -> "ttnn.Tensor":
         """
         Create timestep embedding.
-
+        
         Args:
             timestep: TTNN tensor (batch_size,)
-
+        
         Returns:
             TTNN tensor (batch_size, expert_width)
         """
@@ -346,7 +344,7 @@ class SuffixEmbeddingTTNN:
             max_period=4.0,
             device=self.device,
         )
-
+    
     def fuse_action_time(
         self,
         action_emb: "ttnn.Tensor",
@@ -354,28 +352,28 @@ class SuffixEmbeddingTTNN:
     ) -> Tuple["ttnn.Tensor", Optional["ttnn.Tensor"]]:
         """
         Fuse action and time embeddings using TTNN operations.
-
+        
         Args:
             action_emb: TTNN tensor (batch_size, action_horizon, expert_width)
             time_emb: TTNN tensor (batch_size, expert_width)
-
+        
         Returns:
             Tuple of (fused_emb, adarms_cond)
         """
         if self.config.pi05:
             return action_emb, time_emb
-
+        
         # Get shapes
         batch_size = action_emb.shape[0]
         action_horizon = action_emb.shape[1]
-
+        
         # Expand time embedding to match action shape
         time_expanded = ttnn.reshape(time_emb, (batch_size, 1, -1))
         time_expanded = ttnn.repeat(time_expanded, (1, action_horizon, 1))
-
+        
         # Concatenate
         concat = ttnn.concat([action_emb, time_expanded], dim=-1)
-
+        
         # MLP: Linear -> SiLU -> Linear
         x = ttnn.linear(
             concat,
@@ -390,9 +388,9 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
+        
         return x, None
-
+    
     def embed_suffix(
         self,
         state: "ttnn.Tensor",
@@ -401,12 +399,12 @@ class SuffixEmbeddingTTNN:
     ) -> Tuple["ttnn.Tensor", "ttnn.Tensor", "ttnn.Tensor", Optional["ttnn.Tensor"]]:
         """
         Create suffix embeddings using TTNN operations.
-
+        
         Args:
             state: TTNN tensor (batch_size, state_dim) or None
             noisy_actions: TTNN tensor (batch_size, action_horizon, action_dim)
             timestep: TTNN tensor (batch_size,)
-
+        
         Returns:
             Tuple of (suffix_embs, pad_masks, att_masks, adarms_cond)
             - suffix_embs: (batch_size, suffix_len, expert_width)
@@ -417,7 +415,7 @@ class SuffixEmbeddingTTNN:
         batch_size = noisy_actions.shape[0]
         embs = []
         att_masks = []
-
+        
         # Embed state (PI0 only, not PI05)
         if not self.config.pi05:
             state_emb = self.embed_state(state)
@@ -425,32 +423,32 @@ class SuffixEmbeddingTTNN:
                 embs.append(state_emb)
                 # State token starts causal attention boundary
                 att_masks.append(1)
-
+        
         # Embed timestep
         time_emb = self.embed_timestep(timestep)
-
+        
         # Embed actions
         action_emb = self.embed_actions(noisy_actions)
-
+        
         # Fuse action and time
         action_time_emb, adarms_cond = self.fuse_action_time(action_emb, time_emb)
-
+        
         # Add action-time embeddings
         embs.append(action_time_emb)
-
+        
         # First action token continues causal boundary, rest are causal
         att_masks.append(1)
         att_masks.extend([0] * (self.config.action_horizon - 1))
-
+        
         # Concatenate embeddings along sequence dimension
         if len(embs) > 1:
             suffix_embs = ttnn.concat(embs, dim=1)
         else:
             suffix_embs = embs[0]
-
+        
         # Create masks on device
         suffix_len = suffix_embs.shape[1]
-
+        
         # Padding mask: all ones (no padding)
         suffix_pad_masks = ttnn.ones(
             (batch_size, suffix_len),
@@ -459,7 +457,7 @@ class SuffixEmbeddingTTNN:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        
         # Attention mask: from list
         att_mask_tensor = torch.tensor(att_masks, dtype=torch.bool)
         att_mask_tensor = att_mask_tensor.unsqueeze(0).expand(batch_size, -1)
@@ -470,16 +468,16 @@ class SuffixEmbeddingTTNN:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
-
+    
     def project_output(self, expert_output: "ttnn.Tensor") -> "ttnn.Tensor":
         """
         Project expert output back to action dimension.
-
+        
         Args:
             expert_output: TTNN tensor (batch_size, action_horizon, expert_width)
-
+        
         Returns:
             TTNN tensor (batch_size, action_horizon, action_dim)
         """
@@ -498,27 +496,27 @@ def convert_suffix_weights_to_ttnn(
 ) -> Dict[str, "ttnn.Tensor"]:
     """
     Convert PyTorch suffix weights to TTNN format.
-
+    
     Args:
         torch_weights: Dictionary of PyTorch weight tensors
         device: TTNN device
         dtype: TTNN data type (default: bfloat8_b for weights, bfloat16 for bias)
-
+    
     Returns:
         Dictionary of TTNN weight tensors
     """
     if not TTNN_AVAILABLE:
         raise RuntimeError("TTNN not available")
-
+    
     if dtype is None:
         weight_dtype = ttnn.bfloat8_b
         bias_dtype = ttnn.bfloat16
     else:
         weight_dtype = dtype
         bias_dtype = dtype
-
+    
     ttnn_weights = {}
-
+    
     for key, value in torch_weights.items():
         if "bias" in key:
             # Bias: expand to [1, out_features]
@@ -538,7 +536,7 @@ def convert_suffix_weights_to_ttnn(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
+    
     return ttnn_weights
 
 
@@ -547,3 +545,4 @@ if TTNN_AVAILABLE:
     SuffixEmbedding = SuffixEmbeddingTTNN  # Use TTNN by default for performance
 else:
     SuffixEmbedding = SuffixEmbeddingTorch  # Fallback to PyTorch
+
