@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "fixed_point_arithmetic.h"
-#include "debug/dprint.h"
+#include "fixed_point_arithmetic.hpp"
 #include "bilinear_weights_lut.hpp"
 
 //

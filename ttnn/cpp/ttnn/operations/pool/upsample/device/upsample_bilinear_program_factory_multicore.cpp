@@ -188,7 +188,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     // Kernels
     // computation needed for the bilinear kernel. Passing them as an argument.
     // Convert to fixed-point Q16.16 format on host for better compile-time optimization in kernel
-    // NOTE: These constants must match those in fixed_point_arithmetic.h to ensure consistency
+    // NOTE: These constants must match those in fixed_point_arithmetic.hpp to ensure consistency
     constexpr int32_t FIXED_POINT_SHIFT = 16;
     constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 
