@@ -242,6 +242,14 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
         .sender_core = {MeshCoordinate(1, 3), sender_logical_coord_1},
         .receiver_core = {MeshCoordinate(1, 3), recv_logical_coord_1}};
 
+    tt_metal::distributed::SocketConnection socket_connection_4 = {
+        .sender_core = {MeshCoordinate(0, 1), sender_logical_coord_1},
+        .receiver_core = {MeshCoordinate(2, 3), recv_logical_coord_0}};
+
+    tt_metal::distributed::SocketConnection socket_connection_5 = {
+        .sender_core = {MeshCoordinate(2, 3), sender_logical_coord_0},
+        .receiver_core = {MeshCoordinate(0, 1), recv_logical_coord_1}};
+
     tt_metal::distributed::SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = tt_metal::BufferType::L1,
         .fifo_size = 1024,
@@ -251,7 +259,12 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
     uint32_t recv_mesh_id = 1;
 
     tt_metal::distributed::SocketConfig socket_config(
-        {socket_connection_0, socket_connection_1, socket_connection_2, socket_connection_3},
+        {socket_connection_0,
+         socket_connection_1,
+         socket_connection_2,
+         socket_connection_3,
+         socket_connection_4,
+         socket_connection_5},
         socket_mem_config,
         sender_mesh_id,
         recv_mesh_id);

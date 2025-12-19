@@ -23,8 +23,6 @@ struct SocketPeerDescriptor {
     SocketConfig config;
     DeviceAddr config_buffer_address = 0;
     DeviceAddr data_buffer_address = 0;
-    std::vector<uint32_t> mesh_ids;
-    std::vector<uint32_t> chip_ids;
     multihost::Tag exchange_tag = multihost::Tag{0};
 };
 
@@ -57,8 +55,6 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context);
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
-    const SocketConfig& config,
-    const SocketPeerDescriptor& sender_descriptor,
-    const SocketPeerDescriptor& receiver_descriptor);
+    const SocketConfig& config);
 
 }  // namespace tt::tt_metal::distributed

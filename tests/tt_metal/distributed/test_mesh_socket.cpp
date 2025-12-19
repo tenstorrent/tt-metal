@@ -2112,6 +2112,10 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
     EXPECT_EQ(config_a.socket_mem_config.fifo_size, config_b.socket_mem_config.fifo_size);
     EXPECT_EQ(config_a.socket_mem_config.sender_sub_device, config_b.socket_mem_config.sender_sub_device);
     EXPECT_EQ(config_a.socket_mem_config.receiver_sub_device, config_b.socket_mem_config.receiver_sub_device);
+    EXPECT_EQ(config_a.sender_mesh_id, config_b.sender_mesh_id);
+    EXPECT_EQ(config_a.receiver_mesh_id, config_b.receiver_mesh_id);
+    EXPECT_EQ(config_a.sender_rank, config_b.sender_rank);
+    EXPECT_EQ(config_a.receiver_rank, config_b.receiver_rank);
 }
 
 // ========= Single Device Data Movement Tests =========
@@ -2315,21 +2319,13 @@ TEST(SocketSerializationTest, PeerDesc) {
         .data_buffer_address = 0,          /* Sender Endpoint has no data buffer allocated. */
     };
 
-    for (const auto& id : sender_chip_ids) {
-        send_socket_peer_desc_l1.mesh_ids.push_back(0);
-        send_socket_peer_desc_l1.chip_ids.push_back(id);
-    }
-
     // Populate receiver size peer descriptor based on config, addresses and device coordinates
     SocketPeerDescriptor recv_socket_peer_desc_l1 = SocketPeerDescriptor{
         .config = socket_config_l1,
         .config_buffer_address = 1 << 21,  // Assuming a dummy address for the config buffer at 2 MB
         .data_buffer_address = 1 << 22,    // Assuming a dummy address for the data buffer at 4 MB
     };
-    for (const auto& id : recv_chip_ids) {
-        recv_socket_peer_desc_l1.mesh_ids.push_back(1);
-        recv_socket_peer_desc_l1.chip_ids.push_back(id);
-    }
+
     // Serialize and deserialize the socket peer descriptors
     auto serialized_send_socket_desc = serialize_to_bytes(send_socket_peer_desc_l1);
     SocketPeerDescriptor deserialized_send_socket_desc = deserialize_from_bytes(serialized_send_socket_desc);
@@ -2344,10 +2340,6 @@ TEST(SocketSerializationTest, PeerDesc) {
     EXPECT_EQ(deserialized_recv_socket_desc.config_buffer_address, recv_socket_peer_desc_l1.config_buffer_address);
     EXPECT_EQ(deserialized_send_socket_desc.data_buffer_address, send_socket_peer_desc_l1.data_buffer_address);
     EXPECT_EQ(deserialized_recv_socket_desc.data_buffer_address, recv_socket_peer_desc_l1.data_buffer_address);
-    EXPECT_EQ(deserialized_send_socket_desc.mesh_ids, send_socket_peer_desc_l1.mesh_ids);
-    EXPECT_EQ(deserialized_recv_socket_desc.mesh_ids, recv_socket_peer_desc_l1.mesh_ids);
-    EXPECT_EQ(deserialized_send_socket_desc.chip_ids, send_socket_peer_desc_l1.chip_ids);
-    EXPECT_EQ(deserialized_recv_socket_desc.chip_ids, recv_socket_peer_desc_l1.chip_ids);
 }
 
 }  // namespace tt::tt_metal::distributed
