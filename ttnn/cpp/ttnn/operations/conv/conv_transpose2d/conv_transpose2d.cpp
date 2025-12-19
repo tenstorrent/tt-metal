@@ -916,7 +916,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
         output_slice_height_end - output_slice_height_start,
         output_slice_width_end - output_slice_width_start);
 
-    if (!this->conv_config.shard_layout.has_value()) {
+    if (!this->conv_config.shard_layout.has_value() && sliced_input_tensor.is_sharded()) {
         this->conv_config.shard_layout = sliced_input_tensor.memory_config().memory_layout();
     }
     auto conv_config_l1 = conv_config;
