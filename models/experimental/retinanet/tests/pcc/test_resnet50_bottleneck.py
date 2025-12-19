@@ -61,7 +61,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
 
 
 def load_input(name):
-    # name = "backbone_layer2_1"
     retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
     retinanet.eval()
     torch_backbone = retinanet.backbone.body

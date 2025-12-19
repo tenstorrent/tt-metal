@@ -17,7 +17,6 @@ class RetinaNetClassificationHeadOptimizer:
     fpn3_conv_blocks: dict
     fpn4_conv_blocks: dict
 
-    # Final cls_logits configs (one per FPN level)
     fpn0_final_conv: dict
     fpn1_final_conv: dict
     fpn2_final_conv: dict
@@ -25,10 +24,9 @@ class RetinaNetClassificationHeadOptimizer:
     fpn4_final_conv: dict
 
 
-# Define optimization profiles
+# Define optimization configurations
 retinanet_classification_head_optimizations = {
     "optimized": RetinaNetClassificationHeadOptimizer(
-        # FPN Level 0: Largest spatial (64x64)
         fpn0_conv_blocks={
             "act_block_h_override": 1024,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -45,7 +43,6 @@ retinanet_classification_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 1: Medium-large spatial (32x32)
         fpn1_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -62,7 +59,6 @@ retinanet_classification_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 2: Medium spatial (16x16)
         fpn2_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -79,7 +75,6 @@ retinanet_classification_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 3: Small spatial (8x8)
         fpn3_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -96,7 +91,6 @@ retinanet_classification_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 4: Smallest spatial (4x4)
         fpn4_conv_blocks={
             "act_block_h_override": 32,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -131,31 +125,14 @@ def ttnn_retinanet_classification_head(
 ) -> ttnn.Tensor:
     """
     TTNN implementation of RetinaNet classification head.
-
-    Args:
-        feature_maps: List of FPN feature tensors in NHWC format
-        parameters: Dict containing 'conv' list and 'cls_logits' parameters
-        device: TTNN device
-        in_channels: Number of input channels (256 for RetinaNet)
-        num_anchors: Number of anchors per location (9 for RetinaNet)
-        num_classes: Number of classes (91 for COCO)
-        batch_size: Batch size
-        input_shapes: List of (H, W) tuples for each FPN level
-        model_config: Dictionary containing model configuration
-        optimization_profile: Optimization profile to use
-    Returns:
-        Output tensor of shape (N, total_anchors, num_classes)
     """
     if input_shapes is None:
         input_shapes = [(fm.shape[1], fm.shape[2]) for fm in feature_maps]
 
-    # Get optimization config
     opt_config = retinanet_classification_head_optimizations[optimization_profile]
 
-    # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
-    # Create input mask for GroupNorm
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = input_mask_tensor.to(device, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -170,15 +147,12 @@ def ttnn_retinanet_classification_head(
     # Process each FPN level
     all_cls_logits = []
     for fpn_idx, (feature_map, (H, W)) in enumerate(zip(feature_maps, input_shapes)):
-        # Get per-FPN configurations
         fpn_conv_config_dict = getattr(opt_config, f"fpn{fpn_idx}_conv_blocks")
         fpn_final_config_dict = getattr(opt_config, f"fpn{fpn_idx}_final_conv")
 
-        # Create Conv2dConfig objects for this FPN level
         fpn_conv_config = ttnn.Conv2dConfig(**fpn_conv_config_dict) if fpn_conv_config_dict else None
         fpn_final_config = ttnn.Conv2dConfig(**fpn_final_config_dict) if fpn_final_config_dict else None
 
-        # Create 4 Conv2dNormActivation blocks for this FPN level
         x = feature_map
         for conv_idx in range(4):
             conv_block = Conv2dNormActivation(
@@ -201,7 +175,6 @@ def ttnn_retinanet_classification_head(
                 x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )
 
-        # Apply final cls_logits convolution
         cls_logits = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=parameters["cls_logits"]["weight"],
@@ -221,16 +194,13 @@ def ttnn_retinanet_classification_head(
             slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
-        # Reshape from (N, H, W, 819) to (N, H, W, 9, 91)
         N, H_out, W_out, _ = cls_logits.shape
         cls_logits = ttnn.to_memory_config(cls_logits, ttnn.DRAM_MEMORY_CONFIG)
         cls_logits = ttnn.reshape(cls_logits, (N, H_out, W_out, num_anchors, num_classes))
 
-        # Flatten to (N, H*W*A, K)
         cls_logits = ttnn.reshape(cls_logits, (N, H_out * W_out * num_anchors, num_classes))
 
         all_cls_logits.append(cls_logits)
 
-    # Concatenate all FPN levels
     output = ttnn.concat(all_cls_logits, dim=1)
     return output

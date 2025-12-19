@@ -192,10 +192,6 @@ class TTUpsample:
         sent_to_dram=False,
         dtype=ttnn.bfloat8_b,
     ):
-        # Convert a **sharded** tensor (distributed across cores) into a single **interleaved** tensor, choosing the backing memory
-        # - DRAM: use when tensors are large or when later ops expect DRAM residency.
-        # - L1  : fastest on-chip memory; use when the tensor fits and you’ll run
-        #         compute-heavy kernels immediately after.
         if sent_to_dram:
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -204,7 +200,7 @@ class TTUpsample:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
 
-        # Optionally pad channels to a multiple of 32 to match TT tile/channel alignment.
+        # Pad channels to a multiple of 32 to match TT tile/channel alignment if specified.
         if pad_ch_to_32:
             input_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 0), (0, 32 - input_tensor.shape[-1] % 32)], 0)
 

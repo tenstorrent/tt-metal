@@ -200,7 +200,7 @@ class Demo:
             model_config=model_config,
             optimization_profile="optimized",
         )
-        logger.debug("✅✅✅ REGRESSION HEAD Complete ✅✅✅")
+        logger.debug("Regression head completed")
         # Run classification head
         classification_output = ttnn_retinanet_classification_head(
             feature_maps=fpn_features,
@@ -238,8 +238,8 @@ class Demo:
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         transform = transforms.Compose(
             [
-                transforms.ToTensor(),  # Convert image to tensor (range [0, 1])
-                normalize,  # Normalize with ImageNet stats
+                transforms.ToTensor(),
+                normalize,
             ]
         )
 
@@ -250,22 +250,16 @@ class Demo:
             mean=[-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.225], std=[1 / 0.229, 1 / 0.224, 1 / 0.225]
         )
 
-        # Remove batch dimension if it exists
         img = image_tensor.squeeze(0)
-
-        # Denormalize
         img = denorm(img)
-
-        # Clamp to [0,1] just to avoid out-of-range values after denorm
         img = img.clamp(0, 1)
 
-        # Convert to PIL
         to_pil = transforms.ToPILImage()
         restored_image = to_pil(img)
-
-        # Save
         restored_image.save("models/experimental/retinanet/resources/outputs/restored.jpg")
-        print("Saved restored image to restored.jpg")
+        logger.info(
+            f"Saved restored image to the default output directory: models/experimental/retinanet/resources/outputs/restored.jpg"
+        )
 
         return image_tensor, og_size
 
@@ -294,7 +288,6 @@ class Demo:
         return torch.stack((x1, y1, x2, y2), dim=1)
 
     def postprocess_detections(self, head_outputs, anchors, image_shapes):
-        # type: (Dict[str, List[Tensor]], List[List[Tensor]], List[Tuple[int, int]]) -> List[Dict[str, Tensor]]
         class_logits = head_outputs["cls_logits"]
         box_regression = head_outputs["bbox_regression"]
 
@@ -316,13 +309,11 @@ class Demo:
             ):
                 num_classes = logits_per_level.shape[-1]
 
-                # remove low scoring boxes
                 scores_per_level = torch.sigmoid(logits_per_level).flatten()
                 keep_idxs = scores_per_level > self.score_thresh
                 scores_per_level = scores_per_level[keep_idxs]
                 topk_idxs = torch.where(keep_idxs)[0]
 
-                # keep only topk scoring predictions
                 num_topk = det_utils._topk_min(topk_idxs, self.topk_candidates, 0)
                 scores_per_level, idxs = scores_per_level.topk(num_topk)
                 topk_idxs = topk_idxs[idxs]
@@ -455,15 +446,14 @@ class Demo:
 
         # Postprocess to comparable outputs
         detections = self.postprocess_detections(split_head_outputs, split_anchors, image_list.image_sizes)
-        # original_image_sizes = [(900, 600)]
-        print(f"image_list.image_sizes: {image_list.image_sizes}, original_image_sizes: {original_image_sizes}")
+        logger.info(f"image_list.image_sizes: {image_list.image_sizes}, original_image_sizes: {original_image_sizes}")
         for i, (pred, im_s, o_im_s) in enumerate(zip(detections, image_list.image_sizes, original_image_sizes)):
-            print(f"im_s:{im_s}, o_im_s:{o_im_s}")
+            logger.info(f"im_s:{im_s}, o_im_s:{o_im_s}")
             boxes = pred["boxes"]
             boxes = Demo.resize_boxes(boxes, im_s, o_im_s)
             detections[i]["boxes"] = boxes
 
-        print(detections)
+        logger.info(detections)
         self.visualize_detections(image_path, detections, output_dir)
 
         logger.info("Demo completed. Output dir: {}", output_dir)

@@ -16,30 +16,24 @@ def create_classification_head_parameters(torch_head, device, model_config):
     """Convert PyTorch classification head weights to TTNN format."""
     parameters = {}
 
-    # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
     layout = (
         ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
     )
-    # Convert 4 conv layers (Conv2d + GroupNorm weights)
     parameters["conv"] = []
     for i in range(4):
-        # Conv2d weights
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)  # Was: torch.bfloat16
+        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
         bias = torch.zeros(conv_weight.shape[0])
 
-        # GroupNorm weights - format using helper function
         norm_weight = torch_head.conv[i][1].weight.detach()
         norm_bias = torch_head.conv[i][1].bias.detach()
 
-        # Format GroupNorm parameters using helper function
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
             norm_weight, num_channels=256, num_cores_x=grid_size.y
         )
         formatted_norm_bias = ttnn.create_group_norm_weight_bias_rm(
             norm_bias, num_channels=256, num_cores_x=grid_size.y
         )
-        # Prepare weights using ttnn.prepare_conv_weights
         prepared_weight = ttnn.prepare_conv_weights(
             weight_tensor=ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -48,8 +42,8 @@ def create_classification_head_parameters(torch_head, device, model_config):
             in_channels=conv_weight.shape[1],
             out_channels=conv_weight.shape[0],
             batch_size=1,
-            input_height=64,  # Adjust based on FPN level
-            input_width=64,  # Adjust based on FPN level
+            input_height=64,
+            input_width=64,
             kernel_size=(3, 3),
             stride=(1, 1),
             padding=(1, 1),
@@ -60,7 +54,6 @@ def create_classification_head_parameters(torch_head, device, model_config):
             input_dtype=ttnn.bfloat16,
         )
 
-        # Prepare bias using ttnn.prepare_conv_bias
         prepared_bias = ttnn.prepare_conv_bias(
             bias_tensor=ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16),
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -100,10 +93,8 @@ def create_classification_head_parameters(torch_head, device, model_config):
 
         parameters["conv"].append(conv_params)
 
-    # Convert cls_logits layer
     cls_logits_weight = torch_head.cls_logits.weight.detach().to(torch.bfloat16)
     cls_logits_bias = torch_head.cls_logits.bias.detach().to(torch.bfloat16)
-    # Prepare cls_logits weights
     cls_logits_weight_ttnn = ttnn.from_torch(cls_logits_weight, dtype=ttnn.bfloat16)
 
     prepared_cls_logits_weight = ttnn.prepare_conv_weights(
@@ -111,12 +102,12 @@ def create_classification_head_parameters(torch_head, device, model_config):
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
         weights_format="OIHW",
-        in_channels=cls_logits_weight.shape[1],  # Input channels
-        out_channels=cls_logits_weight.shape[0],  # Output channels (819 for classification)
+        in_channels=cls_logits_weight.shape[1],
+        out_channels=cls_logits_weight.shape[0],
         batch_size=1,
-        input_height=64,  # Adjust based on FPN level
-        input_width=64,  # Adjust based on FPN level
-        kernel_size=(3, 3),  # Assuming 3x3 kernel like other layers
+        input_height=64,
+        input_width=64,
+        kernel_size=(3, 3),
         stride=(1, 1),
         padding=(1, 1),
         dilation=(1, 1),
@@ -127,7 +118,6 @@ def create_classification_head_parameters(torch_head, device, model_config):
         conv_config=ttnn.Conv2dConfig(weights_dtype=model_config["WEIGHTS_DTYPE"]),
     )
 
-    # Prepare cls_logits bias
     cls_logits_bias_ttnn = ttnn.from_torch(cls_logits_bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16)
 
     prepared_cls_logits_bias = ttnn.prepare_conv_bias(
@@ -163,13 +153,11 @@ def test_classification_head_full(device, pcc, reset_seeds):
     """Test TTNN classification head implementation with 5 FPN levels using real or random features."""
     torch.manual_seed(0)
 
-    # Load pretrained model
     torch_model = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
     torch_model.eval()
     torch_model = torch_model.to(dtype=torch.bfloat16)
     classification_head = torch_model.head.classification_head
 
-    # Load pickled FPN features
     pickle_path = "models/experimental/retinanet/data/fpn_features.pkl"
 
     if os.path.exists(pickle_path):
@@ -187,7 +175,6 @@ def test_classification_head_full(device, pcc, reset_seeds):
             logger.info(f"    Level {i}: {feat.shape}")
     else:
         logger.info(f"Pickle file not found at {pickle_path}, using random features")
-        # Fallback to random features with 5 FPN levels
         batch_size = 1
         in_channels = 256
         input_shapes = [(100, 100), (50, 50), (25, 25), (13, 13), (7, 7)]
@@ -235,10 +222,8 @@ def test_classification_head_full(device, pcc, reset_seeds):
         optimization_profile="optimized",
     )
 
-    # Convert back to PyTorch for comparison
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # Assert PCC
     passed, pcc_msg = assert_with_pcc(torch_output, ttnn_output_torch, pcc=pcc)
     logger.info(f"Classification Head PCC: {pcc_msg}")
     assert passed, f"Classification Head test failed: {pcc_msg}"

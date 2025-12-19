@@ -21,7 +21,6 @@ class RetinaNetHeadOptimizer:
     fpn3_conv_blocks: dict
     fpn4_conv_blocks: dict
 
-    # cls_logits configs (one per FPN level)
     fpn0_final_conv: dict
     fpn1_final_conv: dict
     fpn2_final_conv: dict
@@ -31,8 +30,6 @@ class RetinaNetHeadOptimizer:
 
 retinanet_head_optimizations = {
     "optimized": RetinaNetHeadOptimizer(
-        # Conv block 0 - First convolution in the sequence
-        # FPN Level 0: Largest spatial (64x64)
         fpn0_conv_blocks={
             "act_block_h_override": 1024,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -49,7 +46,6 @@ retinanet_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 1: Medium-large spatial (32x32)
         fpn1_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -66,7 +62,6 @@ retinanet_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 2: Medium spatial (16x16)
         fpn2_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -83,7 +78,6 @@ retinanet_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 3: Small spatial (8x8)
         fpn3_conv_blocks={
             "act_block_h_override": 256,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -100,7 +94,6 @@ retinanet_head_optimizations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        # FPN Level 4: Smallest spatial (4x4)
         fpn4_conv_blocks={
             "act_block_h_override": 32,
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -165,21 +158,16 @@ class Conv2dNormActivation:
         self.model_config = model_config
         self.compute_config = compute_config
         self.conv_config = conv_config
-        # Store parameters
         self.conv_weight = parameters["weight"]
         self.conv_bias = parameters["bias"]
-        # Store formatted weights for TTNN native GroupNorm
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
-        # Use standard FALLBACK_ON_GROUPNORM flag (default "1" = PyTorch fallback enabled)
+        # GroupNorm fallback flag
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "1") == "1"
-        # Grid size for GroupNorm
         self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
 
-        # Input mask for GroupNorm
         self.input_mask = input_mask
 
-        # DRAM slicing config for conv2d
         self.slice_config = ttnn.Conv2dSliceConfig(
             slice_type=ttnn.Conv2dDRAMSliceHeight,
         )
@@ -208,7 +196,6 @@ class Conv2dNormActivation:
             Output tensor after Conv2d + GroupNorm + ReLU
         """
 
-        # Create hierarchical log prefix
         prefix = (
             f"[FPN{fpn_level}][Conv{conv_block_idx}]"
             if fpn_level is not None and conv_block_idx is not None
@@ -232,10 +219,9 @@ class Conv2dNormActivation:
             compute_config=self.compute_config,
             conv_config=self.conv_config,
             return_output_dim=True,
-            return_weights_and_bias=True,  # ADD THIS
+            return_weights_and_bias=True,
         )
 
-        # Get output shape after conv
         N, H_out, W_out, C = x.shape
 
         if self.fallback_on_groupnorm:
@@ -243,7 +229,6 @@ class Conv2dNormActivation:
             x = ttnn.reshape(x, (N, H_out, W_out, C))
             x = ttnn.permute(x, (0, 3, 1, 2))
 
-            # Use PyTorch's GroupNorm
             x = fallback_ops.group_norm(
                 x,
                 num_groups=self.num_groups,
@@ -251,7 +236,6 @@ class Conv2dNormActivation:
                 bias=self.norm_bias,
             )
             x = x.to(self.device)
-            # Convert back to NHWC
             x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -259,23 +243,16 @@ class Conv2dNormActivation:
             # Use TTNN native GroupNorm (when FALLBACK_ON_GROUPNORM=0)
             logger.debug(f"{prefix} Using TTNN native GroupNorm")
 
-            # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
             spatial_size = H_out * W_out
             required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
                 self.grid_size.y * 32
             )
 
             if spatial_size != required_size:
-                # Pad spatial dimension to required size
                 pad_amount = required_size - spatial_size
-
-                # Reshape to (N, 1, H*W, C) for padding
                 x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-                # Pad along spatial dimension
                 x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
             else:
-                # Reshape to (N, 1, H*W, C) without padding
                 x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
 
             # Apply GroupNorm
@@ -291,12 +268,9 @@ class Conv2dNormActivation:
                 compute_kernel_config=self.compute_config,
             )
 
-            # Unpad
             if spatial_size != required_size:
-                # Slice back to original spatial size
                 x_normalized = x_normalized[:, :, :spatial_size, :]
 
-            # Reshape back using PRESERVED dimensions
             x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
 
         H_out = input_height
@@ -320,10 +294,8 @@ def ttnn_retinanet_regression_head(
     model_config: dict = None,
     optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
-    # Get optimization config
     opt_config = retinanet_head_optimizations[optimization_profile]
 
-    # Map FPN level index to config attributes
     fpn_conv_configs = [
         opt_config.fpn0_conv_blocks,
         opt_config.fpn1_conv_blocks,
@@ -342,7 +314,6 @@ def ttnn_retinanet_regression_head(
 
     all_bbox_regression = []
 
-    # Setup shared resources
     grid_size = ttnn.CoreGrid(y=8, x=8)
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = input_mask_tensor.to(device, ttnn.DRAM_MEMORY_CONFIG)
@@ -355,21 +326,17 @@ def ttnn_retinanet_regression_head(
         packer_l1_acc=model_config.get("PACKER_L1_ACC", False),
     )
 
-    # Process each FPN level
     for fpn_idx, feature_map in enumerate(feature_maps):
         N, H, W, C = feature_map.shape
 
-        # Get configs for THIS FPN level
         conv_blocks_config = fpn_conv_configs[fpn_idx]
         final_conv_config = fpn_final_configs[fpn_idx]
 
-        # Create Conv2dConfig for this FPN's conv blocks
         if conv_blocks_config is not None:
             conv_config = ttnn.Conv2dConfig(**conv_blocks_config)
         else:
             conv_config = None
 
-        # Create 4 Conv2dNormActivation blocks for THIS FPN level
         conv_blocks = []
         for conv_idx in range(4):
             conv_block = Conv2dNormActivation(
@@ -429,6 +396,5 @@ def ttnn_retinanet_regression_head(
 
         all_bbox_regression.append(bbox_regression)
 
-    # Concatenate all FPN levels
     output = ttnn.concat(all_bbox_regression, dim=1)
     return output
