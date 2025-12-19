@@ -369,7 +369,7 @@ class Generator:
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
             # Ensure all copying is done
-            ttnn.synchronize_device(self.model[model_id].mesh_device)
+            # ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
