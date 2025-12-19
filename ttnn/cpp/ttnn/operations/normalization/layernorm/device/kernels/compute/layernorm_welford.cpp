@@ -131,7 +131,7 @@ void MAIN {
         // Process the last tile
         // cb_x is synced on full blocks, so we need to wait for the
         // last tile + any remaining in the last block
-        const auto num_to_wait = generic::blocks(Wt, blk).back().remainder() + 1;
+        const auto num_to_wait = generic::blocks(Wt, blk).total_with_remainder();
         cb_wait_front(cb_x, num_to_wait);
         transpose_wh_tile(cb_x, Wt - 1, input_dst);
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
