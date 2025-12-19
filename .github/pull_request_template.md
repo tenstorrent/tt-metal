@@ -10,9 +10,9 @@ Summarize the changes made and its impact.
 
 ### Checklist
 
-- [ ] [All post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml) CI passes
-- [ ] [Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml) CI with demo tests passes (if applicable)
-- [ ] [cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) job passes
+- [ ] [![All post-commit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml)
+- [ ] [![Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml) job with demo tests passes (if applicable)
+- [ ] [![cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) job passes
 - [ ] New/Existing tests provide coverage for changes
 
 
@@ -20,6 +20,8 @@ Summarize the changes made and its impact.
 
 If your changes cover model-related code, you should run tests corresponding to affected models and platforms (Single card, T3K, Galaxy). "Choose your pipeline" workflows facilite running multiple kinds of tests in a single run. Each offers `models-mandatory` and `models-extended` presets.
 The former includes a minimal set of tests, to be run always. The latter extends that with additional ones - use your best judgement in deciding which is the most appropriate for your PR.
+
+Branch name: `{{branch_name}}`
 
 - [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml)
   - [ ] `models-mandatory` preset (runs:
