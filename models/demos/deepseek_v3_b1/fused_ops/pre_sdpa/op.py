@@ -24,7 +24,14 @@ class PreSDPA:
     """
 
     @staticmethod
-    def golden(input_tensor, gamma_tensor, matmul_weights_tensor, epsilon=1e-6):
+    def golden(
+        input_tensor,
+        gamma_tensor,
+        matmul_weights_tensor,
+        rmsnorm2_gamma_tensor,
+        matmul2_weights_tensor,
+        epsilon=1e-6,
+    ):
         """
         PyTorch reference implementation for validation.
 
@@ -32,17 +39,23 @@ class PreSDPA:
             input_tensor: Input tensor (torch.Tensor) [1, K]
             gamma_tensor: Gamma/weight tensor (torch.Tensor) [1, K]
             matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
+            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (torch.Tensor) [1, N]
+            matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M]
             epsilon: Small value to avoid division by zero
 
         Returns:
-            Output tensor with pre-SDPA operations applied: RMSNorm @ matmul_weights [1, N]
+            Output tensor with pre-SDPA operations applied: RMSNorm -> matmul -> RMSNorm2 -> matmul2 [1, M]
         """
-        # RMSNorm
-        variance = input_tensor.pow(2).mean(-1, keepdim=True)
-        normalized = input_tensor * torch.rsqrt(variance + epsilon)
-        rmsnorm_result = normalized * gamma_tensor
-        # Matmul: [1, K] @ [K, N] -> [1, N]
-        return rmsnorm_result @ matmul_weights_tensor
+
+        def rmsnorm(x, gamma):
+            variance = x.pow(2).mean(-1, keepdim=True)
+            normalized = x * torch.rsqrt(variance + epsilon)
+            return normalized * gamma
+
+        # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
+        matmul_result = rmsnorm(input_tensor, gamma_tensor) @ matmul_weights_tensor
+        # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
+        return rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
 
     @staticmethod
     def op(
@@ -168,7 +181,7 @@ class PreSDPA:
         rmsnorm_output_cb = 4
         matmul_weights_cb = 5
         matmul_output_cb = 9
-        output_cb = 7
+        gather_output_cb = 7
         matmul_input_cb = 8
         rmsnorm2_gamma_cb = 10  # New gamma for second RMSNorm (1536 elements padded to 2 tiles)
         rmsnorm2_input_cb = 11  # Separate input CB for RMSNorm2
@@ -243,7 +256,7 @@ class PreSDPA:
             ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
-            ("output_cb", output_cb),
+            ("gather_output_cb", gather_output_cb),
         ]
 
         # Calculate matmul parameters
@@ -367,7 +380,7 @@ class PreSDPA:
             ("gather_sender_grid_end_x", gather_sender_grid_end_x),
             ("gather_sender_grid_end_y", gather_sender_grid_end_y),
             ("gather_row_major", 1),  # 1 = row-major linearization
-            ("gather_dst_cb", output_cb),  # Destination CB for gather (used by copy on input core)
+            ("gather_dst_cb", gather_output_cb),  # Destination CB for gather (used by copy on input core)
             ("gather_dst_num_pages", gather_dst_num_pages),  # Number of pages in gather dst cb
         ]
 
@@ -379,7 +392,7 @@ class PreSDPA:
             ("gather_noc1_num_senders", gather_noc1_num_senders),
             ("gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
             ("gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
-            ("gather_dst_cb", output_cb),
+            ("gather_dst_cb", gather_output_cb),
             ("gather_dst_num_pages", gather_dst_num_pages),
         ]
 
@@ -542,23 +555,23 @@ class PreSDPA:
             matmul2_weights_cb, matmul2_weights_tensor
         )
 
-        # CB 16: Matmul2 output buffer (4 tiles per core on main grid)
-        matmul2_output_tiles_per_core = 4  # 4 1x32 tiles per core
-        matmul2_output_total_size = matmul2_output_tiles_per_core * matmul_output_page_size
-        matmul2_output_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=matmul2_output_cb,
-            data_format=data_format,
-            page_size=matmul_output_page_size,
-            tile=matmul_output_tile_descriptor,
-        )
-        matmul2_output_cb_descriptor = ttnn.CBDescriptor(
-            total_size=matmul2_output_total_size,
-            core_ranges=ttnn.CoreRangeSet([main_grid]),
-            format_descriptors=[matmul2_output_cb_format],
-        )
+        # CB 16: Matmul2 output buffer (width sharded, mapped to output_tensor)
+        matmul2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_output_cb, output_tensor)
 
-        # Set up sharded output CB, mapping to output_tensor shards
-        output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
+        # CB 7: Gather output buffer (dynamically allocated on input core)
+        # Receives gather data from matmul cores (one 1x32 tile per sender)
+        gather_output_total_size = gather_dst_num_pages * matmul_input_page_size
+        gather_output_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=gather_output_cb,
+            data_format=data_format,
+            page_size=matmul_input_page_size,
+            tile=matmul_input_tile_descriptor,
+        )
+        gather_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=gather_output_total_size,
+            core_ranges=rmsnorm_core_grid,
+            format_descriptors=[gather_output_cb_format],
+        )
 
         # ========================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
@@ -673,7 +686,7 @@ class PreSDPA:
                 rmsnorm_output_cb_descriptor,
                 matmul_weights_cb_descriptor,
                 matmul_output_cb_descriptor,
-                output_cb_descriptor,
+                gather_output_cb_descriptor,
                 matmul_input_cb_descriptor,
                 rmsnorm2_gamma_cb_descriptor,  # CB 10: RMSNorm2 gamma
                 rmsnorm2_input_cb_descriptor,  # CB 11: RMSNorm2 input

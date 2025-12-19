@@ -142,16 +142,24 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     )
 
     # Compute reference output using PyTorch
-    torch_expected = PreSDPA.golden(torch_input, torch_gamma, torch_matmul_weights, epsilon=epsilon)
+    torch_expected = PreSDPA.golden(
+        torch_input,
+        torch_gamma,
+        torch_matmul_weights,
+        torch_rmsnorm2_gamma,
+        torch_matmul2_weights,
+        epsilon=epsilon,
+    )
 
-    # Create output tensor sharded on same core - shape is (1, 1536) after matmul
-    output_shape = (1, matmul_weights_shape[1])  # (1, 1536)
+    # Create output tensor - width sharded on same grid as matmul2, shape is (1, matmul2_width)
+    output_shape = (1, matmul2_width)  # (1, 12288) or (1, 11264)
+    output_shard_shape = (1, matmul2_width // matmul2_num_cores)  # (1, 128)
     output_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        output_shape,
+        ttnn.CoreRangeSet({matmul2_grid}),
+        output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
