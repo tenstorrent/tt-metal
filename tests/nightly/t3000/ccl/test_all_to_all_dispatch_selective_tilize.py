@@ -177,6 +177,91 @@ def get_dte_intermediate(indices_tensor, scores_tensor, mapping_tensor, mesh_sha
     return dte_intermediate, dte_scores, ed_table.reshape(devices, experts_per_device * devices)
 
 
+def get_a2a_dispatch_golden(input_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis):
+    """
+    Get the golden output of the all-to-all dispatch selective tilize operation.
+    """
+    devices = mesh_shape[0] * mesh_shape[1]
+    dispatch_devices = mesh_shape[cluster_axis]
+    tokens_per_device = input_tokens.shape[1]
+
+    selected_experts_k = expert_indices.shape[-1]
+
+    expert_indices_reshaped = expert_indices.reshape(
+        devices, -1, expert_indices.shape[-1]
+    )  # [devices, tokens_per_device, selected_experts_k]
+    input_tokens_reshaped = input_tokens.reshape(
+        devices, -1, input_tokens.shape[-1]
+    )  # [devices, tokens_per_device, hidden_size]
+    output_tokens = torch.zeros_like(input_tokens_reshaped).repeat(
+        1, dispatch_devices, 1
+    )  # [devices, tokens_per_device*dispatch_devices, hidden_size]
+
+    metadata = expert_indices.reshape(devices, -1, expert_indices.shape[-1]).repeat(
+        dispatch_devices, 1, 1
+    )  # all-gather of the expert indices
+    gathered_scores = expert_scores.reshape(devices, -1, expert_scores.shape[-1]).repeat(
+        dispatch_devices, 1, 1
+    )  # all-gather of the expert scores
+
+    # Track which (source_device, token, target_device) have already been dispatched
+    # to avoid redundant writes when multiple experts map to the same device
+    send_buffer = torch.zeros(devices, tokens_per_device, devices, dtype=torch.uint8)
+
+    for source_device_idx in range(devices):
+        source_axis_pos = get_axis_position(source_device_idx, mesh_shape, cluster_axis)
+        for t in range(tokens_per_device):
+            for k in range(selected_experts_k):
+                expert_id = expert_indices_reshaped[source_device_idx, t, k].item()
+                device_idx = expert_mapping[0, expert_id].item()
+                if send_buffer[source_device_idx, t, device_idx] == 0:
+                    if get_other_axis_position(source_device_idx, mesh_shape, cluster_axis) == get_other_axis_position(
+                        device_idx, mesh_shape, cluster_axis
+                    ):
+                        output_tokens[device_idx, t + (source_axis_pos * tokens_per_device), :] = input_tokens_reshaped[
+                            source_device_idx, t, :
+                        ]  # source device can dispatch to the target device, offset at its own unique position in the output buffer, offset by the token
+                    send_buffer[source_device_idx, t, device_idx] = 1
+
+    return output_tokens, metadata, gathered_scores
+
+
+def verify_a2a_dispatch_output_tokens(
+    output_tokens, golden_output_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+):
+    """
+    Verify the output of the all-to-all dispatch selective tilize operation against the golden.
+    """
+    devices = mesh_shape[0] * mesh_shape[1]
+    tokens_per_device = output_tokens.shape[-2]
+
+    selected_experts_k = expert_indices.shape[-1]
+
+    expert_indices_reshaped = expert_indices.reshape(
+        devices, -1, expert_indices.shape[-1]
+    )  # [devices, tokens_per_device, selected_experts_k]
+
+    # Track which (source_device, token, target_device) have already been verified
+    # to avoid redundant checks when multiple experts map to the same device
+    verified_buffer = torch.zeros(devices, tokens_per_device, devices, dtype=torch.uint8)
+
+    for source_device_idx in range(devices):
+        source_axis_pos = get_axis_position(source_device_idx, mesh_shape, cluster_axis)
+        for t in range(tokens_per_device):
+            for k in range(selected_experts_k):
+                expert_id = expert_indices_reshaped[source_device_idx, t, k].item()
+                device_idx = expert_mapping[0, expert_id].item()
+                if verified_buffer[source_device_idx, t, device_idx] == 0:
+                    if get_other_axis_position(source_device_idx, mesh_shape, cluster_axis) == get_other_axis_position(
+                        device_idx, mesh_shape, cluster_axis
+                    ):
+                        assert torch.allclose(
+                            output_tokens[device_idx, t + (source_axis_pos * tokens_per_device), :],
+                            golden_output_tokens[device_idx, t + (source_axis_pos * tokens_per_device), :],
+                        ), f"Output token mismatch at target device {device_idx}, token {t}, source device {source_device_idx} (axis position {source_axis_pos}), selected expert {expert_id}."
+                    verified_buffer[source_device_idx, t, device_idx] = 1
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -294,6 +379,9 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
     logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
 
+    logger.info(f"expert_mapping: {expert_mapping[2,:]}")
+    logger.info(f"expert_indices: {expert_indices[2,:,:,:]}")
+
     output_tokens, metadata, gathered_scores = ttnn.experimental.all_to_all_dispatch_selective_tilize(
         tt_input_tokens,
         tt_expert_indices,
@@ -306,5 +394,27 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"metadata shape: {metadata.shape}")
     logger.info(f"gathered_scores shape: {gathered_scores.shape}")
 
-    logger.info(f"metadata: {metadata}")
+    logger.info(f"expert_scores: {expert_scores}")
     logger.info(f"gathered_scores: {gathered_scores}")
+
+    logger.info(f"input_tokens: {input_tokens}")
+    logger.info(f"output_tokens: {output_tokens}")
+    logger.info(f"metadata: {metadata}")
+
+    golden_output_tokens, golden_metadata, golden_gathered_scores = get_a2a_dispatch_golden(
+        input_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+    )
+    output_tokens = ttnn.to_torch(output_tokens, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
+        tt_to_torch_dtype(dtype)
+    )
+    metadata = ttnn.to_torch(metadata, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(torch.uint16)
+    gathered_scores = ttnn.to_torch(gathered_scores, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
+        tt_to_torch_dtype(dtype)
+    )
+
+    assert torch.allclose(metadata, golden_metadata), f"Metadata mismatch."
+    assert torch.allclose(gathered_scores, golden_gathered_scores), f"Gathered scores mismatch."
+
+    verify_a2a_dispatch_output_tokens(
+        output_tokens, golden_output_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+    )
