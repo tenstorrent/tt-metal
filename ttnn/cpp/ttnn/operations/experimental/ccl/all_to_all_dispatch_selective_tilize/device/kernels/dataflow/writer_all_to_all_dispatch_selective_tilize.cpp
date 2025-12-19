@@ -205,6 +205,56 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc(
         static_cast<uint8_t>(NegativeDistance));
 }
 
+inline void dispatch_input_local_device_flushed(
+    uint32_t input_token_read_addr, uint64_t output_token_write_addr, uint32_t output_page_size) {
+    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+    noc_async_writes_flushed();
+}
+
+template <typename DataType>
+FORCE_INLINE DataType* tile_row_offset(DataType* indices_address, uint32_t row) {
+    constexpr uint32_t num_face_width = 2;
+    constexpr uint32_t num_face_height = 2;
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    constexpr uint32_t TileHeight = 32;
+    constexpr uint32_t TileWidth = 32;
+    uint32_t offset = 0;
+    uint32_t local_row = row;
+    if (row >= FaceHeight) {
+        offset += num_face_width * FaceHeight * FaceWidth;  // if it was generic, multiply by row/FaceHeight
+        local_row -= FaceHeight;
+    }
+    offset += local_row * FaceWidth;
+    return (DataType*)(indices_address + offset);
+}
+
+template <typename DataType>
+FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) {
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    uint32_t offset = 0;
+    uint32_t local_col = col;
+    if (col >= FaceWidth) {
+        offset += FaceHeight * FaceWidth;  // if it was generic, multiply by col/FaceWidth
+        local_col -= FaceWidth;
+    }
+    offset += local_col;
+    return (DataType*)(indices_address + offset);
+}
+
+template <typename DataType>
+FORCE_INLINE DataType* tile_offset(DataType* indices_address, uint32_t full_buffer_row) {
+    constexpr uint32_t num_face_width = 2;
+    constexpr uint32_t num_face_height = 2;
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    constexpr uint32_t TileHeight = 32;
+    constexpr uint32_t TileWidth = 32;
+    constexpr uint32_t TileSize = TileHeight * TileWidth;
+    return (DataType*)(indices_address + (full_buffer_row / TileHeight) * TileSize);
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -259,7 +309,6 @@ void kernel_main() {
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
     constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
     constexpr uint32_t num_connections = get_named_compile_time_arg_val("num_connections");
-    DPRINT << "num_connections: " << num_connections << ENDL();
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -405,6 +454,8 @@ void kernel_main() {
     uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
                                              (token_start_idx * aligned_indices_page_size);
 
+    constexpr uint32_t tile_height = 32;
+    uint16_t* token_indices = (uint16_t*)base_indices_addr;
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint32_t base_mapping_addr = get_read_ptr(mapping_tensor_cb_id);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
@@ -414,68 +465,70 @@ void kernel_main() {
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
-        // uint16_t* token_indices = (uint16_t*)(base_indices_addr + (local_token * (aligned_indices_page_size / 32)));
-        // wrong
+
+        if constexpr (reuse_index) {
+            // if re-using, the full buffer is already in the CB, so we need to offset in to the relevant tile
+            token_indices = detail::tile_offset(token_indices, local_token);
+            // then we need to offset into the relevant row within the tile
+            token_indices = detail::tile_row_offset(token_indices, local_token % tile_height);
+        } else {
+            if (local_token % tile_height == 0) {
+                // only 1 tile in the CB, so just need to get the read pointer
+                cb_wait_front(indices_tensor_cb_id, 1);
+                token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+            } else {
+                // still the first tile, but now need to get the relevant row within the tile
+                token_indices = detail::tile_row_offset(token_indices, local_token % tile_height);
+            }
+        }
         cb_wait_front(input_tensor_cb_id, 1);
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
+        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + subtoken_offset;
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             // get the expert that is chosen for the current token
-            // uint16_t expert_chosen = tiled_access<32, 32, 16, 16>(token_indices, k); need to correct this
-            uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
-            uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+            uint32_t expert_offset =
+                expert_chosen *
+                dispatch_devices;  // now that it's [1, 1, 1, E*D], we just offset into the e*D mapping tensor
+            uint16_t* devices_for_expert = (uint16_t*)(base_mapping_addr + expert_offset);
 
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-                if (devices_for_expert[d] == 1 &&
-                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
-                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
+                if (devices_for_expert[d] == 1 && send_preparation_buffer[(local_token * num_devices) + d] == 0) {
+                    send_preparation_buffer[(local_token * num_devices) + d] = 1;
                     if (d == linearized_mesh_coord) {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device_flushed(
-                            input_token_read_addr, output_token_write_addr, output_page_size);
+                            input_token_read_addr, output_token_write_addr, subtoken_size);
                         needs_barrier = true;
                     } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
-                        if constexpr (is_1d_topology<topology>()) {
-                            fabric_send_chip_unicast_noc_unicast_1d<
-                                linearized_mesh_coord,
-                                topology,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size>(
-                                output_addr_gen,
-                                fabric_connections,
-                                unicast_packet_header,
-                                d,
-                                input_token_read_addr,
-                                global_token,
-                                (int)output_page_size,
-                                alignment);
-                        } else {
-                            fabric_send_chip_unicast_noc_unicast<
-                                src_chip_id,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size>(
-                                output_addr_gen,
-                                fabric_connections,
-                                unicast_packet_header,
-                                dest_chip_ids[d],
-                                dest_mesh_ids[d],
-                                input_token_read_addr,
-                                global_token,
-                                (int)output_page_size,
-                                alignment);
-                        }
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            output_addr_gen,
+                            fabric_connections,
+                            unicast_packet_header,
+                            d,
+                            input_token_read_addr,
+                            global_token,
+                            (int)subtoken_size,
+                            alignment);
                     }
                 }
             }
         }
         cb_pop_front(input_tensor_cb_id, 1);
+        if constexpr (!reuse_index) {
+            if ((local_token + 1) % tile_height == 0) {
+                cb_pop_front(indices_tensor_cb_id, 1);
+            }
+        }
     }
     if (needs_barrier) {
         noc_async_write_barrier();
