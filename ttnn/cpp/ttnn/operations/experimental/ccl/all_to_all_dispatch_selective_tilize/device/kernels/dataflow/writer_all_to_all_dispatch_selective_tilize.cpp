@@ -255,6 +255,35 @@ FORCE_INLINE DataType* tile_offset(DataType* indices_address, uint32_t full_buff
     return (DataType*)(indices_address + (full_buffer_row / TileHeight) * TileSize);
 }
 
+template <bool reuse_index, uint32_t indices_tensor_cb_id, uint32_t tile_height = 32, typename DataType = uint16_t>
+FORCE_INLINE DataType* wait_indices(DataType* base_indices_addr, DataType*& tile_base, uint32_t local_token) {
+    if constexpr (reuse_index) {
+        // if re-using, the full buffer is already in the CB, so we need to offset into the relevant tile
+        DataType* token_indices = tile_offset(base_indices_addr, local_token);
+        // then we need to offset into the relevant row within the tile
+        return tile_row_offset(token_indices, local_token % tile_height);
+    } else {
+        if (local_token % tile_height == 0) {
+            // at tile boundary, wait for the next tile and update tile_base
+            cb_wait_front(indices_tensor_cb_id, 1);
+            tile_base = (DataType*)(get_read_ptr(indices_tensor_cb_id));
+            return tile_base;
+        } else {
+            // still within the same tile, offset into the relevant row from tile_base
+            return tile_row_offset(tile_base, local_token % tile_height);
+        }
+    }
+}
+
+template <bool reuse_index, uint32_t indices_tensor_cb_id, uint32_t tile_height = 32>
+FORCE_INLINE void pop_indices(uint32_t local_token) {
+    if constexpr (!reuse_index) {
+        if ((local_token + 1) % tile_height == 0) {
+            cb_pop_front(indices_tensor_cb_id, 1);
+        }
+    }
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -455,7 +484,8 @@ void kernel_main() {
                                              (token_start_idx * aligned_indices_page_size);
 
     constexpr uint32_t tile_height = 32;
-    uint16_t* token_indices = (uint16_t*)base_indices_addr;
+    uint16_t* base_indices_ptr = (uint16_t*)base_indices_addr;
+    uint16_t* tile_base = nullptr;  // tracks current tile base for non-reuse case
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint32_t base_mapping_addr = get_read_ptr(mapping_tensor_cb_id);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
@@ -466,21 +496,8 @@ void kernel_main() {
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
 
-        if constexpr (reuse_index) {
-            // if re-using, the full buffer is already in the CB, so we need to offset in to the relevant tile
-            token_indices = detail::tile_offset(token_indices, local_token);
-            // then we need to offset into the relevant row within the tile
-            token_indices = detail::tile_row_offset(token_indices, local_token % tile_height);
-        } else {
-            if (local_token % tile_height == 0) {
-                // only 1 tile in the CB, so just need to get the read pointer
-                cb_wait_front(indices_tensor_cb_id, 1);
-                token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
-            } else {
-                // still the first tile, but now need to get the relevant row within the tile
-                token_indices = detail::tile_row_offset(token_indices, local_token % tile_height);
-            }
-        }
+        uint16_t* token_indices = detail::wait_indices<reuse_index, indices_tensor_cb_id, tile_height>(
+            base_indices_ptr, tile_base, local_token);
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + subtoken_offset;
 
@@ -524,11 +541,7 @@ void kernel_main() {
             }
         }
         cb_pop_front(input_tensor_cb_id, 1);
-        if constexpr (!reuse_index) {
-            if ((local_token + 1) % tile_height == 0) {
-                cb_pop_front(indices_tensor_cb_id, 1);
-            }
-        }
+        detail::pop_indices<reuse_index, indices_tensor_cb_id, tile_height>(local_token);
     }
     if (needs_barrier) {
         noc_async_write_barrier();
