@@ -89,12 +89,12 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
         remote_endpoint_desc =
             receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
-        fabric_node_id_map_ = generate_fabric_node_id_map(config_, local_endpoint_desc, remote_endpoint_desc);
+        fabric_node_id_map_ = generate_fabric_node_id_map(config_);
     } else {
         remote_endpoint_desc =
             receive_and_verify_descriptor_from_peer(local_endpoint_desc, socket_endpoint_type_, context);
         forward_descriptor_to_peer(local_endpoint_desc, socket_endpoint_type_, context);
-        fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
+        fabric_node_id_map_ = generate_fabric_node_id_map(config_);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
@@ -141,7 +141,7 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     write_socket_configs(sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER);
     write_socket_configs(recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER);
 
-    auto fabric_node_id_map = generate_fabric_node_id_map(config, send_peer_descriptor, recv_peer_descriptor);
+    auto fabric_node_id_map = generate_fabric_node_id_map(config);
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
