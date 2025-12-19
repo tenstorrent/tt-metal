@@ -18,8 +18,25 @@ def is_ttnn_float_type(tt_dtype) -> bool:
 
 
 TORCH_FLOAT_TYPES = [torch.float16, torch.float32, torch.float64]
-ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
-FLOAT_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if is_ttnn_float_type(dtype)]
+
+
+def get_types_from_binding_framework():
+    if hasattr(ttnn.DataType, "__entries"):
+        # pybind
+        ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+    elif hasattr(ttnn.DataType, "_member_map_"):
+        # nanobind
+        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+    else:
+        raise Exception(
+            "test_rand.py: ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind."
+        )
+
+    return ALL_TYPES
+
+
+ALL_TYPES = get_types_from_binding_framework()
+FLOAT_TYPES = [dtype for dtype in ALL_TYPES if is_ttnn_float_type(dtype)]
 TTNN_MUST_TILE_TYPES = [ttnn.bfloat8_b, ttnn.bfloat4_b]
 NUMPY_FLOAT_TYPES = [np.float16, np.float32, np.float64]
 
