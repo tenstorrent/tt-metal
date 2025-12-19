@@ -141,16 +141,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         tile=tile,
     )
 
-    # Compute reference output using PyTorch
-    torch_expected = PreSDPA.golden(
-        torch_input,
-        torch_gamma,
-        torch_matmul_weights,
-        torch_rmsnorm2_gamma,
-        torch_matmul2_weights,
-        epsilon=epsilon,
-    )
-
     # Create output tensor - width sharded on same grid as matmul2, shape is (1, matmul2_width)
     output_shape = (1, matmul2_width)  # (1, 12288) or (1, 11264)
     output_shard_shape = (1, matmul2_width // matmul2_num_cores)  # (1, 128)
@@ -194,6 +184,16 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     # Verify results
     logger.info("Verifying pre-SDPA results...")
+
+    # Compute reference output using PyTorch
+    torch_expected = PreSDPA.golden(
+        torch_input,
+        torch_gamma,
+        torch_matmul_weights,
+        torch_rmsnorm2_gamma,
+        torch_matmul2_weights,
+        epsilon=epsilon,
+    )
 
     # torch_expected = torch_expected[:, :32]
     # output_torch = output_torch[:, :32]

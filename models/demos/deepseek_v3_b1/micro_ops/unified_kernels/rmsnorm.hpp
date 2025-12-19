@@ -137,6 +137,8 @@ struct RMSNorm {
                 // Square the input
                 mul_tiles_init(args.input_cb, args.input_cb);
                 cb_wait_front(args.input_cb, args.num_tiles);
+                UNPACK((DPRINT << TileSlice(args.input_cb, 0, SliceRange::hw0_32_16(), true, true) << ENDL()));
+                UNPACK((DPRINT << TileSlice(args.input_cb, 1, SliceRange::hw0_32_16(), true, true) << ENDL()));
                 cb_reserve_back(args.interm_cb, args.num_tiles + 1);  // Plus 1 for the RMS tile
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < args.num_tiles; i++) {
@@ -204,6 +206,12 @@ struct RMSNorm {
                 pack_tile_block(0, args.output_cb, args.num_tiles);
                 tile_regs_release();
                 cb_pop_front(args.interm_cb, 1);
+
+                PACK((DPRINT << "RMSNORM OUTPUT: " << ENDL()));
+                PACK((DPRINT << TileSlice(args.output_cb, 0, SliceRange{0, 2, 1, 0, 32, 2}, true, false) << ENDL()));
+                PACK((DPRINT << TileSlice(args.output_cb, 0, SliceRange{30, 32, 1, 0, 32, 2}, true, false) << ENDL()));
+                PACK((DPRINT << TileSlice(args.output_cb, 1, SliceRange{0, 2, 1, 0, 32, 2}, true, false) << ENDL()));
+                PACK((DPRINT << TileSlice(args.output_cb, 1, SliceRange{14, 16, 1, 0, 32, 2}, true, false) << ENDL()));
                 cb_push_back(args.output_cb, args.num_tiles);
             }
         }

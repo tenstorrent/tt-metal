@@ -97,7 +97,6 @@ struct Gather {
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
-                DPRINT << TileSlice(args.src_cb, 0, SliceRange::hw0_32_8(), true, true) << ENDL();
                 DPRINT << "wait for source CB data to be ready" << ENDL();
 
                 // Get source address from CB
@@ -142,7 +141,6 @@ struct Gather {
                 noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
 
                 // Push to destination CB after data arrived
-                DPRINT << TileSlice(args.dst_cb, 0, SliceRange::hw0_32_8(), true, true) << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }
 #elif defined(COMPILE_FOR_TRISC)

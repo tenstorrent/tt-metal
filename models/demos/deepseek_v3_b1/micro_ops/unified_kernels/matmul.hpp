@@ -110,7 +110,6 @@ struct Matmul {
             pack_tile(0, args.out);
             tile_regs_release();
 
-            PACK((DPRINT << TileSlice(args.out, 0, SliceRange::hw0_32_8(), true, true) << ENDL()));
             cb_push_back(args.out, 1);
 #endif
         }

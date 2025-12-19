@@ -379,6 +379,10 @@ struct Mcast {
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 
                 // Push to destination CB after data arrived
+                DPRINT << TileSlice(args.dst_cb, 0, SliceRange{0, 2, 1, 0, 32, 2}, true, false) << ENDL();
+                DPRINT << TileSlice(args.dst_cb, 0, SliceRange{30, 32, 1, 0, 32, 2}, true, false) << ENDL();
+                DPRINT << TileSlice(args.dst_cb, 1, SliceRange{0, 2, 1, 0, 32, 2}, true, false) << ENDL();
+                DPRINT << TileSlice(args.dst_cb, 1, SliceRange{14, 16, 1, 0, 32, 2}, true, false) << ENDL();
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }
 #endif

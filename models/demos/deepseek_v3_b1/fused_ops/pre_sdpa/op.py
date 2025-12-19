@@ -55,8 +55,16 @@ class PreSDPA:
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         matmul_result = rmsnorm(input_tensor, gamma_tensor) @ matmul_weights_tensor
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
-        print(f"result of matmul: {matmul_result}")
-        print(f"result of rmsnorm: {rmsnorm(matmul_result, rmsnorm2_gamma_tensor)}")
+        rmsnorm_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor)
+        torch.set_printoptions(threshold=1000000, sci_mode=False)
+        print(f"result of rmsnorm: {rmsnorm_result[:, :32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, 32:64:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, 30*32:31*32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, 31*32:32*32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, 32*32:33*32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, 33*32:34*32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, -64:-32:2]}")
+        print(f"result of rmsnorm: {rmsnorm_result[:, -32::2]}")
         return rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
 
     @staticmethod

@@ -322,19 +322,21 @@ KERNEL_ENTRY {
         uint32_t dst_addr = get_write_ptr(rmsnorm2_input_cb);
 
         // Copy gather data to rmsnorm2 cb using local NOC read
-        // uint64_t src_noc_addr = get_noc_addr(src_addr);
-        // noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
-        // noc_async_read_barrier();
+        uint64_t src_noc_addr = get_noc_addr(src_addr);
+        noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
+        noc_async_read_barrier();
 
-        // // Zero-pad the remaining bytes (last half tile)
-        // volatile tt_l1_ptr uint16_t* pad_ptr =
-        //     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
-        // constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
-        // for (uint32_t i = 0; i < padding_elements; ++i) {
-        //     pad_ptr[i] = 0;
-        // }
+        // Zero-pad the remaining bytes (last half tile)
+        volatile tt_l1_ptr uint16_t* pad_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
+        constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
+        for (uint32_t i = 0; i < padding_elements; ++i) {
+            pad_ptr[i] = 0;
+        }
 
         // Push the completed 2 tiles to rmsnorm2 input cb
+        DPRINT << TileSlice(rmsnorm2_input_cb, 0, SliceRange::hw0_32_16(), true, true) << ENDL();
+        DPRINT << TileSlice(rmsnorm2_input_cb, 1, SliceRange::hw0_32_16(), true, true) << ENDL();
         cb_push_back(rmsnorm2_input_cb, 2);
 
         // Pop the gather dst cb
@@ -383,8 +385,8 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("MATMUL2");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         // Note: Using main grid (all cores) instead of just matmul cores
-        // deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
-        // matmul2(matmul2_args);
+        deepseek_b1_ops::Matmul::Op<Core::is_matmul2_core, true, false> matmul2;
+        matmul2(matmul2_args);
     }
 }
 KERNEL_END
