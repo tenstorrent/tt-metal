@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "ethernet/tunneling.h"
+#include "internal/ethernet/tunneling.h"
 #endif
 
 /**
