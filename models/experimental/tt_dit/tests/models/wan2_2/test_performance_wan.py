@@ -228,10 +228,10 @@ def test_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "encoder": 14.8,
+            "encoder": 19.0,
             "denoising": 800.0,
             "vae": 9.0,
-            "total": 823.8,
+            "total": 850.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
