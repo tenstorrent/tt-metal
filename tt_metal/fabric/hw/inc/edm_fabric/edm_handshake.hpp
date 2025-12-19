@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "ethernet/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
 #include "hostdevcommon/fabric_common.h"
 
 namespace erisc {

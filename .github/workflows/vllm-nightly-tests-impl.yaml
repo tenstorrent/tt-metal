@@ -593,7 +593,7 @@ jobs:
           cat output/vllm_result.json
 
       - name: Show structured output report
-        if: ${{ matrix.test-group.structured-output }}
+        if: ${{ always() && matrix.test-group.structured-output }}
         continue-on-error: true
         run: |
           cat output/vllm_result_structured.json

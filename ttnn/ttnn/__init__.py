@@ -145,7 +145,14 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManagerMode,
+    set_fabric_config,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -268,7 +275,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *

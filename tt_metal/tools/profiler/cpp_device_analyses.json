@@ -70,7 +70,10 @@
         "type": "PROGRAM_FIRST_TO_LAST_MARKER",
         "dimension": "PROGRAM",
         "results_config": {
-            "analysis_name": "DEVICE KERNEL DURATION [ns]"
+            "analysis_name": "DEVICE KERNEL DURATION [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE KERNEL START CYCLE",
+            "end_timestamp_header": "DEVICE KERNEL END CYCLE"
         },
         "start_config": {
             "marker_type": "ZONE_START",
@@ -85,7 +88,10 @@
         "type": "PROGRAM_FIRST_TO_LAST_MARKER",
         "dimension": "PROGRAM",
         "results_config": {
-            "analysis_name": "DEVICE KERNEL DURATION DM START [ns]"
+            "analysis_name": "DEVICE KERNEL DURATION DM START [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE KERNEL DM START CYCLE",
+            "end_timestamp_header": "DEVICE KERNEL DM END CYCLE"
         },
         "start_config": {
             "risc": ["BRISC", "NCRISC", "ERISC"],

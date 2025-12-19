@@ -16,7 +16,6 @@ from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.loaders import WanLoraLoaderMixin
 from diffusers.models import AutoencoderKLWan, WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
@@ -28,7 +27,7 @@ from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
-from ...utils.cache import get_and_create_cache_path, cache_dict_exists, save_cache_dict, load_cache_dict
+from ...utils import cache
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
 
@@ -123,8 +122,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         parallel_config,
         vae_parallel_config,
         num_links,
-        use_cache,
-        boundary_ratio: Optional[float] = None,
+        checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        boundary_ratio: Optional[float] = 0.875,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
@@ -132,23 +131,19 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     ):
         super().__init__()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="tokenizer", trust_remote_code=True
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
         self.text_encoder = UMT5EncoderModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="text_encoder", trust_remote_code=True
+            checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )
-        self.vae = AutoencoderKLWan.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae", trust_remote_code=True
-        )
+        self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="scheduler", trust_remote_code=True
+            checkpoint_name, subfolder="scheduler", trust_remote_code=True
         )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
+            checkpoint_name, subfolder="transformer", trust_remote_code=True
         )
         self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
+            checkpoint_name, subfolder="transformer_2", trust_remote_code=True
         )
 
         self.dit_ccl_manager = CCLManager(
@@ -165,7 +160,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
-        self.use_cache = use_cache
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
         if not self.dynamic_load:
@@ -196,7 +190,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     @staticmethod
     def create_pipeline(
-        mesh_device, sp_axis=None, tp_axis=None, num_links=None, dynamic_load=None, topology=None, is_fsdp=None
+        mesh_device,
+        checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        sp_axis=None,
+        tp_axis=None,
+        num_links=None,
+        dynamic_load=None,
+        topology=None,
+        is_fsdp=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -260,11 +261,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
             num_links=num_links or config["num_links"],
-            use_cache=False,
             boundary_ratio=0.875,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
+            checkpoint_name=checkpoint_name,
         )
 
     def _load_transformer1(self):
@@ -286,25 +287,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
         )
 
-        if self.use_cache:
-            cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-                subfolder="transformer",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                dtype="bf16",
-            )
-            # create cache if it doesn't exist
-            if not cache_dict_exists(cache_path):
-                logger.info(
-                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                )
-                self.transformer.load_state_dict(self.torch_transformer.state_dict())
-                save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
-            else:
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                self.transformer.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
+        if not cache.initialize_from_cache(
+            self.transformer,
+            self.torch_transformer.state_dict(),
+            "Wan2.2-T2V-A14B-Diffusers",
+            "transformer",
+            self.parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
             logger.info("Loading transformer weights from PyTorch state dict")
             self.transformer.load_state_dict(self.torch_transformer.state_dict())
 
@@ -328,25 +318,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
         )
 
-        if self.use_cache:
-            cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-                subfolder="transformer_2",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                dtype="bf16",
-            )
-            # create cache if it doesn't exist
-            if not cache_dict_exists(cache_path):
-                logger.info(
-                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                )
-                self.transformer_2.load_state_dict(self.torch_transformer_2.state_dict())
-                save_cache_dict(self.transformer_2.to_cached_state_dict(cache_path), cache_path)
-            else:
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                self.transformer_2.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
+        if not cache.initialize_from_cache(
+            self.transformer_2,
+            self.torch_transformer_2.state_dict(),
+            "Wan2.2-T2V-A14B-Diffusers",
+            "transformer_2",
+            self.parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
             logger.info("Loading transformer weights from PyTorch state dict")
             self.transformer_2.load_state_dict(self.torch_transformer_2.state_dict())
 
@@ -531,7 +510,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         num_frames: int = 81,
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if latents is not None:
@@ -545,13 +523,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             int(height) // self.vae_scale_factor_spatial,
             int(width) // self.vae_scale_factor_spatial,
         )
-        if isinstance(generator, list) and len(generator) != batch_size:
-            raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
-            )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        latents = torch.randn(shape, dtype=torch.float32, device=torch.device(device))
         return latents
 
     @property
@@ -582,15 +555,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
-        negative_prompt: Union[str, List[str]] = None,
+        negative_prompt: Union[
+            str, List[str]
+        ] = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
         num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        guidance_scale_2: Optional[float] = None,
+        guidance_scale: float = 3.0,
+        guidance_scale_2: Optional[float] = 4.0,
         num_videos_per_prompt: Optional[int] = 1,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        seed: Optional[int] = None,
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
@@ -602,6 +577,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -635,13 +611,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 and the pipeline's `boundary_ratio` are not None.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
-            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-                A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
-                generation deterministic.
+            seed (`int`, *optional*):
+                A random generator seed to make generation deterministic.
             latents (`torch.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
-                tensor is generated by sampling using the supplied random `generator`.
+                tensor is generated by sampling using the supplied random `seed`.
             prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs (prompt weighting). If not
                 provided, text embeddings are generated from the `prompt` input argument.
@@ -749,6 +724,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         #     else self.transformer_2.config.in_channels
         # )
         num_channels_latents = self.torch_transformer.config.in_channels
+        if seed is not None:
+            torch.manual_seed(seed)
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -757,7 +734,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             num_frames,
             torch.float32,
             device,
-            generator,
             latents,
         )
 
@@ -914,3 +890,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             return (video,)
 
         return WanPipelineOutput(frames=video)
+
+    def run_single_prompt(self, *args, **kwargs):
+        return self.__call__(*args, **kwargs).frames
+
+    def synchronize_devices(self):
+        ttnn.synchronize_device(self.mesh_device)
