@@ -15,7 +15,7 @@ namespace deepseek_b1_ops {
 // Mcast utility functions (inlined from mcast_utils.hpp)
 // ============================================================================
 
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
 
 template <uint8_t noc>
 FORCE_INLINE uint64_t get_noc_multicast_addr(
@@ -169,19 +169,19 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr)
     riscv_wait(1000);  // This is just to guarantee safety due to posted mcast hw bug
 }
 
-#endif  // defined(COMPILE_FOR_NCRISC)
+#endif  // defined(COMPILE_FOR_BRISC)
 
 // ============================================================================
 // Mcast micro-op
 //
 // Multicasts data from a single sender core to multiple receiver cores.
-// Sender runs on NCRISC, Receiver runs on BRISC.
+// Sender runs on BRISC, Receiver runs on NCRISC.
 //
 // CB States:
-//   NCRISC (Sender):
+//   BRISC (Sender):
 //     - Waits: src_cb (src_num_pages)
 //     - Pops: src_cb (src_num_pages) if pop_src=true
-//   BRISC (Receiver):
+//   NCRISC (Receiver):
 //     - Reserves: dst_cb (dst_num_pages)
 //     - Pushes: dst_cb (dst_num_pages)
 //   TRISC: No-op
@@ -198,7 +198,7 @@ struct Mcast {
     // Only what MUST be compile-time (used as template parameters)
     // ========================================================================
 
-    // Sender CTArgs (NCRISC): mcast_num_cores, is_part_of_receiver_grid
+    // Sender CTArgs (BRISC): mcast_num_cores, is_part_of_receiver_grid
     // loopback is inferred: if sender is part of receiver grid, it needs loopback to receive its own mcast
     template <uint32_t McastNumCores, bool IsPartOfReceiverGrid>
     struct SenderCTArgs {
@@ -207,7 +207,7 @@ struct Mcast {
         static constexpr bool loopback = IsPartOfReceiverGrid;  // Inferred from is_part_of_receiver_grid
     };
 
-    // Receiver CTArgs (BRISC): none needed
+    // Receiver CTArgs (NCRISC): none needed
     struct ReceiverCTArgs {};
 
     // Compute CTArgs (TRISC): none needed
@@ -217,7 +217,7 @@ struct Mcast {
     // Runtime args structs - different layout per RISC
     // ========================================================================
 
-    // Sender args (NCRISC): all runtime parameters
+    // Sender args (BRISC): all runtime parameters
     struct SenderArgs {
         uint32_t dest_noc_start_x;
         uint32_t dest_noc_start_y;
@@ -232,7 +232,7 @@ struct Mcast {
         uint32_t mcast_receiver_data_addr;
     };
 
-    // Receiver args (BRISC): all runtime parameters
+    // Receiver args (NCRISC): all runtime parameters
     struct ReceiverArgs {
         uint32_t data_receiver_semaphore_id;
         uint32_t dst_cb;
@@ -242,8 +242,8 @@ struct Mcast {
     // Compute args (TRISC) - not used for mcast (dataflow only)
     struct ComputeArgs {};
 
-    // Note: For mcast, NCRISC=Sender, BRISC=Receiver
-    using RTArgs = SelectByRISCV<SenderArgs, ReceiverArgs, ComputeArgs>;
+    // Note: For mcast, BRISC=Sender, NCRISC=Receiver
+    using RTArgs = SelectByRISCV<ReceiverArgs, SenderArgs, ComputeArgs>;
 
     // ========================================================================
     // Op - the actual operation
@@ -266,12 +266,12 @@ struct Mcast {
     class Op {
     public:
         // ====================================================================
-        // init - Initialize persistent mcast sender (NCRISC only)
+        // init - Initialize persistent mcast sender (BRISC only)
         // Must be called before operator() on sender core
-        // No-op for BRISC/TRISC
+        // No-op for NCRISC/TRISC
         // ====================================================================
         void init([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Get semaphore addresses from runtime args
                 uint32_t data_sender_semaphore_addr = get_semaphore(args.data_sender_semaphore_id);
@@ -296,19 +296,19 @@ struct Mcast {
         }
 
         // ====================================================================
-        // operator() - Send data via mcast (NCRISC sender) / Full receive logic (BRISC receiver)
-        // For NCRISC: Must call init() first, waits for src CB, sends data
-        // For BRISC: Reserve CB, wait for semaphore, push CB (complete receive)
+        // operator() - Send data via mcast (BRISC sender) / Full receive logic (NCRISC receiver)
+        // For BRISC: Must call init() first, waits for src CB, sends data
+        // For NCRISC: Reserve CB, wait for semaphore, push CB (complete receive)
         // ====================================================================
         void operator()(const RTArgs& args) { impl(args); }
 
         // ====================================================================
-        // teardown - Teardown persistent mcast sender (NCRISC only)
+        // teardown - Teardown persistent mcast sender (BRISC only)
         // Must be called after all operator() calls on sender core
-        // No-op for BRISC/TRISC
+        // No-op for NCRISC/TRISC
         // ====================================================================
         void teardown() {
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Teardown persistent mcast sender
                 teardown_persistent_mcast_sender<
@@ -330,7 +330,7 @@ struct Mcast {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
@@ -368,9 +368,9 @@ struct Mcast {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
             }
-#elif defined(COMPILE_FOR_BRISC)
+#elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // BRISC - Receiver cores: reserve, wait, push (all in operator)
+            // NCRISC - Receiver cores: reserve, wait, push (all in operator)
             // ================================================================
             if constexpr (IsReceiverCore) {
                 // Reserve space in destination CB before mcast writes to it
@@ -393,7 +393,7 @@ struct Mcast {
 #endif
         }
 
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
         // Cached addresses computed during init, used during send and teardown
         uint64_t noc_coord_ = 0;
         uint64_t mcast_flag_noc_addr_ = 0;

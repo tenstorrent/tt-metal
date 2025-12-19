@@ -240,7 +240,7 @@ class PreSDPA:
             ("rmsnorm_tiny_tile", is_16x32_tile),
         ]
 
-        # Mcast sender compile-time args (named args for NCRISC)
+        # Mcast sender compile-time args (named args for BRISC)
         mcast_sender_named_compile_time_args = [
             ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
             ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
@@ -261,7 +261,7 @@ class PreSDPA:
             ("rmsnorm_num_tiles", num_tiles),
         ]
 
-        # Mcast receiver compile-time args (named args for BRISC)
+        # Mcast receiver compile-time args (named args for NCRISC)
         mcast_receiver_named_compile_time_args = [
             ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
             ("mcast_dst_cb", matmul_input_cb),
@@ -599,13 +599,14 @@ class PreSDPA:
         # ========================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
         # ========================================================================
-        # NCRISC sender: data_size_bytes, src_num_pages (grid/semaphores reused from mcast)
-        mcast2_ncrisc_named_compile_time_args = [
+        # BRISC sender: data_size_bytes, src_num_pages, rmsnorm2_output_cb (grid/semaphores reused from mcast)
+        mcast2_brisc_named_compile_time_args = [
             ("mcast2_data_size_bytes", mcast2_data_size_bytes),
             ("mcast2_src_num_pages", mcast2_src_num_pages),
+            ("rmsnorm2_output_cb", rmsnorm2_output_cb),  # Source CB for mcast2 sender
         ]
-        # BRISC receiver: dst_num_pages (semaphore reused from mcast)
-        mcast2_brisc_named_compile_time_args = [
+        # NCRISC receiver: dst_num_pages (semaphore reused from mcast)
+        mcast2_ncrisc_named_compile_time_args = [
             ("mcast2_dst_num_pages", mcast2_dst_num_pages),
         ]
 
@@ -642,9 +643,9 @@ class PreSDPA:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
             core_ranges=full_device_grid,
-            # NCRISC named compile-time args: rmsnorm reader + mcast sender + matmul + gather sender + rmsnorm2 + matmul2 + mcast2
+            # NCRISC named compile-time args: rmsnorm reader + mcast receiver + matmul + gather sender + rmsnorm2 + matmul2 + mcast2
             ncrisc_named_compile_time_args=rmsnorm_reader_named_compile_time_args
-            + mcast_sender_named_compile_time_args
+            + mcast_receiver_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_sender_named_compile_time_args
             + rmsnorm2_ncrisc_named_compile_time_args
@@ -656,9 +657,9 @@ class PreSDPA:
                 scalar_packed,
                 scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
             ],
-            # BRISC named compile-time args: rmsnorm writer + mcast receiver + matmul + gather receiver + matmul2 + mcast2
+            # BRISC named compile-time args: rmsnorm writer + mcast sender + matmul + gather receiver + matmul2 + mcast2
             brisc_named_compile_time_args=rmsnorm_writer_named_compile_time_args
-            + mcast_receiver_named_compile_time_args
+            + mcast_sender_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args

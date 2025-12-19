@@ -24,17 +24,15 @@ KERNEL_ENTRY {
     using Core = pre_sdpa::UnifiedCoreDescriptor;
 
 // ============================================================================
-// NCRISC (Reader + Mcast Sender) - ReaderConfigDescriptor compiles as NCRISC
-// Named compile-time args: rmsnorm reader, mcast sender, matmul reader, gather sender
+// NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
+// Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
 // Runtime args: [epsilon, scalar, gather_addr]
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs =
         deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_tiny_tile") == 1>;
-    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast_num_cores"),
-        Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
+    using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     // RMSNorm reader runtime args
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
@@ -43,23 +41,11 @@ KERNEL_ENTRY {
         get_arg_val<uint32_t>(1),  // scalar (1/sqrt(7168))
     };
 
-    // Mcast CB indices from named compile-time args
-    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-
-    // Mcast sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
+    // Mcast receiver args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
-        get_write_ptr(mcast_dst_cb),
+        get_named_compile_time_arg_val("mcast_dst_cb"),
+        get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
 
     // Matmul reader args (NCRISC is no-op)
@@ -101,32 +87,24 @@ KERNEL_ENTRY {
     constexpr uint32_t matmul2_in1 = get_named_compile_time_arg_val("matmul2_in1");
     constexpr uint32_t matmul2_num_tiles = get_named_compile_time_arg_val("matmul2_num_tiles");
 
-    // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
-    // Uses same grid and semaphores as first mcast
-    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
-    constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
+    // Mcast2 receiver args (for matmul2 cores to receive matmul2 input from input core)
+    // Uses same semaphore as first mcast
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
-        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
-        mcast2_src_cb,  // Wait for rmsnorm2_output_cb
-        get_named_compile_time_arg_val("mcast2_src_num_pages"),
-        get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
-        get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
+        get_named_compile_time_arg_val("matmul2_in0"),
+        get_named_compile_time_arg_val("mcast2_dst_num_pages"),
     };
 
 // ============================================================================
-// BRISC (Writer + Mcast Receiver) - WriterConfigDescriptor compiles as BRISC
-// Named compile-time args: rmsnorm writer, mcast receiver, matmul writer, gather receiver
+// BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
+// Named compile-time args: rmsnorm writer, mcast sender, matmul writer, gather receiver
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
-    using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_num_cores"),
+        Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
 
     // RMSNorm writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
@@ -134,11 +112,23 @@ KERNEL_ENTRY {
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
 
-    // Mcast receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
+    // Mcast CB indices from named compile-time args
+    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
+    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
+
+    // Mcast sender args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+        get_named_compile_time_arg_val("mcast_data_size_bytes"),
+        mcast_src_cb,
+        get_named_compile_time_arg_val("mcast_src_num_pages"),
+        get_read_ptr(mcast_src_cb),
+        get_write_ptr(mcast_dst_cb),
     };
 
     // Matmul writer args (BRISC is no-op)
@@ -157,12 +147,25 @@ KERNEL_ENTRY {
     // Matmul2 writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
 
-    // Mcast2 receiver args (for matmul2 cores to receive matmul2 input from input core)
-    // Uses same semaphore as first mcast
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
+    // Matmul2 CB indices and parameters from named compile-time args
+    constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
+
+    // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
+    // Uses same grid and semaphores as first mcast
+    // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
+    constexpr uint32_t mcast2_src_cb = get_named_compile_time_arg_val("rmsnorm2_output_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast2_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore"),
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
-        get_named_compile_time_arg_val("matmul2_in0"),
-        get_named_compile_time_arg_val("mcast2_dst_num_pages"),
+        get_named_compile_time_arg_val("mcast2_data_size_bytes"),
+        mcast2_src_cb,  // Wait for rmsnorm2_output_cb
+        get_named_compile_time_arg_val("mcast2_src_num_pages"),
+        get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
+        get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
     };
 
 // ============================================================================
