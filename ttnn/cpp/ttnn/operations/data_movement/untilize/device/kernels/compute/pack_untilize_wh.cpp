@@ -6,7 +6,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/debug/dprint.h"
 #include "common.cpp"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     const uint32_t block_size_col = get_compile_time_arg_val(0);

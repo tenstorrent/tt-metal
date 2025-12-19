@@ -21,8 +21,8 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);

@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
 
 using std::uint32_t;
 
