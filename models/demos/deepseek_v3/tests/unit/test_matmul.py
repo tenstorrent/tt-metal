@@ -121,6 +121,7 @@ def run_test_matmul_dram_sharded(
     )
 
     # Create input tensors
+    torch.manual_seed(1234)
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
 

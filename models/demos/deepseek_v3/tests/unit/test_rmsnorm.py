@@ -387,7 +387,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     full_hidden_size = per_device_width * n_devices_row  # 7168
     inp_shape_per_device = (1, 1, 32, per_device_width)
     inp_shape_full = (1, 1, 32, full_hidden_size)
-    weight_shape_per_device = (1, 1, per_device_width // 32, 32)  # (1, 1, 28, 32)
+
     grid = ttnn.CoreGrid(x=4, y=7)
     epsilon = 1e-6
 
