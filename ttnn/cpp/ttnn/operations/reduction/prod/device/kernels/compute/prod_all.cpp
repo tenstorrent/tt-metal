@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "tt_metal/include/compute_kernel_api.h"
-#include "tt_metal/hw/inc/debug/dprint_pages.h"
+#include "api/debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {

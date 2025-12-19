@@ -4,12 +4,12 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
 // #define DEBUG
 #ifdef DEBUG
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 #endif
 
 void kernel_main() {

@@ -180,6 +180,7 @@ target_sources(
         scatter/scatter.cpp
         scatter/tosa_scatter.cpp
         scatter/device/scatter_device_operation.cpp
+        scatter/device/scatter_reduce_bfloat16_program_factory.cpp
         scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
@@ -230,8 +231,14 @@ target_sources(
         transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp
-        untilize/device/untilize_op.cpp
-        untilize/device/untilize_program_factory.cpp
+        untilize/device/untilize_device_operation.cpp
+        untilize/device/untilize_device_operation_types.cpp
+        untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.cpp
+        untilize/device/factories/untilize_single_core_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_block_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_program_factory.cpp
         untilize/untilize.cpp
         untilize_with_unpadding/device/untilize_with_unpadding_op.cpp
         untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
