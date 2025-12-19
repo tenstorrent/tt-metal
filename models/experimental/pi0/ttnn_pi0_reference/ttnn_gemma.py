@@ -408,10 +408,10 @@ class GemmaAttentionTTNN:
         Returns:
             Tuple of (output, optional_cache)
         """
-        # Project Q, K, V
-        q = ttnn.linear(hidden_states, self.q_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.linear(hidden_states, self.k_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.linear(hidden_states, self.v_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Project Q, K, V (use DRAM for large tensors)
+        q = ttnn.linear(hidden_states, self.q_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.linear(hidden_states, self.k_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(hidden_states, self.v_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         
         # Reshape and split heads using TTNN experimental ops
         batch_size = hidden_states.shape[0]
@@ -502,8 +502,8 @@ class GemmaAttentionTTNN:
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_len, -1))
         
-        # Output projection
-        output = ttnn.linear(attn_output, self.o_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Output projection (DRAM for large tensors)
+        output = ttnn.linear(attn_output, self.o_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         
         return output, new_cache
 
