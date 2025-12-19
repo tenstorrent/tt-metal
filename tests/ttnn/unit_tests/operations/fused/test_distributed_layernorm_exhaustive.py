@@ -145,10 +145,7 @@ def test_distributed_norm_allclose(
         ("layer_norm", True),  # LayerNorm with Welford
         ("rms_norm", False),  # RMSNorm without Welford
     ],
-    ids=[
-        "layer_norm_welford",
-        "rms_norm_no_welford"
-    ],
+    ids=["layer_norm_welford", "rms_norm_no_welford"],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -392,6 +389,58 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
 
     assert passes, (
         f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
+        f"max_abs_diff={max_abs_diff:.6e} | "
+        f"max_rel_diff={max_rel_diff:.6e}"
+    )
+
+
+# ============================================================================
+# 2D Core Grid Tests - Testing RMS norm with 2D core grid layout
+# ============================================================================
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("seq_len", [128])  # 2D core grid is typically used with seq_len=128
+@pytest.mark.parametrize("hidden_dim", [2048, 4096, 8192])
+@pytest.mark.parametrize("eps", [1e-5, 1e-6])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidden_dim, eps):
+    """
+    Test distributed RMS norm with 2D core grid layout enabled.
+
+    The 2D core grid layout distributes work across cores in a 2D grid pattern,
+    which can be more efficient for certain tensor shapes (particularly when seq_len=128).
+
+    This test only runs for RMS norm as use_2d_core_grid is specifically designed for RMS norm operations.
+    """
+    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
+        mesh_device=mesh_device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        eps=eps,
+        norm_type="rms_norm",
+        mean=0,
+        var=1,
+        outlier_pct=0,
+        outlier_var=0,
+        use_legacy=False,
+        use_high_precision=True,
+        verbose=False,
+        use_welford=False,  # RMS norm does not support Welford
+        use_2d_core_grid=True,
+    )
+
+    assert passes, (
+        f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
+        f"use_2d_core_grid=True | "
         f"max_abs_diff={max_abs_diff:.6e} | "
         f"max_rel_diff={max_rel_diff:.6e}"
     )
