@@ -157,13 +157,7 @@ def ttnn_retinanet_classification_head(
 
     # Create input mask for GroupNorm
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=model_config["ACTIVATIONS_DTYPE"],
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = input_mask_tensor.to(device, ttnn.DRAM_MEMORY_CONFIG)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -202,6 +196,7 @@ def ttnn_retinanet_classification_head(
                 compute_config=compute_config,
                 conv_config=fpn_conv_config,
             )
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             x = conv_block(
                 x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )

@@ -111,7 +111,6 @@ class TTConv2D:
             shard_layout=self.shard_layout,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_weights_double_buffer=self.enable_weights_double_buffer,
-            in_place=False,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

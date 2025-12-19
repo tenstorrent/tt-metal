@@ -61,7 +61,7 @@ class resnet50Stem:
             stride=[2, 2],
             padding=[1, 1],
             dilation=[1, 1],
-            in_place_halo=True,
+            reallocate_halo_output=True,
             applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ceil_mode=False,
         )

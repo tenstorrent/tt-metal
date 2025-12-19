@@ -250,7 +250,6 @@ class Conv2dNormActivation:
                 weight=self.norm_weight,
                 bias=self.norm_bias,
             )
-            # CRITICAL: Move tensor back to device after fallback
             x = x.to(self.device)
             # Convert back to NHWC
             x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
@@ -346,13 +345,8 @@ def ttnn_retinanet_regression_head(
     # Setup shared resources
     grid_size = ttnn.CoreGrid(y=8, x=8)
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=model_config["ACTIVATIONS_DTYPE"],
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = input_mask_tensor.to(device, ttnn.DRAM_MEMORY_CONFIG)
+
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=model_config.get("MATH_FIDELITY", ttnn.MathFidelity.HiFi4),
@@ -398,6 +392,7 @@ def ttnn_retinanet_regression_head(
         # Apply conv blocks to feature map
         x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             x = conv_block(
                 x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
             )
