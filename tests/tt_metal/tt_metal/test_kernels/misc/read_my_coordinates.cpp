@@ -15,7 +15,7 @@
 #ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/common.h"
 #else
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #endif
 
 #ifdef COMPILE_FOR_TRISC

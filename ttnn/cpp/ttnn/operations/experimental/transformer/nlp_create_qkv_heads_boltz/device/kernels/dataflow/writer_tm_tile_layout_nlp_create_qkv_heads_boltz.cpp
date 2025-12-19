@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <array>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     // WRITER RUNTIME ARGS
     uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "risc_attribs.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/risc_attribs.h"
 
 void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(0);

@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
-
+#include "api/dataflow/dataflow_api.h"
 template <uint8_t noc>
 FORCE_INLINE uint64_t get_noc_multicast_addr(
     uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint32_t addr) {

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-#include "dataflow_api.h"
-#include "socket_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host

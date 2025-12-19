@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <cstring>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {

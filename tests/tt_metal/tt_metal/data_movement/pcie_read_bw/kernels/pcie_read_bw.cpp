@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compile_time_args.h"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // Compile-time arguments

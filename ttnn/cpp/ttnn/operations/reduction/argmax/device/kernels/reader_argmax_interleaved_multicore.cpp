@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_common.hpp"
-#include "utils/bfloat16.h"
-#include "dataflow_api.h"
+#include "api/numeric/bfloat16.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include <cstdint>
 

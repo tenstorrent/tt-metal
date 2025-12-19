@@ -6,7 +6,7 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define ALWI inline __attribute__((always_inline))
 

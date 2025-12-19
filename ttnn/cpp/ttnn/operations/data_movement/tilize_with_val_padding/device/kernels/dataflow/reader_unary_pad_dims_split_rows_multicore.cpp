@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // This function is templated to choose the pointer data-type based on 'val' size
 // to avoid unaligned addresses and out-of-bounds access.

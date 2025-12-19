@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_init.h"
+#include "internal/circular_buffer_init.h"
 
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 
 void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t initial_value, uint32_t mask) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
