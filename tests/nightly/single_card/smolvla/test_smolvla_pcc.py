@@ -35,11 +35,11 @@ def test_smolvla_pcc(device, reset_seeds, model_location_generator):
 
     model_weights_path = get_model_path(model_location_generator)
 
-    model_cpu = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=None)
+    model_cpu = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=None, local_files_only=True)
     model_cpu.processor.image_processor.do_image_splitting = False
     model_cpu.eval()
 
-    model_tt = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=device)
+    model_tt = SmolVLAForActionPrediction.from_pretrained(model_weights_path, ttnn_device=device, local_files_only=True)
     model_tt.processor.image_processor.do_image_splitting = False
     model_tt.eval()
 
