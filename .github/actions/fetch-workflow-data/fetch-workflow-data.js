@@ -107,8 +107,9 @@ async function run() {
     if (forceFresh) {
       core.info('[CACHE] force-fresh enabled, skipping artifact restoration and starting fresh');
     } else {
-      const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
-      const previousRunId = 20380161184;
+      // const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
+      const previousRunId = 20380161184
+      if (previousRunId) {
         const restored = await restoreArtifactsFromPreviousRun(octokit, github.context, previousRunId, workspace, cutoffDate, days);
         cachedGrouped = restored.cachedGrouped;
         cachedAnnotationsIndex = restored.cachedAnnotationsIndex;
