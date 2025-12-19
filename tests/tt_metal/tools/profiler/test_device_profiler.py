@@ -476,17 +476,6 @@ def test_dispatch_cores():
         refCountDict=REF_COUNT_DICT,
     )
 
-    verify_stats(
-        run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
-            setupAutoExtract=False,
-            doDispatchCores=True,
-        ),
-        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
-        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
-        refCountDict=REF_COUNT_DICT,
-    )
-
 
 @skip_for_blackhole()
 @pytest.mark.skip_post_commit
@@ -494,6 +483,8 @@ def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 8570],
         "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
+        "dispatch_total_cq_cmd_op_time": [223],
+        "dispatch_go_send_wait_time": [223],
     }
 
     verify_stats(
@@ -517,6 +508,17 @@ def test_dispatch_cores_extended_worker():
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=9260,
+        refCountDict=REF_COUNT_DICT,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            setupAutoExtract=False,
+            doDispatchCores=True,
+        ),
+        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
+        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
         refCountDict=REF_COUNT_DICT,
     )
 
