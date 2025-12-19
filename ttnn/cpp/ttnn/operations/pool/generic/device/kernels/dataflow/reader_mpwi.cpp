@@ -205,18 +205,14 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
-    constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
-                                     (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
-    if constexpr (return_indices) {
-        static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
-        max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
-    }
+    static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+    max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        if constexpr (reader_id == 0 || !return_indices) {
+        if constexpr (reader_id == 0) {
             uint32_t read_bytes = in_nbytes_c;
             if constexpr (wide_reduction) {
                 read_bytes =
@@ -239,13 +235,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     const uint32_t read_offset =
                         in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
                     noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
-                    // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
-                    // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
-                    if constexpr (tilize_reconfig) {
-                        in_l1_write_addr += read_bytes * w_multiple;
-                    } else {
-                        in_l1_write_addr += max_write_inc * w_multiple;
-                    }
+                    in_l1_write_addr += max_write_inc * w_multiple;
                     processed_sticks += w_multiple;
                     if constexpr (is_large_kernel) {
                         if ((processed_sticks % max_sticks_for_reduction) == 0 ||
@@ -295,11 +285,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             }
         }
         if constexpr (!is_large_kernel) {
-            if (reader_id == 0 || !return_indices) {
+            if (reader_id == 0) {
                 noc_async_read_barrier();
                 cb_push_back(in_cb_id, 1);
             }
-            if constexpr (reader_id == 1 && return_indices) {
+            if constexpr (reader_id == 1) {
                 constexpr uint32_t num_faces_in_output_tile = 2;
                 constexpr uint32_t num_faces_in_last_output_tile =
                     last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
@@ -321,9 +311,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 cb_pop_front(pack_idx_tmp_cb_id, 1);
 
                 cb_push_back(out_cb_id, output_faces);
-                if constexpr (return_indices) {
-                    cb_push_back(out_idx_cb_id, output_faces);
-                }
+                cb_push_back(out_idx_cb_id, output_faces);
             }
         }
     }
@@ -425,28 +413,22 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
 
-    constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t in_scalar_cb_id =
-        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    constexpr uint32_t in_scalar_cb_id = in_scalar_cb_id_0;
 
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
-    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
+    constexpr uint32_t face_r_dim = FACE_HEIGHT;
+    constexpr uint32_t num_faces_in_input_tile = 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb =
-        return_indices ||
-        (remaining_elems && face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
-         interm_reduction_chunks <= multi_buffering_factor);
+    constexpr bool need_to_initialize_in_cb = true;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
@@ -461,12 +443,10 @@ void kernel_main() {
         // for average pool clear out tiles runs in loop, no need to initialize here
         // TODO do we really need to init the in CB for return indices?
         // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
-        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
 
-    if constexpr (reader_id == 0 && return_indices) {
+    if constexpr (reader_id == 0) {
         initialize_return_indices_data<
             kernel_h,
             kernel_w,
@@ -486,7 +466,7 @@ void kernel_main() {
     }
 
     // initialize the scalar CB
-    if constexpr (reader_id == 0 && one_scalar_per_core) {
+    if constexpr (reader_id == 0) {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
@@ -508,49 +488,19 @@ void kernel_main() {
     uint32_t scalar_value;
     uint32_t scalar_end;
     uint32_t counter = reader_id;
-    if constexpr (!one_scalar_per_core) {
-        uint32_t config_l1_addr = get_read_ptr(config_cb_id);
-        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
-        scalar_start = config_ptr[0];
-        scalar_value = config_ptr[1];
-        scalar_end = config_ptr[2];
-    }
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = reader_id == 0 || !use_split_reader;
+    bool first_row_value = true;
 
-    uint32_t reader_indices_on_core = 0;
-
-    if (use_split_reader) {
-        if (reader_id == 0) {
-            reader_indices_on_core = (reader_nindices + 1) / 2;
-        } else {
-            reader_indices_on_core = reader_nindices / 2;
-        }
-    } else {
-        reader_indices_on_core = reader_nindices;
-    }
+    uint32_t reader_indices_on_core = reader_nindices;
 
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
 
-        if (!first_row_value) {
-            start += stride_w;
-            first_row_value = true;
-        }
-
-        constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
+        constexpr uint32_t stride_multiple = 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
-            if constexpr (!one_scalar_per_core) {
-                fill_scalar<
-                    one_scalar_per_core,
-                    in_scalar_cb_id,
-                    reader_nindices,
-                    use_split_reader,
-                    multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
-            }
             reader_indices_on_core--;
             read_kernel_with_top_left_index<
                 in_nblocks_c,
@@ -579,9 +529,6 @@ void kernel_main() {
                 reader_id,
                 pack_tmp_cb_id,
                 pack_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
-            if (use_split_reader && ind == end) {
-                first_row_value = false;
-            }
         }
     }
 }  // kernel_main()
