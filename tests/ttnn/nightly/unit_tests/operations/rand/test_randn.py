@@ -107,6 +107,21 @@ def test_randn_dtype_layout_and_distribution(device, dtype, layout):
     assert check_standard_normal_distribution(torch_tensor, dtype), "Random values do not look standard normal!"
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_randn_dtype_layout_and_distribution_no_check(device, dtype, layout):
+    shape = (1024, 1024)
+
+    tensor = ttnn.randn(shape, device=device, dtype=dtype, layout=layout, seed=1234)
+
+    assert tensor.layout == layout
+    assert tensor.dtype == dtype
+    assert tuple(tensor.shape) == tuple(shape)
+
+    torch_tensor = ttnn.to_torch(tensor)
+    assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
+
+
 def test_randn_invalid_args(device):
     with pytest.raises(TypeError):
         ttnn.randn(5, device=device)
