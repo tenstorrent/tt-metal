@@ -15,16 +15,16 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dev_msgs.h"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
-#include "dataflow_api.h"
+#include "hostdev/dev_msgs.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/watcher_common.h"
+#include "api/debug/waypoint.h"
+#include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
 
