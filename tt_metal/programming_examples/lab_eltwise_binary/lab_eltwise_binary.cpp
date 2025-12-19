@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -144,61 +145,65 @@ void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t n
  *
  * | Argument  | Description                                                         |
  * |-----------|---------------------------------------------------------------------|
- * | a         | Input vector A                                                      |
- * | b         | Input vector B                                                      |
- * | output    | Output vector (will be overwritten)                                 |
+ * | a         | Input matrix A in row-major format, size MxN                        |
+ * | b         | Input matrix B in row-major format, size MxN                        |                                                     |
+ * | M         | Number of rows in matrices A and B                                  |
+ * | N         | Number of columns in matrices A and B                               |
+
+ * | output    | Output matrix (will be overwritten)                                 |
  * | prog_state| Program state containing device, program, and execution context     |
  */
 // clang-format on
-void eltwise_add_tensor(
+void eltwise_add_tensix(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
+    const size_t M,
+    const size_t N,
     ProgramState& prog_state) {
+    const size_t total_elements = M * N;
+    TT_FATAL(a.size() == total_elements, "Input vectors must have size M * N");
     TT_FATAL(a.size() == b.size(), "Input vectors must have the same size");
     TT_FATAL(output.size() == a.size(), "Output vector must have the same size as input vectors");
 
-    const uint32_t total_elements = static_cast<uint32_t>(a.size());
-    const uint32_t elements_per_tile = TILE_HEIGHT * TILE_WIDTH;
+    constexpr uint32_t elements_per_tile = TILE_HEIGHT * TILE_WIDTH;
     TT_FATAL(total_elements % elements_per_tile == 0, "Total elements must be divisible by elements per tile");
     const uint32_t n_tiles = total_elements / elements_per_tile;
 
     // Create ttnn::Tensor objects for the input and output data.
-    // We use TILE layout as that's what the hardware expects for element-wise operations.
-    // For TILE layout with sequential tiles, we need a 2D shape where each tile is 32x32.
-    // Reshape as (n_tiles * TILE_HEIGHT, TILE_WIDTH) so tiles are laid out sequentially.
+    // We use TILE layout as that's what the hardware natively operates on.
+    // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
+    // which is distinct from the the host DRAM).
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
-    TensorSpec src0_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
-    TensorSpec src1_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
-    TensorSpec dst_spec(Shape({n_tiles * TILE_HEIGHT, TILE_WIDTH}), tile_layout);
+    TensorSpec t_spec(Shape({M, N}), tile_layout);
 
     // Create device tensors from input data.
     // This creates the tensors and transfers data to device in one step.
-    Tensor src0_tensor =
-        Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), src0_spec, prog_state.mesh_device.get());
-    Tensor src1_tensor =
-        Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), src1_spec, prog_state.mesh_device.get());
-    // Allocate output tensor on device (no initialization needed - kernel will handle it).
-    Tensor dst_tensor = allocate_tensor_on_device(dst_spec, prog_state.mesh_device.get());
+    Tensor src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), t_spec, prog_state.mesh_device.get());
+    Tensor src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), t_spec, prog_state.mesh_device.get());
+    // Allocate output tensor on device (no initialization needed - kernel will write into it).
+    Tensor dst_tensor = allocate_tensor_on_device(t_spec, prog_state.mesh_device.get());
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
     // the compute kernel is using the other tile). This number can be adjusted based on the use case, but generally
     // there are diminishing returns observed after several tiles.
-    constexpr uint32_t num_input_tiles = 2;
+    constexpr uint32_t tiles_per_cb_input = 2;
     // There are 32 circular buffers (c_0 - c_31) on the device. We can use any of them, as long as they are not already
     // in use. Kernel code is responsible for using the correct circular buffer for the input and output data (e.g.
     // reader kernel reads data into c_0 and c_1, while the compute kernel reads data from these same buffers).
-    create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_0);
-    create_cb(prog_state.program, prog_state.core, num_input_tiles, CBIndex::c_1);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_input, CBIndex::c_0);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_input, CBIndex::c_1);
 
-    constexpr uint32_t num_output_tiles = 2;
+    constexpr uint32_t tiles_per_cb_output = 2;
     // Compute kernel will write output data to c_16, which will be consumed by the writer kernel.
     // c_16 chosen arbitrarily (e.g. to leave c_2-c_15 free for other potential inputs when code is extended in the
     // future).
-    create_cb(prog_state.program, prog_state.core, num_output_tiles, tt::CBIndex::c_16);
+    create_cb(prog_state.program, prog_state.core, tiles_per_cb_output, tt::CBIndex::c_16);
 
-    // Get mesh buffers from tensors for use with TensorAccessorArgs and runtime args.
+    // Get MeshBuffer pointers from tensors. Mesh buffers hold info about how tensor data is distributed
+    // across physical DRAM banks (at least for our case when data is stored in DRAM).
+    // Programmer doesn't need to understand the internals, but needs to pass this info to the kernels.
     auto src0_mesh_buffer = src0_tensor.mesh_buffer();
     auto src1_mesh_buffer = src1_tensor.mesh_buffer();
     auto dst_mesh_buffer = dst_tensor.mesh_buffer();
@@ -212,8 +217,14 @@ void eltwise_add_tensor(
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
     std::vector<uint32_t> reader_compile_time_args;
+    // TensorAccessorArgs just packages data distribution details from MeshBuffer object into a format that can be
+    // understood by the kernel, and that data is pushed into compile-time arguments.
     TensorAccessorArgs(*src0_mesh_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_mesh_buffer).append_to(reader_compile_time_args);
+
+    // There are two data movement RISCV processors in each Tensix core. We pick one to read data from DRAM into
+    // circular buffers and the other to write result from circular buffer to DRAM. Which one is used for
+    // reading vs writing  doesn't impact functionality or performance.
     KernelHandle reader_id = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/dataflow/read_tiles.cpp",
@@ -234,24 +245,29 @@ void eltwise_add_tensor(
             .noc = NOC::RISCV_1_default,
             .compile_args = writer_compile_time_args});
 
-    KernelHandle compute_id = tt_metal::CreateKernel(
+    // Compile time arguments for the compute kernel.
+    // Note that these are evaluated at the kernel's compile time, which is JIT compile done at program creation time.
+    // Having arguments at compile time generally allows the compiler to optimize the kernel for the specific use case
+    // (e.g. apply loop unrolling, constant folding, etc.), resulting in a more efficient kernel.
+    // For this simple example it may have little to no impact, but is done to illustrate this possibility.
+    std::vector<uint32_t> compute_compile_time_args = {n_tiles};
+
+    tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/compute/tiles_add.cpp",
         prog_state.core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4});  // There's different math fidelity modes (for the tensor engine)
-    // that trade off performance for accuracy. HiFi4 is the most accurate
-    // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
-    // difference between them is the number of bits used during computation.
+        tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
     // Set the runtime arguments for the kernels.
-    tt_metal::SetRuntimeArgs(
-        prog_state.program,
-        reader_id,
-        prog_state.core,
-        {src0_mesh_buffer->address(), src1_mesh_buffer->address(), n_tiles});
-    tt_metal::SetRuntimeArgs(prog_state.program, writer_id, prog_state.core, {dst_mesh_buffer->address(), n_tiles});
-    tt_metal::SetRuntimeArgs(prog_state.program, compute_id, prog_state.core, {n_tiles});
+    uint32_t src0_addr = src0_mesh_buffer->address();
+    uint32_t src1_addr = src1_mesh_buffer->address();
+    uint32_t dst_addr = dst_mesh_buffer->address();
+    tt_metal::SetRuntimeArgs(prog_state.program, reader_id, prog_state.core, {src0_addr, src1_addr, n_tiles});
+    tt_metal::SetRuntimeArgs(prog_state.program, writer_id, prog_state.core, {dst_addr, n_tiles});
+
+    // NOTE: Observe that we never set the runtime arguments for the compute kernel. This is because everything needed
+    // has been set at compile time. The compute kernel does not need any runtime arguments to execute, so we can skip
+    // this step.
 
     // Execute the kernels (data is already on device from Tensor::from_vector)
     prog_state.workload.add_program(prog_state.device_range, std::move(prog_state.program));
@@ -280,39 +296,39 @@ int main() {
         ProgramState prog_state = init_program();
 
         // Define some constants that will be used throughout the program.
-        // * Processing 64 tiles
-        // * Each tile is 32x32 elements
-        // * Each element is a bfloat16 (2 bytes)
-        constexpr uint32_t n_tiles = 64;
-        constexpr uint32_t elements_per_tile = TILE_WIDTH * TILE_HEIGHT;
-        constexpr uint32_t total_elements = n_tiles * elements_per_tile;
+        // We will be adding two matrices of shape MxN
+        constexpr size_t M = 640;  // user-defined
+        constexpr size_t N = 640;  // user-defined
 
+        // In C++, the matrices are represented as vectors, to emphasize that memory
+        // space is one-dimensional in general.
+        // Filled with random values in the range [0, 1) for testing.
         // Use a fixed seed for reproducible results. Change this value to get different random sequences.
         constexpr uint32_t rng_seed = 42;
         std::mt19937 rng(rng_seed);
-        // Input vectors with random values in the range [0, 1).
-        std::uniform_real_distribution<float> dist(0.f, 1.0f);
-        std::vector<bfloat16> src0_vec(total_elements);
+        std::uniform_real_distribution<float> rng_dist(0.f, 1.0f);
+        std::vector<bfloat16> src0_vec(M * N);
         for (bfloat16& v : src0_vec) {
-            v = static_cast<bfloat16>(dist(rng));
+            v = static_cast<bfloat16>(rng_dist(rng));
         }
 
-        // src1 is a vector of bfloat16 values initialized to -1.0f.
-        constexpr float val_to_add = -1.0f;
-        std::vector<bfloat16> src1_vec(total_elements, static_cast<bfloat16>(val_to_add));
+        std::vector<bfloat16> src1_vec(M * N);
+        for (bfloat16& v : src1_vec) {
+            v = static_cast<bfloat16>(rng_dist(rng));
+        }
 
-        // Golden addition running on CPU so we can verify Tensix result.
-        std::vector<bfloat16> golden_vec(total_elements);
+        // Golden addition running on x86 CPU so we can verify Tensix result.
+        std::vector<bfloat16> golden_vec(M * N);
         golden_add(src0_vec, src1_vec, golden_vec);
 
         // Invoke the element-wise addition on the Tensix device
-        std::vector<bfloat16> result_vec(total_elements);
-        eltwise_add_tensor(src0_vec, src1_vec, result_vec, prog_state);
+        std::vector<bfloat16> result_vec(M * N);
+        eltwise_add_tensix(src0_vec, src1_vec, result_vec, M, N, prog_state);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
         // Validate results
-        constexpr float eps = 1e-2f;  // loose tolerance because of the nature of bfloat16
+        constexpr float eps = 1e-2f;  // Loose tolerance because of limited precision of bfloat16.
         TT_FATAL(result_vec.size() == golden_vec.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
             const float expected = static_cast<float>(golden_vec[i]);
