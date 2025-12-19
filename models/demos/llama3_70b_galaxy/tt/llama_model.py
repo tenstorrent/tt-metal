@@ -496,11 +496,18 @@ class TtTransformer(LightweightModule):
             tt_out = tt_out[0]
 
         if isinstance(tt_out, tuple):
-            # Get logits and skip log-probs
+            tt_log_probs = tt_out[1]
             tt_out = tt_out[0]
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
 
-        tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
-        return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
+            if tt_log_probs is not None:
+                tt_log_probs_cpu = tt_log_probs.cpu(blocking=False, cq_id=0)
+            else:
+                tt_log_probs_cpu = None
+        else:
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+            tt_log_probs_cpu = None
+        return tt_out_cpu, tt_log_probs_cpu, ttnn.record_event(self.mesh_device, 0)
 
     def ttnn_prefill_forward(
         self,
@@ -586,7 +593,7 @@ class TtTransformer(LightweightModule):
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
 
-            return tt_logits
+            return tt_logits, None
 
         # Save output logits to global python object
         if tt_out_logits_saved is not None:
@@ -603,12 +610,12 @@ class TtTransformer(LightweightModule):
         if capture_sampling_trace:
             return tt_logits
 
-        tt_toks = self.sampling.sample(
+        tt_toks, tt_log_probs = self.sampling.sample(
             tt_logits[0],
             tt_out_tok=x,
             enable_trace=False,
         )
-        return tt_toks
+        return tt_toks, tt_log_probs
 
     def switch_mode(self, mode):
         if mode == "decode":
