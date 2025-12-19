@@ -316,7 +316,7 @@ UntilizeDeviceOperation::create_op_performance_model(
 
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
-        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
