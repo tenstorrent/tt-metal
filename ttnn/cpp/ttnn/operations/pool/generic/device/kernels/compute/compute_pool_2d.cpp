@@ -279,9 +279,17 @@ void MAIN {
                         // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
                         // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
                         // to unpack_A_hw_configure.
+                        // tensix_sync();
+                        // UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None,
+                        // false>(
+                        //     pre_tilize_cb_id)));
                         tensix_sync();
-                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                            pre_tilize_cb_id)));
+                        unpack_tilizeA_B_uninit(pre_tilize_cb_id);
+                        // nops are used to avoid a race condition #33429
+                        for (uint32_t i = 0; i < 10; i++) {
+                            TTI_NOP;
+                            asm volatile("nop");
+                        }
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
