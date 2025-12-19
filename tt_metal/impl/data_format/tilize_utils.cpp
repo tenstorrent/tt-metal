@@ -314,13 +314,13 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
     const bool can_use_avx = (face_row_bytes == 32) && cpu_supports_avx2();
 
     for (size_t b = 0; b < B; b++) {
-        const T* batch_src = in_row_major.data() + b * batch_size;
-        T* batch_dst = tilized_output.data() + b * batch_size;
+        const T* batch_src = in_row_major.data() + (b * batch_size);
+        T* batch_dst = tilized_output.data() + (b * batch_size);
 
         for (size_t tile_row = 0; tile_row < row_tiles; tile_row++) {
             for (size_t tile_col = 0; tile_col < col_tiles; tile_col++) {
-                const size_t tile_idx = tile_row * col_tiles + tile_col;
-                T* tile_dst = batch_dst + tile_idx * elements_per_tile;
+                const size_t tile_idx = (tile_row * col_tiles) + tile_col;
+                T* tile_dst = batch_dst + (tile_idx * elements_per_tile);
 
                 // Process each face in the tile
                 for (size_t face_row_idx = 0; face_row_idx < faces_per_tile_row; face_row_idx++) {
