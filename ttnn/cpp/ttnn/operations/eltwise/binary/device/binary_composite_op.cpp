@@ -201,12 +201,12 @@ Tensor ExecuteDiv::invoke(
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = round_mode.has_value();
-    if (not(use_legacy ? *use_legacy
-                       : (has_legacy_only_args ||
-                          binary::is_legacy_only(
-                              input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+    if (!(use_legacy ? *use_legacy
+                     : (has_legacy_only_args ||
+                        binary::is_legacy_only(
+                            input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
         TT_FATAL(
-            not has_legacy_only_args,
+            !has_legacy_only_args,
             "round_mode is not valid when passing use_legacy=false in div (tensor-scalar); binary_ng does not "
             "support round_mode for scalar operations yet");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
@@ -275,7 +275,7 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // Only require legacy mode for round_mode if inputs are not INT32
+    // Only force legacy mode if round_mode is set and inputs are not of INT32 dtype
     const auto has_legacy_only_args = (round_mode.has_value() && !is_int32);
 
     if (is_int32) {
@@ -296,7 +296,7 @@ Tensor ExecuteDiv::invoke(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                use_legacy,
+                std::nullopt,
                 sub_core_grids);
         } else if (round_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
@@ -308,7 +308,7 @@ Tensor ExecuteDiv::invoke(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                use_legacy,
+                std::nullopt,
                 sub_core_grids);
         } else {
             // round_mode = None
@@ -325,8 +325,8 @@ Tensor ExecuteDiv::invoke(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                use_legacy,
-                std::nullopt,
+                std::nullopt,  // use_legacy
+                std::nullopt,  // fast_and_approximate_mode
                 sub_core_grids);
         }
     }
@@ -356,7 +356,8 @@ Tensor ExecuteDiv::invoke(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     Tensor result;
-    // No accurate_mode for FP32 div as inf/nan are handled at kernel level
+    // When use_legacy is true, the division operation is performed with fp32 precision and final result is typecasted
+    // back.
     if (is_fp32) {
         result = ttnn::divide(
             input_a,
@@ -367,7 +368,7 @@ Tensor ExecuteDiv::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
+            std::nullopt,
             fast_and_approximate_mode,
             sub_core_grids);
     } else {
@@ -382,7 +383,7 @@ Tensor ExecuteDiv::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
+            std::nullopt,
             fast_and_approximate_mode,
             sub_core_grids);
     }
@@ -396,7 +397,7 @@ Tensor ExecuteDiv::invoke(
     if (is_fp32) {
         return result;
     }
-    return typecast(result, input_dtype, std::nullopt, output_tensor, sub_core_grids);
+    return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
