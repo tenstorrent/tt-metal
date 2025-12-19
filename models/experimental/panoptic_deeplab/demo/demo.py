@@ -2,129 +2,162 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from typing import Tuple
+from typing import Tuple, List, Union
 import pytest
-import cv2
-import torch
 from loguru import logger
 import ttnn
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
-from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
-    create_panoptic_deeplab_parameters,
-    fuse_conv_bn_parameters,
-)
-from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_resnet_dtype_config
-from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import (
-    get_panoptic_deeplab_config,
     PDL_L1_SMALL_SIZE,
-    preprocess_nchw_input_tensor,
+    get_panoptic_deeplab_config,
+    create_pytorch_model,
+    create_ttnn_model,
+    create_model_wrapper,
+    create_host_input_tensors_from_torch,
+    generate_reference_outputs,
+    process_ttnn_outputs_for_visualization,
+    load_and_preprocess_image_for_visualization,
+    extract_outputs_from_pipeline_result,
+    create_visualization_from_outputs,
+    validate_outputs_with_pcc,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
-    create_panoptic_visualization,
-    create_deeplab_v3plus_visualization,
     save_predictions,
     preprocess_input_params,
     skip_if_not_blackhole_20_or_130_cores,
 )
-from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
+from models.tt_cnn.tt.executor import ModelExecutor
+from models.tt_cnn.tt.pipeline import PipelineConfig
+from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
+    CustomTracedModelExecutor,
+    create_pipeline_from_config,
+)
+from models.common.utility_functions import profiler
+
+
+def create_host_input_tensors_from_images(
+    device: ttnn.Device, image_paths: List[str], target_size: Tuple[int, int]
+) -> Tuple[List[ttnn.Tensor], ttnn.MemoryConfig, ttnn.MemoryConfig]:
+    """
+    Create host input tensors for multiple images.
+
+    Args:
+        device: TTNN device
+        image_paths: List of paths to input images
+        target_size: Target size as (height, width)
+
+    Returns:
+        Tuple of (list of host input tensors, dram_memory_config, l1_memory_config)
+    """
+    torch_inputs = []
+    for image_path in image_paths:
+        # Preprocess image to get NCHW tensor [1, C, H, W]
+        torch_input = preprocess_image(image_path, target_size)
+        torch_inputs.append(torch_input)
+
+    return create_host_input_tensors_from_torch(device, torch_inputs)
 
 
 def run_panoptic_deeplab_demo(
     device: ttnn.Device,
-    image_path: str,
+    image_paths: Union[str, List[str]],
     weights_path: str,
     output_dir: str = "panoptic_deeplab_predictions",
     target_size: Tuple[int, int] = (512, 1024),
-    resnet_dtype_config: str = "all_bfloat16",
     center_threshold: float = 0.05,
-    model_category=PANOPTIC_DEEPLAB,
+    model_category: str = PANOPTIC_DEEPLAB,
+    use_trace: bool = True,
 ):
     """
-    Run Panoptic DeepLab inference on a single image.
+    Run Panoptic DeepLab inference on one or more images using pipeline framework.
+
+    Uses pipeline framework with either ModelExecutor (use_trace=False) or
+    CustomTracedModelExecutor (use_trace=True).
 
     Args:
         device: TTNN device
-        image_path: Path to input image
+        image_paths: Single image path (str) or list of image paths (List[str])
         weights_path: Path to model weights (.pkl file)
         output_dir: Directory to save outputs
         target_size: Input size as (height, width)
+        center_threshold: Center threshold for panoptic segmentation
+        model_category: Model category (PANOPTIC_DEEPLAB or DEEPLAB_V3_PLUS)
+        use_trace: If True, use CustomTracedModelExecutor; if False, use ModelExecutor
     """
+    # Normalize image_paths to list
+    if isinstance(image_paths, str):
+        image_paths = [image_paths]
 
-    logger.info(f"Running Panoptic DeepLab demo on {image_path}")
+    logger.info(f"Running Panoptic DeepLab demo on {len(image_paths)} image(s)")
     logger.info(f"Target size: {target_size}")
+    logger.info(f"Model category: {model_category}")
+    logger.info(f"Executor type: {'CustomTracedModelExecutor' if use_trace else 'ModelExecutor'}")
 
     # Get model configuration
-    config = get_panoptic_deeplab_config()
-    batch_size = config["batch_size"]
-    num_classes = config["num_classes"]
-    project_channels = config["project_channels"]
-    decoder_channels = config["decoder_channels"]
-    sem_seg_head_channels = config["sem_seg_head_channels"]
-    ins_embed_head_channels = config["ins_embed_head_channels"]
-    common_stride = config["common_stride"]
+    model_config = get_panoptic_deeplab_config()
+    batch_size = model_config["batch_size"]
+    num_classes = model_config["num_classes"]
+    project_channels = model_config["project_channels"]
+    decoder_channels = model_config["decoder_channels"]
+    sem_seg_head_channels = model_config["sem_seg_head_channels"]
+    ins_embed_head_channels = model_config["ins_embed_head_channels"]
+    common_stride = model_config["common_stride"]
 
-    # Preprocess image
-    logger.info("Preprocessing image...")
-    input_tensor = preprocess_image(image_path, target_size)
+    # Load original images for visualization
+    original_images = []
+    for image_path in image_paths:
+        try:
+            original_image = load_and_preprocess_image_for_visualization(image_path, target_size)
+            original_images.append((image_path, original_image))
+        except (ValueError, Exception) as e:
+            logger.warning(f"Could not load image from {image_path}: {e}, skipping...")
+            continue
 
-    # Load original image for visualization
-    original_image = cv2.imread(image_path)
-    original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
-    original_image = cv2.resize(original_image, (int(target_size[1]), int(target_size[0])))
+    if len(original_images) == 0:
+        logger.error("No valid images found")
+        return
 
     try:
         # Load PyTorch model with weights
-        logger.info("Loading PyTorch model...")
-        pytorch_model = PytorchPanopticDeepLab(
+        pytorch_model = create_pytorch_model(
+            weights_path=weights_path,
+            model_category=model_category,
+            target_size=target_size,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            train_size=target_size,
-            weights_path=weights_path,
-            model_category=model_category,
         )
-        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
-        pytorch_model.eval()
-
-        # Create TTNN parameters
-        logger.info("Creating TTNN parameters...")
-        ttnn_parameters = create_panoptic_deeplab_parameters(
-            pytorch_model, device, input_height=int(target_size[0]), input_width=int(target_size[1]), batch_size=1
-        )
-
-        # Apply Conv+BatchNorm fusion
-        logger.info("Applying Conv+BatchNorm fusion...")
-        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
 
         # Create model configurations
         logger.info("Creating model configurations...")
-        model_configs = ModelOptimisations()
-        model_configs.setup_all_layer_overrides()
+        model_configs = ModelOptimisations(
+            conv_act_dtype=ttnn.bfloat8_b,
+            conv_w_dtype=ttnn.bfloat8_b,
+        )
+        model_configs.setup_resnet_backbone()
+        model_configs.setup_aspp()
+        model_configs.setup_decoder()
+        model_configs.setup_heads()
 
         # Create TTNN model
-        logger.info(f"Creating TTNN model with ResNet dtype config: {resnet_dtype_config}")
-        layer_dtypes = create_resnet_dtype_config(resnet_dtype_config)
-        logger.info(f"ResNet layer dtypes: {layer_dtypes}")
-
-        ttnn_model = TtPanopticDeepLab(
+        ttnn_model = create_ttnn_model(
             device=device,
-            parameters=fused_parameters,
+            pytorch_model=pytorch_model,
+            target_size=target_size,
+            batch_size=1,
+            model_category=model_category,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            train_size=target_size,
             model_configs=model_configs,
-            resnet_layer_dtypes=layer_dtypes,
-            model_category=model_category,
         )
 
     except FileNotFoundError:
@@ -132,159 +165,169 @@ def run_panoptic_deeplab_demo(
         logger.error("Please download the Panoptic DeepLab weights and place them at the specified path.")
         return
 
-    # Prepare inputs for both models
-    # Both models have normalization fused into conv1, so they both receive unnormalized input
-    logger.info("Preprocessing input for TTNN model...")
-    ttnn_input = preprocess_nchw_input_tensor(device, input_tensor)
+    # Pipeline execution path
+    # Create model wrapper for pipeline
+    model_wrapper = create_model_wrapper(ttnn_model)
 
-    pytorch_input = input_tensor.to(dtype=torch.bfloat16)
+    # Create host input tensors
+    logger.info("Preprocessing images for TTNN model...")
+    host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors_from_images(
+        device, [path for path, _ in original_images], target_size
+    )
 
-    logger.info("Running PyTorch inference...")
-    with torch.no_grad():
-        pytorch_semantic_logits, pytorch_center_logits, pytorch_offset_logits, _ = pytorch_model.forward(pytorch_input)
+    num_inputs = len(host_inputs)
 
-    # Run inference
-    logger.info("Running TTNN inference...")
-    ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
+    # Create pipeline
+    executor_name = "CustomTracedModelExecutor" if use_trace else "ModelExecutor"
+    logger.info(f"Creating pipeline with {executor_name}...")
+    pipeline_config = PipelineConfig(
+        use_trace=use_trace,
+        num_command_queues=1,
+        all_transfers_on_separate_command_queue=False,
+    )
+
+    pipeline_args = {
+        "config": pipeline_config,
+        "model": model_wrapper,
+        "device": device,
+        "dram_input_memory_config": dram_memory_config,
+        "l1_input_memory_config": l1_memory_config,
+    }
+
+    pipe = create_pipeline_from_config(**pipeline_args)
+
+    # Verify executor type
+    expected_executor_type = CustomTracedModelExecutor if use_trace else ModelExecutor
+    assert isinstance(
+        pipe.executor, expected_executor_type
+    ), f"Expected {expected_executor_type.__name__}, got {type(pipe.executor).__name__}"
+
+    # Compile pipeline
+    logger.info("Compiling pipeline...")
+    pipe.compile(host_inputs[0])
+
+    # Run pipeline with timing
+    logger.info(f"Running pipeline for {num_inputs} images...")
+    timing_key = f"pipeline_execution_{executor_name}_{model_category}"
+
+    profiler.clear()
+    profiler.enable()
+    profiler.start(timing_key)
+    outputs = pipe.enqueue(host_inputs).pop_all()
+    profiler.end(timing_key, PERF_CNT=num_inputs)
+
+    # Store timing results
+    avg_execution_time = profiler.get(timing_key)
+    total_execution_time = avg_execution_time * num_inputs
+    avg_execution_time_us = avg_execution_time * 1e6
+    samples_per_second = 1.0 / avg_execution_time if avg_execution_time > 0 else 0
+
+    # Generate reference outputs from PyTorch
+    reference_outputs = generate_reference_outputs(pytorch_model, host_inputs)
+
+    # Validate outputs
+    assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
+    assert len(outputs) == num_inputs, f"Expected {num_inputs} outputs, got {len(outputs)}"
 
     # Validate outputs with PCC and relative error checks
     logger.info("Validating outputs with PCC and relative error checks...")
     logger.info("=" * 80)
-    logger.info(f"Validation Results for {os.path.basename(image_path)} ({model_category}):")
+    logger.info(f"Validation Results for Individual Images ({model_category}):")
     logger.info("=" * 80)
+    all_passed = []
 
-    # Check semantic output with PCC and relative errors
-    check_ttnn_output(
-        layer_name="semantic",
-        pytorch_output=pytorch_semantic_logits,
-        ttnn_output=ttnn_semantic_logits,
-        to_channel_first=False,
-        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-        exp_pcc=0.958,
-        exp_abs_err=1.769,
-        exp_rel_err=0.150,
-    )
+    for i, (ttnn_output, ref_tuple) in enumerate(zip(outputs, reference_outputs)):
+        image_path, _ = original_images[i]
+        image_name = os.path.basename(image_path)
+        pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
 
-    # Check instance outputs (only for PANOPTIC_DEEPLAB)
-    if model_category == PANOPTIC_DEEPLAB:
-        check_ttnn_output(
-            layer_name="center",
-            pytorch_output=pytorch_center_logits,
-            ttnn_output=ttnn_center_logits,
-            to_channel_first=False,
-            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-            exp_pcc=0.980,
-            exp_abs_err=0.006,
-            exp_rel_err=21.08,
+        # Extract outputs from pipeline result
+        ttnn_semantic, ttnn_center, ttnn_offset = extract_outputs_from_pipeline_result(
+            ttnn_output, model_category, output_index=i, validate_storage=True
         )
 
-        check_ttnn_output(
-            layer_name="offset",
-            pytorch_output=pytorch_offset_logits,
-            ttnn_output=ttnn_offset_logits,
-            to_channel_first=False,
-            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-            exp_pcc=0.984,
-            exp_abs_err=9.630,
-            exp_rel_err=1.675,
+        logger.info(f"Image {i+1}/{num_inputs}: {image_name}")
+
+        # Validate outputs with PCC
+        passed_list = validate_outputs_with_pcc(
+            pytorch_semantic=pytorch_semantic,
+            ttnn_semantic=ttnn_semantic,
+            ttnn_model=ttnn_model,
+            model_category=model_category,
+            pytorch_center=pytorch_center,
+            ttnn_center=ttnn_center,
+            pytorch_offset=pytorch_offset,
+            ttnn_offset=ttnn_offset,
+            layer_name_prefix=f"{image_name}_",
         )
+        all_passed.extend(passed_list)
+
+        logger.info("")  # Empty line between images
+
+    # Cleanup
+    pipe.cleanup()
 
     logger.info("=" * 80)
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"Timing Results for {model_category} ({executor_name}):")
+    logger.info("=" * 80)
+    logger.info(f"  Average execution time: {avg_execution_time_us:.2f} μs")
+    logger.info(f"  Average samples per second: {samples_per_second:.2f}")
+    logger.info(f"  Total execution time: {total_execution_time * 1e6:.2f} μs ({total_execution_time * 1e3:.2f} ms)")
+    logger.info(f"  Number of samples: {num_inputs}")
+    logger.info("=" * 80)
+    logger.info("")
 
-    # Process TTNN results
-    logger.info("Processing TTNN results...")
+    # Log PCC and relative error check results
+    if not all(all_passed):
+        logger.warning(f"Some outputs did not pass PCC or relative error check. Results: {all_passed}")
+    else:
+        logger.info(f"✅ All PCC and relative error checks passed for {model_category}!")
 
-    # Handle semantic output - convert from NHWC to NCHW and slice padding if needed
-    ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic_logits)
-    semantic_original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
-    if semantic_original_channels is not None:
-        logger.info(
-            f"Slicing semantic output from {ttnn_semantic_torch.shape[1]} to {semantic_original_channels} channels"
+    # Process results for visualization
+    logger.info("Processing results...")
+    for i, (ttnn_output, (image_path, original_image)) in enumerate(zip(outputs, original_images)):
+        # Extract outputs from pipeline result
+        ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits = extract_outputs_from_pipeline_result(
+            ttnn_output, model_category, output_index=i, validate_storage=False
         )
-        ttnn_semantic_torch = ttnn_semantic_torch[:, :semantic_original_channels, :, :]
 
-    if ttnn_model.model_category == PANOPTIC_DEEPLAB:
-        # Handle center output - convert from NHWC to NCHW and slice padding if needed
-        ttnn_center_torch = ttnn.to_torch(ttnn_center_logits)
-        center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
-        if center_original_channels is not None:
-            logger.info(
-                f"Slicing center output from {ttnn_center_torch.shape[1]} to {center_original_channels} channels"
-            )
-            ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
+        # Process TTNN outputs for visualization
+        semantic_np_ttnn, center_np_ttnn, offset_np_ttnn = process_ttnn_outputs_for_visualization(
+            ttnn_semantic_logits,
+            ttnn_model,
+            ttnn_center_logits,
+            ttnn_offset_logits,
+        )
 
-        # Handle offset output - convert from NHWC to NCHW and slice padding if needed
-        ttnn_offset_torch = ttnn.to_torch(ttnn_offset_logits)
-        offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
-        if offset_original_channels is not None:
-            logger.info(
-                f"Slicing offset output from {ttnn_offset_torch.shape[1]} to {offset_original_channels} channels"
-            )
-            ttnn_offset_torch = ttnn_offset_torch[:, :offset_original_channels, :, :]
-
-    # Convert to numpy in HWC format for visualization
-    semantic_np_ttnn = ttnn_semantic_torch.float().squeeze(0).permute(1, 2, 0).numpy()
-    center_np_ttnn = (
-        ttnn_center_torch.float().squeeze(0).permute(1, 2, 0).numpy()
-        if ttnn_model.model_category == PANOPTIC_DEEPLAB
-        else None
-    )
-    offset_np_ttnn = (
-        ttnn_offset_torch.float().squeeze(0).permute(1, 2, 0).numpy()
-        if ttnn_model.model_category == PANOPTIC_DEEPLAB
-        else None
-    )
-
-    if ttnn_model.model_category == PANOPTIC_DEEPLAB:
-        panoptic_vis_ttnn, panoptic_info_ttnn = create_panoptic_visualization(
+        # Create visualization
+        panoptic_vis_ttnn, panoptic_info_ttnn = create_visualization_from_outputs(
             semantic_np_ttnn,
-            center_np_ttnn,
-            offset_np_ttnn,
             original_image,
-            center_threshold=center_threshold,  # Use parameter
-            score_threshold=center_threshold,  # Use same value for consistency
-            stuff_area=1,  # Match PyTorch defaults
-            top_k=1000,  # Match PyTorch defaults
-            nms_kernel=11,  # Match PyTorch defaults
-        )
-    else:
-        panoptic_vis_ttnn, panoptic_info_ttnn = create_deeplab_v3plus_visualization(
-            semantic_np_ttnn,
-            original_image=original_image,
-        )
-    # Save TTNN results
-    image_name = os.path.basename(image_path)
-    ttnn_output_dir = os.path.join(output_dir, "ttnn_output")
-    save_predictions(ttnn_output_dir, image_name, original_image, panoptic_vis_ttnn)
-
-    # Process PyTorch results
-    logger.info("Processing PyTorch results...")
-    semantic_np_pytorch = pytorch_semantic_logits.float().squeeze(0).permute(1, 2, 0).numpy()
-    center_np_pytorch = (
-        pytorch_center_logits.float().squeeze(0).permute(1, 2, 0).numpy() if pytorch_center_logits is not None else None
-    )
-    offset_np_pytorch = (
-        pytorch_offset_logits.float().squeeze(0).permute(1, 2, 0).numpy() if pytorch_offset_logits is not None else None
-    )
-    if pytorch_model.model_category == PANOPTIC_DEEPLAB:
-        panoptic_vis_pytorch, panoptic_info_pytorch = create_panoptic_visualization(
-            semantic_np_pytorch, center_np_pytorch, offset_np_pytorch, original_image
-        )
-    else:
-        panoptic_vis_pytorch, panoptic_info_pytorch = create_deeplab_v3plus_visualization(
-            semantic_np_pytorch,
-            original_image=original_image,
+            model_category,
+            center_np=center_np_ttnn,
+            offset_np=offset_np_ttnn,
+            center_threshold=center_threshold,
+            log_timing=(model_category == DEEPLAB_V3_PLUS),
         )
 
-    # Save PyTorch results
-    pytorch_output_dir = os.path.join(output_dir, "pytorch_output")
-    save_predictions(pytorch_output_dir, image_name, original_image, panoptic_vis_pytorch)
+        # Save results
+        image_name = os.path.basename(image_path)
+        ttnn_output_dir = os.path.join(output_dir, "ttnn_output")
+        save_predictions(ttnn_output_dir, image_name, original_image, panoptic_vis_ttnn)
+
+        logger.info(f"Processed image {i+1}/{len(outputs)}: {image_name}")
 
     logger.info(f"Demo completed! Results saved to {output_dir}")
-    logger.info("Output includes original and panoptic images for both TTNN and PyTorch models")
+    logger.info(f"Processed {len(outputs)} images using pipeline with {executor_name}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": PDL_L1_SMALL_SIZE, "trace_region_size": 2000000}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "output_dir",
     [
@@ -292,10 +335,18 @@ def run_panoptic_deeplab_demo(
     ],
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
-def test_panoptic_deeplab_demo(device, output_dir, model_category, model_location_generator):
+@pytest.mark.parametrize("use_trace", [False, True], ids=["ModelExecutor", "CustomTracedModelExecutor"])
+def test_panoptic_deeplab_demo_pipeline(device, output_dir, model_category, use_trace, model_location_generator):
+    """Test pipeline execution with both executor types for both model categories."""
     skip_if_not_blackhole_20_or_130_cores(device)
-
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
-    run_panoptic_deeplab_demo(device, images[0], weights_path, output_dir, model_category=model_category)
+    run_panoptic_deeplab_demo(
+        device,
+        images,
+        weights_path,
+        output_dir,
+        model_category=model_category,
+        use_trace=use_trace,
+    )

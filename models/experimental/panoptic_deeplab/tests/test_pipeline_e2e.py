@@ -18,21 +18,19 @@ import pytest
 import torch
 import ttnn
 from dataclasses import dataclass
-from typing import Callable, Tuple
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
-from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
-    create_panoptic_deeplab_parameters,
-    fuse_conv_bn_parameters,
-)
-from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
-from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
+    create_pytorch_model,
+    create_ttnn_model,
+    create_model_wrapper,
+    create_host_input_tensors_random,
+    generate_reference_outputs,
 )
 from models.common.utility_functions import profiler
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
@@ -82,138 +80,6 @@ EXECUTOR_CONFIGS = [
 ]
 
 
-def create_model_wrapper(ttnn_model: TtPanopticDeepLab) -> Callable:
-    """
-    Create a model wrapper function for use with pipeline/executor.
-
-    The wrapper takes an L1 input tensor and calls the model's forward method.
-    The executor expects the model to accept L1 tensors and return device tensors.
-
-    Args:
-        ttnn_model: The TtPanopticDeepLab model instance
-
-    Returns:
-        A callable function that takes an L1 input tensor and returns model outputs
-    """
-
-    def model_forward(l1_input_tensor: ttnn.Tensor):
-        """
-        Forward pass wrapper for pipeline executor.
-
-        Args:
-            l1_input_tensor: Input tensor in L1 memory (expected by executor)
-
-        Returns:
-            Tuple of (semantic_logits, center_heatmap, offset_map)
-            For DEEPLAB_V3_PLUS, returns only semantic_logits (not a tuple with None)
-        """
-        assert l1_input_tensor.storage_type() == ttnn.StorageType.DEVICE, "Model expects input tensor to be on device"
-        assert (
-            l1_input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
-        ), "Model expects input tensor to be in L1"
-
-        # Call model forward
-        semantic_logits, center_heatmap, offset_map, _ = ttnn_model.forward(l1_input_tensor, return_features=False)
-
-        # For DEEPLAB_V3_PLUS, center_heatmap and offset_map are None
-        # Return only semantic_logits to avoid None handling issues in executor
-        if ttnn_model.model_category == DEEPLAB_V3_PLUS:
-            return semantic_logits
-        else:
-            # Return as tuple for PANOPTIC_DEEPLAB
-            return (semantic_logits, center_heatmap, offset_map)
-
-    return model_forward
-
-
-def create_host_input_tensors(
-    device: ttnn.Device, batch_size: int, input_height: int, input_width: int, num_inputs: int
-) -> Tuple[list, ttnn.MemoryConfig, ttnn.MemoryConfig]:
-    """
-    Create host input tensors for Panoptic DeepLab.
-
-    Preprocesses input tensors directly in Python:
-    - Pads channels to SHARD_WIDTH (8)
-    - Converts to channel last (NHWC)
-    - Creates host tensors directly without device preprocessing
-
-    Args:
-        device: TTNN device
-        batch_size: Batch size (should be 1 for Panoptic DeepLab)
-        input_height: Input image height
-        input_width: Input image width
-        num_inputs: Number of input tensors to create
-
-    Returns:
-        Tuple of (list of host input tensors, dram_memory_config, l1_memory_config)
-        - dram_memory_config: None (not used)
-        - l1_memory_config: Sharded L1 with full grid
-    """
-    host_inputs = []
-    dram_memory_config = None
-    l1_memory_config = None
-
-    SHARD_WIDTH = 8
-
-    for i in range(num_inputs):
-        # Create random input in NCHW format
-        torch_input = torch.randn(batch_size, 3, input_height, input_width, dtype=torch.bfloat16)
-
-        assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
-
-        C = torch_input.shape[1]
-        H = torch_input.shape[2]
-        W = torch_input.shape[3]
-        HW = H * W
-
-        # Pad channels to SHARD_WIDTH (8) if needed
-        # Padding format: (pad_left, pad_right, pad_top, pad_bottom, pad_front, pad_back)
-        # For channel dimension (dim=1), we pad at the end: pad_front=0, pad_back=SHARD_WIDTH-C
-        torch_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, SHARD_WIDTH - C), mode="constant", value=0)
-
-        # Convert to channel last (NHWC): [1, H, W, SHARD_WIDTH]
-        torch_input = torch_input.permute(0, 2, 3, 1)
-
-        # Create memory configs on first iteration
-        if i == 0:
-            # CustomTracedModelExecutor doesn't use DRAM memory config - it transfers directly to L1
-            dram_memory_config = None
-
-            # Create L1 sharded memory config (height sharding across full grid)
-            core_range_set = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
-            )
-            num_cores = device.core_grid.x * device.core_grid.y
-            shard_height = (1 * HW + num_cores - 1) // num_cores
-
-            sharded_memory_config = ttnn.create_sharded_memory_config_(
-                shape=(shard_height, SHARD_WIDTH),
-                core_grid=core_range_set,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            # Use the L1 sharding config for the pipeline
-            l1_memory_config = ttnn.MemoryConfig(
-                sharded_memory_config.memory_layout,
-                ttnn.BufferType.L1,
-                sharded_memory_config.shard_spec,
-            )
-
-        # Convert to TTNN host tensor (not on device)
-        # Use ROW_MAJOR_LAYOUT and bfloat16 dtype to match the original preprocessing
-        host_input = ttnn.from_torch(
-            torch_input,
-            device=None,  # Host tensor, not on device
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        host_inputs.append(host_input)
-
-    return host_inputs, dram_memory_config, l1_memory_config
-
-
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
 @pytest.mark.parametrize(
     "model_category",
@@ -245,38 +111,27 @@ def test_panoptic_deeplab_pipeline_e2e(
     torch.manual_seed(0)
 
     # Get model configuration
-    config = get_panoptic_deeplab_config()
-    batch_size = config["batch_size"]
-    num_classes = config["num_classes"]
-    input_height, input_width = config["train_size"]
+    model_config = get_panoptic_deeplab_config()
+    batch_size = model_config["batch_size"]
+    num_classes = model_config["num_classes"]
+    input_height, input_width = model_config["train_size"]
 
     # Get weights path
     complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
     try:
         # Create PyTorch reference model
-        pytorch_model = PytorchPanopticDeepLab(
-            num_classes=num_classes,
-            common_stride=config["common_stride"],
-            project_channels=config["project_channels"],
-            decoder_channels=config["decoder_channels"],
-            sem_seg_head_channels=config["sem_seg_head_channels"],
-            ins_embed_head_channels=config["ins_embed_head_channels"],
-            train_size=config["train_size"],
+        pytorch_model = create_pytorch_model(
             weights_path=complete_weights_path,
             model_category=model_category,
+            target_size=model_config["train_size"],
+            num_classes=num_classes,
+            common_stride=model_config["common_stride"],
+            project_channels=model_config["project_channels"],
+            decoder_channels=model_config["decoder_channels"],
+            sem_seg_head_channels=model_config["sem_seg_head_channels"],
+            ins_embed_head_channels=model_config["ins_embed_head_channels"],
         )
-        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
-        pytorch_model.eval()
-
-        # Create TTNN parameters
-        ttnn_parameters = create_panoptic_deeplab_parameters(
-            pytorch_model, device, input_height=input_height, input_width=input_width, batch_size=batch_size
-        )
-
-        # Apply Conv+BatchNorm fusion
-        logger.info("Applying Conv+BatchNorm fusion to parameters...")
-        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
 
         # Create model configurations
         model_configs = ModelOptimisations(
@@ -289,18 +144,19 @@ def test_panoptic_deeplab_pipeline_e2e(
         model_configs.setup_heads()
 
         # Create TTNN model
-        ttnn_model = TtPanopticDeepLab(
+        ttnn_model = create_ttnn_model(
             device=device,
-            parameters=fused_parameters,
-            num_classes=num_classes,
-            common_stride=config["common_stride"],
-            project_channels=config["project_channels"],
-            decoder_channels=config["decoder_channels"],
-            sem_seg_head_channels=config["sem_seg_head_channels"],
-            ins_embed_head_channels=config["ins_embed_head_channels"],
-            train_size=config["train_size"],
-            model_configs=model_configs,
+            pytorch_model=pytorch_model,
+            target_size=model_config["train_size"],
+            batch_size=batch_size,
             model_category=model_category,
+            num_classes=num_classes,
+            common_stride=model_config["common_stride"],
+            project_channels=model_config["project_channels"],
+            decoder_channels=model_config["decoder_channels"],
+            sem_seg_head_channels=model_config["sem_seg_head_channels"],
+            ins_embed_head_channels=model_config["ins_embed_head_channels"],
+            model_configs=model_configs,
         )
 
         # Create model wrapper for pipeline
@@ -309,7 +165,7 @@ def test_panoptic_deeplab_pipeline_e2e(
         # Create 100 random input tensors
         num_inputs = 100
         logger.info(f"Creating {num_inputs} random input tensors...")
-        host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors(
+        host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors_random(
             device, batch_size, input_height, input_width, num_inputs
         )
 
@@ -356,22 +212,7 @@ def test_panoptic_deeplab_pipeline_e2e(
         samples_per_second = 1.0 / avg_execution_time if avg_execution_time > 0 else 0
 
         # Generate reference outputs from PyTorch (after pipeline execution)
-        logger.info("Generating reference outputs from PyTorch model...")
-        reference_outputs = []
-        for host_input in host_inputs:
-            # Convert host input back to torch for reference
-            torch_input = ttnn.to_torch(host_input)
-            # Input is in NHWC format [1, H, W, C] where C=8 (3 original + 5 padding)
-            # We need to remove padding and convert to NCHW for PyTorch model
-            assert torch_input.shape[0] == 1, f"Expected batch size 1, got {torch_input.shape[0]}"
-            # Remove padding: take only first 3 channels
-            torch_input = torch_input[:, :, :, :3]  # [1, H, W, 3]
-            # Convert NHWC -> NCHW
-            torch_input = torch_input.permute(0, 3, 1, 2)  # [1, 3, H, W]
-
-            with torch.no_grad():
-                pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(torch_input)
-            reference_outputs.append((pytorch_semantic, pytorch_center, pytorch_offset))
+        reference_outputs = generate_reference_outputs(pytorch_model, host_inputs)
 
         # Validate outputs
         assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
