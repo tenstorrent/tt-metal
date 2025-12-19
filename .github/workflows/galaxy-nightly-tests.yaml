@@ -2,6 +2,14 @@ name: "(Galaxy) nightly tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: wormhole_b0
   schedule:
     - cron: "0 0 * * *" # Runs every day at 12am UTC
 
@@ -22,4 +30,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
+      blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
+      scheduled: ${{ github.event_name == 'schedule' }}
+      schedule:  ${{ github.event_name == 'schedule' }}

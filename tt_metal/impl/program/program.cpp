@@ -198,6 +198,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
 }  // namespace detail
 
+namespace experimental {
+
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+
+}  // namespace experimental
+
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
@@ -1276,10 +1282,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
+                        const auto& sub_device_cores =
+                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{i});
+                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
                             num_intersections += intersection.num_cores();
                         }
                     }

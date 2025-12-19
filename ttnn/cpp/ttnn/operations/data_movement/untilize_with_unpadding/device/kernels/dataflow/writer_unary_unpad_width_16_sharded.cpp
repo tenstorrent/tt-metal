@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Special case writer for unpad width 16 tensors
 // Skip untilize and just copy f0 and f2 from input tiles to output tiles

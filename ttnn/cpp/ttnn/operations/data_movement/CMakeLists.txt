@@ -64,7 +64,6 @@ target_sources(
             repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
-            reshape_view/reshape_kernel_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
             sharded/reshard/reshard.hpp
@@ -85,7 +84,7 @@ target_sources(
             reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
-            reshape_view/reshape_kernel_common.hpp
+            reshape_view/device/hostdevcommon/common.hpp
             tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
             untilize/device/kernels/dataflow/reader_unary_start_id.cpp
             untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
@@ -175,13 +174,13 @@ target_sources(
         reshape_on_device/reshape.cpp
         reshape_view/device/reshape_rm_program_factory.cpp
         reshape_view/device/reshape_tiled_program_factory.cpp
-        reshape_view/device/reshape_tiled_without_device_mapping_program.cpp
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp
         scatter/scatter.cpp
         scatter/tosa_scatter.cpp
         scatter/device/scatter_device_operation.cpp
+        scatter/device/scatter_reduce_bfloat16_program_factory.cpp
         scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp

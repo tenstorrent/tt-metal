@@ -55,6 +55,8 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeEthSrcL1Overflow,
+    SanitizeEthDestL1Overflow,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -121,7 +123,13 @@ void RunTestOnCore(
     } else {
         virtual_core = device->worker_core_from_logical_core(core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+    log_info(
+        LogTest,
+        "Running test on device {} {} core {} (virtual core {})...",
+        device->id(),
+        (is_eth_core) ? "eth" : "worker",
+        core.str(),
+        virtual_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
@@ -194,6 +202,8 @@ void RunTestOnCore(
     bool use_inline_dw_write = false;
     bool bad_linked_transaction = false;
     uint32_t l1_overflow_addr = 0;
+    uint32_t eth_src_overflow_addr_words = 0;
+    uint32_t eth_dest_overflow_addr_words = 0;
     switch(feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -216,6 +226,8 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
+        case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
+        case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -236,7 +248,9 @@ void RunTestOnCore(
          buffer_size,
          use_inline_dw_write,
          bad_linked_transaction,
-         l1_overflow_addr});
+         l1_overflow_addr,
+         eth_src_overflow_addr_words,
+         eth_dest_overflow_addr_words});
 
     // Run the kernel, expect an exception here
     try {
@@ -397,6 +411,30 @@ void RunTestOnCore(
                 risc_name,
                 l1_overflow_addr + sizeof(std::uint32_t),
                 sizeof(std::uint32_t));
+        } break;
+        case SanitizeEthSrcL1Overflow: {
+            expected = fmt::format(
+                "Device {} acteth core(x={:2},y={:2}) virtual(x={:2},y={:2}): erisc core overflowed L1 with access to "
+                "{:#x} "
+                "of length 64 (ethernet send with L1 source overflow).",
+                device->id(),
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                (eth_src_overflow_addr_words << 4));
+        } break;
+        case SanitizeEthDestL1Overflow: {
+            expected = fmt::format(
+                "Device {} acteth core(x={:2},y={:2}) virtual(x={:2},y={:2}): erisc core overflowed L1 with access to "
+                "{:#x} "
+                "of length 64 (ethernet send to core with L1 destination overflow).",
+                device->id(),
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                (eth_dest_overflow_addr_words << 4));
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -601,6 +639,22 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthSrcL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeEthSrcL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
         },
         this->devices_[0]);
 }
