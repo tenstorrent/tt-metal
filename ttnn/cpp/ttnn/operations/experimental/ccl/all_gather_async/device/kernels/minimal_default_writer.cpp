@@ -42,7 +42,16 @@ constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
 constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
 constexpr bool fuse_op = get_compile_time_arg_val(16);
 constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
+#ifdef USE_WORKER_MUX
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(21);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
+constexpr uint32_t rt_arg_count = 23;
+#else
 constexpr uint32_t rt_arg_count = 18;
+#endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<rt_arg_count>();
@@ -108,7 +117,27 @@ void kernel_main() {
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+#ifdef USE_WORKER_MUX
+    bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
 
+    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+
+    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+#endif
     const auto& unicast_route_info = (direction == 0) ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& barrier_multicast_route_info =
         (direction == 0) ? forward_barrier_multicast_route_info : backward_barrier_multicast_route_info;
@@ -133,23 +162,60 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
     const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 #endif
+
+#ifdef USE_WORKER_MUX
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* fabric_direction_connection;
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    if (mux_connection_valid) {
+        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+            fabric_mux_x,
+            fabric_mux_y,
+            fabric_mux_channel_id,
+            fabric_mux_num_buffers_per_channel,
+            fabric_mux_channel_buffer_size_bytes,
+            fabric_mux_channel_base_address,
+            fabric_mux_connection_info_address,
+            fabric_mux_connection_handshake_address,
+            fabric_mux_flow_control_address,
+            fabric_mux_buffer_index_address,
+            local_flow_control_address,
+            local_teardown_address,
+            local_buffer_index_address);
+        fabric_direction_connection = &mux_connection;
+    } else {
+        fabric_direction_connection = nullptr;
+    }
+
+    if (mux_connection_valid) {
+        // need to wait for fabric mux to be ready to accept connections
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+    }
+#else
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
+#endif
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
     uint32_t self_write_done_semaphore_addr;
     if constexpr (fuse_op) {
+#ifndef USE_WORKER_MUX
         arg_idx = arg_for_fab;
+#endif
         self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
+#ifdef USE_WORKER_MUX
+    if (mux_connection_valid) {
+        tt::tt_fabric::fabric_client_connect(*fabric_direction_connection);
+    }
+#else
     fabric_connection.open();
 
     auto* fabric_direction_connection =
         direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
-
+#endif
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
@@ -520,10 +586,25 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#ifdef USE_WORKER_MUX
+    if (mux_connection_valid) {
+        tt::tt_fabric::fabric_client_disconnect(*fabric_direction_connection);
 
+        if (is_termination_master) {
+            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        } else {
+            uint64_t dest_addr =
+                safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            noc_semaphore_inc(dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+#else
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
     }
-
+#endif
     noc_async_write_barrier();
 }
