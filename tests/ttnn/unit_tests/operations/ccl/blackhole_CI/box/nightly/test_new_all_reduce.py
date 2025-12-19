@@ -68,9 +68,8 @@ def run_all_reduce_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    cluster_shape=(1, 4),
 ):
-    cluster_shape = (1, 4)
-
     if output_dtype is None:
         output_dtype = input_dtype
 
@@ -459,4 +458,77 @@ def test_all_reduce_loopback(
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,
         validate_all=False,
+    )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    [
+        ([1, 1, 32, 1280], 0, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 0, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters, warmup_iters",
+    [
+        (100, 10),
+    ],
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (2, 2),
+    ],
+    indirect=True,
+)
+def test_all_reduce_hanging(
+    mesh_device,
+    output_shape,
+    cluster_axis,
+    input_dtype,
+    num_links,
+    input_num_cores,
+    input_core_range_set,
+    output_num_cores,
+    output_core_range_set,
+    num_iters,
+    warmup_iters,
+    trace_mode,
+    function_level_defaults,
+):
+    run_all_reduce_impl(
+        mesh_device,
+        output_shape,
+        cluster_axis,
+        input_dtype,
+        num_links,
+        input_num_cores,
+        input_core_range_set,
+        output_num_cores,
+        output_core_range_set,
+        loopback_size=4,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+        validate_all=False,
+        cluster_shape=(2, 2),
     )
