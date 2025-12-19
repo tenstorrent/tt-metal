@@ -28,9 +28,7 @@ def get_types_from_binding_framework():
         # nanobind
         ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
     else:
-        raise Exception(
-            "test_rand.py: ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind."
-        )
+        raise Exception("ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind.")
 
     return ALL_TYPES
 
