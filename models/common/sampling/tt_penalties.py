@@ -90,13 +90,7 @@ class TTPenalties(LightweightModule):
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
         self.num_devices = num_devices
-        self.needs_padding = False
-        if self.vocab_size == args.vocab_size:
-            # need to add at least one tile padding for the histogram to handle padded tokens
-            tile_width = 32
-            padding = tile_width - ((self.vocab_size // num_devices) % tile_width)
-            self.vocab_size += padding * num_devices
-            self.needs_padding = True
+
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self._op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids else {}
 
@@ -144,8 +138,6 @@ class TTPenalties(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims_slice, mesh_shape=self.cluster_shape),
         )
 
-        print(self.slice_start, self.slice_end)
-
     def _alloc_int_buffer(self, shard_dims, host=None, layout=ttnn.TILE_LAYOUT):
         if host is None:
             host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
@@ -187,28 +179,55 @@ class TTPenalties(LightweightModule):
             tensor = tensor[: self.max_batch_size]
         return tensor.view(self.max_batch_size, 1)
 
+    def _pad_batch_to_max(self, tokens_2d: torch.Tensor, pad_value: int) -> torch.Tensor:
+        """Pad/truncate first dim to max_batch_size (32)."""
+        if tokens_2d.dim() != 2:
+            raise ValueError(f"Expected 2D tensor [B, S], got {tokens_2d.shape}")
+        B, S = tokens_2d.shape
+        if B < self.max_batch_size:
+            pad = torch.full((self.max_batch_size - B, S), pad_value, dtype=tokens_2d.dtype)
+            return torch.cat([tokens_2d, pad], dim=0)
+        if B > self.max_batch_size:
+            return tokens_2d[: self.max_batch_size]
+        return tokens_2d
+
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
-        # replaces -1s in prompt_tokens with self.vocab_size - 1
-        prompt_tokens = torch.where(prompt_tokens == -1, self.vocab_size - 1, prompt_tokens)
-        prompt_tokens = self._alloc_int_buffer(
-            host=prompt_tokens.reshape(-1, prompt_tokens.shape[-1]),
+        # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
+        prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
+        prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
+
+        src_host = (prompt_tokens_2d != -1).to(torch.int32)
+        idx_host = torch.where(prompt_tokens_2d == -1, torch.zeros_like(prompt_tokens_2d), prompt_tokens_2d)
+
+        prompt_tokens_tt = self._alloc_int_buffer(
+            host=idx_host,
             shard_dims=(None, None),
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        src = self._alloc_int_buffer(
-            host=torch.ones(self.max_batch_size, prompt_tokens.shape[-1]),
+        src_tt = self._alloc_int_buffer(
+            host=src_host,
             shard_dims=(None, None),
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.token_bin_counts_and_mask(new_tokens=prompt_tokens, src=src, mask=self.prompt_mask)
+        self.token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=self.prompt_mask)
 
     def reset_output_tokens(self, tokens):
-        # replaces -1s in tokens with self.vocab_size - 1
-        tokens = torch.where(tokens == -1, self.vocab_size - 1, tokens)
+        # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
+        tokens_2d = tokens.reshape(-1, tokens.shape[-1])
+        tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
+        src_host = (tokens_2d != -1).to(torch.int32)
+        idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
+
         tokens_tt = ttnn.from_torch(
-            tokens.reshape(-1, tokens.shape[-1]),
+            idx_host,
             device=self.mesh_device,
             dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        src_tt = ttnn.from_torch(
+            src_host,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
@@ -217,7 +236,13 @@ class TTPenalties(LightweightModule):
         self.output_counts_gathered = ttnn.mul(
             self.output_counts_gathered, 0, output_tensor=self.output_counts_gathered, **self._op_kwargs
         )
-        self.update_output_tokens(tokens_tt)
+        self.token_bin_counts_and_mask(
+            new_tokens=tokens_tt,
+            counts=self.output_counts_gathered,
+            src=src_tt,
+            counts_sliced=self.output_counts,
+            mask=self.output_mask,
+        )
 
     def update_output_tokens(self, new_tokens):
         # reshape decode token
@@ -250,7 +275,6 @@ class TTPenalties(LightweightModule):
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **self._op_kwargs)
         else:
             counts = counts_new
-
         counts_sliced = ttnn.slice(
             counts,
             self.slice_start,
@@ -278,20 +302,7 @@ class TTPenalties(LightweightModule):
             inverse_repetition_penalties=self.inverse_repetition_penalties,
             sub_core_grids=self.sub_core_grids,
         )
-        if self.needs_padding:
-            original_shape = tt_logits.shape[-1]
-            tt_logits = ttnn.typecast(tt_logits, ttnn.bfloat16)
-            tt_logits = ttnn.pad(
-                tt_logits, [(0, 0), (0, 0), (0, 0), (0, self.vocab_size // self.num_devices - tt_logits.shape[-1])], 0
-            )
-
-        reshaped = ttnn.reshape(tt_logits, (-1, tt_logits.shape[-1]))
-
+        original_shape = tt_logits.shape
+        reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
         apply_penalties(reshaped, context)
-
-        reshaped = ttnn.reshape(reshaped, (1, 1, -1, tt_logits.shape[-1]))
-
-        if self.needs_padding:
-            reshaped = reshaped[:, :, :, :original_shape]
-
-        return reshaped
+        return ttnn.reshape(reshaped, original_shape)
