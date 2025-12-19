@@ -6,9 +6,9 @@
 
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "internal/risc_attribs.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "risc_attribs.h"
 
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"

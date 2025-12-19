@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include "tensix.h"
 
 namespace ckernel

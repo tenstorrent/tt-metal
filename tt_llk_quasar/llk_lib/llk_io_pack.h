@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "circular_buffer.h"
 #include "ckernel.h"
+#include "internal/circular_buffer_interface.h"
 
 using namespace ckernel;
 using namespace ckernel::trisc;

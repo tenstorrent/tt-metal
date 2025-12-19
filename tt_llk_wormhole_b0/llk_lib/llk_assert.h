@@ -23,7 +23,7 @@
 #else
 
 // Assume we are executing in tt-metal and we have assert already available.
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 #define LLK_ASSERT(condition, message) ASSERT(condition)
 
