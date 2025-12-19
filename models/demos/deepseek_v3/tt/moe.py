@@ -210,7 +210,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
-        breakpoint()
         all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
             x_rm,
             topk_experts_indices_rm,
@@ -254,7 +253,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         post_combine_output_tensor = ttnn.mul(
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
-        breakpoint()
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
         post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
