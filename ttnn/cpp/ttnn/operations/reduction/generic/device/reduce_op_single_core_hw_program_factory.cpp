@@ -83,7 +83,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index, dst_single_tile_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -95,7 +95,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

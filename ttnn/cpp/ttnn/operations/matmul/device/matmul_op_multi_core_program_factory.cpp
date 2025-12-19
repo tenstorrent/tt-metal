@@ -91,7 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), output_single_tile_size};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     auto reader_id = tt_metal::CreateKernel(

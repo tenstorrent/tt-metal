@@ -50,9 +50,9 @@ ProdAllProgramFactory::cached_program_t ProdAllProgramFactory::create(
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args;
+    std::vector<uint32_t> reader_compile_time_args{single_tile_size};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), single_tile_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle unary_reader_kernel_id = CreateKernel(

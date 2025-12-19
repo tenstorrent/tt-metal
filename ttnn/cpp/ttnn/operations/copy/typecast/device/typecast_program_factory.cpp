@@ -53,12 +53,16 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args;
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const uint32_t reader_page_bytes = is_row_major ? src_buffer->aligned_page_size() : single_tile_size;
+    const uint32_t writer_page_bytes = is_row_major ? dst_buffer->aligned_page_size() : single_tile_size_output;
+
+    std::vector<uint32_t> reader_compile_time_args{reader_page_bytes};
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), writer_page_bytes};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle typecast_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -244,12 +248,16 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args;
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const uint32_t reader_page_bytes = is_row_major ? src_buffer->aligned_page_size() : single_tile_size;
+    const uint32_t writer_page_bytes = is_row_major ? dst_buffer->aligned_page_size() : single_tile_size_output;
+
+    std::vector<uint32_t> reader_compile_time_args{reader_page_bytes};
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), writer_page_bytes};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle typecast_reader_kernel_id = tt::tt_metal::CreateKernel(

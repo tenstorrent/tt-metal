@@ -97,7 +97,7 @@ FillCacheMultiCoreProgramFactory::cached_program_t FillCacheMultiCoreProgramFact
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, single_tile_size};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
