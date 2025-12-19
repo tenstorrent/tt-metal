@@ -46,65 +46,111 @@ runs:
         echo "📊 Found $REGRESSION_COUNT regression(s). Preparing Slack notification..."
         echo "has_regressions=true" >> "$GITHUB_OUTPUT"
 
-        # Generate the main regression text with detailed information
-        TEXT=$(jq -r '
-          def mentionOwners(owners):
-            if (owners | type) == "array" and (owners | length) > 0 then
-              (owners
-                | map(
-                    if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
-                    elif (.id // "") != "" then "<@" + .id + ">"
-                    elif (.name // "") != "" then .name
-                    else null end
-                  ) | map(select(. != null)) | join(" ")
-              )
-            else "<!subteam^S0985AN7TC5|metal infra team>" end;
-
-          def origOwnerNote(item):
-            # If we forced infra due to missing test and have original owner names, include them as plain text
-            if (item.original_owner_names_for_generic_exit | type) == "array" and (item.original_owner_names_for_generic_exit | length) > 0 then
-              " (error owner unclear. original owners: " + (item.original_owner_names_for_generic_exit | join(", ")) + ")"
-            else "" end;
-
-          def formatFailingJobs(jobs):
-            # Format failing jobs with individual links and owner mentions
-            # Jobs can be either strings (legacy) or objects with {name, url, owners}
-            if (jobs | type) == "array" and (jobs | length) > 0 then
-              (jobs | map(
-                if (. | type) == "object" and .name then
-                  (if .url and (.url | length) > 0 then
-                    "    • <" + .url + "|" + .name + ">"
-                  else
-                    "    • " + .name
-                  end) + (if (.owners | type) == "array" and (.owners | length) > 0 then
-                    " " + (.owners | map(
+        # Function to format a single regression entry
+        format_regression_text() {
+          jq -r '
+            def mentionOwners(owners):
+              if (owners | type) == "array" and (owners | length) > 0 then
+                (owners
+                  | map(
                       if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
                       elif (.id // "") != "" then "<@" + .id + ">"
                       elif (.name // "") != "" then .name
                       else null end
-                    ) | map(select(. != null)) | join(" "))
-                  else "" end)
-                elif (. | type) == "string" then
-                  "    • " + .
-                else
-                  empty
-                end
-              ) | join("\n"))
-            else "" end;
+                    ) | map(select(. != null)) | join(" ")
+                )
+              else "<!subteam^S0985AN7TC5|metal infra team>" end;
 
-          if (type=="array" and length > 0) then
-            "❌ *Regressions (Pass → Fail):*\n" + (map(
-              "*" + .name + "*"
-              + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
-              + (if .run_url then " — <" + .run_url + "|run>" else "" end)
-              + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
-              + (if (.failing_jobs | type) == "array" and (.failing_jobs | length) > 0 then
-                  "\n" + formatFailingJobs(.failing_jobs)
-                else "" end)
-            ) | join("\n"))
+            def formatFailingJobs(jobs):
+              if (jobs | type) == "array" and (jobs | length) > 0 then
+                (jobs | map(
+                  if (. | type) == "object" and .name then
+                    (if .url and (.url | length) > 0 then
+                      "    • <" + .url + "|" + .name + ">"
+                    else
+                      "    • " + .name
+                    end) + (if (.owners | type) == "array" and (.owners | length) > 0 then
+                      " " + (.owners | map(
+                        if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
+                        elif (.id // "") != "" then "<@" + .id + ">"
+                        elif (.name // "") != "" then .name
+                        else null end
+                      ) | map(select(. != null)) | join(" "))
+                    else "" end)
+                  elif (. | type) == "string" then
+                    "    • " + .
+                  else
+                    empty
+                  end
+                ) | join("\n"))
+              else "" end;
+
+            if (type=="array" and length > 0) then
+              (map(
+                "*" + .name + "*"
+                + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
+                + (if .run_url then " — <" + .run_url + "|run>" else "" end)
+                + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
+                + (if (.failing_jobs | type) == "array" and (.failing_jobs | length) > 0 then
+                    "\n" + formatFailingJobs(.failing_jobs)
+                  else "" end)
+              ) | join("\n"))
+            else
+              "Malformed regressions payload"
+            end' "$1"
+        }
+
+        # Slack has a 3000 character limit per text block
+        # Reserve space for header and formatting
+        MAX_BLOCK_TEXT_LENGTH=2900
+        HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
+        HEADER_PREFIX_LENGTH=$(printf '%s' "$HEADER_PREFIX" | wc -c)
+        # Reserve space for chunk indicator (e.g., "*[Part 1/5]*\n") - estimate max 20 chars
+        CHUNK_INDICATOR_MAX_LENGTH=20
+        MAX_REGRESSION_TEXT_LENGTH=$((MAX_BLOCK_TEXT_LENGTH - HEADER_PREFIX_LENGTH - CHUNK_INDICATOR_MAX_LENGTH))
+
+        # Split regressions into chunks that fit within the limit
+        # We'll build chunks by adding regressions one at a time until we exceed the limit
+        chunk_file="$(mktemp)"
+        chunk_index=0
+        current_chunk="[]"
+        current_chunk_text=""
+
+        # Process each regression
+        for i in $(seq 0 $((REGRESSION_COUNT - 1))); do
+          regression=$(jq -c ".[$i]" "$tmp_file")
+          regression_text=$(echo "$regression" | format_regression_text)
+
+          # Calculate what the chunk text would be with this regression added
+          test_chunk=$(echo "$current_chunk" | jq -c ". + [$regression]")
+          test_chunk_text=$(echo "$test_chunk" | format_regression_text)
+          test_full_text="${HEADER_PREFIX}${test_chunk_text}"
+          # Account for potential chunk indicator (we don't know total chunks yet, so be conservative)
+          # Estimate max chunk indicator length (e.g., "*[Part 99/99]*\n" = ~20 chars)
+          test_length=$(printf '%s' "$test_full_text" | wc -c)
+          test_length_with_indicator=$((test_length + CHUNK_INDICATOR_MAX_LENGTH))
+
+          # If adding this regression would exceed the limit, save current chunk and start new one
+          if [ "$test_length_with_indicator" -gt "$MAX_BLOCK_TEXT_LENGTH" ] && [ "$(echo "$current_chunk" | jq 'length')" -gt 0 ]; then
+            echo "$current_chunk" > "${chunk_file}.${chunk_index}"
+            chunk_index=$((chunk_index + 1))
+            current_chunk="[$regression]"
+            current_chunk_text="$regression_text"
           else
-            "Malformed regressions payload"
-          end' "$tmp_file")
+            # Add regression to current chunk
+            current_chunk=$(echo "$current_chunk" | jq -c ". + [$regression]")
+            current_chunk_text="$test_chunk_text"
+          fi
+        done
+
+        # Save the last chunk if it has any regressions
+        if [ "$(echo "$current_chunk" | jq 'length')" -gt 0 ]; then
+          echo "$current_chunk" > "${chunk_file}.${chunk_index}"
+          chunk_index=$((chunk_index + 1))
+        fi
+
+        TOTAL_CHUNKS=$chunk_index
+        echo "total_chunks=$TOTAL_CHUNKS" >> "$GITHUB_OUTPUT"
 
         # Count total failing workflows from alert_all_message
         # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
@@ -128,39 +174,158 @@ runs:
           fi
         fi
 
-        # Build the payload using blocks for guaranteed line breaks, with text fallback
+        # Build payloads for each chunk
         HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
 
-        PAYLOAD=$(jq -cn \
-          --arg header "$HEADER" \
-          --arg body "$TEXT" \
-          --arg failing_count_msg "$FAILING_WORKFLOWS_COUNT_MESSAGE" \
-          '
-          {
-            "text": ($header + "\n" + $body + (if ($failing_count_msg | length > 0) then "\n\n" + $failing_count_msg else "" end)),
-            "blocks": ([
-              { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
-              { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
-            ] + (if ($failing_count_msg | length > 0) then
-              [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } } ]
-            else [] end))
-          }
-        ')
+        # Generate payloads for all chunks
+        for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
+          chunk_regressions=$(cat "${chunk_file}.${i}")
+          chunk_text=$(echo "$chunk_regressions" | format_regression_text)
+          chunk_full_text="${HEADER_PREFIX}${chunk_text}"
 
-        echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
+          # Add chunk indicator if there are multiple chunks
+          if [ "$TOTAL_CHUNKS" -gt 1 ]; then
+            chunk_full_text="*[Part $((i + 1))/$TOTAL_CHUNKS]*\n${chunk_full_text}"
+          fi
+
+          # Final safety check - verify the body text doesn't exceed limit
+          body_length=$(printf '%s' "$chunk_full_text" | wc -c)
+          if [ "$body_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
+            echo "⚠️ Warning: Chunk $((i + 1)) body text ($body_length chars) exceeds limit ($MAX_BLOCK_TEXT_LENGTH chars). This may cause Slack API errors."
+          fi
+
+          # Add failing workflows count message only to the last chunk
+          if [ "$i" -eq $((TOTAL_CHUNKS - 1)) ] && [ -n "$FAILING_WORKFLOWS_COUNT_MESSAGE" ]; then
+            PAYLOAD=$(jq -cn \
+              --arg header "$HEADER" \
+              --arg body "$chunk_full_text" \
+              --arg failing_count_msg "$FAILING_WORKFLOWS_COUNT_MESSAGE" \
+              '
+              {
+                "text": ($header + "\n" + $body + "\n\n" + $failing_count_msg),
+                "blocks": [
+                  { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
+                  { "type": "section", "text": { "type": "mrkdwn", "text": $body } },
+                  { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } }
+                ]
+              }
+            ')
+          else
+            PAYLOAD=$(jq -cn \
+              --arg header "$HEADER" \
+              --arg body "$chunk_full_text" \
+              '
+              {
+                "text": ($header + "\n" + $body),
+                "blocks": [
+                  { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
+                  { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
+                ]
+              }
+            ')
+          fi
+
+          # Store payload in a file for the send step to read
+          payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
+          echo "$PAYLOAD" > "$payload_file"
+        done
+
+        # Clean up temporary chunk files
+        rm -f "${chunk_file}".*
 
     - name: Skip Slack notification (no regressions)
       if: steps.build.outputs.has_regressions != 'true'
       shell: bash
       run: echo "ℹ️ Skipping Slack notification because there are no regressions to report."
 
-    - name: Report GitHub Pipeline Status Slack Action
+    - name: Report GitHub Pipeline Status to Slack (multiple messages if needed)
       if: steps.build.outputs.has_regressions == 'true'
       id: slack_send
-      uses: slackapi/slack-github-action@v1.26.0
-      with:
-        payload: ${{ steps.build.outputs.payload }}
-        channel-id: ${{ inputs.channel_id }}
+      shell: bash
       env:
-        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
         SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        CHANNEL_ID: ${{ inputs.channel_id }}
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+        TOTAL_CHUNKS: ${{ steps.build.outputs.total_chunks }}
+      run: |
+        set -euo pipefail
+
+        TOTAL_CHUNKS=${TOTAL_CHUNKS:-1}
+        echo "Sending $TOTAL_CHUNKS message(s) to Slack..."
+
+        # Get the first message timestamp for thread continuity (if using bot token)
+        FIRST_TS=""
+
+        if [ -n "$SLACK_BOT_TOKEN" ] && [ -n "$CHANNEL_ID" ]; then
+          # Using Bot Token method - supports threading
+          for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
+            payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
+            if [ ! -f "$payload_file" ]; then
+              echo "⚠️ Payload file not found: $payload_file"
+              continue
+            fi
+
+            PAYLOAD=$(cat "$payload_file")
+            echo "Sending message part $((i + 1))/$TOTAL_CHUNKS..."
+
+            # Send via Slack API
+            if [ -z "$FIRST_TS" ]; then
+              # First message - no thread_ts
+              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" '. + {channel: $channel}')
+            else
+              # Subsequent messages - thread to first message
+              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" '. + {channel: $channel, thread_ts: $thread_ts}')
+            fi
+
+            RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$REQUEST_BODY" | jq -c '{channel: .channel, ts: .ts, ok: .ok, error: .error}')
+
+            # Extract timestamp for threading subsequent messages
+            if [ -z "$FIRST_TS" ]; then
+              FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
+              if [ -n "$FIRST_TS" ]; then
+                echo "ts=$FIRST_TS" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+
+            # Check for errors
+            if [ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]; then
+              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "unknown error"')
+              echo "⚠️ Failed to send Slack message part $((i + 1)): $ERROR_MSG"
+              echo "$RESPONSE" | jq .
+            else
+              echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
+            fi
+          done
+        elif [ -n "$SLACK_WEBHOOK_URL" ]; then
+          # Using Webhook method (simpler but no threading support)
+          for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
+            payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
+            if [ ! -f "$payload_file" ]; then
+              echo "⚠️ Payload file not found: $payload_file"
+              continue
+            fi
+
+            PAYLOAD=$(cat "$payload_file")
+            echo "Sending message part $((i + 1))/$TOTAL_CHUNKS via webhook..."
+
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "⚠️ Failed to send Slack message part $((i + 1)): HTTP $HTTP_CODE"
+            else
+              echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
+            fi
+          done
+        else
+          echo "⚠️ No Slack credentials provided (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL)"
+          exit 1
+        fi
+
+        # Clean up payload files
+        rm -f "${GITHUB_WORKSPACE}"/slack_payload_*.json
