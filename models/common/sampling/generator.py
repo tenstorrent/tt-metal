@@ -153,7 +153,7 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor],
     ):
         if penalties_on:
-            self.tt_penalties.apply(logits)
+            logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 
@@ -355,4 +355,7 @@ def format_sampling_params(sampling_params, max_batch_size):
 
         if sampling_params.repetition_penalty[i] == 0:
             sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
+
+        if sampling_params.top_k[i] < 1:
+            sampling_params.top_k[i] = 32  # k<1 means no restriction so set it to max k (32)
     return sampling_params
