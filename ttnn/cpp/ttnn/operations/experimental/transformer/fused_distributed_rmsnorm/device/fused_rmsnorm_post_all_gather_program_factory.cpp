@@ -115,7 +115,8 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats_tensor.dtype());
     tt::DataFormat intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     tt::DataFormat weight_data_format =
         has_weight ? tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.value().dtype())
@@ -270,9 +271,6 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
@@ -291,7 +289,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        packed_winv_value,
+        W * num_devices,
         e.u,
         has_weight,
         fuse_rope,

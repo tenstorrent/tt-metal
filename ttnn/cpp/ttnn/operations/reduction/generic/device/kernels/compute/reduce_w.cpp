@@ -6,6 +6,7 @@
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
 #include "api/compute/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #else
 #include "api/compute/matmul.h"
 #endif
@@ -22,10 +23,20 @@ void kernel_main() {
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+
+    // REDUCE_OP/DIM is expected to come from add_define
+    // ReduceDataFormatReconfigMode::NONE: First operation after hw_startup, no reconfig needed
+    compute_kernel_lib::reduce<
+        REDUCE_OP,
+        REDUCE_DIM,
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_2,
+        tt::CBIndex::c_3,
+        compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
 #else
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
-#endif
 
     cb2.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -38,12 +49,7 @@ void kernel_main() {
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb0.wait_front(onetile);
-                // REDUCE_OP is expected to come from add_define
-#ifndef REDUCE_ROW_SUM_VIA_MM
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
-#else
                 matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0);
-#endif
                 cb0.pop_front(onetile);
             }
 
@@ -53,4 +59,5 @@ void kernel_main() {
             release_dst();
         }
     }
+#endif
 }

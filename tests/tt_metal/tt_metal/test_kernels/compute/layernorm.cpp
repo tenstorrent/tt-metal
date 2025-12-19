@@ -97,7 +97,7 @@ void kernel_main() {
          */
         ACQ();
         cb_reserve_back(cb_ex, 1 * onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -153,7 +153,7 @@ void kernel_main() {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);

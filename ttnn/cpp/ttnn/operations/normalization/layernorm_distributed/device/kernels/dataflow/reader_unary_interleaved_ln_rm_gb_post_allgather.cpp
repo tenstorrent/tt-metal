@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "experimental/noc.h"
@@ -54,10 +54,10 @@ void kernel_main() {
         get_arg_val<uint32_t>(4);  // Tile offset for stats input; status input is two tiles wide and contains E(x) and
                                    // E(x^2) in the left most columns per tile.
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(7);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(8);
-    const uint32_t stats_addr = get_arg_val<uint32_t>(9);
-    const uint32_t y_offset = get_arg_val<uint32_t>(10);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
+    const uint32_t stats_addr = get_arg_val<uint32_t>(8);
+    const uint32_t y_offset = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -78,7 +78,8 @@ void kernel_main() {
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t cb_length = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr uint32_t reduce_factor = get_compile_time_arg_val(8);
+    constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -94,9 +95,13 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    uint32_t scaler = get_arg_val<uint32_t>(5);
-    generate_reduce_scaler(cb_reduce, scaler);
-    const uint32_t eps = get_arg_val<uint32_t>(6);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        reduce_factor>();
+    const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(cb_eps, eps);
 
     experimental::Noc noc;

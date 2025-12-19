@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
 #include "moreh_sum_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -26,8 +25,6 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
 
     tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
-    float scaler = 1.0f;
-
     const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
@@ -118,11 +115,8 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
     tt::tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value(scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    reader_compile_time_args.push_back(packed_scaler_value);
 
     std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
