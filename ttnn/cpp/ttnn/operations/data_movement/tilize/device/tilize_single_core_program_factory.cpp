@@ -4,10 +4,7 @@
 
 #include <math.h>
 #include "tilize_single_core_program_factory.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -155,7 +152,7 @@ void TilizeSingleCoreProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& core = *cached_program.shared_variables.core;
-    auto src_buffer = tensor_args.input_tensor.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
     auto& program = cached_program.program;
     auto* dst_buffer = tensor_return_value.buffer();
     CoreCoord core_0 = corerange_to_cores(core).at(0);

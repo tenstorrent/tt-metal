@@ -5,14 +5,11 @@
 #include <math.h>
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tilize_device_operation.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -25,7 +22,7 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
     const tilize::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
     auto input = tensor_args.input_tensor;
-    auto output = tensor_return_value;
+    const auto& output = tensor_return_value;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -94,8 +91,8 @@ void TilizeMultiCoreShardedProgramFactory::override_runtime_arguments(
     const tilize::operation_attributes_t& operation_attributes,
     const tilize::tensor_args_t& tensor_args,
     const tilize::tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.input_cb_handle, *src_buffer);
     UpdateDynamicCircularBufferAddress(

@@ -6,8 +6,6 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "tilize_multi_core_interleaved_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"

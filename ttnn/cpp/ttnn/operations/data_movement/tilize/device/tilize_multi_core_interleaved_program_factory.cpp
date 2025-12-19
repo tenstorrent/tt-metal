@@ -6,8 +6,6 @@
 #include "tilize_multi_core_interleaved_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -24,7 +22,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     const tilize::tensor_args_t& tensor_args,
     const tilize::tensor_return_value_t& tensor_return_value) {
     auto a = tensor_args.input_tensor;
-    auto output = tensor_return_value;
+    const auto& output = tensor_return_value;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto sub_core_grids = operation_attributes.sub_core_grids;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -207,8 +205,8 @@ void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     const tilize::operation_attributes_t& operation_attributes,
     const tilize::tensor_args_t& tensor_args,
     const tilize::tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include "tt-metalium/kernel_types.hpp"
 
 namespace ttnn::operations::data_movement::tilize {
 
