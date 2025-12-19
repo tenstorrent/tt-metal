@@ -1097,7 +1097,9 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     std::filesystem::create_directories(temp_dir);
 
     // Serialize coordinates to file using the fabric_host_utils function
-    std::filesystem::path output_file = temp_dir / "physical_chip_mesh_coordinate_mapping.yaml";
+    int rank = *distributed_context->rank();
+    std::filesystem::path output_file =
+        temp_dir / ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank) + ".yaml");
     tt::tt_fabric::serialize_mesh_coordinates_to_file(*topology_mapper, output_file);
 
     // Verify the file was created

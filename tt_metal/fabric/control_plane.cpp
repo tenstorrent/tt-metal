@@ -477,15 +477,14 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
-                                            "physical_chip_mesh_coordinate_mapping.yaml";
-        try {
-            tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
-        } catch (const std::exception& e) {
-            log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
-        }
+    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int rank = *global_context->rank();
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                        ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank) + ".yaml");
+    try {
+        tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
     // Initialize routing table generator after topology_mapper is created
