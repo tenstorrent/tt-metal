@@ -1312,11 +1312,19 @@ class MultiModalProjectorTTNN:
         )
 
 
-# Default exports
-PatchEmbedding = PatchEmbeddingTorch
-SigLIPAttention = SigLIPAttentionTorch
-SigLIPMLP = SigLIPMLPTorch
-SigLIPBlock = SigLIPBlockTorch
-SigLIPVisionTower = SigLIPVisionTowerTorch
-MultiModalProjector = MultiModalProjectorTorch
+# Default exports - Use TTNN when available for performance
+if TTNN_AVAILABLE:
+    PatchEmbedding = PatchEmbeddingTTNN
+    SigLIPAttention = SigLIPAttentionTTNN
+    SigLIPMLP = SigLIPMLPTTNN
+    SigLIPBlock = SigLIPBlockTTNN
+    SigLIPVisionTower = SigLIPVisionTowerTTNN
+    MultiModalProjector = MultiModalProjectorTTNN
+else:
+    PatchEmbedding = PatchEmbeddingTorch
+    SigLIPAttention = SigLIPAttentionTorch
+    SigLIPMLP = SigLIPMLPTorch
+    SigLIPBlock = SigLIPBlockTorch
+    SigLIPVisionTower = SigLIPVisionTowerTorch
+    MultiModalProjector = MultiModalProjectorTorch
 

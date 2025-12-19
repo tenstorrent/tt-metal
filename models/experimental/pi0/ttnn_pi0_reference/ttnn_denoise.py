@@ -520,6 +520,9 @@ class KVCacheManagerTTNN:
             self.cache = None
 
 
-# Default exports
-DenoisingModule = DenoisingModuleTorch
+# Default exports - Use TTNN when available for performance
+if TTNN_AVAILABLE:
+    DenoisingModule = DenoisingModuleTTNN
+else:
+    DenoisingModule = DenoisingModuleTorch
 
