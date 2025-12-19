@@ -358,6 +358,178 @@ def test_rmsnorm_post_all_gather(device):
     assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
 
 
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_params):
+    """
+    End-to-end mesh device test for distributed RMSNorm.
+
+    This test runs the full distributed RMSNorm pipeline:
+    1. rms_norm_pre_all_gather: Each device computes local sum(x^2) stats
+    2. all_gather: Gather stats from all devices along cluster_axis=1
+    3. rms_norm_post_all_gather: Normalize using the gathered global stats
+
+    Test configuration based on model usage:
+    - Input: sharded across 8 devices along width, each device has (1, 1, 32, 896)
+    - Full hidden size: 7168 = 896 * 8
+    - Stats gathered along cluster_axis=1
+    - HiFi4 compute kernel with math_approx_mode=True
+    - epsilon: 1e-6
+    """
+    torch.manual_seed(1234)
+
+    # Model dimensions
+    n_devices_row = mesh_device.shape[1]  # 8 devices along cluster_axis=1
+    per_device_width = 896
+    full_hidden_size = per_device_width * n_devices_row  # 7168
+    inp_shape_per_device = (1, 1, 32, per_device_width)
+    inp_shape_full = (1, 1, 32, full_hidden_size)
+    weight_shape_per_device = (1, 1, per_device_width // 32, 32)  # (1, 1, 28, 32)
+    grid = ttnn.CoreGrid(x=4, y=7)
+    epsilon = 1e-6
+
+    logger.info(f"Testing distributed RMSNorm end-to-end on mesh:")
+    logger.info(f"  Full input: {inp_shape_full}, per-device: {inp_shape_per_device}")
+    logger.info(f"  Devices along cluster_axis=1: {n_devices_row}")
+
+    # Compute kernel config - HiFi4 as specified in model
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Create the full input tensor and weights
+    full_inp = torch.randn(inp_shape_full).bfloat16().float()
+    full_gamma = torch.rand(full_hidden_size).bfloat16().float() * 2 - 1
+
+    # Reference output: RMSNorm using global statistics
+    ref_out = reference_rmsnorm(full_inp, full_gamma, epsilon)
+
+    # Create L1 width-sharded config for input
+    num_cores = grid.num_cores
+    shard_width = per_device_width // num_cores  # 896 / 28 = 32
+    shard_height = inp_shape_per_device[-2]  # 32
+
+    in_mem_config = ttnn.create_sharded_memory_config_(
+        shape=(shard_height, shard_width),
+        core_grid=ttnn.num_cores_to_corerangeset(
+            num_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Create L1 width-sharded config for gathered stats
+    # After all_gather: (1, 1, 32, 32 * n_devices_row) = (1, 1, 32, 256)
+    stats_mem_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * n_devices_row],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
+    # Program config for RMSNorm ops
+    program_config = create_sharded_norm_config(
+        grid=grid,
+        dim=per_device_width,
+        tile_padded_batch_rows=shard_height,
+    )
+
+    # Shard input across devices along width dimension (cluster_axis=1)
+    # Each device gets a chunk of the hidden dimension
+    tt_inp = ttnn.from_torch(
+        full_inp,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=mesh_device.shape),
+    )
+    tt_inp = ttnn.to_memory_config(tt_inp, in_mem_config)
+
+    # Shard gamma weights across devices
+    tt_gamma = ttnn.from_torch(
+        full_gamma.reshape(1, 1, full_hidden_size // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=mesh_device.shape),
+    )
+
+    def run_op():
+        # Step 1: Pre-all-gather - each device computes local sum(x^2)
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            tt_inp,
+            compute_kernel_config=kernel_config,
+            program_config=program_config,
+            dtype=ttnn.bfloat16,
+        )
+
+        # Step 2: All-gather stats along cluster_axis=1
+        tt_gathered_stats = ttnn.all_gather(
+            tt_stats,
+            dim=3,
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=stats_mem_config,
+        )
+        ttnn.deallocate(tt_stats)
+
+        # Step 3: Post-all-gather - normalize using gathered global stats
+        tt_out = ttnn.rms_norm_post_all_gather(
+            tt_inp,
+            tt_gathered_stats,
+            epsilon=epsilon,
+            weight=tt_gamma,
+            compute_kernel_config=kernel_config,
+            program_config=program_config,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(tt_gathered_stats)
+
+        return tt_out
+
+    def check_outputs(tt_output):
+        # tt_output is sharded across devices, each device has its chunk
+        device_tensors = ttnn.get_device_tensors(tt_output)
+
+        # Compare each device's output with its corresponding chunk of reference
+        # Devices are ordered by (row, col) in the mesh, we care about col (cluster_axis=1)
+        for device_idx, tt_device_out in enumerate(device_tensors):
+            col_idx = device_idx % n_devices_row  # Column index in mesh
+            tt_output_torch = ttnn.to_torch(tt_device_out)
+            ref_chunk = ref_out[..., col_idx * per_device_width : (col_idx + 1) * per_device_width]
+            assert_with_pcc(ref_chunk, tt_output_torch, pcc=0.99)
+
+    # Run without trace or with trace based on enable_trace flag
+    if not enable_trace:
+        tt_output = run_op()
+        check_outputs(tt_output)
+    else:
+        # Compile the op
+        tt_output = run_op()
+        tt_output.deallocate(True)
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_output = run_op()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+        # Execute trace
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.release_trace(mesh_device, trace_id)
+
+        check_outputs(tt_output)
+
+
 # =============================================================================
 # Test: Non-distributed RMSNorm (ttnn.rms_norm)
 # =============================================================================
