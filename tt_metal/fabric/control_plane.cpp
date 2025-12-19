@@ -34,6 +34,7 @@
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include "fabric_host_utils.hpp"
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
@@ -474,6 +475,19 @@ void ControlPlane::init_control_plane(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
 
+    // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
+    // created This ensures ttnn-visualizer topology remains functional
+    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                            "physical_chip_mesh_coordinate_mapping.yaml";
+        try {
+            tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+        }
+    }
+
     // Initialize routing table generator after topology_mapper is created
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
@@ -533,6 +547,16 @@ void ControlPlane::init_control_plane_auto_discovery() {
         this->local_mesh_binding_,
         fixed_asic_position_pinnings);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+
+    // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
+    // created This ensures ttnn-visualizer topology remains functional
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                        "physical_chip_mesh_coordinate_mapping.yaml";
+    try {
+        tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+    }
 
     // Initialize routing table generator after topology_mapper is created
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
@@ -3028,55 +3052,6 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
-}
-
-void ControlPlane::serialize_eth_coordinates_to_file(const std::filesystem::path& output_dir) const {
-    // Ensure output directory exists
-    std::filesystem::create_directories(output_dir);
-
-    // Build YAML structure with chips mapping chip_id to [x, y, rack, shelf]
-    YAML::Node chips_node;
-    chips_node = YAML::Node(YAML::NodeType::Map);
-
-    // Iterate through all fabric node IDs and get their mesh coordinates
-    for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping_) {
-        // Get the logical chip ID (chip_id within the fabric node)
-        ChipId logical_chip_id = fabric_node_id.chip_id;
-
-        // Get mesh coordinates from the mesh graph
-        MeshCoordinate mesh_coord = mesh_graph_->chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-
-        // Create array [x, y, rack, shelf] format
-        // x, y come from mesh coordinates, rack and shelf default to 0
-        YAML::Node coord_array = YAML::Node(YAML::NodeType::Sequence);
-        // x coordinate (first dimension of mesh)
-        coord_array.push_back(mesh_coord.dims() > 0 ? mesh_coord[0] : 0);
-        // y coordinate (second dimension of mesh, or 0 if 1D)
-        coord_array.push_back(mesh_coord.dims() > 1 ? mesh_coord[1] : 0);
-        // rack (always 0)
-        coord_array.push_back(0);
-        // shelf (always 0)
-        coord_array.push_back(0);
-        chips_node[logical_chip_id] = coord_array;
-    }
-
-    // Create root YAML node
-    YAML::Node root;
-    root["chips"] = chips_node;
-
-    // Write to file
-    std::filesystem::path output_file = output_dir / "eth_coordinates.yaml";
-    std::ofstream out_file(output_file);
-    if (!out_file.is_open()) {
-        TT_THROW("Failed to open output file: {}", output_file.string());
-    }
-
-    YAML::Emitter emitter;
-    emitter << root;
-    out_file << emitter.c_str();
-    out_file.close();
-
-    log_info(tt::LogFabric, "Serialized ethernet coordinates to file: {}", output_file.string());
 }
 
 ControlPlane::~ControlPlane() = default;

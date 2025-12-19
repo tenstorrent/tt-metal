@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -21,6 +22,10 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <filesystem>
+#include <fstream>
+#include <yaml-cpp/yaml.h>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 
@@ -160,6 +165,46 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
 
     mode |= ROUTING_MODE_LOW_LATENCY;
     set_routing_mode(mode);
+}
+
+void serialize_mesh_coordinates_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    // Ensure output directory exists
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    // Get the mapping from TopologyMapper
+    const auto& mapping = topology_mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+    const auto& mesh_graph = topology_mapper.get_mesh_graph();
+
+    // Write to file using emitter with Flow style for inline sequences
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "chips";
+    emitter << YAML::Value << YAML::BeginMap;
+
+    // Emit each chip with flow style for the coordinate array
+    for (const auto& [fabric_node_id, physical_chip_id] : mapping) {
+        MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        emitter << YAML::Key << physical_chip_id;
+        emitter << YAML::Value;
+        emitter << YAML::Flow << YAML::BeginSeq;
+        for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
+            emitter << mesh_coord[dim];
+        }
+        emitter << YAML::EndSeq;
+    }
+
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_info(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

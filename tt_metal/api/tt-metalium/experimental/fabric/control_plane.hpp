@@ -221,10 +221,6 @@ public:
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
-    // Serialize chip IDs to ethernet coordinates mapping to a file
-    // The file format is YAML with chips mapping chip_id to [x, y, rack, shelf]
-    void serialize_eth_coordinates_to_file(const std::filesystem::path& output_dir) const;
-
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;

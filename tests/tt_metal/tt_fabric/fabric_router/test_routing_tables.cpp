@@ -7,8 +7,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
-#include <memory>
-#include <vector>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -21,6 +19,8 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 namespace {
 
@@ -1078,15 +1078,30 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     EXPECT_EQ(mesh_shape[1], 4) << "Mesh should have 4 columns";
     EXPECT_EQ(mesh_shape.mesh_size(), 8) << "Mesh should have 8 chips total";
 
+    // Create a TopologyMapper for testing (similar to RoutingTableGeneratorTestHelper)
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+    tt::tt_fabric::LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {mesh_id};
+    local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+
+    auto topology_mapper =
+        std::make_unique<tt::tt_fabric::TopologyMapper>(mesh_graph, *physical_system_descriptor, local_mesh_binding);
+
     // Create a temporary directory for the output file
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "test_eth_coords";
     std::filesystem::create_directories(temp_dir);
 
-    // Serialize coordinates to file
-    control_plane->serialize_eth_coordinates_to_file(temp_dir);
+    // Serialize coordinates to file using the fabric_host_utils function
+    std::filesystem::path output_file = temp_dir / "physical_chip_mesh_coordinate_mapping.yaml";
+    tt::tt_fabric::serialize_mesh_coordinates_to_file(*topology_mapper, output_file);
 
     // Verify the file was created
-    std::filesystem::path output_file = temp_dir / "eth_coordinates.yaml";
     EXPECT_TRUE(std::filesystem::exists(output_file)) << "Output file should exist: " << output_file;
 
     // Read and verify the file contents
@@ -1096,43 +1111,28 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     const auto& chips_node = yaml_file["chips"];
     EXPECT_TRUE(chips_node.IsMap()) << "'chips' should be a map";
 
+    // Get the mapping from topology mapper to verify physical chip IDs
+    const auto& mapping = topology_mapper->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+
     // Verify that we have the correct number of chips
-    EXPECT_EQ(chips_node.size(), mesh_shape.mesh_size())
-        << "Should have " << mesh_shape.mesh_size() << " chips in the file";
+    EXPECT_EQ(chips_node.size(), mapping.size()) << "Should have " << mapping.size() << " chips in the file";
 
-    // Verify coordinates for each chip match expected mesh coordinates
-    // For a 2x4 mesh, chip_id maps to coordinates as:
-    // chip_id = row * 4 + col, so row = chip_id / 4, col = chip_id % 4
-    for (ChipId chip_id = 0; chip_id < mesh_shape.mesh_size(); ++chip_id) {
-        EXPECT_TRUE(chips_node[chip_id]) << "Chip " << chip_id << " should exist in the file";
+    // Verify coordinates for each physical chip ID match expected mesh coordinates
+    for (const auto& [fabric_node_id, physical_chip_id] : mapping) {
+        EXPECT_TRUE(chips_node[physical_chip_id])
+            << "Physical chip " << physical_chip_id << " should exist in the file";
 
-        const auto& coord_array = chips_node[chip_id];
-        EXPECT_TRUE(coord_array.IsSequence()) << "Chip " << chip_id << " should have a sequence value";
-        EXPECT_EQ(coord_array.size(), 4) << "Chip " << chip_id << " should have 4 coordinates [x, y, rack, shelf]";
+        const auto& coord_array = chips_node[physical_chip_id];
+        ChipId logical_chip_id = fabric_node_id.chip_id;
+        MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, logical_chip_id);
 
-        // Compute expected coordinates from chip_id
-        uint32_t expected_x = chip_id / mesh_shape[1];
-        uint32_t expected_y = chip_id % mesh_shape[1];
-
-        // Verify coordinates match [x, y, rack, shelf] format
-        uint32_t actual_x = coord_array[0].as<uint32_t>();
-        uint32_t actual_y = coord_array[1].as<uint32_t>();
-        uint32_t actual_rack = coord_array[2].as<uint32_t>();
-        uint32_t actual_shelf = coord_array[3].as<uint32_t>();
-
-        EXPECT_EQ(actual_x, expected_x) << "Chip " << chip_id << " should have x coordinate " << expected_x << ", got "
-                                        << actual_x;
-        EXPECT_EQ(actual_y, expected_y) << "Chip " << chip_id << " should have y coordinate " << expected_y << ", got "
-                                        << actual_y;
-        EXPECT_EQ(actual_rack, 0) << "Chip " << chip_id << " should have rack coordinate 0";
-        EXPECT_EQ(actual_shelf, 0) << "Chip " << chip_id << " should have shelf coordinate 0";
-
-        // Also verify using mesh_graph's chip_to_coordinate for consistency
-        MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(mesh_id, chip_id);
-        EXPECT_EQ(actual_x, expected_coord[0])
-            << "Chip " << chip_id << " x coordinate should match mesh_graph.chip_to_coordinate";
-        EXPECT_EQ(actual_y, expected_coord[1])
-            << "Chip " << chip_id << " y coordinate should match mesh_graph.chip_to_coordinate";
+        // Verify coordinate values match expected mesh coordinates
+        for (size_t dim = 0; dim < expected_coord.dims(); ++dim) {
+            uint32_t actual_coord = coord_array[dim].as<uint32_t>();
+            EXPECT_EQ(actual_coord, expected_coord[dim])
+                << "Physical chip " << physical_chip_id << " (logical chip " << logical_chip_id << ") coordinate["
+                << dim << "] should be " << expected_coord[dim] << ", got " << actual_coord;
+        }
     }
 
     // Clean up
