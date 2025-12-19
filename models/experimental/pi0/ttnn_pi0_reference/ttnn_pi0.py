@@ -652,6 +652,11 @@ class PI0ModelTTNN:
         """
         Sample actions via denoising (TTNN inference).
         
+        This runs the full denoising loop:
+        1. Compute prefix embeddings (images + language) once
+        2. Forward prefix through VLM and cache KV
+        3. For each denoising step: compute suffix, forward through expert with cached KV
+        
         Args:
             images: Input images (PyTorch)
             img_masks: Image masks (PyTorch)
@@ -678,12 +683,6 @@ class PI0ModelTTNN:
             device=self.device,
         )
         
-        # Images stay on host for vision tower (hybrid processing)
-        img_masks_ttnn = [
-            ttnn.from_torch(m.float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-            for m in img_masks
-        ]
-        
         state_ttnn = ttnn.from_torch(
             state,
             dtype=ttnn.bfloat16,
@@ -691,14 +690,71 @@ class PI0ModelTTNN:
             device=self.device,
         )
         
-        # Sample actions
-        actions_ttnn = self.denoising.sample_actions(
-            batch_size=batch_size,
-            state=state_ttnn,
+        # Step 1: Embed prefix (images + language) using TTNN
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(
+            images, img_masks, lang_tokens_ttnn, lang_masks_ttnn
         )
         
-        # Convert back to PyTorch
-        return ttnn.to_torch(actions_ttnn)
+        # Step 2: Forward prefix through VLM and cache KV
+        _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
+        
+        # Get timesteps (on host for control flow)
+        timesteps = torch.linspace(1.0, 0.0, self.denoising.config.num_steps + 1)
+        
+        # Step 3: Sample initial noise
+        x_t = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
+        
+        # Step 4: Denoising loop
+        for i in range(self.denoising.config.num_steps):
+            t = timesteps[i].item()
+            t_next = timesteps[i + 1].item()
+            dt = t_next - t
+            
+            # Convert noisy actions to TTNN
+            x_t_ttnn = ttnn.from_torch(
+                x_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            
+            # Create timestep tensor
+            t_tensor = ttnn.from_torch(
+                torch.full((batch_size,), t, dtype=torch.float32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            
+            # Embed suffix
+            suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(
+                state_ttnn, x_t_ttnn, t_tensor
+            )
+            
+            # Forward through expert with cached prefix KV
+            expert_output, _ = self.backbone.forward_expert(
+                suffix_embs,
+                past_key_values=prefix_kv_cache,
+            )
+            
+            # Extract action output (skip state token in PI0 mode)
+            if not self.config.pi05:
+                action_output = ttnn.slice(
+                    expert_output, 
+                    [0, 1, 0], 
+                    [expert_output.shape[0], expert_output.shape[1], expert_output.shape[2]]
+                )
+            else:
+                action_output = expert_output
+            
+            # Project to velocity
+            velocity = self.suffix_embedding.project_output(action_output)
+            velocity_torch = ttnn.to_torch(velocity)
+            
+            # Euler step
+            x_t = x_t + velocity_torch * dt
+        
+        return x_t
     
     @classmethod
     def from_pretrained(
