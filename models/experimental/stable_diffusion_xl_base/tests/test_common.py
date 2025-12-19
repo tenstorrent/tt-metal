@@ -166,15 +166,18 @@ def normalize_prompt_for_text_encoder(
     Returns:
         List of prompts with length equal to tensor_parallel * data_parallel
 
-    Prompt handling rules:
-    - String inputs are converted to single-element lists
-    - If prompt list length is 1: pad with (tensor_parallel-1) empty strings, then broadcast data_parallel times
-    - If prompt list length equals data_parallel: pad each prompt with (tensor_parallel-1) empty strings
-    - If prompt list length equals tensor_parallel * data_parallel: use as-is
+    Prompt distribution strategy:
+    - Single string inputs are converted to single-element lists
+    - Length 1: Broadcast prompt across data_parallel devices, pad with (tensor_parallel-1) empty strings per device
+    - Length data_parallel: Each prompt padded with (tensor_parallel-1) empty strings
+    - Length tensor_parallel * data_parallel: Use as-is
     - Otherwise: raise ValueError
 
+    The output ordering is: [prompt[0], prompt[1], ..., prompt[data_parallel-1], '', '', ..., '']
+    where empty strings fill the remaining (data_parallel * (tensor_parallel-1)) slots.
+
     Raises:
-        ValueError: If prompt list length doesn't match expected values (1, data_parallel, or tensor_parallel * data_parallel)
+        ValueError: If prompt list length is not 1, data_parallel, or tensor_parallel * data_parallel
         AssertionError: If tensor_parallel is not 1 or 2
     """
     assert tensor_parallel in [1, 2], f"Only TP 1 and 2 are supported, got {tensor_parallel}"
@@ -186,16 +189,9 @@ def normalize_prompt_for_text_encoder(
 
     # Handle prompt distribution based on parallelism mode
     if len(prompt_list) == 1:
-        # pad tensor_parallel-1 times, broadcast data_parallel times
-        prompt_list = (prompt_list + [""] * (tensor_parallel - 1)) * data_parallel
+        prompt_list = prompt_list * data_parallel + [""] * data_parallel * (tensor_parallel - 1)
     elif len(prompt_list) == data_parallel:
-        # pad tensor_parallel-1 times for each data_parallel prompt, broadcast data_parallel times
-        new_prompt_list = []
-        for p in prompt_list:
-            p = p if isinstance(p, list) else [p]
-            new_prompt_list += p + [""] * (tensor_parallel - 1)
-        prompt_list = new_prompt_list
-
+        prompt_list = prompt_list + [""] * data_parallel * (tensor_parallel - 1)
     elif len(prompt_list) == data_parallel * tensor_parallel:
         # do nothing, already correct
         pass
@@ -277,7 +273,6 @@ def batch_encode_prompt_on_device(
     data_parallel = determine_data_parallel(ttnn_device, use_cfg_parallel)
 
     prompt = normalize_prompt_for_text_encoder(prompt, tensor_parallel, data_parallel)
-    num_prompts = len(prompt)
     prompt_2 = prompt_2 or prompt
     prompt_2 = normalize_prompt_for_text_encoder(prompt_2, tensor_parallel, data_parallel)
 
@@ -293,7 +288,7 @@ def batch_encode_prompt_on_device(
     ), "Non - Classifier free guidance is not supported currently with on device text encoders"
 
     if prompt is not None:
-        batch_size = num_prompts
+        batch_size = len(prompt)
     else:
         batch_size = prompt_embeds.shape[0]
 
@@ -497,7 +492,7 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    slice_to = num_prompts if use_cfg_parallel else None
+    slice_to = data_parallel if use_cfg_parallel else None
     return (
         prompt_embeds[:slice_to],
         negative_prompt_embeds[:slice_to],
