@@ -16,7 +16,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
 using namespace ckernel;
 

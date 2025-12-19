@@ -41,7 +41,7 @@
  */
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution

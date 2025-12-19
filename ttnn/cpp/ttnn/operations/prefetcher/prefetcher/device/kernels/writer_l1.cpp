@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
-#include "remote_circular_buffer_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/remote_circular_buffer.h"
+#include "api/debug/dprint.h"
 
 uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     uint32_t old_arg_idx = arg_idx;

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_eth_api.h"
-#include "ethernet/dataflow_api.h"
+#include "internal/ethernet/tt_eth_api.h"
+#include "internal/ethernet/dataflow_api.h"
 
 void eth_txq_reg_write(uint32_t qnum, uint32_t offset, uint32_t val) {
     ETH_WRITE_REG(ETH_TXQ0_REGS_START + (qnum * ETH_TXQ_REGS_SIZE) + offset, val);

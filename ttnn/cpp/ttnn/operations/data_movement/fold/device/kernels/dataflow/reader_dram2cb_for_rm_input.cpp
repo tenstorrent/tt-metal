@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);

@@ -4,16 +4,16 @@
 
 #pragma once
 
-#include "compile_time_args.h"
-#include "dataflow_api.h"
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_elastic_channels_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
-#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "hostdev/fabric_telemetry_msgs.h"
+#include "api/alignment.h"
 
 #include <array>
 #include <utility>

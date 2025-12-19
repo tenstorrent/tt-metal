@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 // Simple kernel that copies [start_page, end_page) pages from dst to dst.
 void kernel_main() {

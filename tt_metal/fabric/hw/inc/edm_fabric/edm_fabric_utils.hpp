@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "dataflow_api.h"
-#include "debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace tt::tt_fabric {

@@ -6,8 +6,8 @@
 
 #include "c_tensix_core.h"
 #include "core_config.h"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 constexpr uint32_t num_unique_rt_args = get_compile_time_arg_val(0);
 constexpr uint32_t num_common_rt_args = get_compile_time_arg_val(1);

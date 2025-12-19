@@ -5,8 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "dataflow_api.h"
-#include "socket_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS

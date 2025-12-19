@@ -5,13 +5,13 @@
 #pragma once
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "risc_attribs.h"
-#include "debug/waypoint.h"
+#include "internal/risc_attribs.h"
+#include "api/debug/waypoint.h"
 #include "noc/noc_parameters.h"
 
 #if !defined(FD_CORE_TYPE)

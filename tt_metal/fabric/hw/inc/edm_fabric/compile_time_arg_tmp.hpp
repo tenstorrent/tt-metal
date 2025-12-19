@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/compile_time_args.h"
+#include "api/compile_time_args.h"
 
 ////////////////////////////////////////
 //  Conditional Arg Getters

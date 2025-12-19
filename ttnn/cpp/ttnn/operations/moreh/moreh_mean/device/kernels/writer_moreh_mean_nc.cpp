@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     const auto output_addr = get_arg_val<uint32_t>(0);

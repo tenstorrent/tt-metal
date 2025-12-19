@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <algorithm>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with

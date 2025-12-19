@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "risc_common.h"
 
 // Target 8KB of data before a single barrier for 8x8 grid of readers

@@ -5,7 +5,7 @@
 
 #ifdef DATA_MOVEMENT
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #endif
 
 #ifdef COMPUTE
@@ -16,7 +16,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #endif
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 #if defined DATA_MOVEMENT or ERISC
 namespace {

@@ -4,10 +4,9 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
-#include "hw/inc/dataflow_api.h"
-#include "hw/inc/dataflow_api_addrgen.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/dprint.h"
 #include "ckernel_defs.h"
 #include "tt-metalium/constants.hpp"
 uint32_t round_down(uint32_t value, uint32_t multiple) {

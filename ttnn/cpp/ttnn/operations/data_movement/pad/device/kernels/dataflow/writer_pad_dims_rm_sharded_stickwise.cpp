@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <cstring>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "dataflow_api.h"
-#include "utils/bfloat16.h"
-#include "utils/float32.h"
-#include "utils/int32.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/numeric/bfloat16.h"
+#include "api/numeric/float32.h"
+#include "api/numeric/int32.h"
 
 #include <cstdint>
 

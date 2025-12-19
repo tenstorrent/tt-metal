@@ -25,7 +25,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
