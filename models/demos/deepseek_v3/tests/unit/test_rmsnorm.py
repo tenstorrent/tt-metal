@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.tests.unit.utils import run_test
 from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -279,7 +280,7 @@ def test_rmsnorm_post_all_gather(device):
     ],
     ids=["32x1536", "32x512"],
 )
-def test_rmsnorm(device, inp_shape, weight_shape):
+def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     """
     Test non-distributed RMSNorm operation (ttnn.rms_norm).
 
@@ -335,3 +336,77 @@ def test_rmsnorm(device, inp_shape, weight_shape):
     tt_out_cpu = ttnn.to_torch(tt_out)
 
     assert_with_pcc(ref_out, tt_out_cpu, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "inp_shape, weight_shape",
+    [
+        ((1, 1, 32, 1536), (1, 1, 48, 32)),  # 1536 / 32 = 48 sticks
+        ((1, 1, 32, 512), (1, 1, 16, 32)),  # 512 / 32 = 16 sticks
+    ],
+    ids=["32x1536", "32x512"],
+)
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace, device_params):
+    """
+    Mesh device test for non-distributed RMSNorm operation (ttnn.rms_norm).
+
+    Test configuration:
+    - Input: bfloat16, DRAM INTERLEAVED, TILE layout
+    - Weight: bfloat16, DRAM INTERLEAVED, ROW_MAJOR layout
+    - LoFi compute kernel (math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
+    - LayerNormDefaultProgramConfig
+    - epsilon: 1e-6
+    """
+    torch.manual_seed(1234)
+
+    epsilon = 1e-6
+
+    logger.info(f"Testing rms_norm on mesh: inp_shape={inp_shape}, weight_shape={weight_shape}")
+
+    # Create input and weight tensors
+    inp = torch.randn(inp_shape).bfloat16().float()
+    gamma = torch.rand(inp_shape[-1]).bfloat16().float() * 2 - 1
+
+    # Reference output
+    ref_out = reference_rmsnorm(inp, gamma, epsilon)
+
+    # Prepare input - DRAM INTERLEAVED, TILE layout
+    tt_inp = ttnn.from_torch(
+        inp,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Prepare gamma weights - DRAM INTERLEAVED, ROW_MAJOR layout
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(weight_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def run_op():
+        tt_out = ttnn.rms_norm(
+            tt_inp,
+            epsilon=epsilon,
+            weight=tt_gamma,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            program_config=ttnn.LayerNormDefaultProgramConfig(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return tt_out
+
+    def check_op(tt_output):
+        assert_with_pcc(ref_out, tt_output, pcc=0.99)
+
+    run_test(mesh_device, run_op, check_op, enable_trace)
