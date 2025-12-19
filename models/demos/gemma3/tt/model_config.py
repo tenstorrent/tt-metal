@@ -59,13 +59,6 @@ class ModelArgs(TTModelArgs):
         "OUTPUT_MM",
     )
 
-    LOCAL_HF_PARAMS = {
-        "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
-        "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
-        "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
-        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
-    }
-
     MAX_QKV_MM_SEQ_LEN = 2048
 
     def __init__(
@@ -194,7 +187,6 @@ class ModelArgs(TTModelArgs):
         if self.optimizations is None:
             self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
 
-        self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -675,7 +667,7 @@ class ModelArgs(TTModelArgs):
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )  # if self.dim==8192 else ttnn.DRAM_MEMORY_CONFIG
+            )
 
             self.model_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32 * 4, self.hidden_dim // 8 // 8),
@@ -791,7 +783,6 @@ class ModelArgs(TTModelArgs):
                 k=cache_seq_len,
                 n=self.head_dim,
                 grid_size=(8, 8),
-                # in0_block_w=1, # TODO: Remove this when we get non-causal FlashDecode
                 fuse_batch=False,
             )
             self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
@@ -941,14 +932,8 @@ class ModelArgs(TTModelArgs):
         return []
 
     def _set_model_specific_params(self):
-        # Gemma3 specific params
-        if self.is_gemma:
-            self.rms_norm_add_unit_offset = True
-            self.embed_scale = self.dim**0.5
-
-    @property
-    def is_gemma(self):
-        return any(x in self.base_model_name.lower() for x in ["gemma-3", "medgemma"])
+        self.rms_norm_add_unit_offset = True
+        self.embed_scale = self.dim**0.5
 
     # def _set_vision_params(self, vision_config):
     #     self.vision_dim = vision_config.get("hidden_size", 1280)
@@ -991,13 +976,7 @@ class ModelArgs(TTModelArgs):
             "silu": ttnn.UnaryOpType.SILU,
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
-        # Optional tuning knobs
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
 
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
@@ -1015,27 +994,23 @@ class ModelArgs(TTModelArgs):
         from transformers import AutoConfig
 
         if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:
             self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
 
         if "text_config" in self.hf_config or "vision_config" in self.hf_config:
-            if self.is_gemma:
-                self._set_params_from_dict(self.hf_config)
-                if "vision_config" in self.hf_config:
-                    merged_vision_config = merge_vision_config(self.hf_config)
-                    self._set_vision_params(merged_vision_config)
+            self._set_params_from_dict(self.hf_config)
+            if "vision_config" in self.hf_config:
+                merged_vision_config = merge_vision_config(self.hf_config)
+                self._set_vision_params(merged_vision_config)
         else:
             self._set_params_from_dict(self.hf_config)
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if self.is_gemma:
-            if is_vision:
-                text_prefix = "model.vision_tower.vision_model.encoder."
-            else:
-                # text_prefix = "model.language_model."
-                text_prefix = ""
+        if is_vision:
+            text_prefix = "model.vision_tower.vision_model.encoder."
+        else:
+            text_prefix = ""
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
@@ -1060,24 +1035,9 @@ class ModelArgs(TTModelArgs):
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoModelForCausalLM
 
-            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-            config.num_layers = self.n_layers
-            config.num_hidden_layers = self.n_layers
-
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = AutoModelForCausalLM.from_config(config)
-
-            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
-            state_dict = model.state_dict()
+            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:
             from transformers import AutoModelForCausalLM
 
@@ -1093,8 +1053,7 @@ class ModelArgs(TTModelArgs):
             state_dict = model.state_dict()
 
         if self.is_multimodal:
-            if self.is_gemma:
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+            state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -1153,15 +1112,11 @@ class ModelArgs(TTModelArgs):
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector.mm_soft_emb_norm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_rms_norm(self, i=0):
@@ -1198,28 +1153,14 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        from transformers import AutoConfig, AutoModelForCausalLM
+        pass
 
         if self.dummy_weights and not load_checkpoint:
-            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-            config.num_layers = self.n_layers
-            config.num_hidden_layers = self.n_layers
-
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = AutoModelForCausalLM.from_config(config)
-            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
         else:
-            if self.is_gemma:
-                from transformers import Gemma3ForConditionalGeneration
+            from transformers import Gemma3ForConditionalGeneration
 
-                model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+            model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper
@@ -1236,36 +1177,26 @@ class ModelArgs(TTModelArgs):
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_mlp(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.encoder.layers[0].mlp
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.position_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
@@ -1276,29 +1207,21 @@ class ModelArgs(TTModelArgs):
             layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
         else:
             layer = model.vision_tower.vision_model.post_layernorm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_attention(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_encoder_block(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.encoder.layers[0]
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.encoder
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_decoder(self, i=0):
@@ -1306,9 +1229,8 @@ class ModelArgs(TTModelArgs):
         layer = model.model.layers[i]
         rotary_emb = model.model.rotary_emb
 
-        if self.is_gemma:
-            rotary_emb_local = model.model.rotary_emb_local
-            wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
+        rotary_emb_local = model.model.rotary_emb_local
+        wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
 
         return wrapper
 

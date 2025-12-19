@@ -95,11 +95,7 @@ class TtGemmaImageAttention(LightweightModule):
             torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
 
-        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: (
-            None
-            if self.configuration.is_gemma
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-        )
+        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: None
 
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -233,7 +229,7 @@ class TtGemmaImageAttention(LightweightModule):
         if len(x_11SH.shape) == 3:
             x_11SH = ttnn.reshape(x_11SH, (batch_size, 1, seq_len, -1))
 
-        MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
