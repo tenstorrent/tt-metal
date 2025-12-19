@@ -172,7 +172,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -281,7 +281,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = ttnn::get_dest_reg_count(compute_kernel_config);
+    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
     const uint32_t qk_in0_block_w = DHt;
     // max of Sk_chunk_t and dst_size
     const uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
@@ -397,7 +397,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         local_padded_N,
         local_padded_Nt,
         padded_Nt,
-        static_cast<uint32_t>(logical_n),
+        static_cast<uint32_t>(args.logical_n),
         logical_nt,
         Lt,
         L,
@@ -406,7 +406,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        ring_size};
+        args.all_gather_struct.ring_size};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -438,7 +438,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         local_padded_N,
         local_padded_Nt,
         padded_Nt,
-        logical_n,
+        args.logical_n,
         logical_nt,
         Lt,
         L,
@@ -449,7 +449,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        ring_size};
+        args.all_gather_struct.ring_size};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -464,7 +464,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         local_padded_N,
         local_padded_Nt,
         padded_Nt,
-        logical_n,
+        args.logical_n,
         logical_nt,
         Lt,
         L,
@@ -473,7 +473,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        ring_size,
+        args.all_gather_struct.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
