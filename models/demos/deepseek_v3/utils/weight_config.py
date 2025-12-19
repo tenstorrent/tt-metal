@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import fcntl
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,35 @@ from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 # Import TENSOR_CACHE_EXTENSION from config_helpers since it's also used by shard_and_save
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
+
+
+@contextmanager
+def locked_file(file_path: Path, mode: str = "r", exclusive: bool = False):
+    """
+    Context manager for file operations with advisory locking.
+
+    Args:
+        file_path: Path to the file
+        mode: File open mode ('r' for read, 'w' for write, etc.)
+        exclusive: If True, use exclusive lock (LOCK_EX) for writes.
+                  If False, use shared lock (LOCK_SH) for reads.
+
+    Yields:
+        File handle with lock acquired
+    """
+    # Ensure parent directory exists for write operations
+    if mode in ("w", "a", "x") or "+" in mode:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+
+    with file_path.open(mode) as f:
+        try:
+            fcntl.flock(f.fileno(), lock_type)
+            yield f
+        finally:
+            # Lock is automatically released when file is closed
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 # JSON serializer for the weight config
@@ -89,7 +120,7 @@ def get_weight_config(
         if not config_path.exists():
             logger.info(f"Weight configuration file does not exist, forcing recalculating weights")
             break
-        with config_path.open() as f:
+        with locked_file(config_path, "r", exclusive=False) as f:
             weight_config = json.load(f, object_hook=try_decode_saved_weight)
         try:
             validate_weight_config_paths(weight_cache_path, weight_config)
@@ -117,13 +148,13 @@ def get_weight_config(
     logger.info("Converting weights to TTNN SavedWeight format...")
 
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-    breakpoint()
 
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)
 
     # Save config with relative paths for portability
-    with config_path.open("w") as f:
+    # Use exclusive lock to prevent concurrent writes and corruption
+    with locked_file(config_path, "w", exclusive=True) as f:
         json.dump(weight_config, f, cls=WeightConfigEncoder)
 
     # Return normalized config with absolute paths for runtime use
