@@ -386,4 +386,72 @@ ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
+// clang-format off
+/**
+ * Init function for broadcast operations with destination register reuse.
+ * Must be called before using bcast_dest_reuse_tiles.
+ *
+ * | Argument       | Description                                              | Type     | Valid Range | Required |
+ * |----------------|----------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
+ALWI void bcast_dest_reuse_tiles_init(uint32_t icb0) {
+    UNPACK((llk_unpack_A_init<src_b_bcast_type, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(false, false, icb0)));
+    MATH((llk_math_eltwise_binary_init<
+          eltwise_binary_type,
+          src_b_bcast_type,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCB>(false)));
+}
+
+// clang-format off
+/**
+ * Performs element-wise binary operations with broadcast, reusing a value from the destination register.
+ * The tile at src_dst_tile_index will be loaded from DST into SRCB with the specified broadcast type.
+ * For scalar broadcast, the first value is broadcast across the entire SRCB register.
+ * The binary operation will operate on SRCA (from CB) & SRCB (from DST) inputs, and the result
+ * will be written to the DST register buffer at dst_tile_index.
+ *
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument           | Description                                                              | Type     | Valid Range                                    | Required |
+ * |--------------------|--------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in_cb_id           | The identifier of the circular buffer (CB) containing A                  | uint32_t | 0 to 31                                        | True     |
+ * | in_tile_index      | The index of tile A within the CB                                        | uint32_t | Must be less than the size of the CB           | True     |
+ * | src_dst_tile_index | The index of the tile in DST REG to load into srcB (with broadcast)      | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | dst_tile_index     | The index of the tile in DST REG for the result                          | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
+ALWI void bcast_dest_reuse_tiles(
+    uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_dst_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<src_b_bcast_type, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_binary<
+          eltwise_binary_type,
+          src_b_bcast_type,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::DEST_TO_SRCB>(src_dst_tile_index, dst_tile_index, true)));
+}
+
+/**
+ * Shorthand for scalar broadcast multiply with dest reuse.
+ */
+ALWI void mul_tiles_bcast_scalar_dest_reuse_init(uint32_t icb0) {
+    bcast_dest_reuse_tiles_init<ELWMUL, BroadcastType::SCALAR>(icb0);
+}
+
+/**
+ * Performs a broadcast-multiply of a tile from icb0[in_tile_index] with a scalar from DST[src_dst_tile_index].
+ */
+ALWI void mul_tiles_bcast_scalar_dest_reuse(
+    uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_dst_tile_index, uint32_t dst_tile_index) {
+    bcast_dest_reuse_tiles<ELWMUL, BroadcastType::SCALAR>(in_cb_id, in_tile_index, src_dst_tile_index, dst_tile_index);
+}
+
 }  // namespace ckernel
