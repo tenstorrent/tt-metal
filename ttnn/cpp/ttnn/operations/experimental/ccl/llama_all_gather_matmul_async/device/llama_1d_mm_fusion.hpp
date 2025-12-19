@@ -6,7 +6,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"

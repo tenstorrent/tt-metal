@@ -12,12 +12,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {

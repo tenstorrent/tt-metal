@@ -5,9 +5,7 @@
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/global_semaphore.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
 
