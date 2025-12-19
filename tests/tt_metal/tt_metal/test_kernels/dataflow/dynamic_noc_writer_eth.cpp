@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "hw/inc/risc_attribs.h"
+#include "internal/risc_attribs.h"
 
 void kernel_main() {
     constexpr std::uint32_t num_iterations = get_compile_time_arg_val(0);
