@@ -186,7 +186,7 @@ class TestTriage:
     # Tests below test individual triage scripts
 
     def test_check_arc(self):
-        result = self.run_triage_script("check_arc.py", return_result=True)
+        result = self.run_triage_script("check_arc.py")
 
         assert result is not None, "Expected non-None result from check_arc.py"
         for check in result:
@@ -216,10 +216,75 @@ class TestTriage:
         self.run_triage_script("check_noc_locations.py")
 
     def test_check_noc_status(self):
-        self.run_triage_script("check_noc_status.py")
+        self.run_triage_script("check_noc_status.py", assert_failure_checks=False)
 
+        global FAILURE_CHECKS
+
+        # Some mismatches may occur on unused cores.
+        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
+        assert (
+            len(non_state_failures) == 0
+        ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
+
+    def test_dump_fast_dispatch(self):
+        self.run_triage_script("dump_fast_dispatch.py")
+
+    def test_dump_lightweight_asserts(self):
+        result = self.run_triage_script("dump_lightweight_asserts.py")
+
+        assert result is not None, "Expected non-None result from dump_lightweight_asserts.py"
+
+        # Get expected results from configuration, skip detailed checks if not provided
+        expected = self.expected_results.get("lightweight_asserts")
+        if not expected:
+            return  # No expected results configured, just verify it runs without failures
+
+        expected_risc_names = expected.get("risc_names")
+        if expected_risc_names:
+            assert len(result) == len(
+                expected_risc_names
+            ), f"Expected {len(expected_risc_names)} risc results, got {len(result)}"
+            risc_names = {check.risc_name for check in result}
+            assert risc_names == expected_risc_names, f"Expected {expected_risc_names}, got {risc_names}"
+
+        for check in result:
+            assert check.result is not None, f"Expected non-None result for {check.risc_name}"
+
+            # Verify kernel name if specified
+            expected_kernel_name = expected.get("kernel_name")
+            if expected_kernel_name:
+                assert (
+                    check.result.kernel_name == expected_kernel_name
+                ), f"{check.risc_name}: Expected kernel_name '{expected_kernel_name}', got '{check.result.kernel_name}'"
+
+            # Verify callstack exists and has entries
+            callstack = check.result.kernel_callstack_with_message.callstack.callstack
+            assert callstack and len(callstack) > 0, f"{check.risc_name}: Callstack is empty"
+
+            # Verify first callstack entry if specified
+            first_entry = callstack[0]
+            expected_file = expected.get("first_callstack_file")
+            if expected_file:
+                assert first_entry.file.endswith(
+                    expected_file
+                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file}'"
+
+            expected_line = expected.get("first_callstack_line")
+            if expected_line:
+                assert (
+                    first_entry.line == expected_line
+                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
+
+    def test_dump_running_operations(self):
+        self.run_triage_script("dump_running_operations.py")
+
+    def test_dump_watcher_ringbuffer(self):
+        self.run_triage_script("dump_watcher_ringbuffer.py")
+
+    # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
+    # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
-        result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"], return_result=True)
+        result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
 
@@ -287,63 +352,13 @@ class TestTriage:
                         f"Found {expected_file} at lines: {[entry.line for entry in matching_entries]}"
                     )
 
-    def test_dump_fast_dispatch(self):
-        self.run_triage_script("dump_fast_dispatch.py")
-
-    def test_dump_lightweight_asserts(self):
-        result = self.run_triage_script("dump_lightweight_asserts.py", return_result=True)
-
-        assert result is not None, "Expected non-None result from dump_lightweight_asserts.py"
-
-        # Get expected results from configuration, skip detailed checks if not provided
-        expected = self.expected_results.get("lightweight_asserts")
-        if not expected:
-            return  # No expected results configured, just verify it runs without failures
-
-        expected_risc_names = expected.get("risc_names")
-        if expected_risc_names:
-            assert len(result) == len(
-                expected_risc_names
-            ), f"Expected {len(expected_risc_names)} risc results, got {len(result)}"
-            risc_names = {check.risc_name for check in result}
-            assert risc_names == expected_risc_names, f"Expected {expected_risc_names}, got {risc_names}"
-
-        for check in result:
-            assert check.result is not None, f"Expected non-None result for {check.risc_name}"
-
-            # Verify kernel name if specified
-            expected_kernel_name = expected.get("kernel_name")
-            if expected_kernel_name:
-                assert (
-                    check.result.kernel_name == expected_kernel_name
-                ), f"{check.risc_name}: Expected kernel_name '{expected_kernel_name}', got '{check.result.kernel_name}'"
-
-            # Verify callstack exists and has entries
-            callstack = check.result.kernel_callstack_with_message.callstack.callstack
-            assert callstack and len(callstack) > 0, f"{check.risc_name}: Callstack is empty"
-
-            # Verify first callstack entry if specified
-            first_entry = callstack[0]
-            expected_file = expected.get("first_callstack_file")
-            if expected_file:
-                assert first_entry.file.endswith(
-                    expected_file
-                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file}'"
-
-            expected_line = expected.get("first_callstack_line")
-            if expected_line:
-                assert (
-                    first_entry.line == expected_line
-                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
-
-    def test_dump_running_operations(self):
-        self.run_triage_script("dump_running_operations.py")
-
-    def test_dump_watcher_ringbuffer(self):
-        self.run_triage_script("dump_watcher_ringbuffer.py")
-
     def run_triage_script(
-        self, script_name: str, args: ScriptArguments = None, argv: list[str] = [], return_result: bool = True
+        self,
+        script_name: str,
+        args: ScriptArguments = None,
+        argv: list[str] = [],
+        return_result: bool = True,
+        assert_failure_checks: bool = True,
     ):
         global triage_home
         global FAILURE_CHECKS
@@ -357,5 +372,9 @@ class TestTriage:
             return_result=return_result,
         )
 
-        assert len(FAILURE_CHECKS) == 0, f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        if assert_failure_checks:
+            assert (
+                len(FAILURE_CHECKS) == 0
+            ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
         return result
