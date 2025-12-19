@@ -49,7 +49,9 @@ runs:
         # Slack has a 3000 character limit per text block
         # Use 2500 as our target to leave room for chunk indicators and formatting
         MAX_BLOCK_TEXT_LENGTH=2500
-        HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
+        # Use actual newline character
+        NEWLINE=$'\n'
+        HEADER_PREFIX="❌ *Regressions (Pass → Fail):*${NEWLINE}"
 
         # Function to format a single failing job to text
         format_single_job() {
@@ -107,7 +109,7 @@ runs:
             # No failing jobs, just add the header
             test_text="${current_chunk_text}"
             if [ -n "$test_text" ]; then
-              test_text="${test_text}\n${regression_header}"
+              test_text="${test_text}${NEWLINE}${regression_header}"
             else
               test_text="${HEADER_PREFIX}${regression_header}"
             fi
@@ -131,14 +133,14 @@ runs:
               if [ "$is_first_job_batch" = true ]; then
                 # First batch includes the regression header
                 if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}\n${regression_header}"
+                  batch_text="${current_chunk_text}${NEWLINE}${regression_header}"
                 else
                   batch_text="${HEADER_PREFIX}${regression_header}"
                 fi
               else
                 # Continuation batch
                 if [ -n "$current_chunk_text" ]; then
-                  batch_text="${current_chunk_text}\n_(continued)_ *${regression_name}*"
+                  batch_text="${current_chunk_text}${NEWLINE}_(continued)_ *${regression_name}*"
                 else
                   batch_text="${HEADER_PREFIX}_(continued)_ *${regression_name}*"
                 fi
@@ -155,7 +157,7 @@ runs:
                   continue
                 fi
 
-                test_batch="${batch_text}\n${job_text}"
+                test_batch="${batch_text}${NEWLINE}${job_text}"
                 test_length=$(printf '%s' "$test_batch" | wc -c)
 
                 # Reserve space for chunk indicator
@@ -239,7 +241,9 @@ runs:
         fi
 
         # Build payloads for each chunk
-        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
+        HEADER="Aggregate Workflow Data run: "
+        HEADER+="<https://github.com/${GITHUB_REPOSITORY}"
+        HEADER+="/actions/runs/${GITHUB_RUN_ID}|this run>"
 
         # Generate payloads for all chunks and store them
         # Temporarily disable exit on error so we create all payload files even if one fails
@@ -260,7 +264,7 @@ runs:
 
           # Add chunk indicator if there are multiple chunks
           if [ "$TOTAL_CHUNKS" -gt 1 ]; then
-            chunk_full_text="*[Part $((i + 1))/$TOTAL_CHUNKS]*\n${chunk_full_text}"
+            chunk_full_text="*[Part $((i + 1))/$TOTAL_CHUNKS]*"$'\n'"${chunk_full_text}"
           fi
 
           # Verify the final text length doesn't exceed Slack's limit
@@ -309,9 +313,10 @@ runs:
           fi
 
           # Verify the actual block text length in the payload (after JSON encoding)
-          body_block_text=$(echo "$PAYLOAD" | jq -r '.blocks[1].text.text // .blocks[1].text // ""' 2>/dev/null || echo "")
+          body_block_text=$(echo "$PAYLOAD" | \
+            jq -r '.blocks[1].text.text // .blocks[1].text // ""' 2>/dev/null || echo "")
           body_block_text_length=$(printf '%s' "$body_block_text" | wc -c)
-          echo "Chunk $((i + 1)) body block text length: $body_block_text_length characters (limit: 3000)"
+          echo "Chunk $((i + 1)) body block text length: $body_block_text_length chars"
           if [ "$body_block_text_length" -gt 3000 ]; then
             echo "⚠️ CRITICAL: Chunk $((i + 1)) block text exceeds Slack's 3000 char limit!"
           fi
@@ -405,9 +410,13 @@ runs:
             # Build request body with channel and optional thread_ts
             REQUEST_BODY=""
             if [ -z "$FIRST_TS" ]; then
-              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" '. + {channel: $channel}' 2>/dev/null || echo "")
+              REQUEST_BODY=$(echo "$PAYLOAD" | \
+                jq -c --arg channel "$CHANNEL_ID" \
+                '. + {channel: $channel}' 2>/dev/null || echo "")
             else
-              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" '. + {channel: $channel, thread_ts: $thread_ts}' 2>/dev/null || echo "")
+              REQUEST_BODY=$(echo "$PAYLOAD" | \
+                jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" \
+                '. + {channel: $channel, thread_ts: $thread_ts}' 2>/dev/null || echo "")
             fi
 
             if [ -z "$REQUEST_BODY" ]; then
@@ -431,9 +440,11 @@ runs:
             fi
 
             # Check for errors
-            OK_STATUS=$(echo "$RESPONSE" | jq -r '.ok // false' 2>/dev/null || echo "false")
+            OK_STATUS=$(echo "$RESPONSE" | \
+              jq -r '.ok // false' 2>/dev/null || echo "false")
             if [ "$OK_STATUS" != "true" ]; then
-              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "unknown error"' 2>/dev/null || echo "failed to parse response")
+              ERROR_MSG=$(echo "$RESPONSE" | \
+                jq -r '.error // "unknown error"' 2>/dev/null || echo "failed to parse response")
               echo "⚠️ Failed to send Slack message part $((i + 1)): $ERROR_MSG"
               echo "Response: $RESPONSE"
               SEND_ERRORS=$((SEND_ERRORS + 1))
