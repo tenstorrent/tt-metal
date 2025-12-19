@@ -231,3 +231,19 @@ class TestTriage:
         assert (
             len(FAILURE_CHECKS) == 0
         ), f"Core magic check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_dump_risc_debug_signals(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "dump_risc_debug_signals.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        assert (
+            len(FAILURE_CHECKS) == 0
+        ), f"Dump risc debug signals check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
