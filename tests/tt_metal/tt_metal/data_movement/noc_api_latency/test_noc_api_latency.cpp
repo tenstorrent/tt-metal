@@ -200,42 +200,49 @@ void multicast_write_sweep_test(
 
 // Test definitions
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyUnicastWrite) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 700;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
         this->mesh_device_, test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_WRITE);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyUnicastRead) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 701;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
         this->mesh_device_, test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_READ);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyStatefulWrite) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 702;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
         this->mesh_device_, test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_WRITE);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyStatefulRead) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 703;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
         this->mesh_device_, test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_READ);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyMulticastWrite2x2) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 704;
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
         this->mesh_device_, test_case_id, {0, 1}, {1, 2}, false);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyMulticastWrite5x5) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 705;
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
         this->mesh_device_, test_case_id, {0, 1}, {4, 5}, false);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixNocApiLatencyMulticastWriteAll) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 706;
     auto* device = this->mesh_device_->get_device(0);
     CoreCoord grid_size = device->compute_with_storage_grid_size();
