@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
-
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -77,7 +77,8 @@ spec_return_value_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_spe
         aggregated_shape, TensorLayout(input0.dtype(), input0.tensor_spec().page_config(), aggregated_mem_config));
 
     // Matmul output spec - using aggregated tensor as input to matmul
-    ttnn::TensorSpec matmul_output_specs = args.matmul_struct.compute_output_specs({input0, input1}, {})[0];
+    ttnn::TensorSpec matmul_output_specs =
+        matmul::MatmulDeviceOperation::compute_output_specs(args.matmul_struct, {{input0, input1}, {}})[0];
 
     return spec_return_value_t{.mm = matmul_output_specs, .aggregated = aggregated_tensor_spec};
 }
@@ -92,7 +93,8 @@ tensor_return_value_t LlamaAllGatherMatmulAsyncDeviceOperation::create_output_te
     ttnn::Tensor aggregated_tensor = create_device_tensor(specs.aggregated, input0.device());
 
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = args.matmul_struct.create_output_tensors({aggregated_tensor, input1})[0];
+    ttnn::Tensor matmul_output_tensor =
+        matmul::MatmulDeviceOperation::create_output_tensors(args.matmul_struct, {{aggregated_tensor, input1}, {}})[0];
 
     return tensor_return_value_t{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
 }
@@ -178,11 +180,11 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
 
-    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+    auto matmul_struct = matmul::create_matmul_attributes(
         input0,
         input1,
         /*parameters=*/
-        operations::matmul::Matmul{
+        matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             mm_memory_config.value_or(input0.memory_config()),
@@ -195,7 +197,8 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
             /*transpose_a=*/false,
             /*transpose_b=*/false,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/global_cb});
+            /*global_cb=*/global_cb},
+        {});
 
     return {
         operation_attributes_t(
