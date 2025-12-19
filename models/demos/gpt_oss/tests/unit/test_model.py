@@ -122,7 +122,7 @@ def run_accuracy(
         current_pos += 1
 
         # Log token comparison for debugging
-        if i < 5:  # Only log first 5 tokens to avoid spam
+        if i < 50:  # Only log first 5 tokens to avoid spam
             tt_token_text = tokenizer.decode([predicted_token])
             ref_token_text = tokenizer.decode([reference_tokens[i].item()])
             logger.info(f"Token {i} - TT: '{tt_token_text}' (id: {predicted_token})")
@@ -139,7 +139,7 @@ def run_accuracy(
 
 
 @parametrize_mesh_with_fabric()
-def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
+def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict):
     """Test full model with accuracy testing using new abstractions"""
 
     # Cache file for reference tokens
@@ -220,6 +220,8 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             page_params=page_params,
             paged_attention=paged_attention,
             mesh_config=mesh_config,
+            state_dict=state_dict,
+            users_row_sharded=False,
         )
 
         # Create test input using the same prompt as the demo
@@ -322,6 +324,8 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             page_params=page_params,
             paged_attention=paged_attention,
             mesh_config=mesh_config,
+            state_dict=state_dict,
+            users_row_sharded=False,
         )
 
         # Create test input using the same prompt as the demo
