@@ -29,7 +29,7 @@ void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include "debug/debug.h"
-#include "hostdev/circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 
 using namespace tt;
 
