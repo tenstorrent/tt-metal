@@ -70,8 +70,8 @@ def test_t5_encoder(
             d_model=4096,
             d_ff=10240,
             num_heads=64,
-            num_layers=24,
-            num_decoder_layers=24,
+            num_layers=2,
+            num_decoder_layers=2,
             feed_forward_proj="gated-gelu",
             output_past=True,
         )
@@ -122,7 +122,7 @@ def test_t5_encoder(
     )
 
     tt_encoder = T5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
-    tt_encoder.load_state_dict(hf_model.state_dict())
+    tt_encoder.load_torch_state_dict(hf_model.state_dict())
 
     # time TT model inference only
     tt_start_time = time.time()

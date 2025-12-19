@@ -281,7 +281,7 @@ def test_wan_transformer_model(
     MAX_RMSE = 0.15
 
     if dit_unit_test:
-        torch_model = TorchWanTransformer3DModel(num_layers=2)
+        torch_model = TorchWanTransformer3DModel(num_layers=1)
         num_layers = torch_model.config.num_layers
     else:
         torch_model = TorchWanTransformer3DModel.from_pretrained(

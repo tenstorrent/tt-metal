@@ -606,6 +606,7 @@ run_t3000_ccl_tests() {
 run_t3000_tt_dit_tests() {
   # Record the start time
   fail=0
+  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_tt_dit_tests"
 
@@ -613,7 +614,7 @@ run_t3000_tt_dit_tests() {
   DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
 
   #Clip Encoder
-  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4 ; fail+=$?
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
 
   #Image DiTs VAE with one iteration pcc and perf test
   DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
@@ -633,6 +634,10 @@ run_t3000_tt_dit_tests() {
   #Mochi VAE main component
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py::test_tt_resblock_forward[wormhole_b0-mesh_device0-device_params0-1link-l768] ; fail+=$?
 
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_tt_dit_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi

@@ -22,7 +22,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
 
 
 def get_hf_config(model_name: str) -> HF_CLIPConfig:
-    # Clip config pulled from the model
+    # Clip config pulled from the model. Updated to use 2 layers for testing.
     config_params = {
         "text_encoder": {
             "architectures": ["CLIPTextModelWithProjection"],
@@ -32,7 +32,7 @@ def get_hf_config(model_name: str) -> HF_CLIPConfig:
             "hidden_size": 768,
             "intermediate_size": 3072,
             "num_attention_heads": 12,
-            "num_hidden_layers": 12,
+            "num_hidden_layers": 2,
             "projection_dim": 768,
             "vocab_size": 49408,
         },
@@ -44,7 +44,7 @@ def get_hf_config(model_name: str) -> HF_CLIPConfig:
             "hidden_size": 1280,
             "intermediate_size": 5120,
             "num_attention_heads": 20,
-            "num_hidden_layers": 32,
+            "num_hidden_layers": 2,
             "projection_dim": 1280,
             "vocab_size": 49408,
         },

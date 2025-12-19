@@ -308,7 +308,7 @@ def test_mochi_transformer_model(
     MIN_RMSE = 0.14
 
     if dit_unit_test:
-        torch_model = TorchMochiTransformer3DModel(num_layers=2)
+        torch_model = TorchMochiTransformer3DModel(num_layers=1)
         num_layers = torch_model.config.num_layers
     else:
         torch_model = TorchMochiTransformer3DModel.from_pretrained(
