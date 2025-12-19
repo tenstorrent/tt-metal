@@ -50,7 +50,8 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
 
-    const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
+    const tt::DataFormat intermediary_format =
+        (input_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_size = 2;
@@ -79,9 +80,7 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     const uint32_t output_cb_id = tt::CBIndex::c_16;
     create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
 
-    const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
-    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,

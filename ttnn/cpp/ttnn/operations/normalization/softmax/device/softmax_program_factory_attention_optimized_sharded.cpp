@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <bit>
 #include <utility>
 
 namespace ttnn::prim {
@@ -36,15 +35,18 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     tt::DataFormat mask_cb_data_format = tensor_args.mask.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.mask->dtype())
                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat fused_attention_scale_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scaler_cb_data_format =
+        (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
 
     log_debug(tt::LogOp, "in0_cb_data_format: {}", in0_cb_data_format);
     log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
     log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
     log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "scale_cb_data_format: {}", im_cb_data_format);
-    log_debug(tt::LogOp, "scalar_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "fused_attention_scale_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "reduce_scaler_cb_data_format: {}", im_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -78,8 +80,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
     uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
     uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
-    uint32_t scale_tile_size = tt::tile_size(scale_cb_data_format);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
+    uint32_t fused_attention_scale_tile_size = tt::tile_size(fused_attention_scale_cb_data_format);
+    uint32_t reduce_scaler_tile_size = tt::tile_size(reduce_scaler_cb_data_format);
     // in out buffer
     auto* src0_buffer = tensor_args.input_tensor.buffer();
     auto* out0_buffer = output_tensor.buffer();
@@ -90,9 +92,9 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     // block size for in0 (tensor a)
     uint32_t in0_CB_size = program_config.block_w * program_config.block_h * in0_tile_size;
     // scaler for reduce coming from reader
-    uint32_t in1_CB_size = 1 * scalar_tile_size;
+    uint32_t in1_CB_size = 1 * reduce_scaler_tile_size;
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
-    uint32_t in2_CB_size = 1 * scale_tile_size;
+    uint32_t in2_CB_size = 1 * fused_attention_scale_tile_size;
     // attention mask
     uint32_t in3_CB_size;
     if (attributes.is_causal_mask) {
@@ -213,8 +215,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                             .set_globally_allocated_address(*src0_buffer);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
     // in1 scalar
-    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, scalar_cb_data_format}})
-                            .set_page_size(tt::CBIndex::c_1, scalar_tile_size);
+    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, reduce_scaler_cb_data_format}})
+                            .set_page_size(tt::CBIndex::c_1, reduce_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_in1_config);
     // in2 in3 attn scale mask
     std::optional<CBHandle> cb_intermed2_id;
@@ -226,8 +228,9 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                                       .set_page_size(tt::CBIndex::c_8, im_tile_size);
         cb_intermed2_id = CreateCircularBuffer(program, all_device_cores, c_intermed2_config);
         // in2 scale
-        auto c_in2_config = CircularBufferConfig(in2_CB_size, {{tt::CBIndex::c_2, scale_cb_data_format}})
-                                .set_page_size(tt::CBIndex::c_2, scale_tile_size);
+        auto c_in2_config =
+            CircularBufferConfig(in2_CB_size, {{tt::CBIndex::c_2, fused_attention_scale_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_2, fused_attention_scale_tile_size);
         cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
         // in3 attn mask
         if (tensor_args.mask->is_sharded()) {
@@ -268,8 +271,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
     // Runtime Args
     uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask->buffer()->address() : 0;
-    uint32_t scale_value =
-        std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
+    union {
+        float f;
+        uint32_t u;
+    } s{};
+    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 
     uint32_t num_tiles_in_attn_mask = 0;
@@ -288,8 +294,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
+                reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
@@ -328,8 +333,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(scale_value);
+                reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
@@ -394,7 +398,7 @@ void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
                 i % cached_program.shared_variables.grid_size.x, i / cached_program.shared_variables.grid_size.x};
             auto& runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id, core);
-            runtime_args[2] = mask_tensor->buffer()->address();
+            runtime_args[1] = mask_tensor->buffer()->address();
         }
     }
 }
