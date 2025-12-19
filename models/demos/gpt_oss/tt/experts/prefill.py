@@ -50,12 +50,12 @@ def _process_prefill_chunk(
     program_config: ProgramConfig,
     ep,
     tp,
+    batch_size,
+    seq_len,
 ):
     """Process a single chunk of the sequence in prefill mode."""
     activation_dtype = ttnn.bfloat8_b
     TILE_SIZE = 32
-    batch_size = hidden_states.shape[0]
-    seq_len = hidden_states.shape[1]
 
     # Reshape for prefill (group tokens into tiles)
     hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
@@ -196,8 +196,10 @@ def prefill_forward(
         Expert output [batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
-    batch_size = hidden_states.shape[0]
-    seq_len_global = hidden_states.shape[1]
+    batch_dim = 1
+    seq_dim = 2
+    batch_size = hidden_states.shape[batch_dim]
+    seq_len_global = hidden_states.shape[seq_dim]
 
     if batch_size != 1:
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
@@ -221,11 +223,14 @@ def prefill_forward(
     # Reshard for sequence parallelism if needed
     if sp > 1:
         hidden_states, routing_weights = _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device)
+        local_seq_len = hidden_states.shape[seq_dim]
+    else:
+        local_seq_len = seq_len_global
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size
-    if hidden_states.shape[1] > chunk_size:
-        hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=1)
+    if hidden_states.shape[seq_dim] > chunk_size:
+        hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=seq_dim)
         hidden_states.deallocate(True)
         routing_weights_chunks = ttnn.split(routing_weights, chunk_size, dim=0)
         routing_weights.deallocate(True)
@@ -245,6 +250,8 @@ def prefill_forward(
             program_config,
             ep,
             tp,
+            batch_size,
+            local_seq_len,
         )
         next_states_list.append(next_states)
         hidden_chunk.deallocate(True)
@@ -276,8 +283,8 @@ def prefill_forward(
     # Final reshape
     next_states = ttnn.reshape(
         next_states,
-        (batch_size, seq_len_global, config.hidden_size),
-        (batch_size, max(32, seq_len_global), config.hidden_size),
+        (1, batch_size, seq_len_global, config.hidden_size),
+        (1, batch_size, max(32, seq_len_global), config.hidden_size),
     )
 
     return next_states
