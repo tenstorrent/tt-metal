@@ -286,7 +286,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
