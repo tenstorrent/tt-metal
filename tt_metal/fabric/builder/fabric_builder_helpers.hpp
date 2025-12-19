@@ -24,8 +24,9 @@ eth_chan_directions get_sender_channel_direction(eth_chan_directions my_directio
 std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction);
 
 // Helper function to get directions for inter-mux connections
-// Returns all directions except the current direction, in E,W,N,S order
-std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction);
+// Returns all directions except the current direction
+// exclude_z: if true, excludes Z direction (for modes that don't support Z like MUX)
+std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction, bool exclude_z = false);
 
 }  // namespace builder
 

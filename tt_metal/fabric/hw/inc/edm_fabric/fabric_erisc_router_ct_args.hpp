@@ -79,8 +79,12 @@ constexpr size_t MAX_NUM_SENDER_CHANNELS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = get_compile_time_arg_val(MAX_NUM_SENDER_CHANNELS_IDX);
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS_IDX = MAX_NUM_SENDER_CHANNELS_IDX + 1;
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(MAX_NUM_RECEIVER_CHANNELS_IDX);
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = 4;  // Channels 0-3
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 4;  // Channels 4-7 (2D only)
+// VC0 and VC1 channel counts depend on router type:
+// Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
+// MESH/MESH_AND_Z: 4 VC0 + 4 VC1 = 8 total (with some unused)
+// These are computed from MAX_NUM_SENDER_CHANNELS
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;  // 5 if Z router, else 4
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;  // Remainder
 
 // Downstream tensix connections argument (after stream IDs, marker, and max channel counts)
 constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;
@@ -273,6 +277,8 @@ constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_
 constexpr size_t local_sender_channel_5_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
 constexpr size_t local_sender_channel_6_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
 constexpr size_t local_sender_channel_7_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
+constexpr size_t local_sender_channel_8_connection_info_addr =
+    get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 8);  // 9th channel for Z routers
 
 // TODO: CONVERT TO SEMAPHORE
 constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + MAX_NUM_SENDER_CHANNELS;
