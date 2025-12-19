@@ -1094,7 +1094,7 @@ static uint32_t calculate_out_channels_padded(uint32_t out_channels, const Paral
 }
 
 static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -1239,6 +1239,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                           kernel_size[1] - padding_n4[2];
             padding_n4[3] = 0;  // No padding on right for sliced width
         }
+        input_memory_config = conv2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
     }
 
     auto opt_conv_op_block_config = get_opt_block_config(
@@ -1305,7 +1309,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             mm_conv,
             device->compute_with_storage_grid_size(),
             input_layout,
-            BufferType::L1,
+            is_dram_conv ? BufferType::DRAM : BufferType::L1,
             parallel_config,
             conv_config.act_block_h_override);
 

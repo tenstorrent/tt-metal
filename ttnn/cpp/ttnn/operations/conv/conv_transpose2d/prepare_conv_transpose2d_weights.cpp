@@ -153,7 +153,7 @@ Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, 
 
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     const std::string& weights_format,
     uint32_t in_channels,
@@ -215,7 +215,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             output_dtype,
             conv_config_,
             compute_config_,
-            dram_slice_config_);
+            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     } else {
         Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
@@ -305,6 +305,10 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         }
         auto [input_slice_start, input_slice_end] =
             convt2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
+        input_memory_config = convt2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
         auto [input_height_slice_start, input_width_slice_start] = input_slice_start;
         auto [input_height_slice_end, input_width_slice_end] = input_slice_end;
         auto input_height_sliced = input_height_slice_end - input_height_slice_start;
@@ -315,7 +319,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         return prepare_conv_weights(
             mirrored_weight_tensor,
             input_memory_config,
-            input_layout,
+            Layout::ROW_MAJOR,
             weights_format,
             in_channels,
             out_channels,
@@ -333,7 +337,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             output_dtype,
             conv_config_,
             compute_config_,
-            dram_slice_config_);
+            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     }
 }
 
