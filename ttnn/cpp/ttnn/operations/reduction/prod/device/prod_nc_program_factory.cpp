@@ -97,7 +97,8 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_3;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, single_tile_size};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =

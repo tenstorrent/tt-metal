@@ -85,7 +85,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, dst_single_tile_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reduce_defines =
@@ -99,7 +99,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
