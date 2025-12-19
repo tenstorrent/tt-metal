@@ -47,7 +47,9 @@ runs:
         echo "has_regressions=true" >> "$GITHUB_OUTPUT"
 
         # Slack has a 3000 character limit per text block
-        MAX_BLOCK_TEXT_LENGTH=2900
+        # Be very conservative: use 2500 to leave plenty of room for chunk indicators and formatting
+        # The chunk indicator (e.g., "*[Part 1/2]*\n") adds ~20 chars, plus we want buffer for safety
+        MAX_BLOCK_TEXT_LENGTH=2500
         HEADER_PREFIX="❌ *Regressions (Pass → Fail):*\n"
 
         # Function to format regression array to text (takes file path as argument)
@@ -114,10 +116,10 @@ runs:
           test_full_text="${HEADER_PREFIX}${test_chunk_text}"
           test_length=$(printf '%s' "$test_full_text" | wc -c)
 
-          # Reserve space for chunk indicator if we'll have multiple chunks
-          # Estimate max: "*[Part 99/99]*\n" = ~20 chars
-          CHUNK_INDICATOR_MAX=20
-          test_length_with_indicator=$((test_length + CHUNK_INDICATOR_MAX))
+          # Reserve space for chunk indicator (we don't know total chunks yet, so be conservative)
+          # Worst case: "*[Part 99/99]*\n" = ~18 chars, use 30 chars buffer for safety
+          CHUNK_INDICATOR_BUFFER=30
+          test_length_with_indicator=$((test_length + CHUNK_INDICATOR_BUFFER))
 
           # If adding this regression would exceed the limit and we have regressions in current chunk, save it
           if [ "$test_length_with_indicator" -gt "$MAX_BLOCK_TEXT_LENGTH" ] && [ "$(echo "$current_chunk" | jq 'length')" -gt 0 ]; then
@@ -166,6 +168,8 @@ runs:
         HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
 
         # Generate payloads for all chunks and store them
+        # Temporarily disable exit on error so we create all payload files even if one fails
+        set +e
         for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
           chunk_file="${chunk_dir}/chunk_${i}.json"
           if [ ! -f "$chunk_file" ]; then
@@ -173,15 +177,32 @@ runs:
             continue
           fi
 
-          chunk_text=$(format_regressions "$chunk_file")
+          chunk_text=$(format_regressions "$chunk_file" 2>/dev/null || echo "Error formatting regressions")
+          if [ "$chunk_text" = "Error formatting regressions" ]; then
+            echo "⚠️ Failed to format regressions for chunk $i"
+          fi
+
           chunk_full_text="${HEADER_PREFIX}${chunk_text}"
 
           # Add chunk indicator if there are multiple chunks
           if [ "$TOTAL_CHUNKS" -gt 1 ]; then
-            chunk_full_text="*[Part $((i + 1))/$TOTAL_CHUNKS]*\n${chunk_full_text}"
+            chunk_indicator="*[Part $((i + 1))/$TOTAL_CHUNKS]*\n"
+            chunk_full_text="${chunk_indicator}${chunk_full_text}"
+          else
+            chunk_indicator=""
+          fi
+
+          # Verify the final text length doesn't exceed Slack's limit
+          final_text_length=$(printf '%s' "$chunk_full_text" | wc -c)
+          if [ "$final_text_length" -gt "$MAX_BLOCK_TEXT_LENGTH" ]; then
+            echo "⚠️ Warning: Chunk $((i + 1)) text length ($final_text_length) exceeds limit ($MAX_BLOCK_TEXT_LENGTH)"
+            echo "This chunk may fail to send. Consider splitting regressions further."
+            # Try to truncate at a safe point (remove last incomplete regression)
+            # For now, we'll let it try to send and see the error, but log the warning
           fi
 
           # Add failing workflows count message only to the last chunk
+          PAYLOAD=""
           if [ "$i" -eq $((TOTAL_CHUNKS - 1)) ] && [ -n "${FAILING_WORKFLOWS_COUNT_MESSAGE:-}" ]; then
             PAYLOAD=$(jq -cn \
               --arg header "$HEADER" \
@@ -196,7 +217,7 @@ runs:
                   { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } }
                 ]
               }
-            ')
+            ' 2>/dev/null || echo "")
           else
             PAYLOAD=$(jq -cn \
               --arg header "$HEADER" \
@@ -209,12 +230,30 @@ runs:
                   { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
                 ]
               }
-            ')
+            ' 2>/dev/null || echo "")
+          fi
+
+          if [ -z "$PAYLOAD" ]; then
+            echo "⚠️ Failed to create payload for chunk $i"
+            continue
           fi
 
           # Store payload in a file for the send step
           payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
           echo "$PAYLOAD" > "$payload_file"
+          echo "Created payload file: $payload_file ($(wc -c < "$payload_file") bytes)"
+        done
+        set -e
+
+        # Verify all payload files were created
+        echo "Verifying payload files were created:"
+        for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
+          payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
+          if [ -f "$payload_file" ]; then
+            echo "  ✅ Payload $i exists ($(wc -c < "$payload_file") bytes)"
+          else
+            echo "  ⚠️ Payload $i MISSING!"
+          fi
         done
 
         # Clean up temporary chunk files
@@ -240,73 +279,123 @@ runs:
         TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
         echo "Sending $TOTAL_CHUNKS message(s) to Slack..."
 
+        # Debug: List all payload files
+        echo "Looking for payload files in ${GITHUB_WORKSPACE}:"
+        ls -la "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || echo "No payload files found yet"
+
         FIRST_TS=""
+        SEND_ERRORS=0
 
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # Using Bot Token method - supports threading
+          # Temporarily disable exit on error for the loop so we can send all messages even if one fails
+          set +e
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
             payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
             if [ ! -f "$payload_file" ]; then
               echo "⚠️ Payload file not found: $payload_file"
+              echo "Available files:"
+              ls -la "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || echo "None found"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
               continue
             fi
 
-            PAYLOAD=$(cat "$payload_file")
+            PAYLOAD=$(cat "$payload_file" 2>/dev/null || echo "")
+            if [ -z "$PAYLOAD" ]; then
+              echo "⚠️ Failed to read payload file: $payload_file"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
+              continue
+            fi
+
             echo "Sending message part $((i + 1))/$TOTAL_CHUNKS..."
+            echo "Payload file size: $(wc -c < "$payload_file" 2>/dev/null || echo 0) bytes"
 
             # Build request body with channel and optional thread_ts
+            REQUEST_BODY=""
             if [ -z "$FIRST_TS" ]; then
-              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" '. + {channel: $channel}')
+              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" '. + {channel: $channel}' 2>/dev/null || echo "")
             else
-              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" '. + {channel: $channel, thread_ts: $thread_ts}')
+              REQUEST_BODY=$(echo "$PAYLOAD" | jq -c --arg channel "$CHANNEL_ID" --arg thread_ts "$FIRST_TS" '. + {channel: $channel, thread_ts: $thread_ts}' 2>/dev/null || echo "")
+            fi
+
+            if [ -z "$REQUEST_BODY" ]; then
+              echo "⚠️ Failed to build request body for message part $((i + 1))"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
+              continue
             fi
 
             RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$REQUEST_BODY")
+              -d "$REQUEST_BODY" 2>/dev/null || echo '{"ok":false,"error":"curl_failed"}')
 
             # Extract timestamp for threading subsequent messages
             if [ -z "$FIRST_TS" ]; then
-              FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
-              if [ -n "$FIRST_TS" ] && [ "$FIRST_TS" != "null" ]; then
+              FIRST_TS=$(echo "$RESPONSE" | jq -r '.ts // empty' 2>/dev/null || echo "")
+              if [ -n "$FIRST_TS" ] && [ "$FIRST_TS" != "null" ] && [ "$FIRST_TS" != "" ]; then
                 echo "ts=$FIRST_TS" >> "$GITHUB_OUTPUT"
+                echo "First message timestamp: $FIRST_TS"
               fi
             fi
 
             # Check for errors
-            if [ "$(echo "$RESPONSE" | jq -r '.ok // false')" != "true" ]; then
-              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "unknown error"')
+            OK_STATUS=$(echo "$RESPONSE" | jq -r '.ok // false' 2>/dev/null || echo "false")
+            if [ "$OK_STATUS" != "true" ]; then
+              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "unknown error"' 2>/dev/null || echo "failed to parse response")
               echo "⚠️ Failed to send Slack message part $((i + 1)): $ERROR_MSG"
-              echo "$RESPONSE" | jq . || echo "$RESPONSE"
+              echo "Response: $RESPONSE"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
             else
               echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
             fi
           done
+          set -e
+
+          if [ "$SEND_ERRORS" -gt 0 ]; then
+            echo "⚠️ Warning: $SEND_ERRORS out of $TOTAL_CHUNKS messages failed to send"
+          fi
         elif [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
           # Using Webhook method (simpler but no threading support)
+          # Temporarily disable exit on error for the loop
+          set +e
           for i in $(seq 0 $((TOTAL_CHUNKS - 1))); do
             payload_file="${GITHUB_WORKSPACE}/slack_payload_${i}.json"
             if [ ! -f "$payload_file" ]; then
               echo "⚠️ Payload file not found: $payload_file"
+              echo "Available files:"
+              ls -la "${GITHUB_WORKSPACE}"/slack_payload_*.json 2>/dev/null || echo "None found"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
               continue
             fi
 
-            PAYLOAD=$(cat "$payload_file")
+            PAYLOAD=$(cat "$payload_file" 2>/dev/null || echo "")
+            if [ -z "$PAYLOAD" ]; then
+              echo "⚠️ Failed to read payload file: $payload_file"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
+              continue
+            fi
+
             echo "Sending message part $((i + 1))/$TOTAL_CHUNKS via webhook..."
+            echo "Payload file size: $(wc -c < "$payload_file" 2>/dev/null || echo 0) bytes"
 
             HTTP_CODE=$(curl -s -w "\n%{http_code}" -o /tmp/slack_response_${i}.txt -X POST "$SLACK_WEBHOOK_URL" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD" | tail -n1)
+              -d "$PAYLOAD" 2>/dev/null | tail -n1 || echo "000")
 
             if [ "$HTTP_CODE" != "200" ]; then
               echo "⚠️ Failed to send Slack message part $((i + 1)): HTTP $HTTP_CODE"
-              cat "/tmp/slack_response_${i}.txt" || true
+              cat "/tmp/slack_response_${i}.txt" 2>/dev/null || echo "No response body"
+              SEND_ERRORS=$((SEND_ERRORS + 1))
             else
               echo "✅ Successfully sent message part $((i + 1))/$TOTAL_CHUNKS"
             fi
             rm -f "/tmp/slack_response_${i}.txt"
           done
+          set -e
+
+          if [ "$SEND_ERRORS" -gt 0 ]; then
+            echo "⚠️ Warning: $SEND_ERRORS out of $TOTAL_CHUNKS messages failed to send"
+          fi
         else
           echo "⚠️ No Slack credentials provided (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL)"
           exit 1
