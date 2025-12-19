@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,7 @@ class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
-class MeshDeviceImpl;
+class MeshDevice;
 
 namespace multihost {
 class DistributedContext;
@@ -70,14 +70,9 @@ class DistributedContext;
 
 using DeviceIds = std::vector<int>;
 
-class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
-    friend class MeshDeviceImpl;
-
+class MeshDeviceImpl : public IDevice {
 private:
-    MeshDevice() = default;
-
-    // TODO(p1-0tr): Moved to MeshDeviceImpl, need to wait for deprecation period expiry of local_root_devices, before
-    // this can be removed. My bad.
+    // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
@@ -115,68 +110,112 @@ private:
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
 
-    std::unique_ptr<MeshDeviceImpl> pimpl_;
+    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
+    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
+    // on the device may not be thread safe.
+    std::mutex api_mutex_;
+    bool is_internal_state_initialized = false;
+    std::shared_ptr<ScopedDevices> scoped_devices_;
+    int mesh_id_;
+    std::unique_ptr<MeshDeviceView> view_;
+    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
+    std::shared_ptr<MeshDevice> parent_mesh_;
+    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
+
+    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    uint32_t trace_buffers_size_ = 0;
+    uint32_t max_num_eth_cores_ = 0;
+    std::shared_ptr<ThreadPool> dispatch_thread_pool_;
+    std::shared_ptr<ThreadPool> reader_thread_pool_;
+    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
+    std::size_t num_virtual_eth_cores_ = 0;
+    std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+    // This is a reference device used to query properties that are the same for all devices in the mesh.
+    IDevice* reference_device() const;
+    // Recursively quiesce all submeshes.
+    void quiesce_internal();
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
+
+    void mark_allocations_unsafe();
+    void mark_allocations_safe();
+
+    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
+
+    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+    // Distributed context used to synchronize operations done by all ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    MeshDevice* pimpl_wrapper_;
 
 public:
-    ~MeshDevice() override;
+    MeshDeviceImpl(
+        MeshDevice* pimpl_wrapper,
+        std::shared_ptr<ScopedDevices> mesh_handle,
+        std::unique_ptr<MeshDeviceView> mesh_device_view,
+        std::shared_ptr<MeshDevice> parent_mesh = {});
+    ~MeshDeviceImpl();
 
-    MeshDevice(const MeshDevice&) = delete;
-    MeshDevice& operator=(const MeshDevice&) = delete;
+    MeshDeviceImpl(const MeshDeviceImpl&) = delete;
+    MeshDeviceImpl& operator=(const MeshDeviceImpl&) = delete;
 
-    MeshDevice(MeshDevice&&) = delete;
-    MeshDevice& operator=(MeshDevice&&) = delete;
+    MeshDeviceImpl(MeshDeviceImpl&&) = delete;
+    MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     // IDevice interface implementation
-    tt::ARCH arch() const override;
-    int id() const override;
-    ChipId build_id() const override;
-    uint8_t num_hw_cqs() const override;
-    bool is_initialized() const override;
+    tt::ARCH arch() const;
+    int id() const;
+    ChipId build_id() const;
+    uint8_t num_hw_cqs() const;
+    bool is_initialized() const;
 
-    int num_dram_channels() const override;
-    uint32_t l1_size_per_core() const override;
-    uint32_t dram_size_per_channel() const override;
+    int num_dram_channels() const;
+    uint32_t l1_size_per_core() const;
+    uint32_t dram_size_per_channel() const;
 
-    CoreCoord grid_size() const override;
-    CoreCoord logical_grid_size() const override;
-    CoreCoord dram_grid_size() const override;
-    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
+    CoreCoord grid_size() const;
+    CoreCoord logical_grid_size() const;
+    CoreCoord dram_grid_size() const;
+    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
-
-    CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
-    CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
-    CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
-    CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
-    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
-    bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
-    CoreCoord compute_with_storage_grid_size() const override;
-    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-    const std::unique_ptr<Allocator>& allocator() const override;
-    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
-    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
-    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
-    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
-    const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
-    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
-    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
-    SystemMemoryManager& sysmem_manager() override;
-    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc);
+    CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const;
+    CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const;
+    bool is_inactive_ethernet_core(CoreCoord logical_core) const;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id);
+    CoreCoord compute_with_storage_grid_size() const;
+    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
+    const std::unique_ptr<Allocator>& allocator() const;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const;
+    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const;
+    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
+    const std::set<CoreCoord>& ethernet_cores() const;
+    const std::set<CoreCoord>& storage_only_cores() const;
+    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const;
+    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const;
+    SystemMemoryManager& sysmem_manager();
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt);
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
@@ -186,8 +225,8 @@ public:
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
-    uint32_t get_trace_buffers_size() const override;
-    void set_trace_buffers_size(uint32_t size) override;
+    uint32_t get_trace_buffers_size() const;
+    void set_trace_buffers_size(uint32_t size);
 
     // Initialization APIs
     bool initialize(
@@ -196,49 +235,46 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
-    bool compile_fabric() override;
-    void configure_fabric() override;
-    void init_fabric() override;
-    bool close() override;
-    void enable_program_cache() override;
-    void clear_program_cache() override;
-    void disable_and_clear_program_cache() override;
-    program_cache::detail::ProgramCache& get_program_cache() override;
-    std::size_t num_program_cache_entries() override;
-    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
-    SubDeviceManagerId get_active_sub_device_manager_id() const override;
-    SubDeviceManagerId get_default_sub_device_manager_id() const override;
+        bool minimal = false);
+    void init_command_queue_host();
+    void init_command_queue_device();
+    bool compile_fabric();
+    void configure_fabric();
+    void init_fabric();
+    bool close();
+    void enable_program_cache();
+    void clear_program_cache();
+    void disable_and_clear_program_cache();
+    program_cache::detail::ProgramCache& get_program_cache();
+    std::size_t num_program_cache_entries();
+    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const;
+    SubDeviceManagerId get_active_sub_device_manager_id() const;
+    SubDeviceManagerId get_default_sub_device_manager_id() const;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
-    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
-    void clear_loaded_sub_device_manager() override;
-    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
-    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
-    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
-    void reset_sub_device_stall_group() override;
-    uint32_t num_sub_devices() const override;
-    bool is_mmio_capable() const override;
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size);
+    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
+    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
+    void clear_loaded_sub_device_manager();
+    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const;
+    const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void reset_sub_device_stall_group();
+    uint32_t num_sub_devices() const;
+    bool is_mmio_capable() const;
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device();
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    [[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
     IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
@@ -254,7 +290,6 @@ public:
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.
-    [[deprecated("Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
@@ -295,9 +330,12 @@ public:
     void quiesce_devices();
 
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const std::shared_ptr<MeshDevice>& parent_mesh,
+        const MeshShape& submesh_shape,
+        const std::optional<MeshCoordinate>& offset = std::nullopt);
 
-    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
+    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
+        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape);
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
@@ -331,12 +369,9 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-
-    const MeshDeviceImpl& impl() const { return *pimpl_; }
-    MeshDeviceImpl& impl() { return *pimpl_; }
 };
 
-std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
+std::ostream& operator<<(std::ostream& os, const MeshDeviceImpl& mesh_device);
 
 }  // namespace distributed
 
