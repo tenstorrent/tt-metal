@@ -34,7 +34,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
         conv = model.conv1
         bn = model.bn1
-        relu = model.relu
         pool = model.maxpool
 
         stem_params = conv_bn_to_params(conv, bn, mesh_mapper)

@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from typing import List
-from typing import Optional
+from typing import List, Optional
 from dataclasses import dataclass
-from typing import Optional
 from loguru import logger
 import tt_lib.fallback_ops as fallback_ops
 import os

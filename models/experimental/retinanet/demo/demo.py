@@ -4,21 +4,19 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import ttnn
 from PIL import Image
 from loguru import logger
 
-from PIL import Image
 import torchvision.transforms as transforms
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection import _utils as det_utils
 from torchvision.ops import boxes as box_ops
 from torchvision.models.detection.image_list import ImageList
-from typing import Any, Dict, List, Optional
 from torch import Tensor
 from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
 from models.experimental.retinanet.tt.tt_classification_head import ttnn_retinanet_classification_head
@@ -257,9 +255,8 @@ class Demo:
         to_pil = transforms.ToPILImage()
         restored_image = to_pil(img)
         restored_image.save("models/experimental/retinanet/resources/outputs/restored.jpg")
-        logger.info(
-            f"Saved restored image to the default output directory: models/experimental/retinanet/resources/outputs/restored.jpg"
-        )
+        output_path = "models/experimental/retinanet/resources/outputs/restored.jpg"
+        logger.info(f"Saved restored image to the default output directory: {output_path}")
 
         return image_tensor, og_size
 
@@ -412,15 +409,7 @@ class Demo:
         self.score_thresh = 0.05
         self.nms_thresh = 0.5
         self.detections_per_img = 1
-        fg_iou_thresh = 0.5
-        bg_iou_thresh = 0.4
         self.topk_candidates = 1000
-
-        proposal_matcher = det_utils.Matcher(
-            fg_iou_thresh,
-            bg_iou_thresh,
-            allow_low_quality_matches=True,
-        )
 
         self.box_coder = det_utils.BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
 

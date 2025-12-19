@@ -161,7 +161,6 @@ bottleneck_layer_optimisations = {
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             "reshard_if_not_optimal": True,
             "reallocate_halo_output": True,
-            "reshard_if_not_optimal": True,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
