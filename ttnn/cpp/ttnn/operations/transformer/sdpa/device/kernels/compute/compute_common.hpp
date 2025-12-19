@@ -290,7 +290,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     sub_tiles_transpA_bcastB_cols_init_short(in0_cb, in1_cb);
 
     {
-        ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+        ckernel::T6MutexLockGuard lock(ckernel::mutex::SFPU);
         exp_tile_init<true, true, scale_fp32>();
     }
     cb_wait_front(in0_cb, rows * cols);
@@ -311,7 +311,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_transpA_bcastB_cols(in0_cb, in1_cb, in0_index, i, j);
                 {
-                    ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+                    ckernel::T6MutexLockGuard lock(ckernel::mutex::SFPU);
                     exp_tile<true, true>(j);
                 }
                 in0_index++;
@@ -359,7 +359,7 @@ void sub_exp_block_bcast_rows_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     sub_bcast_rows_init_short(in0_cb, in1_cb);
 
     {
-        ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+        ckernel::T6MutexLockGuard lock(ckernel::mutex::SFPU);
         exp_tile_init<true, true, scale_fp32>();
     }
     cb_wait_front(in0_cb, rows * cols);
@@ -375,7 +375,7 @@ void sub_exp_block_bcast_rows_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
                 {
-                    ckernel::T6MutexGuard lock(ckernel::mutex::SFPU);
+                    ckernel::T6MutexLockGuard lock(ckernel::mutex::SFPU);
                     exp_tile<true, true>(j);
                 }
                 in0_index++;
