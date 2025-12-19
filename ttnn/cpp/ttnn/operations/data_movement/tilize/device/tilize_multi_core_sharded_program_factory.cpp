@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 

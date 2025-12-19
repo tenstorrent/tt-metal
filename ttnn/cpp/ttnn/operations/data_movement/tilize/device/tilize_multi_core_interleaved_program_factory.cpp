@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include "tilize_multi_core_interleaved_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -196,7 +195,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
-    shared_variables_t shared_vars{unary_reader_kernel_id, unary_writer_kernel_id, cores};
+    shared_variables_t shared_vars{unary_reader_kernel_id, unary_writer_kernel_id, cores, ncores};
     return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
@@ -211,7 +210,7 @@ void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
-    auto ncores = cores.size();
+    auto ncores = cached_program.shared_variables.ncores;
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);

@@ -5,7 +5,6 @@
 #include "tilize.hpp"
 
 #include "device/tilize_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
@@ -45,9 +44,8 @@ ttnn::Tensor ExecuteTilize::invoke(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
-        output_dtype.has_value()
-            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
-            : input_single_tile_size;
+        output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+                                 : input_single_tile_size;
 
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();

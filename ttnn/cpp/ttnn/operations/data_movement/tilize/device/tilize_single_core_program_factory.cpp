@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include "tilize_single_core_program_factory.hpp"
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -141,7 +139,7 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, &core}};
+    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, core}};
 }
 
 void TilizeSingleCoreProgramFactory::override_runtime_arguments(
@@ -151,7 +149,7 @@ void TilizeSingleCoreProgramFactory::override_runtime_arguments(
     const tilize::tensor_return_value_t& tensor_return_value) {
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& core = *cached_program.shared_variables.core;
+    auto& core = cached_program.shared_variables.core;
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto& program = cached_program.program;
     auto* dst_buffer = tensor_return_value.buffer();

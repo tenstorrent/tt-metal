@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -275,7 +274,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
         }
     }
 
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores}};
+    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores, ncores}};
 }
 
 void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
@@ -289,7 +288,7 @@ void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     auto& program = cached_program.program;
-    auto ncores = cores.size();
+    auto ncores = cached_program.shared_variables.ncores;
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (uint32_t i = 0; i < ncores; ++i) {
