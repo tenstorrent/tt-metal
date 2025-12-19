@@ -65,6 +65,9 @@ DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_16()) << ENDL();
 ## Environment Setup
 
 ```bash
+# Reset device before testing (IMPORTANT: use tt-smi -r without device ID)
+tt-smi -r  # Resets all devices allocated to you - NEVER use tt-smi -r 0 or other specific device IDs
+
 # Enable watcher (polls every N ms)
 export TT_METAL_WATCHER=10
 
@@ -75,4 +78,44 @@ export TT_METAL_DPRINT_CORES="(0,0)-(0,0)"
 export TT_METAL_DPRINT_RISCVS=BR       # BRISC (reader)
 export TT_METAL_DPRINT_RISCVS=NC       # NCRISC (writer)
 export TT_METAL_DPRINT_RISCVS=TR0,TR1,TR2  # TRISCs (compute)
+```
+
+## Semaphore Debugging Quick Reference
+
+### Semaphore APIs
+| API | Purpose |
+|-----|---------|
+| `noc_semaphore_wait_min(addr, val)` | Block until sem >= val |
+| `noc_semaphore_set(addr, val)` | Set local semaphore |
+| `noc_semaphore_inc(noc_addr, val)` | Atomic increment on remote core |
+| `noc_semaphore_set_multicast(...)` | Set semaphore on multiple cores |
+
+### Waypoint Patterns (Semaphore-Related)
+| Pattern | Diagnosis |
+|---------|-----------|
+| `W,W,W,W,W` (no CB code) | Semaphore deadlock |
+| `NRW` stuck | NoC read stall (may be semaphore) |
+| `NWW` stuck | NoC write stall (may be semaphore) |
+| `R,R,W,W,W` | Readers running, compute waiting on semaphore? |
+
+### DPRINT for Semaphores
+```cpp
+// Read semaphore value
+volatile tt_l1_ptr uint32_t* sem = get_semaphore(sem_id);
+DPRINT << "SEM" << sem_id << "=" << *sem << ENDL();
+
+// Track signals sent
+DPRINT << "INC sem" << sem_id << " to core(" << x << "," << y << ")" << ENDL();
+
+// Track waits completed
+DPRINT << "WAIT_DONE sem" << sem_id << " val=" << *sem << ENDL();
+```
+
+### Multicast Coordination Check
+```bash
+# Find expected receiver count
+grep -n "mcast_num_dests\|num_receivers" program_factory.cpp
+
+# Find semaphore wait threshold
+grep -n "noc_semaphore_wait.*num" kernel.cpp
 ```

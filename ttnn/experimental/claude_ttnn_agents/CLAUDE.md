@@ -34,6 +34,9 @@ Refer to `METALIUM_GUIDE.md` for detailed architecture explanations.
 ./build_metal.sh --clean
 ```
 
+### Device-side kernels
+Kernels build at runtime. DO NOT build when changing kernel code.
+
 ## Running Tests
 
 ### Python API Tests
@@ -83,7 +86,7 @@ source python_env/bin/activate
 ### Device Reset
 If device hangs or misbehaves:
 ```bash
-tt-smi -tr 0  # Reset device 0
+tt-smi -r # Reset device
 ```
 
 ## Debugging Guide
@@ -133,7 +136,6 @@ The agent autonomously enables watcher, interprets core states, analyzes kernel 
 - `METALIUM_GUIDE.md`: Comprehensive architecture and programming guide
 - `README.md`: High-level project overview
 - `INSTALLING.md`: Installation instructions
-- `CONTRIBUTING.md`: Contribution guidelines and workflows
 - `build_metal.sh`: Main build script
 
 ## Kernel Development

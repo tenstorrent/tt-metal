@@ -203,7 +203,7 @@ DPRINT << "[CONSUMER] TOTAL_WAITED=" << total_waited
 export TT_METAL_WATCHER=10
 
 # 2. Run test
-timeout 30 pytest test_file.py::test_name -v
+timeout 10 pytest test_file.py::test_name -v
 
 # 3. Analyze watcher
 cat generated/watcher/watcher.log | tail -50
@@ -223,7 +223,7 @@ export TT_METAL_DPRINT_CORES="(0,0)-(0,0)"
 export TT_METAL_DPRINT_RISCVS=BR,NC,TR0,TR1,TR2
 
 # 3. Run test again
-timeout 30 pytest test_file.py::test_name -v 2>&1 | tee dprint_output.txt
+timeout 10 pytest test_file.py::test_name -v 2>&1 | tee dprint_output.txt
 
 # 4. Analyze counter progression
 grep -E "WAIT|POP|RESERVE|PUSH|BALANCE" dprint_output.txt
