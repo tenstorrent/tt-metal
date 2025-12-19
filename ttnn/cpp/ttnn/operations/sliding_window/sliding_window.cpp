@@ -486,7 +486,9 @@ static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::ve
     for (const auto& config : serialized_configs) {
         max_size = std::max(max_size, config.size());
     }
-    max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
+    // Cast to double before division so round() can properly round 0.5 fractions up.
+    // Example: max_size=4: was round((4+1)/2)*2 = round(2)*2 = 4, now round(2.5)*2 = 3*2 = 6
+    max_size = static_cast<size_t>(round(static_cast<double>(max_size + 1) / 2.0)) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
     for (std::vector<uint16_t>& config : serialized_configs) {
         TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);

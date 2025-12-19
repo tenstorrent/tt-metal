@@ -36,7 +36,9 @@ inline uint32_t get_max_l1_space(IDevice* device) {
 }
 
 uint32_t calculate_optimal_chunk_size(IDevice* device) {
-    return ceil32(((((get_max_l1_space(device)) / 4) / 4) * 0.8) - 32);
+    // Use floating-point division to preserve precision before multiplying by 0.8.
+    // Example: 100 bytes: was (100/4)/4*0.8 = 6*0.8 = 4.8, now (100.0/4.0)/4.0*0.8 = 6.25*0.8 = 5.0
+    return ceil32(static_cast<uint32_t>(((static_cast<double>(get_max_l1_space(device)) / 4.0) / 4.0) * 0.8) - 32);
 }
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
