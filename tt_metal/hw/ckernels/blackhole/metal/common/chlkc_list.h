@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
-#include "debug/fw_debug.h"
+#include "internal/debug/fw_debug.h"
 #include "llk_param_structs.h"
 
 using namespace ckernel;

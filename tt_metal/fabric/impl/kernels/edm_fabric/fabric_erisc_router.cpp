@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/assert.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
+#include "internal/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
@@ -30,10 +30,10 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include "noc_overlay_parameters.h"
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
