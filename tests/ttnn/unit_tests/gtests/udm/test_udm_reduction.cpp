@@ -337,19 +337,25 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
     auto input_composer = create_block_sharded_mesh_composer(mesh_device, input_interleaved.padded_shape().rank());
     auto input_aggregated = ttnn::distributed::aggregate_tensor(input_interleaved, *input_composer);
     auto input_data = input_aggregated.to_vector<bfloat16>();
+
+    // Output is height-distributed (Shard{height}, Replicate{})
+    // Composer produces [H, W * num_replicas] - we use first W_original elements per row
     auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_interleaved.padded_shape().rank());
     auto output_aggregated = ttnn::distributed::aggregate_tensor(output_interleaved, *output_composer);
     auto output_data = output_aggregated.to_vector<bfloat16>();
 
     // Get dimensions from aggregated tensors
+    // Input is 2D: [H, W]
     uint32_t global_height = input_aggregated.padded_shape()[-2];
     uint32_t global_width = input_aggregated.padded_shape()[-1];
-    // Use aggregated tensor's width (includes replicated copies) for correct indexing
-    uint32_t output_last_dim = output_aggregated.padded_shape()[-1];
+
+    // Output is 2D after aggregation: [H, W * num_replicas]
+    // We use the first replica, so stride is the full aggregated width
+    uint32_t output_aggregated_width = output_aggregated.padded_shape()[-1];
 
     // Log shapes
     log_info(tt::LogTest, "Aggregated input shape: {}", input_aggregated.padded_shape());
-    log_info(tt::LogTest, "Aggregated output shape: {}", output_aggregated.padded_shape());
+    log_info(tt::LogTest, "Aggregated output shape: {} (using first replica)", output_aggregated.padded_shape());
 
     // Compute number of "rows" to validate
     uint32_t num_rows = global_height;
@@ -371,8 +377,9 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
         }
         expected_values.push_back(bfloat16(expected_sum));
 
-        // Get actual value from output (first element along last dimension)
-        uint32_t output_idx = row * output_last_dim;
+        // Get actual value from first replica (first element of row in aggregated output)
+        // Output layout: [H, W * num_replicas] -> index = row * aggregated_width + 0
+        uint32_t output_idx = row * output_aggregated_width;
         actual_values.push_back(output_data[output_idx]);
 
         // Debug: Print first 16 rows and any mismatches
