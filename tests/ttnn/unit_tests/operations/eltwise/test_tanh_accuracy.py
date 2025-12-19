@@ -11,8 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
 )
-def test_tanh_range(device_module, torch_dtype, ttnn_dtype, atol):
-    device = device_module
+def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     torch_input_tensor_a = torch.tensor(
         [
             [
@@ -88,8 +87,7 @@ def test_tanh_range(device_module, torch_dtype, ttnn_dtype, atol):
         (4, -4),
     ],
 )
-def test_tanh_inplace(device_module, high, low, torch_dtype, ttnn_dtype, atol):
-    device = device_module
+def test_tanh_inplace(device, high, low, torch_dtype, ttnn_dtype, atol):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand([1, 9, 8192], dtype=torch_dtype) * (high - low) + low
@@ -130,8 +128,7 @@ def test_tanh_inplace(device_module, high, low, torch_dtype, ttnn_dtype, atol):
         (4, -4),  # pcc_msg 0.9999948671754642
     ],
 )
-def test_tanh_accuracy(device_module, input_shapes, high, low, torch_dtype, ttnn_dtype, atol):
-    device = device_module
+def test_tanh_accuracy(device, input_shapes, high, low, torch_dtype, ttnn_dtype, atol):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((input_shapes), dtype=torch_dtype) * (high - low) + low
@@ -162,8 +159,7 @@ def test_tanh_accuracy(device_module, input_shapes, high, low, torch_dtype, ttnn
         (4, -4),
     ],
 )
-def test_tanh_height_sharded(device_module, input_shapes, high, low, torch_dtype, ttnn_dtype, atol):
-    device = device_module
+def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_dtype, atol):
     torch.manual_seed(0)
 
     in_data = torch.rand((input_shapes), dtype=torch_dtype) * (high - low) + low
@@ -273,8 +269,7 @@ def return_mem_config(mem_config_string):
         "l1_block_sharded_cm",
     ],
 )
-def test_tanh_sharded(device_module, high, low, input_mem_config, torch_dtype, ttnn_dtype, atol):
-    device = device_module
+def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dtype, atol):
     torch.manual_seed(0)
 
     in_data = torch.rand([1, 1, 512, 512], dtype=torch_dtype) * (high - low) + low

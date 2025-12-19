@@ -68,6 +68,5 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_pow(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device_module):
-    device = device_module
+def test_pow(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
     run_pow_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device)

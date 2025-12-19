@@ -83,13 +83,11 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_selu(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device_module):
-    device = device_module
+def test_eltwise_selu(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     run_eltwise_selu_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
 
 
-def test_selu_arange(device_module):
-    device = device_module
+def test_selu_arange(device):
     # Generate all possible bit pattersn for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
@@ -126,8 +124,7 @@ def test_selu_arange(device_module):
         (-1.6 * 10**38, 1.6 * 10**38, 0),  # bf16 range
     ],
 )
-def test_selu_atol(low, high, expected_Atol, device_module):
-    device = device_module
+def test_selu_atol(low, high, expected_Atol, device):
     num_elements = torch.prod(torch.tensor(torch.Size([1, 3, 320, 320]))).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))

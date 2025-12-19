@@ -21,8 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
         ttnn.add,
     ],
 )
-def test_fp32(device_module, ttnn_function):
-    device = device_module
+def test_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1]], dtype=torch.float32)
     y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -43,8 +42,7 @@ def test_fp32(device_module, ttnn_function):
         ttnn.sub,
     ],
 )
-def test_int32(device_module, ttnn_function):
-    device = device_module
+def test_int32(device, ttnn_function):
     x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
     y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -64,8 +62,7 @@ def test_int32(device_module, ttnn_function):
         ttnn.mul,
     ],
 )
-def test_mul_fp32(device_module, ttnn_function):
-    device = device_module
+def test_mul_fp32(device, ttnn_function):
     x_torch = torch.tensor([[2]], dtype=torch.float32)
     y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -87,8 +84,7 @@ def test_mul_fp32(device_module, ttnn_function):
 )
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=nan; in fp32  tile
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=0; in chained (mul * recip) div op
-def test_div_fp32(device_module, ttnn_function):
-    device = device_module
+def test_div_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10]], dtype=torch.float32)
     # torch out in ttnn TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
@@ -112,8 +108,7 @@ def test_div_fp32(device_module, ttnn_function):
     ],
 )
 # Test division when input_b is non-zero
-def test_div_bf16_nonzero(device_module, ttnn_function):
-    device = device_module
+def test_div_bf16_nonzero(device, ttnn_function):
     x_torch = torch.tensor(
         [
             [
@@ -160,8 +155,7 @@ def test_div_bf16_nonzero(device_module, ttnn_function):
         ttnn.pow,
     ],
 )
-def test_pow_fp32(device_module, ttnn_function):
-    device = device_module
+def test_pow_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.55, 2.25, -3.6]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, -2.2]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -175,8 +169,7 @@ def test_pow_fp32(device_module, ttnn_function):
     assert status
 
 
-def test_squared_sum_fp32_activ(device_module):
-    device = device_module
+def test_squared_sum_fp32_activ(device):
     x_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32)
     y_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32) * 4
     z_torch = torch.square(x_torch + y_torch)
@@ -204,8 +197,7 @@ def test_squared_sum_fp32_activ(device_module):
         [1, 3, 320, 384],
     ],
 )
-def test_add_fp32_input_activ(device_module, ttnn_function, shape):
-    device = device_module
+def test_add_fp32_input_activ(device, ttnn_function, shape):
     x_torch = torch.ones(shape, dtype=torch.float32) * 2
     y_torch = torch.ones(shape, dtype=torch.float32) * 4
     z_torch = torch.square(torch.nn.functional.silu(x_torch) + y_torch)
@@ -229,8 +221,7 @@ def test_add_fp32_input_activ(device_module, ttnn_function, shape):
         ttnn.logaddexp,
     ],
 )
-def test_logaddexp_fp32(device_module, ttnn_function):
-    device = device_module
+def test_logaddexp_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -250,8 +241,7 @@ def test_logaddexp_fp32(device_module, ttnn_function):
         ttnn.logaddexp2,
     ],
 )
-def test_logaddexp2_fp32(device_module, ttnn_function):
-    device = device_module
+def test_logaddexp2_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1, 2, 3, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, 4, 5]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -271,8 +261,7 @@ def test_logaddexp2_fp32(device_module, ttnn_function):
         ttnn.ldexp,
     ],
 )
-def test_ldexp_fp32(device_module, ttnn_function):
-    device = device_module
+def test_ldexp_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, 4, 5]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -292,8 +281,7 @@ def test_ldexp_fp32(device_module, ttnn_function):
         ttnn.bias_gelu,
     ],
 )
-def test_bias_gelu_fp32(device_module, ttnn_function):
-    device = device_module
+def test_bias_gelu_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, 4, 5]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -313,8 +301,7 @@ def test_bias_gelu_fp32(device_module, ttnn_function):
         ttnn.squared_difference,
     ],
 )
-def test_squared_difference_fp32(device_module, ttnn_function):
-    device = device_module
+def test_squared_difference_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[2.009, 3.11, 4.22, 5]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -336,8 +323,7 @@ def test_squared_difference_fp32(device_module, ttnn_function):
         ttnn.logical_and,
     ],
 )
-def test_logical_fp32(device_module, ttnn_function):
-    device = device_module
+def test_logical_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.509009, 2, 3.33, 4, 0, -11]], dtype=torch.float32)
     y_torch = torch.tensor([[0, 3, 4, 5, 0, -9999]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -362,8 +348,7 @@ def test_logical_fp32(device_module, ttnn_function):
         ttnn.le,
     ],
 )
-def test_relational_fp32(device_module, ttnn_function):
-    device = device_module
+def test_relational_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.99999999991, 0, 345.1234568999130, -1]], dtype=torch.float32)
     y_torch = torch.tensor([[1.99999999990, 0, 345.1234568999131, -1]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -385,8 +370,7 @@ def test_relational_fp32(device_module, ttnn_function):
         ttnn.bitwise_xor,
     ],
 )
-def test_bitwise(device_module, ttnn_function):
-    device = device_module
+def test_bitwise(device, ttnn_function):
     x_torch = torch.tensor([[1, 2, 3, 4, 5, 0]], dtype=torch.int32)
     y_torch = torch.tensor([[9, 3, 0, 1, 7, 0]], dtype=torch.int32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
@@ -409,8 +393,7 @@ def test_bitwise(device_module, ttnn_function):
     ),
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_xlogy_ttnn(input_shapes, device_module, use_legacy):
-    device = device_module
+def test_binary_xlogy_ttnn(input_shapes, device, use_legacy):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
 
@@ -425,8 +408,7 @@ def test_binary_xlogy_ttnn(input_shapes, device_module, use_legacy):
 @pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
-def test_binary_div_edge_case_ttnn(accurate_mode, round_mode, device_module, torch_dtype, ttnn_dtype):
-    device = device_module
+def test_binary_div_edge_case_ttnn(accurate_mode, round_mode, device, torch_dtype, ttnn_dtype):
     if torch_dtype == torch.bfloat16 and round_mode is None and accurate_mode is False:
         pytest.skip(
             "Skipping test case due to division by zero not being handled properly in bfloat16 with round_mode=None and accurate_mode=False"

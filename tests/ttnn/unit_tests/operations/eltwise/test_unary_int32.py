@@ -30,8 +30,7 @@ import ttnn
         ttnn.logical_not,
     ],
 )
-def test_unary_logical_int32(input_shapes, low_a, high_a, logical_op, device_module):
-    device = device_module
+def test_unary_logical_int32(input_shapes, low_a, high_a, logical_op, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a[::5] = 0  # every 5th element is zero
@@ -60,8 +59,7 @@ def test_unary_logical_int32(input_shapes, low_a, high_a, logical_op, device_mod
         ttnn.logical_not,
     ],
 )
-def test_unary_logical_int32_edge_cases(logical_op, device_module):
-    device = device_module
+def test_unary_logical_int32_edge_cases(logical_op, device):
     # Note: torch.logical_not(-2147483648) returns False, whereas ttnn.logical_not(-2147483648) returns True.
     # This discrepancy occurs because, in Wormhole, the value -2147483648 wraps around to 0 due to integer overflow.
     torch_input_tensor_a = torch.tensor([0, 1, -1, 2147483647, -2147483647])
@@ -126,8 +124,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         "square",
     ],
 )
-def test_unary_logical_int32_sharded(a_shape, sharded_config, ttnn_op, device_module):
-    device = device_module
+def test_unary_logical_int32_sharded(a_shape, sharded_config, ttnn_op, device):
     ttnn_op = getattr(ttnn, ttnn_op)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(-100, 100, num_elements, dtype=torch.int32)
@@ -168,8 +165,7 @@ def test_unary_logical_int32_sharded(a_shape, sharded_config, ttnn_op, device_mo
         (-46340, 46340),  # output overflows beyond this range
     ],
 )
-def test_unary_square_int32(input_shapes, low_a, high_a, device_module):
-    device = device_module
+def test_unary_square_int32(input_shapes, low_a, high_a, device):
     if len(input_shapes) == 0:
         torch_input_tensor = torch.randint(low=-(2**15), high=2**15, size=(), dtype=torch.int32)
     else:
@@ -194,8 +190,7 @@ def test_unary_square_int32(input_shapes, low_a, high_a, device_module):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_abs_int32(device_module):
-    device = device_module
+def test_abs_int32(device):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randint(low=-1000, high=100, size=(1, 1, 320, 384), dtype=torch.int32)

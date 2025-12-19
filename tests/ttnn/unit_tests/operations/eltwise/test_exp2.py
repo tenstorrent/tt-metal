@@ -9,8 +9,7 @@ import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
-def test_exp2_arange_masking(device_module):
-    device = device_module
+def test_exp2_arange_masking(device):
     # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
     low = -126.0
     high = 127.0
@@ -55,8 +54,7 @@ def test_exp2_arange_masking(device_module):
         (-126, 127),
     ],
 )
-def test_exp2_ULP(input_shapes, low, high, device_module):
-    device = device_module
+def test_exp2_ULP(input_shapes, low, high, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -91,8 +89,7 @@ def test_exp2_ULP(input_shapes, low, high, device_module):
         (-127, -126),
     ],
 )
-def test_exp2_atol(input_shapes, low, high, device_module):
-    device = device_module
+def test_exp2_atol(input_shapes, low, high, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)

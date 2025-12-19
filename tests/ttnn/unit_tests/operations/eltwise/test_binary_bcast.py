@@ -43,8 +43,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
         [[5, 2, 3, 3, 4, 32], [5, 1, 3, 3, 4, 32]],
     ],
 )
-def test_unequal_ranks(a_shape, b_shape, device_module):
-    device = device_module
+def test_unequal_ranks(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -80,8 +79,7 @@ def test_unequal_ranks(a_shape, b_shape, device_module):
         (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_01_volume_tensors(device_module, a, b, c_golden, memory_config_a, memory_config_b):
-    device = device_module
+def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_config_b):
     a = torch.BFloat16Tensor(a)
     b = torch.BFloat16Tensor(b)
     assert torch.add(a, b).tolist() == c_golden
@@ -101,8 +99,7 @@ def test_01_volume_tensors(device_module, a, b, c_golden, memory_config_a, memor
         [[1, 2, 3, 3, 4, 32], [5, 1, 3, 3, 4, 32]],
     ],
 )
-def test_binary_invalid_rank(device_module, a_shape, b_shape):
-    device = device_module
+def test_binary_invalid_rank(device, a_shape, b_shape):
     torch.manual_seed(0)
     pt_a, tt_a = rand_bf16_gen(a_shape, device)
     pt_b, tt_b = rand_bf16_gen(b_shape, device)
@@ -261,8 +258,7 @@ def test_binary_sharded_bcast_no_identical(
         ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
     ),
 )
-def test_binary_sharded_row_major_layout(device_module, a_shape, b_shape, sharded_core_grid, memory_lay_out):
-    device = device_module
+def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_grid, memory_lay_out):
     torch.manual_seed(0)
     sharded_config = ttnn.create_sharded_memory_config(
         [160, 128],  # 14 cores
@@ -319,8 +315,7 @@ def test_binary_sharded_row_major_layout(device_module, a_shape, b_shape, sharde
     ),
 )
 @pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
-def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device_module):
-    device = device_module
+def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device, min=-1e3, max=1e3)
@@ -361,8 +356,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device_module):
         # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
-def test_binary_sharded_bcast_w_height(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([5, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([5, 7, 2 * 32, 1])
@@ -426,8 +420,7 @@ def test_binary_sharded_bcast_w_height(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_height_c(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_height_c(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([5, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([5, 1, 2 * 32, 1])
@@ -491,8 +484,7 @@ def test_binary_sharded_bcast_w_height_c(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_height_n(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([5, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([1, 7, 2 * 32, 1])
@@ -556,8 +548,7 @@ def test_binary_sharded_bcast_w_height_n(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_height(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -622,8 +613,7 @@ def test_binary_sharded_bcast_h_height(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_height(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 1])
@@ -688,8 +678,7 @@ def test_binary_sharded_bcast_scalar_height(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_hw_mixed_height(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_hw_mixed_height(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 2 * 32, 1])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -751,8 +740,7 @@ def test_binary_sharded_bcast_hw_mixed_height(device_module, dtype_pt, dtype_tt)
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_width(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_width(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([1, 2, 2 * 32, 40 * 32])
     b_shape = torch.Size([1, 1, 2 * 32, 1])
@@ -817,8 +805,7 @@ def test_binary_sharded_bcast_w_width(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_width(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_width(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 64, 7 * 32])
     b_shape = torch.Size([1, 1, 1, 7 * 32])
@@ -883,8 +870,7 @@ def test_binary_sharded_bcast_h_width(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_width(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 64, 7 * 32])
     b_shape = torch.Size([1, 1, 1, 1])
@@ -961,8 +947,7 @@ def test_binary_sharded_bcast_scalar_width(device_module, dtype_pt, dtype_tt):
         ),
     ),
 )
-def test_binary_sharded_bcast_hw_mixed_width(device_module, dtype_pt, dtype_tt, sub_core_grids):
-    device = device_module
+def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_core_grids):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 1, 7 * 32])
     b_shape = torch.Size([1, 1, 2 * 32, 1])
@@ -1035,8 +1020,7 @@ def test_binary_sharded_bcast_hw_mixed_width(device_module, dtype_pt, dtype_tt, 
         (1, 1, 32, 128 * 1024),
     ),
 )
-def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device_module):
-    device = device_module
+def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     """Test binary operations with sub_core_grids parameter"""
     torch.manual_seed(10)
     shape = [nb, nc, nh, nw]
@@ -1133,8 +1117,7 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device_module):
         [ttnn.ShardStrategy.BLOCK, [32 * 5, 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 6))})],
     ),
 )
-def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, core_range, device_module):
-    device = device_module
+def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
@@ -1247,8 +1230,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
         ],
     ),
 )
-def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, ttnn_fn, device_module):
-    device = device_module
+def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, ttnn_fn, device):
     torch.manual_seed(0)
     golden_function = ttnn.get_golden_function(ttnn_fn)
 
@@ -1313,8 +1295,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
         [ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(x=2, y=5)],  # shard [32 * 7, 32],
     ),
 )
-def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device_module):
-    device = device_module
+def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
     torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
@@ -1362,8 +1343,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device_mo
         [ttnn.ShardStrategy.BLOCK, [32 * 8, 64], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 4))})],
     ),
 )
-def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, shard_size, core_range, device_module):
-    device = device_module
+def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
@@ -1632,8 +1612,7 @@ def test_binary_sharded_bcast_scalar_value_uneven(
         ],
     ),
 )
-def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, shard_size, core_range, device_module):
-    device = device_module
+def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
@@ -1682,8 +1661,7 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
         ],
     ),
 )
-def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size, core_range, device_module):
-    device = device_module
+def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
@@ -1739,8 +1717,7 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
         ],
     ),
 )
-def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_size, core_range, device_module):
-    device = device_module
+def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_size, core_range, device):
     torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
@@ -1943,8 +1920,7 @@ def test_binary_sharded_row_major_layout_mixed(
         [[256], [920, 1, 256]],
     ],
 )
-def test_binary_subtile_no_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_subtile_no_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -1974,8 +1950,7 @@ def test_binary_subtile_no_bcast(a_shape, b_shape, device_module):
         [[1, 8192], [8192, 8192]],
     ],
 )
-def test_binary_subtile_row_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_subtile_row_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -2018,8 +1993,7 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device_module):
         [[4, 4, 320, 320], [4, 4, 320, 1]],
     ],
 )
-def test_binary_subtile_col_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_subtile_col_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -2055,8 +2029,7 @@ def test_binary_subtile_col_bcast(a_shape, b_shape, device_module):
         [[4, 4, 320, 320], [1, 1, 1, 1]],
     ],
 )
-def test_binary_subtile_scalar_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_subtile_scalar_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -2098,8 +2071,7 @@ def test_binary_subtile_scalar_bcast(a_shape, b_shape, device_module):
         [[4, 4, 1, 320], [4, 4, 320, 1]],
     ],
 )
-def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
@@ -2128,8 +2100,7 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device_module):
 )
 @pytest.mark.parametrize("bcast_dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
 @pytest.mark.parametrize("math_op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL])
-def test_bcast(input_shape_a, device_module, bcast_dim, math_op):
-    device = device_module
+def test_bcast(input_shape_a, device, bcast_dim, math_op):
     torch.manual_seed(0)
     input_shape_b = list(input_shape_a)
 
@@ -2168,8 +2139,7 @@ def test_bcast(input_shape_a, device_module, bcast_dim, math_op):
     assert comp_pass
 
 
-def test_yolov8_add_small(device_module):
-    device = device_module
+def test_yolov8_add_small(device):
     tor_a = torch.tensor(
         [
             [
@@ -2297,8 +2267,7 @@ def rand_gen(shape, device, *, dtype, tt_dtype, min=0, max=1, memory_config):
         [torch.float32, ttnn.float32, torch.bfloat16, ttnn.bfloat16],
     ),
 )
-def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device_module):
-    device = device_module
+def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device):
     torch.manual_seed(0)
     a_shape = torch.Size([1, 4, 2, 160])
     b_shape = torch.Size([1, 4, 1, 160])
@@ -2316,8 +2285,7 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     assert compare_pcc([out_tt], [out_pt])
 
 
-def test_add_1m(device_module):
-    device = device_module
+def test_add_1m(device):
     torch.manual_seed(0)
     a = torch.ones(1, 1) * 1_000_000
     b = torch.ones(32, 32)
@@ -2332,8 +2300,7 @@ def test_add_1m(device_module):
     assert_with_pcc(c, ttnn.to_torch(tc))
 
 
-def test_add_i32(device_module):
-    device = device_module
+def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
     a = torch.reshape(a, (1, 1, 1, 256))
@@ -2349,8 +2316,7 @@ def test_add_i32(device_module):
     assert torch.equal(torch_add, output_tensor)
 
 
-def test_add_error(device_module):
-    device = device_module
+def test_add_error(device):
     pytest.skip("Test is skipped because half mem config feature not supported yet")
     # Create input tensors with specified shapes
     input_shape = [1, 1, 1, 39576]
@@ -2375,8 +2341,7 @@ def test_add_error(device_module):
         [[8, 16, 32], [1, 1, 32]],
     ],
 )
-def test_sub_implicit_broadcast(device_module, shapes):
-    device = device_module
+def test_sub_implicit_broadcast(device, shapes):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.float32)
@@ -2406,8 +2371,7 @@ def test_sub_implicit_broadcast(device_module, shapes):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-def test_small_fp32_multiply(device_module):
-    device = device_module
+def test_small_fp32_multiply(device):
     # Scaling with 0.01 to get realistic values that appear during training.
     a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
@@ -2437,8 +2401,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_block(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 32 * 2, 1])
@@ -2503,8 +2466,7 @@ def test_binary_sharded_bcast_w_block(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_block(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_block(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -2569,8 +2531,7 @@ def test_binary_sharded_bcast_h_block(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_block(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_block(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 1])
@@ -2635,8 +2596,7 @@ def test_binary_sharded_bcast_scalar_block(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_hw_mixed_block(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_hw_mixed_block(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 1])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -2754,8 +2714,7 @@ def test_binary_sharded_bcast_scalar_zero_dim(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device_module):
-    device = device_module
+def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
     torch.manual_seed(0)
     dram_grid_size = device.dram_grid_size()
     input_shape = (1, 1, dram_grid_size.x * dram_grid_size.y * 32, 32)
@@ -2814,8 +2773,7 @@ def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device_m
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device_module):
-    device = device_module
+def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     torch.manual_seed(0)
     dram_grid_size = device.dram_grid_size()
     input_shape = (1, 1, dram_grid_size.x * dram_grid_size.y * 32, 32)
@@ -2861,8 +2819,7 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device_module):
         # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
-def test_binary_sharded_bcast_w_height_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([5, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([5, 7, 2 * 32, 1])
@@ -2927,8 +2884,7 @@ def test_binary_sharded_bcast_w_height_uneven(device_module, dtype_pt, dtype_tt)
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_width_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_width_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([1, 2, 2 * 32, 40 * 32])
     b_shape = torch.Size([1, 1, 2 * 32, 1])
@@ -2994,8 +2950,7 @@ def test_binary_sharded_bcast_w_width_uneven(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_w_block_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 3 * 32])
     b_shape = torch.Size([1, 7, 32 * 2, 1])
@@ -3061,8 +3016,7 @@ def test_binary_sharded_bcast_w_block_uneven(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_height_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -3127,8 +3081,7 @@ def test_binary_sharded_bcast_h_height_uneven(device_module, dtype_pt, dtype_tt)
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_width_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_width_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 64, 7 * 32])
     b_shape = torch.Size([1, 1, 1, 7 * 32])
@@ -3193,8 +3146,7 @@ def test_binary_sharded_bcast_h_width_uneven(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_block_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 5 * 32])
     b_shape = torch.Size([1, 7, 1, 5 * 32])
@@ -3259,8 +3211,7 @@ def test_binary_sharded_bcast_h_block_uneven(device_module, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_height_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 1])
@@ -3325,8 +3276,7 @@ def test_binary_sharded_bcast_scalar_height_uneven(device_module, dtype_pt, dtyp
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_width_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_width_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 64, 7 * 32])
     b_shape = torch.Size([1, 1, 1, 1])
@@ -3391,8 +3341,7 @@ def test_binary_sharded_bcast_scalar_width_uneven(device_module, dtype_pt, dtype
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_scalar_block_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_scalar_block_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 5 * 32])
     b_shape = torch.Size([1, 7, 1, 1])
@@ -3471,8 +3420,7 @@ def rand_bf16_gen_dtype(shape, device, *, min=0, max=1, dtype, memory_config=ttn
         (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 640, 1])),
     ),
 )
-def test_binary_sfpu_row_bcast(a_shape, b_shape, device_module):
-    device = device_module
+def test_binary_sfpu_row_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
     # make 0 exclusive for rhs of div
     min, max = (1, 0)
@@ -3498,8 +3446,7 @@ def test_binary_sfpu_row_bcast(a_shape, b_shape, device_module):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 1])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -3682,8 +3629,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
 
 @pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
 @pytest.mark.parametrize("is_legacy", [True, False])
-def test_add_sharded(device_module, input_shape, is_legacy):
-    device = device_module
+def test_add_sharded(device, input_shape, is_legacy):
     torch_input_tensor_a = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -3711,8 +3657,7 @@ def test_add_sharded(device_module, input_shape, is_legacy):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_hw_mixed_orientation_output(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 31 * 2, 1])
     b_shape = torch.Size([1, 7, 1, 4 * 31])
@@ -3806,8 +3751,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device_module, dtype_p
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
@@ -3879,8 +3823,7 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device_module, dtype_pt,
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_identical_mixed_strategy(device_module, dtype_pt, dtype_tt):
-    device = device_module
+def test_binary_sharded_bcast_identical_mixed_strategy(device, dtype_pt, dtype_tt):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
@@ -3957,8 +3900,7 @@ def test_binary_sharded_bcast_identical_mixed_strategy(device_module, dtype_pt, 
     ([torch.bfloat16, ttnn.bfloat16],),
 )
 @pytest.mark.parametrize("scalar", [1.7, -0.25])
-def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device_module, dtype_pt, dtype_tt, scalar):
-    device = device_module
+def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device, dtype_pt, dtype_tt, scalar):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     out_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
@@ -4049,8 +3991,7 @@ def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device_module, dty
         ttnn.logical_xor_,
     ],
 )
-def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, device_module, ttnn_fn):
-    device = device_module
+def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, device, ttnn_fn):
     torch.manual_seed(10)
     shape = [nb, nc, nh, nw]
     inp_a = torch.rand(*shape).to(dtype_pt)
@@ -4110,8 +4051,7 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
         None,
     ],
 )
-def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, round_mode, device_module):
-    device = device_module
+def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, round_mode, device):
     torch.manual_seed(10)
     shape = [nb, nc, nh, nw]
     inp_a = torch.rand(*shape).to(dtype_pt)
@@ -4180,8 +4120,7 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
         (1, 1, 32, 32 * 1024),
     ),
 )
-def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, device_module):
-    device = device_module
+def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     torch.manual_seed(10)
     shape = [nb, nc, nh, nw]
     inp_a = torch.rand(*shape).to(dtype_pt)

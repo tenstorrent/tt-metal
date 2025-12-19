@@ -20,8 +20,7 @@ import ttnn
         [3, 128, 512],
     ],
 )
-def test_i1_range(device_module, shapes):
-    device = device_module
+def test_i1_range(device, shapes):
     torch.manual_seed(0)
 
     high = 10
@@ -50,8 +49,7 @@ def test_i1_range(device_module, shapes):
         [1, 1, 64, 64],
     ],
 )
-def test_i1_zero(device_module, shapes):
-    device = device_module
+def test_i1_zero(device, shapes):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.zeros(shapes, dtype=torch.float32)

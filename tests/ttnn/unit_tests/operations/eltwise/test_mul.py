@@ -14,8 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # fmt: off
 @pytest.mark.parametrize("scalar", [3.0])
 # fmt: on
-def test_multiply_not_4D(device_module, scalar):
-    device = device_module
+def test_multiply_not_4D(device, scalar):
     torch_input_tensor_a = torch.arange(32).to(dtype=torch.bfloat16)
     torch_input_tensor_b = torch.arange(32).to(dtype=torch.bfloat16)
 
@@ -32,8 +31,7 @@ def test_multiply_not_4D(device_module, scalar):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_mul_4D(device_module, h, w):
-    device = device_module
+def test_mul_4D(device, h, w):
     torch_input_tensor_a = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
@@ -49,8 +47,7 @@ def test_mul_4D(device_module, h, w):
 # fmt: off
 @pytest.mark.parametrize("scalar", [3.0, 0.125])
 # fmt: on
-def test_multiply_with_scalar(device_module, scalar):
-    device = device_module
+def test_multiply_with_scalar(device, scalar):
     torch_input_tensor_a = torch.arange(1024).reshape(32, 32).to(dtype=torch.bfloat16)
     torch_output_tensor = scalar * torch_input_tensor_a
 
@@ -64,8 +61,7 @@ def test_multiply_with_scalar(device_module, scalar):
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("scalar", [3.0, 0.125])
-def test_multiply_with_scalar_sharded(device_module, scalar, input_shard_orientation, output_memory_config):
-    device = device_module
+def test_multiply_with_scalar_sharded(device, scalar, input_shard_orientation, output_memory_config):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand(1024 * 32, dtype=torch.bfloat16).reshape(32, 32, 32)
     torch_output_tensor = scalar * torch_input_tensor_a
@@ -92,8 +88,7 @@ def test_multiply_with_scalar_sharded(device_module, scalar, input_shard_orienta
         ([13, 16, 42, 42], 0.125)
     ])
 # fmt: on
-def test_multiply_int32_with_scalar(device_module, input_a, scalar):
-    device = device_module
+def test_multiply_int32_with_scalar(device, input_a, scalar):
     torch_input_tensor_a = torch.as_tensor(input_a, dtype=torch.int32)
     torch_output_tensor = scalar * torch_input_tensor_a
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
@@ -107,8 +102,7 @@ def test_multiply_int32_with_scalar(device_module, input_a, scalar):
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("scalar", [0.125])
 @pytest.mark.parametrize("batch_size", [6, 7, 8])
-def test_multiply_float32_with_scalar_sharded(device_module, scalar, batch_size, output_memory_config):
-    device = device_module
+def test_multiply_float32_with_scalar_sharded(device, scalar, batch_size, output_memory_config):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((batch_size, 16, 384, 384), dtype=torch.float32)
     torch_output_tensor = scalar * torch_input_tensor_a

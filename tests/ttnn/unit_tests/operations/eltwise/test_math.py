@@ -35,23 +35,20 @@ def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_i0(device_module, h, w):
-    device = device_module
+def test_i0(device, h, w):
     run_math_unary_test(device, h, w, ttnn.i0, pcc=0.998)
 
 
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
-def test_lgamma(device_module, h, w):
-    device = device_module
+def test_lgamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.lgamma, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.uint16, ttnn.uint32])
-def test_eq(device_module, h, w, output_dtype):
-    device = device_module
+def test_eq(device, h, w, output_dtype):
     torch.manual_seed(0)
 
     same = 50
@@ -102,127 +99,109 @@ def test_eq(device_module, h, w, output_dtype):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log10(device_module, h, w):
-    device = device_module
+def test_log10(device, h, w):
     run_math_unary_test(device, h, w, ttnn.log10)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log1p(device_module, h, w):
-    device = device_module
+def test_log1p(device, h, w):
     run_math_unary_test(device, h, w, ttnn.log1p, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log2(device_module, h, w):
-    device = device_module
+def test_log2(device, h, w):
     run_math_unary_test(device, h, w, ttnn.log2, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_neg(device_module, h, w):
-    device = device_module
+def test_neg(device, h, w):
     run_math_unary_test(device, h, w, ttnn.neg)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_abs(device_module, h, w):
-    device = device_module
+def test_abs(device, h, w):
     run_math_unary_test(device, h, w, ttnn.abs)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_rad2deg(device_module, h, w):
-    device = device_module
+def test_rad2deg(device, h, w):
     run_math_unary_test(device, h, w, ttnn.rad2deg)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_cbrt(device_module, h, w):
-    device = device_module
+def test_cbrt(device, h, w):
     run_math_unary_test(device, h, w, ttnn.cbrt, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_tril(device_module, h, w):
-    device = device_module
+def test_tril(device, h, w):
     run_math_unary_test(device, h, w, ttnn.tril)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_deg2rad(device_module, h, w):
-    device = device_module
+def test_deg2rad(device, h, w):
     run_math_unary_test(device, h, w, ttnn.deg2rad)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sqrt(device_module, h, w):
-    device = device_module
+def test_sqrt(device, h, w):
     run_math_unary_test(device, h, w, ttnn.sqrt)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_digamma(device_module, h, w):
-    device = device_module
+def test_digamma(device, h, w):
     run_math_unary_test(device, h, w, ttnn.digamma)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_erf(device_module, h, w):
-    device = device_module
+def test_erf(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erf)
 
 
 @pytest.mark.parametrize("h", [2])
 @pytest.mark.parametrize("w", [3])
-def test_erfc(device_module, h, w):
-    device = device_module
+def test_erfc(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erfc)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_erfinv(device_module, h, w):
-    device = device_module
+def test_erfinv(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erfinv, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_square(device_module, h, w):
-    device = device_module
+def test_square(device, h, w):
     run_math_unary_test(device, h, w, ttnn.square)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_exp2(device_module, h, w):
-    device = device_module
+def test_exp2(device, h, w):
     run_math_unary_test(device, h, w, ttnn.exp2, pcc=0.98)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_expm1(device_module, h, w):
-    device = device_module
+def test_expm1(device, h, w):
     run_math_unary_test(device, h, w, ttnn.expm1, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_triu(device_module, h, w):
-    device = device_module
+def test_triu(device, h, w):
     run_math_unary_test(device, h, w, ttnn.triu)
 
 
@@ -256,8 +235,7 @@ def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_recip(device_module, h, w):
-    device = device_module
+def test_recip(device, h, w):
     run_math_unary_test_recip(device, h, w, ttnn.reciprocal, pcc=0.999)
 
 
@@ -279,8 +257,7 @@ def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
-def test_multigammaln(device_module, h, w):
-    device = device_module
+def test_multigammaln(device, h, w):
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, pcc=0.999)
 
 
@@ -304,13 +281,11 @@ def run_math_test_polygamma(device, h, w, scalar, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("scalar", [1, 2, 5, 10])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_polygamma(device_module, h, w, scalar):
-    device = device_module
+def test_polygamma(device, h, w, scalar):
     run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_recip_fixed(device_module, h, w):
-    device = device_module
+def test_recip_fixed(device, h, w):
     run_math_unary_test_fixed_val(device, h, w, 0, ttnn.reciprocal, pcc=0.999)

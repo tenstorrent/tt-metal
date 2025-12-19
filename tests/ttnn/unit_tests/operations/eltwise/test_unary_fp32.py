@@ -15,8 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ttnn.neg,
     ],
 )
-def test_neg_fp32(device_module, ttnn_function):
-    device = device_module
+def test_neg_fp32(device, ttnn_function):
     x_torch = torch.tensor([[0.00001]], dtype=torch.float32)
     y_torch = -x_torch
 
@@ -35,8 +34,7 @@ def test_neg_fp32(device_module, ttnn_function):
         ttnn.sin,
     ],
 )
-def test_sin_fp32(device_module, ttnn_function):
-    device = device_module
+def test_sin_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.sin(x_torch)
 
@@ -55,8 +53,7 @@ def test_sin_fp32(device_module, ttnn_function):
         ttnn.cos,
     ],
 )
-def test_cos_fp32(device_module, ttnn_function):
-    device = device_module
+def test_cos_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.cos(x_torch)
 
@@ -75,8 +72,7 @@ def test_cos_fp32(device_module, ttnn_function):
         ttnn.tan,
     ],
 )
-def test_tan_fp32(device_module, ttnn_function):
-    device = device_module
+def test_tan_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.tan(x_torch)
 
@@ -95,8 +91,7 @@ def test_tan_fp32(device_module, ttnn_function):
         ttnn.relu,
     ],
 )
-def test_relu_fp32(device_module, ttnn_function):
-    device = device_module
+def test_relu_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.relu(x_torch)
 
@@ -126,91 +121,78 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_exp(device_module, h, w):
-    device = device_module
+def test_exp(device, h, w):
     run_unary_test(device, h, w, ttnn.exp, pcc=0.9998)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_tanh(device_module, h, w):
-    device = device_module
+def test_tanh(device, h, w):
     run_unary_test(device, h, w, ttnn.tanh, pcc=0.993)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device_module, h, w):
-    device = device_module
+def test_gelu(device, h, w):
     run_unary_test(device, h, w, ttnn.gelu, pcc=0.9996)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_rsqrt(device_module, h, w):
-    device = device_module
+def test_rsqrt(device, h, w):
     run_unary_test(device, h, w, ttnn.rsqrt)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_silu(device_module, h, w):
-    device = device_module
+def test_silu(device, h, w):
     run_unary_test(device, h, w, ttnn.silu)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log(device_module, h, w):
-    device = device_module
+def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_asin(device_module, h, w):
-    device = device_module
+def test_asin(device, h, w):
     run_unary_test(device, h, w, ttnn.asin, pcc=0.998)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_acos(device_module, h, w):
-    device = device_module
+def test_acos(device, h, w):
     run_unary_test(device, h, w, ttnn.acos, pcc=0.998)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_atan(device_module, h, w):
-    device = device_module
+def test_atan(device, h, w):
     run_unary_test(device, h, w, ttnn.atan)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sinh(device_module, h, w):
-    device = device_module
+def test_sinh(device, h, w):
     run_unary_test(device, h, w, ttnn.sinh)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_cosh(device_module, h, w):
-    device = device_module
+def test_cosh(device, h, w):
     run_unary_test(device, h, w, ttnn.cosh, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_acosh(device_module, h, w):
-    device = device_module
+def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh)
 
 
 @pytest.mark.skip("The current version doesn’t work with float32, but this will be fixed in issue #231689.")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_atanh(device_module, h, w):
-    device = device_module
+def test_atanh(device, h, w):
     run_unary_test(device, h, w, ttnn.atanh, pcc=0.997)

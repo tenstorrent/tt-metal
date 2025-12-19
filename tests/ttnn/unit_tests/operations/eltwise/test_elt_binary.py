@@ -36,57 +36,49 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_ldexp(device_module, h, w):
-    device = device_module
+def test_ldexp(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.ldexp, -60, 60, pcc=0.9995)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logaddexp(device_module, h, w):
-    device = device_module
+def test_logaddexp(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.logaddexp, -80, 80)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logaddexp2(device_module, h, w):
-    device = device_module
+def test_logaddexp2(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.logaddexp2, -60, 100, pcc=0.993)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logical_and(device_module, h, w):
-    device = device_module
+def test_logical_and(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.logical_and, -100, 100)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logical_or(device_module, h, w):
-    device = device_module
+def test_logical_or(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.logical_or, -100, 100)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_logical_xor(device_module, h, w):
-    device = device_module
+def test_logical_xor(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.logical_xor, -100, 100)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_xlogy(device_module, h, w):
-    device = device_module
+def test_xlogy(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.xlogy, 1e-6, 1e6)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_bias_gelu(device_module, h, w):
-    device = device_module
+def test_bias_gelu(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.bias_gelu, -100, 100)
 
 
@@ -114,20 +106,17 @@ def run_elt_binary_test_min_max(device, h, w, ttnn_function, low, high, pcc=0.99
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_maximum(device_module, h, w):
-    device = device_module
+def test_maximum(device, h, w):
     run_elt_binary_test_min_max(device, h, w, ttnn.maximum, -100, 100)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_minimum(device_module, h, w):
-    device = device_module
+def test_minimum(device, h, w):
     run_elt_binary_test_min_max(device, h, w, ttnn.minimum, -100, 100)
 
 
-def test_arithmetic_operators(device_module):
-    device = device_module
+def test_arithmetic_operators(device):
     """Test basic arithmetic operators (+, -, *, /) on ttnn tensors"""
 
     # Create test tensors with different values

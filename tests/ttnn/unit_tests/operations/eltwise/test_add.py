@@ -20,8 +20,7 @@ from models.common.utility_functions import skip_for_slow_dispatch
         [[63, 1, 4], [1, 1, 1]],
     ],
 )
-def test_non_4D_channel_bcast(device_module, shapes):
-    device = device_module
+def test_non_4D_channel_bcast(device, shapes):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16)
@@ -43,8 +42,7 @@ def test_non_4D_channel_bcast(device_module, shapes):
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64, 1, 0])
-def test_add_1D_tensor_and_scalar(device_module, scalar, size):
-    device = device_module
+def test_add_1D_tensor_and_scalar(device, scalar, size):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((size,), dtype=torch.bfloat16)
@@ -59,8 +57,7 @@ def test_add_1D_tensor_and_scalar(device_module, scalar, size):
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
-def test_add_2D_tensors(device_module, hw):
-    device = device_module
+def test_add_2D_tensors(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(hw, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -74,8 +71,7 @@ def test_add_2D_tensors(device_module, hw):
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
-def test_add_2D_tensors_with_program_cache(device_module, hw):
-    device = device_module
+def test_add_2D_tensors_with_program_cache(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(hw, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -90,8 +86,7 @@ def test_add_2D_tensors_with_program_cache(device_module, hw):
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 @pytest.mark.parametrize("scalar", [0.42])
-def test_add_scalar(device_module, hw, scalar):
-    device = device_module
+def test_add_scalar(device, hw, scalar):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_output_tensor = scalar + torch_input_tensor_a
 
@@ -104,8 +99,7 @@ def test_add_scalar(device_module, hw, scalar):
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 @pytest.mark.parametrize("scalar", [0.42])
-def test_reverse_add_scalar(device_module, hw, scalar):
-    device = device_module
+def test_reverse_add_scalar(device, hw, scalar):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
     torch_output_tensor = scalar + torch_input_tensor_a
 
@@ -117,8 +111,7 @@ def test_reverse_add_scalar(device_module, hw, scalar):
 
 
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
-def test_add_4D_tensors(device_module, hw):
-    device = device_module
+def test_add_4D_tensors(device, hw):
     torch_input_tensor_a = torch.rand((5, 64, hw[0], hw[1]), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((5, 64, hw[0], hw[1]), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -133,9 +126,8 @@ def test_add_4D_tensors(device_module, hw):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_add_with_broadcast(device_module, h, w):
+def test_add_with_broadcast(device, h, w):
     # See #4005, we basically are using ttnn.repeat to get this to pass.
-    device = device_module
     torch_input_tensor_a = torch.rand((2, 16, 1, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -150,8 +142,7 @@ def test_add_with_broadcast(device_module, h, w):
 
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
-def test_expand_and_broadcast(device_module, h, w):
-    device = device_module
+def test_expand_and_broadcast(device, h, w):
     torch_input_tensor_a = torch.rand((1, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -166,8 +157,7 @@ def test_expand_and_broadcast(device_module, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_add_with_broadcast_on_batch(device_module, h, w):
-    device = device_module
+def test_add_with_broadcast_on_batch(device, h, w):
     torch_input_tensor_a = torch.rand((1, 16, 1, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((2, 16, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -182,8 +172,7 @@ def test_add_with_broadcast_on_batch(device_module, h, w):
 
 @pytest.mark.parametrize("shape", [(8, 16, 384, 384)])
 @pytest.mark.parametrize("scalar", [0.125])
-def test_add_attention_scores_to_scalar(device_module, shape, scalar):
-    device = device_module
+def test_add_attention_scores_to_scalar(device, shape, scalar):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
@@ -201,8 +190,7 @@ def test_add_attention_scores_to_scalar(device_module, shape, scalar):
 
 @pytest.mark.parametrize("shape_a", [(8, 16, 128, 128)])
 @pytest.mark.parametrize("shape_b", [(1, 16, 128, 128)])
-def test_add_with_batch_broadcast(device_module, shape_a, shape_b):
-    device = device_module
+def test_add_with_batch_broadcast(device, shape_a, shape_b):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape_a, dtype=torch.bfloat16)
@@ -224,8 +212,7 @@ def test_add_with_batch_broadcast(device_module, shape_a, shape_b):
 
 @pytest.mark.parametrize("shape_a", [(4096, 4096)])
 @pytest.mark.parametrize("shape_b", [(1, 4096)])
-def test_add_dram_and_l1_tensor(device_module, shape_a, shape_b):
-    device = device_module
+def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape_a, dtype=torch.bfloat16)
@@ -247,8 +234,7 @@ def test_add_dram_and_l1_tensor(device_module, shape_a, shape_b):
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
-def test_add_and_apply_activations(device_module, shape, activations):
-    device = device_module
+def test_add_and_apply_activations(device, shape, activations):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -269,8 +255,7 @@ def test_add_and_apply_activations(device_module, shape, activations):
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
-def test_in_place_add_and_apply_activations(device_module, shape, activations):
-    device = device_module
+def test_in_place_add_and_apply_activations(device, shape, activations):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -290,8 +275,7 @@ def test_in_place_add_and_apply_activations(device_module, shape, activations):
 
 
 @pytest.mark.parametrize("shape", [(32, 32)])
-def test_prim_add(device_module, shape):
-    device = device_module
+def test_prim_add(device, shape):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -310,8 +294,7 @@ def test_prim_add(device_module, shape):
 @pytest.mark.skip(reason="#11002/#4005: Bcast does not appear to be doing what we expect.  Leaving test for reference.")
 @pytest.mark.parametrize("shape_a", [(1, 1, 8192, 320)])
 @pytest.mark.parametrize("shape_b", [(2, 1, 1, 320)])
-def test_add_with_different_batch(device_module, shape_a, shape_b):
-    device = device_module
+def test_add_with_different_batch(device, shape_a, shape_b):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape_a, dtype=torch.bfloat16)
@@ -365,8 +348,7 @@ def test_add_with_different_batch(device_module, shape_a, shape_b):
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_add_with_height_sharding(device_module, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
-    device = device_module
+def test_add_with_height_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
     shape = (1, 1, 1024, 1024)
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -416,8 +398,7 @@ def test_add_with_height_sharding(device_module, input_a_sharded, input_b_sharde
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_add_with_width_sharding(device_module, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
-    device = device_module
+def test_add_with_width_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
     shape = (1, 1, 1024, 1024)
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -467,8 +448,7 @@ def test_add_with_width_sharding(device_module, input_a_sharded, input_b_sharded
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_add_with_block_sharding(device_module, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
-    device = device_module
+def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
     shape = (1, 1, 1024, 1024)
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
@@ -524,8 +504,7 @@ def test_add_with_block_sharding(device_module, input_a_sharded, input_b_sharded
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-def test_01_volume_tensors(device_module, data, memory_config):
-    device = device_module
+def test_01_volume_tensors(device, data, memory_config):
     (a, b, c_golden) = data
     a = torch.BFloat16Tensor(a)
     b = torch.BFloat16Tensor(b)
@@ -544,8 +523,7 @@ def test_01_volume_tensors(device_module, data, memory_config):
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_add_with_sub_devices(device_module, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
-    device = device_module
+def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
     shape = (1, 1, 1024, 1024)
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)

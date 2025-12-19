@@ -43,8 +43,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ("tensor", "tensor"),
     ],
 )
-def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device_module):
-    device = device_module
+def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -101,8 +100,7 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device_modul
         ("tensor", "tensor"),
     ],
 )
-def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device_module):
-    device = device_module
+def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     if min_val == "tensor":
@@ -138,8 +136,7 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device_module
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_digamma_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_digamma_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 100, device)
 
     output_tensor = ttnn.digamma(input_tensor1)
@@ -158,8 +155,7 @@ def test_unary_composite_digamma_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_lgamma_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_lgamma_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, 0.1, 100, device)
 
     output_tensor = ttnn.lgamma(input_tensor1)
@@ -178,8 +174,7 @@ def test_unary_composite_lgamma_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_mish_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_mish_ttnn(input_shapes, device):
     in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mish(input_tensor1)
@@ -194,8 +189,7 @@ def test_unary_composite_mish_ttnn(input_shapes, device_module):
     "input_shapes",
     (torch.Size([1, 1, 89600, 32]),),
 )
-def test_unary_composite_mish_sharded_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
     in_data = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
     shard_grid = ttnn.CoreRangeSet(
         {
@@ -234,8 +228,7 @@ def test_unary_composite_mish_sharded_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_multigammaln_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_multigammaln_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1.6, 100, device)
 
     output_tensor = ttnn.multigammaln(input_tensor1)
@@ -254,8 +247,7 @@ def test_unary_composite_multigammaln_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_polygamma_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_polygamma_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 10, device)
     k = 5
     output_tensor = ttnn.polygamma(input_tensor1, k)
@@ -274,8 +266,7 @@ def test_unary_composite_polygamma_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_tril_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_tril_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.tril(input_tensor1)
@@ -294,8 +285,7 @@ def test_unary_composite_tril_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_triu_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_composite_triu_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.triu(input_tensor1)
@@ -318,8 +308,7 @@ def test_unary_composite_triu_ttnn(input_shapes, device_module):
     "dim",
     [-1, 3],
 )
-def test_unary_glu_ttnn(input_shapes, dim, device_module):
-    device = device_module
+def test_unary_glu_ttnn(input_shapes, dim, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
     golden_fn = ttnn.get_golden_function(ttnn.glu)
 
@@ -342,8 +331,7 @@ def test_unary_glu_ttnn(input_shapes, dim, device_module):
     "dim",
     [-1, 3],
 )
-def test_unary_reglu_ttnn(input_shapes, dim, device_module):
-    device = device_module
+def test_unary_reglu_ttnn(input_shapes, dim, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
     golden_fn = ttnn.get_golden_function(ttnn.reglu)
 
@@ -366,8 +354,7 @@ def test_unary_reglu_ttnn(input_shapes, dim, device_module):
     "dim",
     [-1, 3],
 )
-def test_unary_geglu_ttnn(input_shapes, dim, device_module):
-    device = device_module
+def test_unary_geglu_ttnn(input_shapes, dim, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
     golden_fn = ttnn.get_golden_function(ttnn.geglu)
 
@@ -389,8 +376,7 @@ def test_unary_geglu_ttnn(input_shapes, dim, device_module):
     "dim",
     [-1, 3],
 )
-def test_unary_swiglu_ttnn(input_shapes, dim, device_module):
-    device = device_module
+def test_unary_swiglu_ttnn(input_shapes, dim, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -5, 5, device)
     golden_fn = ttnn.get_golden_function(ttnn.swiglu)
 
@@ -427,8 +413,7 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device_module):
         (0, 1),
     ],
 )
-def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device_module):
-    device = device_module
+def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device):
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     if min_val is None:

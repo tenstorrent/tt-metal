@@ -56,8 +56,7 @@ binary_fns = {
     ([ttnn.TILE_LAYOUT]),
 )
 # No typecast on inputs and optional output
-def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device_module):
-    device = device_module
+def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn, ttnn_fn)
@@ -105,8 +104,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device_mod
     ([ttnn.bfloat8_b]),
 )
 # Typecast on both inputs and optional output
-def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device_module):
-    device = device_module
+def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn, ttnn_fn)
@@ -148,8 +146,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device_module):
     ),
 )
 # Typecast on both inputs
-def test_sub_typecast(input_shapes, device_module):
-    device = device_module
+def test_sub_typecast(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -193,8 +190,7 @@ def test_sub_typecast(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor a
-def test_sub_typecast_a(input_shapes, device_module):
-    device = device_module
+def test_sub_typecast_a(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -238,8 +234,7 @@ def test_sub_typecast_a(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor b
-def test_sub_typecast_b(input_shapes, device_module):
-    device = device_module
+def test_sub_typecast_b(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -283,8 +278,7 @@ def test_sub_typecast_b(input_shapes, device_module):
     ),
 )
 # Typecast on both inputs
-def test_sub_opt_output_typecast_inputs(input_shapes, device_module):
-    device = device_module
+def test_sub_opt_output_typecast_inputs(input_shapes, device):
     a_shape, b_shape, out_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -334,8 +328,7 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device_module):
     ),
 )
 # Typecast on output
-def test_sub_opt_output_typecast_out(input_shapes, device_module):
-    device = device_module
+def test_sub_opt_output_typecast_out(input_shapes, device):
     a_shape, b_shape, out_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -383,8 +376,7 @@ def test_sub_opt_output_typecast_out(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor a
-def test_sub_opt_output_typecast_a(input_shapes, device_module):
-    device = device_module
+def test_sub_opt_output_typecast_a(input_shapes, device):
     a_shape, b_shape, out_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -432,8 +424,7 @@ def test_sub_opt_output_typecast_a(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor b
-def test_sub_opt_output_typecast_b(input_shapes, device_module):
-    device = device_module
+def test_sub_opt_output_typecast_b(input_shapes, device):
     a_shape, b_shape, out_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -481,8 +472,7 @@ def test_sub_opt_output_typecast_b(input_shapes, device_module):
     ),
 )
 # Typecast on both inputs
-def test_inplace_sub_typecast(input_shapes, device_module):
-    device = device_module
+def test_inplace_sub_typecast(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -526,8 +516,7 @@ def test_inplace_sub_typecast(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor a
-def test_inplace_sub_typecast_a(input_shapes, device_module):
-    device = device_module
+def test_inplace_sub_typecast_a(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -571,8 +560,7 @@ def test_inplace_sub_typecast_a(input_shapes, device_module):
     ),
 )
 # Typecast on input tensor b
-def test_inplace_sub_typecast_b(input_shapes, device_module):
-    device = device_module
+def test_inplace_sub_typecast_b(input_shapes, device):
     a_shape, b_shape = input_shapes
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -634,8 +622,7 @@ def test_inplace_sub_typecast_b(input_shapes, device_module):
 )
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
 # Typecast on both input and optional tensor
-def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device_module):
-    device = device_module
+def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     torch.manual_seed(0)
     a_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn, ttnn_fn)
@@ -688,8 +675,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device_module):
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device_module):
-    device = device_module
+def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape = input_shape
 
@@ -734,8 +720,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device_module):
-    device = device_module
+def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape = input_shape
 
@@ -791,8 +776,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memory_config, layout, device_module):
-    device = device_module
+def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
@@ -855,8 +839,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_config, layout, device_module):
-    device = device_module
+def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 

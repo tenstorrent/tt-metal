@@ -18,8 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_gcd_int32(input_shapes, device_module):
-    device = device_module
+def test_binary_gcd_int32(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
     in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
@@ -43,8 +42,7 @@ def test_binary_gcd_int32(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_gcd_ttnn(input_shapes, device_module):
-    device = device_module
+def test_binary_gcd_ttnn(input_shapes, device):
     in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
     in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -73,8 +71,7 @@ def test_binary_gcd_ttnn(input_shapes, device_module):
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_gcd_int32(input_shapes, low_a, high_a, low_b, high_b, device_module):
-    device = device_module
+def test_binary_gcd_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
@@ -118,8 +115,7 @@ def test_binary_gcd_int32(input_shapes, low_a, high_a, low_b, high_b, device_mod
         (11, 53),
     ],
 )
-def test_binary_gcd_fill_val_int32(input_shapes, input_a_val, input_b_val, device_module):
-    device = device_module
+def test_binary_gcd_fill_val_int32(input_shapes, input_a_val, input_b_val, device):
     torch_input_a = torch.ones(input_shapes, dtype=torch.int32) * input_a_val
     torch_input_b = torch.ones(input_shapes, dtype=torch.int32) * input_b_val
 
@@ -164,8 +160,7 @@ def test_binary_gcd_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device_module):
-    device = device_module
+def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
@@ -211,8 +206,7 @@ def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_gcd_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device_module):
-    device = device_module
+def test_binary_gcd_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)

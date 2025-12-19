@@ -22,8 +22,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_square_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_square_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -44,8 +43,7 @@ def test_unary_square_ttnn(input_shapes, device_module):
     ),
 )
 @pytest.mark.parametrize("exponent", [0.5, 2.0])
-def test_unary_pow_ttnn(input_shapes, exponent, device_module):
-    device = device_module
+def test_unary_pow_ttnn(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -65,8 +63,7 @@ def test_unary_pow_ttnn(input_shapes, exponent, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_abs_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_abs_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -104,10 +101,7 @@ def test_unary_abs_ttnn(input_shapes, device_module):
     "ttnn_op",
     [ttnn.asin, ttnn.acos],
 )
-def test_unary_inverse_trig_functions_ttnn(
-    input_shapes, torch_dtype, ttnn_dtype, pcc, low, high, ttnn_op, device_module
-):
-    device = device_module
+def test_unary_inverse_trig_functions_ttnn(input_shapes, torch_dtype, ttnn_dtype, pcc, low, high, ttnn_op, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -131,8 +125,7 @@ def test_unary_inverse_trig_functions_ttnn(
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_atan_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_atan_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -152,8 +145,7 @@ def test_unary_atan_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_cos_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_cos_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -173,8 +165,7 @@ def test_unary_cos_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_eqz_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_eqz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -194,8 +185,7 @@ def test_unary_eqz_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_eqz_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_eqz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -215,8 +205,7 @@ def test_unary_eqz_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_nez_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_nez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -236,8 +225,7 @@ def test_unary_nez_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_gez_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_gez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -257,8 +245,7 @@ def test_unary_gez_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_lez_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_lez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -278,8 +265,7 @@ def test_unary_lez_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_ltz_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_ltz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -299,8 +285,7 @@ def test_unary_ltz_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_gtz_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_gtz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -321,8 +306,7 @@ def test_unary_gtz_ttnn(input_shapes, device_module):
     ),
 )
 @pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_erf_ttnn(input_shapes, fast_and_approx, device_module):
-    device = device_module
+def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -343,8 +327,7 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device_module):
     ),
 )
 @pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device_module):
-    device = device_module
+def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -364,8 +347,7 @@ def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_erfinv_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_erfinv_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -385,8 +367,7 @@ def test_unary_erfinv_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_expm1_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_expm1_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -407,8 +388,7 @@ def test_unary_expm1_ttnn(input_shapes, device_module):
     ),
 )
 @pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device_module):
-    device = device_module
+def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -429,8 +409,7 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device_module):
     ),
 )
 @pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0, 0.1])
-def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device_module):
-    device = device_module
+def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -457,8 +436,7 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device_module):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_unary_logical_not_ttnn(input_shapes, torch_dtype, ttnn_dtype, device_module):
-    device = device_module
+def test_unary_logical_not_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     in_data = torch.linspace(-100, 100, num_elements, dtype=torch_dtype)
     in_data[::5] = 0  # every 5th element is zero
@@ -492,8 +470,7 @@ def test_unary_logical_not_ttnn(input_shapes, torch_dtype, ttnn_dtype, device_mo
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_i0_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_i0_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -514,8 +491,7 @@ def test_unary_i0_ttnn(input_shapes, device_module):
     ),
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
-def test_unary_neg_ttnn(input_shapes, device_module, ttnn_dtype):
-    device = device_module
+def test_unary_neg_ttnn(input_shapes, device, ttnn_dtype):
     in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
 
     output_tensor = ttnn.neg(input_tensor1)
@@ -536,8 +512,7 @@ def test_unary_neg_ttnn(input_shapes, device_module, ttnn_dtype):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_relu_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_relu_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -557,8 +532,7 @@ def test_unary_relu_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_relu6_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_relu6_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -578,8 +552,7 @@ def test_unary_relu6_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_tan_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_tan_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -599,8 +572,7 @@ def test_unary_tan_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_tanh_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_tanh_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -620,8 +592,7 @@ def test_unary_tanh_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_sign_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_sign_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -641,8 +612,7 @@ def test_unary_sign_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_signbit_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_signbit_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -662,8 +632,7 @@ def test_unary_signbit_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_silu_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_silu_ttnn(input_shapes, device):
     torch.manual_seed(0)
     max_atol = 0.03125
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
@@ -688,8 +657,7 @@ def test_unary_silu_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device_module):
-    device = device_module
+def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device):
     torch.manual_seed(0)
     in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device)
 
@@ -711,8 +679,7 @@ def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_log_sigmoid_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_log_sigmoid_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -736,8 +703,7 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device_module):
     "approx_mode",
     (False, True),
 )
-def test_unary_sigmoid_ttnn(input_shapes, device_module, approx_mode):
-    device = device_module
+def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -759,8 +725,7 @@ def test_unary_sigmoid_ttnn(input_shapes, device_module, approx_mode):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_recip_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_recip_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -781,8 +746,7 @@ def test_unary_recip_ttnn(input_shapes, device_module):
     ),
 )
 @pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_unary_heaviside_ttnn(input_shapes, value, device_module):
-    device = device_module
+def test_unary_heaviside_ttnn(input_shapes, value, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -802,8 +766,7 @@ def test_unary_heaviside_ttnn(input_shapes, value, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_log2_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_log2_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -823,8 +786,7 @@ def test_unary_log2_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_log10_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_log10_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -845,8 +807,7 @@ def test_unary_log10_ttnn(input_shapes, device_module):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_bitwise_not(input_shapes, device_module):
-    device = device_module
+def test_unary_bitwise_not(input_shapes, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -881,8 +842,7 @@ def test_unary_bitwise_not(input_shapes, device_module):
         (torch.Size([])),
     ),
 )
-def test_unary_log1p_ttnn(input_shapes, device_module):
-    device = device_module
+def test_unary_log1p_ttnn(input_shapes, device):
     if len(input_shapes) == 0:
         torch_input_tensor = torch.rand((), dtype=torch.bfloat16)
     else:
@@ -935,10 +895,7 @@ def test_unary_log1p_ttnn(input_shapes, device_module):
     ],
 )
 @pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_log_like_fast_approx_ttnn(
-    input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_and_approx, device_module
-):
-    device = device_module
+def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_and_approx, device):
     torch.manual_seed(0)
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     if fast_and_approx:
@@ -980,8 +937,7 @@ def test_unary_log_like_fast_approx_ttnn(
         (torch.uint32, ttnn.uint32),
     ],
 )
-def test_fill(device_module, h, w, scalar, torch_dtype, ttnn_dtype):
-    device = device_module
+def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
     if torch_dtype.is_floating_point:
@@ -1016,8 +972,7 @@ def test_fill(device_module, h, w, scalar, torch_dtype, ttnn_dtype):
     "param",
     {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")},
 )
-def test_unary_celu(input_shapes, param, device_module):
-    device = device_module
+def test_unary_celu(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.celu(input_tensor, alpha=param)
     golden_function = ttnn.get_golden_function(ttnn.celu)

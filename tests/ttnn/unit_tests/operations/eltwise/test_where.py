@@ -55,8 +55,7 @@ def make_condition_tensor(shape, dtype, condition, stride=8):
 @pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device_module):
-    device = device_module
+def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
     if variant == "TTS":
@@ -97,8 +96,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 @pytest.mark.parametrize("scalar", [-9, 10, 7])
-def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar, device_module):
-    device = device_module
+def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.int32) * condition
     if variant == "TTS":
@@ -145,10 +143,7 @@ def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar,
 @pytest.mark.parametrize("scalar", [15.5, -11.5, 0, 55.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_bfloat8b(
-    tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, scalar, variant, condition, device_module
-):
-    device = device_module
+def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=tor_dtype) * condition
     if variant == "TTS":
@@ -202,8 +197,7 @@ def test_ttnn_where_forge():
     assert torch.equal(result, expected), f"Expected {expected}, got {result}"
 
 
-def test_ttnn_where_nan(device_module):
-    device = device_module
+def test_ttnn_where_nan(device):
     tor_dtype = torch.float32
 
     condition = torch.tensor([1, 0, -2, 0, 5, 0, 0, 8, 0, -1, float("inf"), float("nan")], dtype=tor_dtype)
@@ -254,8 +248,7 @@ def test_ttnn_where_nan(device_module):
 @pytest.mark.parametrize(
     "tor_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32), (torch.int32, ttnn.int32)]
 )
-def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device_module):
-    device = device_module
+def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device):
     C = torch.arange(h * w, dtype=tor_dtype)
     C = (C % 2).float()  # Alternates 0, 1, 0, 1, ...
     C = C.reshape(1, 1, h, w)
@@ -273,8 +266,7 @@ def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device_module):
     assert torch.equal(result, golden)
 
 
-def test_ttnn_where_edge_cases_bf16(device_module):
-    device = device_module
+def test_ttnn_where_edge_cases_bf16(device):
     tor_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
 
@@ -321,8 +313,7 @@ def test_ttnn_where_edge_cases_bf16(device_module):
     assert torch_equal_nan(tt_result3, result3)
 
 
-def test_bf8b_exponent_behaviour(device_module):
-    device = device_module
+def test_bf8b_exponent_behaviour(device):
     tor_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat8_b
 
@@ -374,8 +365,7 @@ def test_bf8b_exponent_behaviour(device_module):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
-def test_where_tts(device_module, dtype, h, w, scalar):
-    device = device_module
+def test_where_tts(device, dtype, h, w, scalar):
     if dtype == torch.bfloat16 and isnan(scalar):
         pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
 
@@ -403,8 +393,7 @@ def test_where_tts(device_module, dtype, h, w, scalar):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
-def test_where_tst(device_module, dtype, h, w, scalar):
-    device = device_module
+def test_where_tst(device, dtype, h, w, scalar):
     if dtype == torch.bfloat16 and isnan(scalar):
         pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
 
@@ -441,8 +430,7 @@ def test_where_tst(device_module, dtype, h, w, scalar):
         [-float("inf"), float("nan")],
     ],
 )
-def test_where_tss(device_module, dtype, h, w, scalar1, scalar2):
-    device = device_module
+def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     if dtype == torch.bfloat16 and (isnan(scalar1) or isnan(scalar2)):
         pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
 
@@ -494,8 +482,7 @@ def test_where_tss(device_module, dtype, h, w, scalar1, scalar2):
         torch.Size([3, 128, 32]),
     ],
 )
-def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, device_module):
-    device = device_module
+def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, device):
     condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch_dtype)
     scalar_true, scalar_false = scalars
 
@@ -531,8 +518,7 @@ def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, d
         torch.Size([1, 3, 320, 384]),
     ],
 )
-def test_where_TSS_int_types(scalars, input_shapes, device_module):
-    device = device_module
+def test_where_TSS_int_types(scalars, input_shapes, device):
     scalar_true, scalar_false = scalars
     condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch.int32)
 
@@ -565,8 +551,7 @@ def test_where_TSS_int_types(scalars, input_shapes, device_module):
         torch.Size([64, 128]),
     ],
 )
-def test_where_TSS_uint32_types(scalars, input_shapes, device_module):
-    device = device_module
+def test_where_TSS_uint32_types(scalars, input_shapes, device):
     scalar_true, scalar_false = scalars
     condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch.uint32)
 
@@ -580,8 +565,7 @@ def test_where_TSS_uint32_types(scalars, input_shapes, device_module):
     assert torch.equal(tt_result, torch_result)
 
 
-def test_div_edgcase(device_module):
-    device = device_module
+def test_div_edgcase(device):
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
 
@@ -604,8 +588,7 @@ def test_div_edgcase(device_module):
     assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
 
 
-def test_addcdiv_edgcase(device_module):
-    device = device_module
+def test_addcdiv_edgcase(device):
     # Hardcoded input tensors
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
@@ -631,8 +614,7 @@ def test_addcdiv_edgcase(device_module):
     assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
 
 
-def test_addcdiv_edgcase_fp32(device_module):
-    device = device_module
+def test_addcdiv_edgcase_fp32(device):
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.float32)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.float32)
     c = torch.tensor([0, 0, 0, 0, 0, 0], dtype=torch.float32)
@@ -652,8 +634,7 @@ def test_addcdiv_edgcase_fp32(device_module):
     assert torch_equal_nan(output_tensor1, golden_tensor)
 
 
-def test_ttnn_where_forge_nan(device_module):
-    device = device_module
+def test_ttnn_where_forge_nan(device):
     C = torch.ones(1, 4, 1, dtype=torch.float32)
     T = torch.randn(1, 4, 768, dtype=torch.float32)
     F = torch.ones(1, 4, 768, dtype=torch.float32) * float("nan")
@@ -678,8 +659,7 @@ def test_ttnn_where_forge_nan(device_module):
         [(1, 512, 14, 14), (1, 512, 14, 14), (1,)],
     ],
 )
-def test_where_int_golden_verification(c_shape, t_shape, f_shape, device_module):
-    device = device_module
+def test_where_int_golden_verification(c_shape, t_shape, f_shape, device):
     torch.manual_seed(42)
 
     # Generate random input tensors
@@ -723,8 +703,7 @@ def test_where_int_golden_verification(c_shape, t_shape, f_shape, device_module)
 @pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTT", "TST", "TTS"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, condition, device_module):
-    device = device_module
+def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
 
     C = torch.ones(a_shape, dtype=torch.float32) * condition
@@ -823,8 +802,7 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
 @pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_where_subcore_grid(device_module, shape, sub_core_grid, dtype, scalar, variant, condition):
-    device = device_module
+def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant, condition):
     torch.manual_seed(0)
     tor_dtype = dtype
 

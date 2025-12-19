@@ -14,8 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device_module, h, w):
-    device = device_module
+def test_mac_all_tensors(device, h, w):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -43,8 +42,7 @@ def test_mac_all_tensors(device_module, h, w):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("scalar1", [5.5])
 @pytest.mark.parametrize("scalar2", [-13.2])
-def test_mac_tensor_with_2_scalaras(device_module, h, w, scalar1, scalar2):
-    device = device_module
+def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -102,8 +100,7 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
         [64, 1, 64, 1, 1, 128],
     ],
 )
-def test_where_bcast(device_module, dtype, hc, ht, hf, wc, wt, wf):
-    device = device_module
+def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((hc, wc), dtype=dtype).uniform_(-100, 100)
@@ -140,8 +137,7 @@ def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device_module, h, w, value):
-    device = device_module
+def test_addcdiv(device, h, w, value):
     run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
@@ -169,8 +165,7 @@ def test_addcdiv(device_module, h, w, value):
         [1, 64, 64, 1, 128, 128],
     ],
 )
-def test_addcmul_with_bcast(device_module, tor_dtype, ttnn_dtype, hc, ht, hf, wc, wt, wf, value):
-    device = device_module
+def test_addcmul_with_bcast(device, tor_dtype, ttnn_dtype, hc, ht, hf, wc, wt, wf, value):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((hc, wc), dtype=tor_dtype).uniform_(-100, 500)
@@ -213,11 +208,10 @@ def test_addcmul_with_bcast(device_module, tor_dtype, ttnn_dtype, hc, ht, hf, wc
         ((4, 2, 1088, 1024), (1, 2, 1088, 1024), (1, 1, 1088, 1024)),  # HLK
     ],
 )
-def test_addcmul_with_bcast_bf8b(device_module, torch_dtype, ttnn_dtype, a_shape, b_shape, c_shape, value):
+def test_addcmul_with_bcast_bf8b(device, torch_dtype, ttnn_dtype, a_shape, b_shape, c_shape, value):
     """
     Test addcmul: Block format datatype inputs with subtile broadcast use composite Addcmul implementation.
     """
-    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(a_shape, dtype=torch_dtype)

@@ -28,8 +28,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.bfloat16),
     ],
 )
-def test_add_and_apply_activations(device_module, shape, activations, torch_dtype):
-    device = device_module
+def test_add_and_apply_activations(device, shape, activations, torch_dtype):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.Tensor(size=shape).uniform_(-100, 100).to(torch_dtype)

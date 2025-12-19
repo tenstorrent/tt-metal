@@ -12,8 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
-def test_nextafter(device_module, shape):
-    device = device_module
+def test_nextafter(device, shape):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)

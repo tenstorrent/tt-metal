@@ -17,8 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
         ttnn.remainder,
     ],
 )
-def test_remainder_fp32(device_module, ttnn_function):
-    device = device_module
+def test_remainder_fp32(device, ttnn_function):
     torch.manual_seed(213919)
     x_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
     y_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
@@ -39,8 +38,7 @@ def test_remainder_fp32(device_module, ttnn_function):
         ttnn.div_no_nan,
     ],
 )
-def test_div_no_nan_fp32(device_module, ttnn_function):
-    device = device_module
+def test_div_no_nan_fp32(device, ttnn_function):
     x_torch = torch.tensor(
         [
             [
@@ -88,8 +86,7 @@ def test_div_no_nan_fp32(device_module, ttnn_function):
         ttnn.remainder,
     ],
 )
-def test_remainder_forge(device_module, ttnn_function):
-    device = device_module
+def test_remainder_forge(device, ttnn_function):
     torch.manual_seed(213919)
     input1 = torch.randn(2, 32, 32)
     input2 = torch.randn(2, 32, 32)
@@ -162,8 +159,7 @@ def test_binary_fmod_bf16(
     ),
 )
 @pytest.mark.parametrize("scalar", [-0.0029, -0.002, -0.0005, 0.0, 0.0007, 0.001, 0.0025])
-def test_unary_fmod(input_shapes, scalar, device_module):
-    device = device_module
+def test_unary_fmod(input_shapes, scalar, device):
     torch.manual_seed(0)
     if len(input_shapes) == 0:
         torch_input_tensor = torch.tensor(5.0, dtype=torch.bfloat16)

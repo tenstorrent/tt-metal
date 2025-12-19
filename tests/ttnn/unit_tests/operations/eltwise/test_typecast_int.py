@@ -8,8 +8,7 @@ import pytest
 
 
 # use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
-def test_typecast_uint16(device_module):
-    device = device_module
+def test_typecast_uint16(device):
     torch.manual_seed(0)
 
     in_data1 = torch.tensor([[[[700, 100, 65000, 9500]]]], dtype=torch.int32)
@@ -91,8 +90,7 @@ def test_typecast_uint16(device_module):
         ),
     ],
 )
-def test_typecast_subcore_grid(device_module, shape, sub_core_grid):
-    device = device_module
+def test_typecast_subcore_grid(device, shape, sub_core_grid):
     torch.manual_seed(0)
 
     in_data1 = torch.randint(0, 65500, (shape), dtype=torch.int32)
@@ -139,8 +137,7 @@ def test_typecast_subcore_grid(device_module, shape, sub_core_grid):
 
 
 # for range verification in conversions
-def test_typecast_uint16_subcore_grid(device_module):
-    device = device_module
+def test_typecast_uint16_subcore_grid(device):
     in_data1 = torch.tensor([[[[700, 100, 65000, 9500]]]], dtype=torch.int32)
     in_data2 = torch.tensor([[[[70000, 1000, 65000, 95000]]]], dtype=torch.int32)
 
