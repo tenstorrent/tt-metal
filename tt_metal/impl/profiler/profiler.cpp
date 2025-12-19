@@ -1178,21 +1178,25 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
 }
 
 void DeviceProfiler::readL1DataBufferForCore(
-    IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    std::vector<uint32_t>& core_l1_data_buffer,
+    bool force_slow_dispatch) {
     ZoneScoped;
-    if (useFastDispatch(device)) {
+    if (useFastDispatch(device) && !force_slow_dispatch) {
         issueFastDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
     } else {
         issueSlowDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
     }
 }
 
-void DeviceProfiler::readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::readL1DataBuffers(
+    IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch) {
     ZoneScoped;
 
     for (const CoreCoord& virtual_core : virtual_cores) {
         std::vector<uint32_t>& core_l1_data_buffer = core_l1_data_buffers[virtual_core];
-        readL1DataBufferForCore(device, virtual_core, core_l1_data_buffer);
+        readL1DataBufferForCore(device, virtual_core, core_l1_data_buffer, force_slow_dispatch);
     }
 }
 
@@ -1241,7 +1245,8 @@ void DeviceProfiler::readControlBuffers(
     }
 }
 
-void DeviceProfiler::resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::resetControlBuffers(
+    IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch) {
     ZoneScoped;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffer_resets;
     for (const CoreCoord& virtual_core : virtual_cores) {
@@ -1273,7 +1278,7 @@ void DeviceProfiler::resetControlBuffers(IDevice* device, const std::vector<Core
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
-        writeToCoreControlBuffer(device, virtual_core, control_buffer_reset);
+        writeToCoreControlBuffer(device, virtual_core, control_buffer_reset, force_slow_dispatch);
     }
 }
 
@@ -1664,6 +1669,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     };
 
     auto device_marker_it = device_markers.begin();
+    // log_info(tt::LogMetal, "Processing {} device markers", device_markers.size());
     while (device_marker_it != device_markers.end()) {
         tracy::TTDeviceMarker marker = *device_marker_it;
         tracy::MarkerDetails marker_details = this->getMarkerDetails(marker.marker_id);
@@ -1988,27 +1994,29 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
+    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+
     if (data_source == ProfilerDataBufferSource::DRAM) {
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(device, virtual_cores, force_slow_dispatch);
 
-        readProfilerBuffer(device);
+        readProfilerBuffer(device, force_slow_dispatch);
 
-        resetControlBuffers(device, virtual_cores);
+        resetControlBuffers(device, virtual_cores, force_slow_dispatch);
     } else if (data_source == ProfilerDataBufferSource::L1) {
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(device, virtual_cores, force_slow_dispatch);
 
-        resetControlBuffers(device, virtual_cores);
+        resetControlBuffers(device, virtual_cores, force_slow_dispatch);
 
-        readL1DataBuffers(device, virtual_cores);
+        readL1DataBuffers(device, virtual_cores, force_slow_dispatch);
     } else {
         TT_ASSERT(data_source == ProfilerDataBufferSource::DRAM_AND_L1);
-        readControlBuffers(device, virtual_cores);
+        readControlBuffers(device, virtual_cores, force_slow_dispatch);
 
-        readProfilerBuffer(device);
+        readProfilerBuffer(device, force_slow_dispatch);
 
-        readL1DataBuffers(device, virtual_cores);
+        readL1DataBuffers(device, virtual_cores, force_slow_dispatch);
 
-        resetControlBuffers(device, virtual_cores);
+        resetControlBuffers(device, virtual_cores, force_slow_dispatch);
     }
 #endif
 }
@@ -2385,6 +2393,7 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
         readProfilerBuffer(device, 1, true);
         processResults(device, virtual_cores_to_process_dram_index_1);
     }
+    dumpDeviceResults(/*is_mid_run_dump=*/true);
 
     // Commit the updated control buffers to our host state
     for (const auto& [virtual_core, risc_types] : stalled_risc_types) {

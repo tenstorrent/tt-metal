@@ -154,7 +154,7 @@ void ProfilerStateManager::start_debug_dump_thread(
 
             process_devices();
 
-            constexpr auto interval = std::chrono::milliseconds(500);
+            constexpr auto interval = std::chrono::milliseconds(1000);
             std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
             if (this->stop_debug_dump_thread_cv.wait_for(
                     lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {

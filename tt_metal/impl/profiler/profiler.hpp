@@ -141,14 +141,19 @@ private:
     void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch = false);
 
     // Reset all control buffers
-    void resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void resetControlBuffers(
+        IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch = false);
 
     // Read all L1 data buffers
-    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void readL1DataBuffers(
+        IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch = false);
 
     // Read L1 data buffer for a single core
     void readL1DataBufferForCore(
-        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
+        IDevice* device,
+        const CoreCoord& virtual_core,
+        std::vector<uint32_t>& core_l1_data_buffer,
+        bool force_slow_dispatch = false);
 
     // Read device profiler buffer
     void readProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0, bool force_slow_dispatch = false);

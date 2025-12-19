@@ -20,6 +20,8 @@
 
 #include "dev_msgs.h"
 
+#include "ethernet/erisc.h"
+
 #define DO_PRAGMA(x) _Pragma(#x)
 
 #define Stringize(L) #L
@@ -292,13 +294,16 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 #endif
 
 // Signal the host that this RISC's destination DRAM buffer is full and wait for a new DRAM profiler address and wIndex
-__attribute__((noinline)) void signal_host_buffer_full() {
-    profiler_control_buffer[DRAM_PROFILER_ADDRESS] = DRAM_PROFILER_ADDRESS_STALLED;
+__attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_index_for_dram = DRAM_PROFILER_ADDRESS) {
+    profiler_control_buffer[control_buffer_index_for_dram] = DRAM_PROFILER_ADDRESS_STALLED;
 
     // Wait for host to give new profiler address
     do {
         invalidate_l1_cache();
-    } while (profiler_control_buffer[DRAM_PROFILER_ADDRESS] == DRAM_PROFILER_ADDRESS_STALLED);
+#if defined(COMPILE_FOR_ERISC)
+        internal_::risc_context_switch(false);
+#endif
+    } while (profiler_control_buffer[control_buffer_index_for_dram] == DRAM_PROFILER_ADDRESS_STALLED);
 
     // wIndex is reset because we got a new DRAM buffer
     wIndex = CUSTOM_MARKERS;
@@ -314,7 +319,7 @@ __attribute__((noinline)) void finish_profiler() {
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
-    bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
+    bool is_dram_set = 0;
 
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
@@ -322,6 +327,15 @@ __attribute__((noinline)) void finish_profiler() {
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         bool do_noc = true;
+        int dramProfilerAddressIndex = 0;
+
+        if constexpr (NON_DROPPING) {
+            dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0 + riscID;
+        } else {
+            dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT;
+        }
+        is_dram_set = profiler_control_buffer[dramProfilerAddressIndex] != 0;
+
         if (!is_dram_set) {
             do_noc = false;
         }
@@ -341,7 +355,8 @@ __attribute__((noinline)) void finish_profiler() {
 
             if constexpr (NON_DROPPING) {
                 if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-                    signal_host_buffer_full();
+                    signal_host_buffer_full(dramProfilerAddressIndex);
+                    profiler_control_buffer[deviceIndex] = wIndex;
                     currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
                 }
             }
@@ -371,7 +386,7 @@ __attribute__((noinline)) void finish_profiler() {
             if (do_noc) {
                 const auto s = TensorAccessor(
                     tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-                    profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+                    profiler_control_buffer[dramProfilerAddressIndex],
                     pageSize);
 
                 uint64_t dram_bank_dst_noc_addr =
