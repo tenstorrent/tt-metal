@@ -15,7 +15,22 @@
 namespace NAMESPACE {
 
 void MAIN {
+    // -------------------------------------------------------------------------
     // Box-Muller transform
+    //
+    // Generate standard normal tiles via the Box–Muller transform, fused into a
+    // single kernel without storing intermediates to memory.
+    //
+    // For each output pair:
+    //   U1, U2 <- Uniform(0,1)
+    //   R     = sqrt(ln(U1) * -2)
+    //   Theta = 2*pi * U2
+    //   Z1 = R * cos(Theta),  Z2 = R * sin(Theta)
+    //
+    // Emits 2 tiles per iteration; if num_tiles is odd, emits only Z1 for the
+    // final tile. Optional OUTPUT_DTYPE_BFLOAT16 casts before packing.
+    // -------------------------------------------------------------------------
+
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t neg_two = 0xc0000000u;    // -2.0f
     constexpr uint32_t two_pi = 0x40c90fdbu;     //  2pi
