@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.utils import TtnnConv2D
+from models.tt_cnn.tt.builder import Conv2dConfiguration, TtConv2d, AutoShardedStrategyConfiguration
 
 
 class TtnnSharedMLP(LightweightModule):
@@ -12,44 +12,66 @@ class TtnnSharedMLP(LightweightModule):
         super().__init__()
         self.device = device
         self.parameters = parameters
-        shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        self.conv1 = TtnnConv2D(
-            parameters.conv_args.layer0.conv,
-            parameters.layer0.conv,
+        # Create conv layers using TtConv2d
+        self.conv1 = TtConv2d(
+            self._create_conv_config(
+                parameters=parameters.layer0.conv,
+                layer_params=parameters.conv_args.layer0.conv,
+            ),
             device,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            is_dealloc_act=True,
-            return_dims=True,
-            shard_layout=shard_layout,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
-        self.conv2 = TtnnConv2D(
-            parameters.conv_args.layer1.conv,
-            parameters.layer1.conv,
+        self.conv2 = TtConv2d(
+            self._create_conv_config(
+                layer_params=parameters.conv_args.layer1.conv,
+                parameters=parameters.layer1.conv,
+            ),
             device,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            is_dealloc_act=True,
-            return_dims=True,
-            shard_layout=shard_layout,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
-        self.conv3 = TtnnConv2D(
-            parameters.conv_args.layer2.conv,
-            parameters.layer2.conv,
+        self.conv3 = TtConv2d(
+            self._create_conv_config(
+                layer_params=parameters.conv_args.layer2.conv,
+                parameters=parameters.layer2.conv,
+            ),
             device,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            is_dealloc_act=True,
-            return_dims=True,
-            shard_layout=shard_layout,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
+    def _create_conv_config(self, parameters, layer_params):
+        # Move weights from device to host for proper conv2d preparation
+        weight = parameters.weight
+        if isinstance(weight, ttnn.Tensor) and ttnn.is_tensor_storage_on_device(weight):
+            weight = ttnn.from_device(weight)
+
+        bias = None
+        if hasattr(parameters, "bias") and parameters.bias is not None:
+            bias = parameters.bias
+            if isinstance(bias, ttnn.Tensor) and ttnn.is_tensor_storage_on_device(bias):
+                bias = ttnn.from_device(bias)
+
+        return Conv2dConfiguration(
+            input_height=2048,
+            input_width=64,
+            in_channels=layer_params.in_channels,
+            out_channels=layer_params.out_channels,
+            batch_size=1,
+            kernel_size=layer_params.kernel_size,
+            stride=layer_params.stride,
+            padding=layer_params.padding,
+            weight=weight,
+            bias=bias,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            activation_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
+            sharding_strategy=AutoShardedStrategyConfiguration(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=True,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+        )
+        # Conv2dConfiguration.from_model_args(layer_params, weights, bias, *)
+
     def forward(self, features):
-        shape = features.shape
-        conv1, shape = self.conv1(features, shape)
-        conv2, shape = self.conv2(conv1, shape)
-        conv3, shape = self.conv3(conv2, shape)
-        conv3 = ttnn.reshape(conv3, shape)
+        conv1 = self.conv1(features)
+        conv2 = self.conv2(conv1)
+        conv3 = self.conv3(conv2)
         return conv3

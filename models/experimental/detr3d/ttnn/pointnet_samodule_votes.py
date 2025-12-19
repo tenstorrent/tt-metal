@@ -308,62 +308,49 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
         new_features = self.mlp_module(grouped_features)  # (B, mlp[-1], npoint, nsample)
 
         if self.pooling == "max":
-            # if False:
-            if new_features.shape[1] == 2048:
-                partial_maxpool_out = []
-                num_maxpool_slice = 2
-                slice_h = new_features.shape[-3] // num_maxpool_slice
-                B, H, W, C = (new_features.shape[-4], slice_h, new_features.shape[-2], new_features.shape[-1])
-                for slice in range(num_maxpool_slice):
-                    slice_input = new_features[:, slice_h * slice : slice_h * (slice + 1), :, :]
-                    slice_input = ttnn.reallocate(slice_input)
-                    slice_input = ttnn.reshape(slice_input, (1, 1, B * H * W, C))
-                    partial_maxpool_out.append(
-                        ttnn.max_pool2d(
-                            input_tensor=slice_input,
-                            batch_size=B,
-                            input_h=slice_h,
-                            input_w=W,
-                            channels=C,
-                            kernel_size=[1, W],
-                            stride=[1, W],
-                            padding=[0, 0],
-                            dilation=[1, 1],
-                            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
-                    )
-                    ttnn.deallocate(slice_input)
-
-                for i in range(len(partial_maxpool_out)):
-                    partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, C))
-
-                new_features = ttnn.concat((partial_maxpool_out), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-                new_features = ttnn.permute(
-                    new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
-                )  # (B, mlp[-1], npoint)
-                for i in range(len(partial_maxpool_out)):
-                    ttnn.deallocate(partial_maxpool_out[i])
-            else:
-                B, H, W, C = new_features.shape
-                new_features = ttnn.reshape(new_features, (1, 1, B * H * W, C))
-                new_features = ttnn.max_pool2d(
-                    input_tensor=new_features,
-                    batch_size=B,
-                    input_h=H,
-                    input_w=W,
-                    channels=C,
-                    kernel_size=[1, W],
-                    stride=[1, W],
-                    padding=[0, 0],
-                    dilation=[1, 1],
-                    applied_shard_scheme=None,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+            if (new_features.shape[-2] // 2048) == 64:
+                new_features = ttnn.reshape(
+                    new_features, (new_features.shape[-4], new_features.shape[-2] // 64, 64, new_features.shape[-1])
                 )
-                new_features = ttnn.reshape(new_features, (B, H, C), memory_config=ttnn.L1_MEMORY_CONFIG)
-                new_features = ttnn.permute(
-                    new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
-                )  # (B, mlp[-1], npoint
+            else:
+                new_features = ttnn.reshape(
+                    new_features, (new_features.shape[-4], new_features.shape[-2] // 32, 32, new_features.shape[-1])
+                )
+
+            partial_maxpool_out = []
+            num_maxpool_slice = 4
+            slice_h = new_features.shape[-3] // num_maxpool_slice
+            B, H, W, C = (new_features.shape[-4], slice_h, new_features.shape[-2], new_features.shape[-1])
+            for slice in range(num_maxpool_slice):
+                slice_input = new_features[:, slice_h * slice : slice_h * (slice + 1), :, :]
+                slice_input = ttnn.reallocate(slice_input)
+                slice_input = ttnn.reshape(slice_input, (1, 1, B * H * W, C))
+                partial_maxpool_out.append(
+                    ttnn.max_pool2d(
+                        input_tensor=slice_input,
+                        batch_size=B,
+                        input_h=slice_h,
+                        input_w=W,
+                        channels=C,
+                        kernel_size=[1, W],
+                        stride=[1, W],
+                        padding=[0, 0],
+                        dilation=[1, 1],
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+                ttnn.deallocate(slice_input)
+
+            for i in range(len(partial_maxpool_out)):
+                partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, C))
+
+            new_features = ttnn.concat((partial_maxpool_out), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            new_features = ttnn.permute(
+                new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
+            )  # (B, mlp[-1], npoint)
+            for i in range(len(partial_maxpool_out)):
+                ttnn.deallocate(partial_maxpool_out[i])
         else:
             raise NotImplementedError("Currently only Maxpool is supported")
 

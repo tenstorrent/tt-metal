@@ -164,7 +164,7 @@ def run_detr3d_inference(
             # Compare outputs (PCC)
             if not encoder_only:
                 logger.info(f"Comparing outputs for batch {batch_idx}...")
-                SKIP_KEYS = ["angle_continuousk"]
+                SKIP_KEYS = ["angle_continuous"]
 
                 for key in ref_outputs["outputs"]:
                     if key in SKIP_KEYS:

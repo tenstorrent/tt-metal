@@ -94,7 +94,7 @@ models/experimental/detr3d/resources/detr3d_weights_download.sh
 
 ```bash
 python models/experimental/detr3d/demo/detr3d_demo.py \
-    --dataset-root-dir  models/experimental/detr3d/resources/sunrgbd
+    --dataset-root-dir  models/experimental/detr3d/resources/sunrgbd/
     --test-ckpt models/experimental/detr3d/resources/sunrgbd_masked_ep720.pth
 ```
 
@@ -118,11 +118,13 @@ python models/experimental/detr3d/demo/detr3d_demo.py \
 The SUNRGBD dataset should be organized as follows:
 
 ```
-sunrgbd_val/                    # Validation split
-├── 000001_bbox.npy            # Bounding box annotations (K×8)
-├── 000001_pc.npz              # Point cloud data (N×6: x,y,z,r,g,b)
-├── 000001_votes.npz           # Vote supervision data (optional)
-└── ...
+sunrgbd/
+├── _val/                       # Validation split
+│   ├── 000001_bbox.npy         # Bounding box annotations (K × 8)
+│   ├── 000001_pc.npz           # Point cloud data (N × 6: x, y, z, r, g, b)
+│   ├── 000001_votes.npz        # Vote supervision data (optional)
+│   └── ...
+
 
 ```
 
