@@ -72,7 +72,7 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch_size, size, expected_compile_time, expected_throughput_fps, use_torch_maxpool",
-    [(1, 512, 25.4, 39.3, True)],
+    [(1, 512, 25.4, 11.3, True)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_efficientdet_d0_e2e_performant(
@@ -98,7 +98,7 @@ def test_efficientdet_d0_e2e_performant(
         num_classes=num_classes,
         compound_coef=0,
     ).eval()
-    load_torch_model_state(torch_model)
+    load_torch_model_state(torch_model, model_location_generator=model_location_generator)
 
     sample_input = torch.randn(batch_size, 3, size, size)
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)

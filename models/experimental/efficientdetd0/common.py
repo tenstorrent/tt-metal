@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import subprocess
+
 import torch
 from loguru import logger
 
@@ -55,9 +57,13 @@ def load_torch_model_state(
         if not os.path.exists(weights_path):
             raise FileNotFoundError(f"Weights file not found at: {weights_path}")
         logger.info(f"Loading weights from provided path: {weights_path}")
-    elif model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        model_path = "models"
-        # Check resources folder first
+    elif model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
+        # CI environment - use model_location_generator to download from S3
+        model_path = model_location_generator("vision-models/efficientdetd0", model_subdir="", download_if_ci_v2=True)
+        weights_path = os.path.join(model_path, "efficientdet-d0.pth")
+        logger.info(f"Loading weights from CI path: {weights_path}")
+    else:
+        # Local environment - check local paths or download
         resources_weights_path = "models/experimental/efficientdetd0/resources/efficientdet-d0.pth"
         default_weights_path = "models/experimental/efficientdetd0/efficientdet-d0.pth"
 
@@ -69,19 +75,28 @@ def load_torch_model_state(
             logger.info(f"Loading weights from default location: {weights_path}")
         else:
             # Download weights if not found
-            logger.info("Weights not found. Downloading...")
-            os.system(
-                "models/experimental/efficientdetd0/resources/efficientdetd0_weights_download.sh"
-            )  # execute the efficientdetd0_weights_download.sh file
+            logger.info("Weights not found locally. Downloading...")
+            download_script = "models/experimental/efficientdetd0/resources/efficientdetd0_weights_download.sh"
+            if os.path.exists(download_script):
+                os.system(f"bash {download_script}")
+            else:
+                # Fallback: download directly using wget
+                url = "https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/releases/download/1.0/efficientdet-d0.pth"
+                os.makedirs("models/experimental/efficientdetd0/resources", exist_ok=True)
+                logger.info(f"Downloading weights from {url}...")
+                subprocess.run(["wget", "-q", "-O", resources_weights_path, url], check=True)
+
             # After download, check if it's in resources or default location
             if os.path.exists(resources_weights_path):
                 weights_path = resources_weights_path
-            else:
+            elif os.path.exists(default_weights_path):
                 weights_path = default_weights_path
+            else:
+                raise FileNotFoundError(
+                    f"Failed to download weights. Please manually download from: "
+                    f"https://github.com/zylo117/Yet-Another-EfficientDet-Pytorch/releases/download/1.0/efficientdet-d0.pth"
+                )
             logger.info(f"Loading weights from: {weights_path}")
-    else:
-        model_path = model_location_generator("vision-models/efficientdetd0", model_subdir="", download_if_ci_v2=True)
-        weights_path = os.path.join(model_path, "efficientdet-d0.pth")
 
     # Load checkpoint
     state_dict = torch.load(weights_path, map_location="cpu")

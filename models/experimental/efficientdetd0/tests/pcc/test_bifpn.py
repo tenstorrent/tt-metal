@@ -67,6 +67,7 @@ def test_bifpn(
     weight_key,
     use_torch_maxpool,
     device,
+    model_location_generator,
 ):
     PCC_THRESHOLD = 0.99
 
@@ -80,7 +81,7 @@ def test_bifpn(
         attention=attention,
         use_p8=False,
     ).eval()
-    load_torch_model_state(torch_model, weight_key)
+    load_torch_model_state(torch_model, weight_key, model_location_generator=model_location_generator)
 
     # Run PyTorch forward pass
     with torch.no_grad():
