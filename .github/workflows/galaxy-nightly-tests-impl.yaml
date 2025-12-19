@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      wormhole:
+        required: false
+        type: boolean
+        default: true
       blackhole:
         required: false
         type: boolean
@@ -26,7 +30,7 @@ on:
         default: false
 jobs:
   galaxy-nightly-tests:
-    if: ${{ inputs.blackhole == false || inputs.scheduled == true }}
+    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
