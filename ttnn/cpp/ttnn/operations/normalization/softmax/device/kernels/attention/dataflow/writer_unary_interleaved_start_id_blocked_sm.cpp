@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "../../../../../../kernel_helper_functions/pad_tile.hpp"
+#include "../../../../../../matmul/device/kernels/dataflow/pad_tile.hpp"
 
 void kernel_main() {
     using namespace tt::constants;
