@@ -275,14 +275,7 @@ void MAIN {
                         cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
-                        // Workaround until #27504 is not closed
-                        // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
-                        // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
-                        // to unpack_A_hw_configure.
-                        tensix_sync();
-                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                            pre_tilize_cb_id)));
-                        tensix_sync();
+                        unpack_tilizeA_B_uninit(curr_in_cb_id);
                         pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
