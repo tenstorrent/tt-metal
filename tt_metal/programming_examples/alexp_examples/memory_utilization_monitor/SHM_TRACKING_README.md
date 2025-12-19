@@ -290,7 +290,7 @@ struct DeviceMemoryRegion {
     // Per-chip statistics (for remote device tracking via gateway)
     ChipStats chip_stats[MAX_CHIPS_PER_DEVICE];
 
-    // Per-process statistics (enabled via TT_METAL_SHM_STATS_PER_PID=1)
+    // Per-process statistics (enabled by default)
     struct ProcessStats {
         pid_t pid;                       // Process ID (0 = unused slot)
         uint64_t dram_allocated;         // DRAM allocated by this process
@@ -307,13 +307,14 @@ struct DeviceMemoryRegion {
 
 ### How PIDs are Tracked
 
-When per-PID tracking is enabled (`TT_METAL_SHM_STATS_PER_PID=1`):
+Per-PID tracking (enabled by default):
 
 1. **PID Registration**: On first allocation from a process, Metal finds or creates an entry in `processes[]`
 2. **Process Name**: Read from `/proc/<pid>/comm` and stored in SHM
 3. **Per-Allocation Update**: Each allocation/deallocation updates that process's counters
 4. **Liveness Check**: `tt_smi` uses `kill(pid, 0)` to check if process is still alive
-5. **Cleanup**: Dead process entries are filtered out when displaying
+5. **Automatic Cleanup**: `tt_smi` automatically detects and removes dead process entries from all SHM files (enabled by default)
+6. **Clean Exit**: When a process exits normally, its destructor subtracts allocations from aggregate counters and clears its entry
 
 ```cpp
 // SharedMemoryStatsProvider::find_or_create_pid_entry()
@@ -335,25 +336,26 @@ entry->process_name = read_from("/proc/<pid>/comm");
 
 ## Usage
 
-### Enable SHM Tracking
+### SHM Tracking (Enabled by Default)
+
+SHM tracking is **enabled by default** with per-PID tracking for full observability.
+
+To **disable** tracking if needed (e.g., for benchmarking):
 
 ```bash
-export TT_METAL_SHM_STATS_ENABLED=1
+export TT_METAL_SHM_TRACKING_DISABLED=1
 ```
 
-### Optional: Enable Per-PID Tracking
-
-```bash
-export TT_METAL_SHM_STATS_PER_PID=1
-```
-
-This enables detailed per-process memory breakdown but adds slight overhead (~50ns per allocation).
+This disables both aggregate and per-PID tracking.
 
 ### Run Workload
 
 ```bash
-# Your Metal application
+# Your Metal application (tracking enabled by default)
 python my_workload.py
+
+# Or disable tracking for benchmarking:
+TT_METAL_SHM_TRACKING_DISABLED=1 python my_workload.py
 ```
 
 SHM files are automatically created in `/dev/shm/`:
@@ -366,22 +368,31 @@ ls -lh /dev/shm/tt_device_*
 ### Monitor with tt_smi
 
 ```bash
-# Real-time monitoring
+# Real-time monitoring (with automatic dead PID cleanup)
 ./build/programming_examples/tt_smi -w
 
-# One-time snapshot
+# One-time snapshot (with cleanup)
 ./build/programming_examples/tt_smi
 
 # Detailed per-process view
 ./build/programming_examples/tt_smi -d
+
+# Disable automatic cleanup (for debugging)
+./build/programming_examples/tt_smi -w --no-cleanup
 ```
 
-### Cleanup
+**Automatic Dead Process Cleanup:**
+- `tt_smi` automatically detects and removes dead PIDs from **all SHM files** on every refresh
+- Works for both local and remote devices (scans `/dev/shm/tt_device_*_memory`)
+- Enabled by default to ensure accurate memory reporting
+- Can be disabled with `--no-cleanup` flag if needed
+
+### Manual Cleanup
 
 SHM files persist across runs (like UMD lock files) for continuous monitoring:
 
 ```bash
-# Manual cleanup if needed
+# Manual cleanup if needed (removes all SHM files)
 rm /dev/shm/tt_device_*_memory
 ```
 
@@ -492,9 +503,11 @@ For N300 boards with MMIO and remote chips:
 
 ### 4. Multi-Process Safe
 
-- Atomic operations for all counters
-- Reference counting for lifecycle management
-- Process cleanup on exit (when refcount → 0)
+- **Atomic operations** for all counters (lock-free updates)
+- **Reference counting** for lifecycle management
+- **Automatic cleanup on normal exit**: When a process exits cleanly, its destructor subtracts allocations from aggregate counters
+- **Automatic cleanup of dead processes**: `tt_smi` detects crashed/killed processes via `kill(pid, 0)` and removes their stale entries
+- **Comprehensive cleanup**: Scans all SHM files (local and remote devices) to ensure accurate reporting
 
 ### 5. Persistent Monitoring
 
@@ -505,9 +518,50 @@ SHM files persist between runs, allowing:
 
 ## Performance
 
-- **Allocation tracking:** ~20-50ns overhead per allocation
-- **SHM access:** Lock-free atomic operations
+- **Allocation tracking:** ~110-140ns overhead per allocation (measured on N300, 4 chips)
+- **SHM access:** Lock-free atomic operations (no mutexes, no contention)
 - **tt_smi:** Read-only, non-blocking, safe during device reset
+- **Dead PID cleanup:** Negligible overhead (~1-2ms to scan all SHM files, done on monitoring side only)
+- **Setup cost:** ~20-50μs for first allocation per chip (one-time SHM initialization)
+
+### Measuring SHM Overhead
+
+To measure the exact overhead in your workload:
+
+1. **Enable timing instrumentation:**
+```bash
+# SHM tracking is enabled by default, just enable timing logs:
+export TT_METAL_SHM_TIMING_ENABLED=1
+```
+
+2. **Run your workload and capture logs:**
+```bash
+python my_workload.py 2>&1 | tee shm_timing.log
+```
+
+3. **Analyze timing data:**
+```bash
+python analyze_shm_timing.py shm_timing.log
+```
+
+**Example output:**
+```
+Total operations:     518,024
+Total time:           0.070 seconds (70.36 ms)
+Mean duration:        136 ns
+Median duration:      110 ns
+95th percentile:      240 ns
+99th percentile:      330 ns
+```
+
+**Performance characteristics:**
+- **DRAM allocations**: ~134 ns (most common)
+- **L1 allocations**: ~167 ns
+- **Kernel allocations**: ~244 ns
+- **First allocation per chip**: ~20-50 μs (one-time SHM setup cost)
+- **Subsequent allocations**: ~110-140 ns (pure tracking overhead)
+
+The overhead is **negligible** - for a typical workload with 500K operations, total SHM overhead is ~70 ms.
 
 ## Debugging
 
@@ -596,7 +650,7 @@ ls -lh /dev/shm/tt_device_*
 ### Issue: "No tracking" in tt_smi
 
 **Causes:**
-1. SHM tracking not enabled: `export TT_METAL_SHM_STATS_ENABLED=1`
+1. SHM tracking explicitly disabled: Remove `TT_METAL_SHM_TRACKING_DISABLED=1`
 2. SHM files not created: Check `/dev/shm/tt_device_*`
 3. Board ID mismatch: Verify with debug logs
 
@@ -628,12 +682,16 @@ if (dev.chip_id_composite != 0) {
 
 **Solution:**
 - SHM is reset when last process detaches (refcount → 0)
+- `tt_smi` **automatically cleans up dead processes by default** (scans all SHM files every refresh)
 - If stale data persists: `rm /dev/shm/tt_device_*_memory`
 
-**Auto-cleanup:**
+**Automatic cleanup (enabled by default):**
 ```bash
-./build/programming_examples/tt_smi -c   # Clean dead processes once
-./build/programming_examples/tt_smi -w -c # Watch mode with auto-cleanup
+./build/programming_examples/tt_smi     # One-time snapshot with cleanup
+./build/programming_examples/tt_smi -w  # Watch mode with auto-cleanup
+
+# Disable cleanup if needed (for debugging):
+./build/programming_examples/tt_smi --no-cleanup
 ```
 
 ### Issue: Different allocations on different runs
@@ -671,9 +729,11 @@ The SHM tracking system provides robust, persistent, per-chip memory monitoring 
 - **Stable:** Physical chip IDs never change, survive reboots
 - **Scalable:** Works with any number of boards/chips
 - **Non-invasive:** Monitoring doesn't affect workloads
-- **Performant:** ~20-50ns overhead per allocation
+- **Performant:** ~110-140ns overhead per allocation
 - **Persistent:** SHM files survive process restarts (like UMD locks)
 - **Accurate:** Each allocation automatically goes to correct chip's SHM file
+- **Self-cleaning:** Automatic dead process cleanup keeps memory tracking accurate
+- **Enabled by default:** No configuration required for full observability
 
 ### Allocation Flow:
 

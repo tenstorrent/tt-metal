@@ -27,7 +27,7 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     device_id_(device_id),
     shm_fd_(-1),
     region_(nullptr),
-    per_pid_tracking_enabled_(false)  // Disabled by default for performance
+    per_pid_tracking_enabled_(true)  // Enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1
     ,
     is_creator_(false) {
     // Create shared memory name using composite asic_id
@@ -84,10 +84,10 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     region_->asic_id = asic_id_ & 0xFF;     // Extract asic_location
     region_->device_id = device_id_;
 
-    // Check if per-PID tracking should be enabled
-    const char* per_pid_env = std::getenv("TT_METAL_SHM_STATS_PER_PID");
-    if (per_pid_env && std::string(per_pid_env) == "1") {
-        per_pid_tracking_enabled_ = true;
+    // Check if tracking should be disabled (enabled by default)
+    const char* tracking_disabled = std::getenv("TT_METAL_SHM_TRACKING_DISABLED");
+    if (tracking_disabled && std::string(tracking_disabled) == "1") {
+        per_pid_tracking_enabled_ = false;
     }
 }
 
@@ -272,6 +272,14 @@ void SharedMemoryStatsProvider::initialize_region() {
 }
 
 void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
+    // Optional timing instrumentation
+    static bool timing_enabled = [] {
+        const char* env = std::getenv("TT_METAL_SHM_TIMING_ENABLED");
+        return env && std::string(env) == "1";
+    }();
+    auto start_time =
+        timing_enabled ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+
     if (!region_) {
         return;
     }
@@ -324,9 +332,32 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
             pid_entry->last_update_timestamp = current_timestamp_ns();
         }
     }
+
+    // Log timing if enabled
+    if (timing_enabled) {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
+        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB", "KERNEL"};
+        const char* type_name = (static_cast<int>(type) < 6) ? type_names[static_cast<int>(type)] : "UNKNOWN";
+        log_info(
+            tt::LogMetal,
+            "SHM record_allocation: type={}, size={} B, chip={}, duration={} ns",
+            type_name,
+            size,
+            chip_id,
+            duration_ns);
+    }
 }
 
 void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
+    // Optional timing instrumentation
+    static bool timing_enabled = [] {
+        const char* env = std::getenv("TT_METAL_SHM_TIMING_ENABLED");
+        return env && std::string(env) == "1";
+    }();
+    auto start_time =
+        timing_enabled ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+
     if (!region_) {
         return;
     }
@@ -425,6 +456,21 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
             }
             pid_entry->last_update_timestamp = current_timestamp_ns();
         }
+    }
+
+    // Log timing if enabled
+    if (timing_enabled) {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
+        static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB", "KERNEL"};
+        const char* type_name = (static_cast<int>(type) < 6) ? type_names[static_cast<int>(type)] : "UNKNOWN";
+        log_info(
+            tt::LogMetal,
+            "SHM record_deallocation: type={}, size={} B, chip={}, duration={} ns",
+            type_name,
+            size,
+            chip_id,
+            duration_ns);
     }
 }
 

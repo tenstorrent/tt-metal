@@ -447,9 +447,9 @@ bool Device::initialize(
         return true;
     }
 
-    // Create shared memory stats provider (if tracking enabled)
-    const char* shm_enabled = std::getenv("TT_METAL_SHM_STATS_ENABLED");
-    if (shm_enabled && std::string(shm_enabled) == "1") {
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
+    const char* shm_disabled = std::getenv("TT_METAL_SHM_TRACKING_DISABLED");
+    if (!shm_disabled || std::string(shm_disabled) != "1") {
         // Compute composite asic_id for globally unique chip identification
         // asic_id = (board_id << 8) | asic_location_composite
         // NOTE: For Galaxy (UBB) systems with multiple trays, we need to encode BOTH tray_id

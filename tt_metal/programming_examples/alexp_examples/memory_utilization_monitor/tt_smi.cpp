@@ -204,10 +204,10 @@ static TopologyCache g_topology_cache;
 // Format bytes with units
 std::string format_bytes(uint64_t bytes) {
     if (bytes == 0) {
-        return "0 B";
+        return "0B";
     }
 
-    const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    const char* units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
     int unit_idx = 0;
     double value = bytes;
 
@@ -217,7 +217,7 @@ std::string format_bytes(uint64_t bytes) {
     }
 
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(1) << value << " " << units[unit_idx];
+    oss << std::fixed << std::setprecision(1) << value << units[unit_idx];
     return oss.str();
 }
 
@@ -268,6 +268,92 @@ bool is_process_alive(pid_t pid) {
     // Use kill(pid, 0) to check if process exists
     // Returns 0 if process exists, -1 if not (errno == ESRCH)
     return (kill(pid, 0) == 0);
+}
+
+// Clean up dead processes from a specific SHM file
+int cleanup_shm_file(const std::string& shm_name) {
+    int fd_write = shm_open(shm_name.c_str(), O_RDWR, 0666);
+    if (fd_write < 0) {
+        return 0;  // Can't open for write
+    }
+
+    auto* region_write = static_cast<SHMDeviceMemoryRegion*>(
+        mmap(nullptr, sizeof(SHMDeviceMemoryRegion), PROT_READ | PROT_WRITE, MAP_SHARED, fd_write, 0));
+
+    if (region_write == MAP_FAILED) {
+        close(fd_write);
+        return 0;
+    }
+
+    int cleaned_count = 0;
+
+    // Check each process entry
+    for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
+        pid_t pid = region_write->processes[i].pid;
+
+        if (pid > 0 && !is_process_alive(pid)) {
+            // Process is dead - subtract its allocations from aggregate atomics
+            auto& proc = region_write->processes[i];
+
+            region_write->total_dram_allocated.fetch_sub(proc.dram_allocated, std::memory_order_relaxed);
+            region_write->total_l1_allocated.fetch_sub(proc.l1_allocated, std::memory_order_relaxed);
+            region_write->total_l1_small_allocated.fetch_sub(proc.l1_small_allocated, std::memory_order_relaxed);
+            region_write->total_trace_allocated.fetch_sub(proc.trace_allocated, std::memory_order_relaxed);
+            region_write->total_cb_allocated.fetch_sub(proc.cb_allocated, std::memory_order_relaxed);
+            region_write->total_kernel_allocated.fetch_sub(proc.kernel_allocated, std::memory_order_relaxed);
+
+            // Also clean up per-chip stats if they exist
+            for (size_t chip_idx = 0; chip_idx < SHMDeviceMemoryRegion::MAX_CHIPS_PER_DEVICE; chip_idx++) {
+                if (region_write->chip_stats[chip_idx].chip_id != 0) {
+                    // Chip is registered, but we don't have per-process-per-chip data
+                    // The per-chip atomics are already updated by the main aggregate counters
+                }
+            }
+
+            // Zero out the process entry
+            memset(&region_write->processes[i], 0, sizeof(SHMDeviceMemoryRegion::ProcessStats));
+            cleaned_count++;
+        }
+    }
+
+    // If we cleaned any processes, recompute num_active_processes
+    if (cleaned_count > 0) {
+        uint32_t active_count = 0;
+        for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
+            if (region_write->processes[i].pid > 0) {
+                active_count++;
+            }
+        }
+        region_write->num_active_processes = active_count;
+    }
+
+    munmap(region_write, sizeof(SHMDeviceMemoryRegion));
+    close(fd_write);
+
+    return cleaned_count;
+}
+
+// Clean up dead processes from ALL SHM files (not just one per device)
+// This is crucial because remote chips may share SHM files or have different naming
+int cleanup_dead_processes_in_all_shm() {
+    int total_cleaned = 0;
+
+    // Scan /dev/shm for all tt_device_*_memory files
+    DIR* dir = opendir("/dev/shm");
+    if (!dir) {
+        return 0;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string filename = entry->d_name;
+        if (filename.find("tt_device_") == 0 && filename.find("_memory") != std::string::npos) {
+            total_cleaned += cleanup_shm_file("/" + filename);
+        }
+    }
+
+    closedir(dir);
+    return total_cleaned;
 }
 
 // Read memory stats from SHM
@@ -345,60 +431,6 @@ void cleanup_shm(DeviceInfo& dev) {
         dev.shm_fd = -1;
     }
     dev.has_shm = false;
-}
-
-// Clean up dead processes from SHM (requires write access)
-// Returns number of dead processes cleaned up
-int cleanup_dead_processes_in_shm(DeviceInfo& dev) {
-    if (!dev.has_shm || !dev.shm_region) {
-        return 0;
-    }
-
-    // Re-open SHM with write access
-    uint64_t asic_id = dev.asic_id;
-    std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";
-
-    int fd_write = shm_open(shm_name.c_str(), O_RDWR, 0666);
-    if (fd_write < 0) {
-        return 0;  // Can't open for write
-    }
-
-    auto* region_write = static_cast<SHMDeviceMemoryRegion*>(
-        mmap(nullptr, sizeof(SHMDeviceMemoryRegion), PROT_READ | PROT_WRITE, MAP_SHARED, fd_write, 0));
-
-    if (region_write == MAP_FAILED) {
-        close(fd_write);
-        return 0;
-    }
-
-    int cleaned_count = 0;
-
-    // Check each process entry
-    for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
-        pid_t pid = region_write->processes[i].pid;
-
-        if (pid > 0 && !is_process_alive(pid)) {
-            // Process is dead - zero out its entry
-            memset(&region_write->processes[i], 0, sizeof(SHMDeviceMemoryRegion::ProcessStats));
-            cleaned_count++;
-        }
-    }
-
-    // If we cleaned any processes, recompute num_active_processes
-    if (cleaned_count > 0) {
-        uint32_t active_count = 0;
-        for (uint32_t i = 0; i < SHMDeviceMemoryRegion::MAX_PROCESSES; i++) {
-            if (region_write->processes[i].pid > 0) {
-                active_count++;
-            }
-        }
-        region_write->num_active_processes = active_count;
-    }
-
-    munmap(region_write, sizeof(SHMDeviceMemoryRegion));
-    close(fd_write);
-
-    return cleaned_count;
 }
 
 // Scan /dev/shm/ for tt_device_*_memory files and parse asic_id from filenames
@@ -612,17 +644,45 @@ void update_all_telemetry_parallel(std::vector<DeviceInfo>& devices, bool shm_on
 }
 
 // Get total memory sizes for architecture
-void set_memory_sizes(DeviceInfo& dev) {
-    // These are typical values - adjust based on actual chip specs
-    if (dev.arch_name == "Wormhole_B0") {
-        dev.total_dram = 12ULL * 1024 * 1024 * 1024;  // 12 GB
-        dev.total_l1 = 1536ULL * 1024 * 1024;         // 1.5 GB total L1
-    } else if (dev.arch_name == "Grayskull") {
-        dev.total_dram = 8ULL * 1024 * 1024 * 1024;  // 8 GB
-        dev.total_l1 = 1024ULL * 1024 * 1024;        // 1 GB total L1
-    } else if (dev.arch_name == "Blackhole") {
-        dev.total_dram = 16ULL * 1024 * 1024 * 1024;  // 16 GB
-        dev.total_l1 = 2048ULL * 1024 * 1024;         // 2 GB total L1
+// Extract memory sizes dynamically from SOC descriptor (if available)
+// Otherwise fall back to hardcoded values based on architecture
+void set_memory_sizes(DeviceInfo& dev, tt::umd::Chip* chip = nullptr) {
+    bool extracted = false;
+
+    if (chip) {
+        try {
+            // Get SOC descriptor from Chip (not TTDevice)
+            auto& soc_desc = chip->get_soc_descriptor();
+
+            // Extract actual values from hardware
+            size_t num_dram_channels = soc_desc.get_num_dram_channels();
+            uint32_t l1_size_per_core = soc_desc.worker_l1_size;
+            uint32_t grid_x = soc_desc.grid_size.x;
+            uint32_t grid_y = soc_desc.grid_size.y;
+            uint64_t dram_size_per_channel = soc_desc.dram_bank_size;
+
+            // Calculate totals
+            dev.total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
+            dev.total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
+
+            extracted = true;
+        } catch (const std::exception& e) {
+            // Fall through to hardcoded fallback
+        }
+    }
+
+    // Fallback: Use hardcoded values if extraction failed
+    if (!extracted) {
+        if (dev.arch_name == "Wormhole_B0") {
+            dev.total_dram = 12ULL * 1024 * 1024 * 1024;  // 12 GB DRAM
+            dev.total_l1 = 93ULL * 1024 * 1024;           // 93 MB total L1 (64 cores × 1.46 MB)
+        } else if (dev.arch_name == "Grayskull") {
+            dev.total_dram = 8ULL * 1024 * 1024 * 1024;  // 8 GB DRAM
+            dev.total_l1 = 120ULL * 1024 * 1024;         // 120 MB total L1 (120 cores × 1.0 MB)
+        } else if (dev.arch_name == "Blackhole") {
+            dev.total_dram = 16ULL * 1024 * 1024 * 1024;  // 16 GB DRAM
+            dev.total_l1 = 100ULL * 1024 * 1024;          // ~100 MB total L1 (estimate)
+        }
     }
 }
 
@@ -715,43 +775,43 @@ void print_devices(const std::vector<DeviceInfo>& devices) {
             std::cout << Color::YELLOW << std::setw(12) << "N/A" << Color::RESET;
         }
 
-        // DRAM usage
+        // DRAM usage (includes Trace buffers which are physically in DRAM)
+        // Note: Kernel estimates are L1 footprint, not DRAM
         if (dev.has_shm) {
-            double usage_pct = (dev.total_dram > 0) ? (100.0 * dev.used_dram / dev.total_dram) : 0.0;
+            uint64_t total_dram_used = dev.used_dram + dev.used_trace;
 
-            if (dev.used_dram > 0) {
+            if (total_dram_used > 0) {
                 std::cout << Color::GREEN;
             }
-            std::cout << format_bytes(dev.used_dram) << " / " << format_bytes(dev.total_dram) << " (" << std::fixed
-                      << std::setprecision(1) << usage_pct << "%)";
-            if (dev.used_dram > 0) {
+            std::cout << format_bytes(total_dram_used) << " / " << format_bytes(dev.total_dram);
+            if (total_dram_used > 0) {
                 std::cout << Color::RESET;
             }
         } else if (dev.total_dram > 0) {
             // No SHM - show 0 B (device not in use)
-            std::cout << "0 B / " << format_bytes(dev.total_dram) << " (0.0%)";
+            std::cout << "0B / " << format_bytes(dev.total_dram);
         } else {
             std::cout << Color::YELLOW << "No data" << Color::RESET;
         }
 
         std::cout << "  ";
 
-        // L1 usage
+        // L1 usage (includes L1, L1_SMALL, CB, and estimated Kernel footprint in L1 reserved region)
+        // Note: Kernel tracking estimates the L1 footprint (binary_size × cores) in the reserved region
+        //       This is an estimate since the actual KERNEL_CONFIG buffer is not directly trackable
         if (dev.has_shm) {
-            uint64_t total_l1_used = dev.used_l1 + dev.used_l1_small;
-            double usage_pct = (dev.total_l1 > 0) ? (100.0 * total_l1_used / dev.total_l1) : 0.0;
+            uint64_t total_l1_used = dev.used_l1 + dev.used_l1_small + dev.used_cb + dev.used_kernel;
 
             if (total_l1_used > 0) {
                 std::cout << Color::GREEN;
             }
-            std::cout << format_bytes(total_l1_used) << " / " << format_bytes(dev.total_l1) << " (" << std::fixed
-                      << std::setprecision(1) << usage_pct << "%)";
+            std::cout << format_bytes(total_l1_used) << " / " << format_bytes(dev.total_l1);
             if (total_l1_used > 0) {
                 std::cout << Color::RESET;
             }
         } else if (dev.total_l1 > 0) {
             // No SHM - show 0 B (device not in use)
-            std::cout << std::setw(20) << ("0 B / " + format_bytes(dev.total_l1) + " (0.0%)");
+            std::cout << std::setw(20) << ("0B / " + format_bytes(dev.total_l1));
         } else {
             std::cout << Color::YELLOW << std::setw(20) << "No data" << Color::RESET;
         }
@@ -798,9 +858,10 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
 
     if (!any_processes && any_memory) {
         std::cout << "\n"
-                  << Color::YELLOW << "⚠  Per-PID memory tracking disabled (aggregated stats only)\n"
+                  << Color::YELLOW << "⚠  Per-PID memory tracking was explicitly disabled (aggregated stats only)\n"
                   << Color::RESET;
-        std::cout << Color::CYAN << "   Enable with: export TT_METAL_SHM_STATS_PER_PID=1\n" << Color::RESET;
+        std::cout << Color::CYAN << "   Remove TT_METAL_SHM_TRACKING_DISABLED=1 to enable per-PID tracking\n"
+                  << Color::RESET;
         std::cout << Color::CYAN << "   Then restart your TT-Metal program\n" << Color::RESET;
         return;
     }
@@ -810,12 +871,12 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
     }
 
     std::cout << "\n" << Color::BOLD << "Per-Process Memory Usage:\n" << Color::RESET;
-    std::cout << std::string(100, '-') << "\n";
+    std::cout << std::string(130, '-') << "\n";
 
-    std::cout << Color::BOLD << std::left << std::setw(12) << "Dev" << std::setw(8) << "PID" << std::setw(20)
-              << "Process" << std::setw(14) << "DRAM" << std::setw(14) << "L1" << std::setw(14) << "L1 Small"
-              << std::setw(12) << "Trace" << Color::RESET << "\n";
-    std::cout << std::string(100, '-') << "\n";
+    std::cout << Color::BOLD << std::left << std::setw(12) << "Dev" << std::setw(8) << "PID" << std::setw(16)
+              << "Process" << std::setw(12) << "DRAM" << std::setw(10) << "L1" << std::setw(10) << "L1 Small"
+              << std::setw(10) << "Trace" << std::setw(10) << "CB" << std::setw(12) << "Kernel" << Color::RESET << "\n";
+    std::cout << std::string(130, '-') << "\n";
 
     for (const auto& dev : devices) {
         for (const auto& proc : dev.processes) {
@@ -843,15 +904,17 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
 
             // Truncate process name if too long
             std::string proc_name = proc.name;
-            if (proc_name.length() > 18) {
-                proc_name = proc_name.substr(0, 15) + "...";
+            if (proc_name.length() > 14) {
+                proc_name = proc_name.substr(0, 11) + "...";
             }
-            std::cout << std::setw(20) << proc_name;
+            std::cout << std::setw(16) << proc_name;
 
-            std::cout << Color::GREEN << std::setw(14) << format_bytes(proc.dram_allocated);
-            std::cout << std::setw(14) << format_bytes(proc.l1_allocated);
-            std::cout << std::setw(14) << format_bytes(proc.l1_small_allocated);
-            std::cout << std::setw(12) << format_bytes(proc.trace_allocated);
+            std::cout << Color::GREEN << std::setw(12) << format_bytes(proc.dram_allocated);
+            std::cout << std::setw(10) << format_bytes(proc.l1_allocated);
+            std::cout << std::setw(10) << format_bytes(proc.l1_small_allocated);
+            std::cout << std::setw(10) << format_bytes(proc.trace_allocated);
+            std::cout << std::setw(10) << format_bytes(proc.cb_allocated);
+            std::cout << std::setw(12) << format_bytes(proc.kernel_allocated);
             std::cout << Color::RESET << "\n";
         }
     }
@@ -904,7 +967,7 @@ int main(int argc, char* argv[]) {
     int refresh_ms = 1000;
     bool show_details = false;
     bool shm_only = false;  // NEW: Skip device access, only read SHM
-    bool auto_cleanup = false;  // NEW: Automatically clean up dead processes
+    bool auto_cleanup = true;  // Enabled by default - always clean dead PIDs
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -919,24 +982,24 @@ int main(int argc, char* argv[]) {
             show_details = true;
         } else if (arg == "--shm-only" || arg == "--memory-only") {
             shm_only = true;
-        } else if (arg == "-c" || arg == "--cleanup") {
-            auto_cleanup = true;
+        } else if (arg == "--no-cleanup") {
+            auto_cleanup = false;
         } else if (arg == "-h" || arg == "--help") {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
             std::cout << "  -w, --watch          Watch mode (continuous updates)\n";
             std::cout << "  -r, --refresh MS     Refresh interval in milliseconds (default: 1000)\n";
             std::cout << "  -d, --details        Show detailed memory breakdown\n";
-            std::cout << "  -c, --cleanup        Automatically cleanup dead processes from SHM\n";
+            std::cout << "  --no-cleanup         Disable automatic cleanup of dead processes (enabled by default)\n";
             std::cout << "  --shm-only           Only read SHM (no device access - works during reset)\n";
             std::cout << "  -h, --help           Show this help\n";
             std::cout << "\n";
             std::cout << "Examples:\n";
-            std::cout << "  " << argv[0] << "                    # One-time snapshot\n";
-            std::cout << "  " << argv[0] << " -w                 # Watch mode\n";
-            std::cout << "  " << argv[0] << " -w -c              # Watch mode with auto-cleanup\n";
-            std::cout << "  " << argv[0] << " --cleanup          # Clean dead processes once and exit\n";
+            std::cout << "  " << argv[0] << "                    # One-time snapshot (with cleanup)\n";
+            std::cout << "  " << argv[0] << " -w                 # Watch mode (auto-cleanup enabled)\n";
+            std::cout << "  " << argv[0] << " --no-cleanup       # Disable dead process cleanup\n";
             std::cout << "\n";
+            std::cout << "Note: Dead process cleanup is enabled by default to keep memory tracking accurate\n";
             std::cout << "Note: --shm-only mode is non-invasive and won't prevent device reset\n";
             return 0;
         }
@@ -976,7 +1039,7 @@ int main(int argc, char* argv[]) {
                     if (read_memory_from_shm(dev)) {
                         // Guess memory sizes based on common configs (or leave as 0)
                         dev.total_dram = 12ULL * 1024 * 1024 * 1024;  // 12 GB typical
-                        dev.total_l1 = 1536ULL * 1024 * 1024;         // 1.5 GB typical
+                        dev.total_l1 = 93ULL * 1024 * 1024;           // 93 MB typical (Wormhole)
                         dev.telemetry_status = "SHM-only mode";
                         devices.push_back(dev);
                     }
@@ -1016,7 +1079,9 @@ int main(int argc, char* argv[]) {
                             if (tt_device) {
                                 auto arch = tt_device->get_arch();
                                 dev.arch_name = get_arch_name(arch);
-                                set_memory_sizes(dev);
+
+                                // Extract memory sizes from SOC descriptor
+                                set_memory_sizes(dev, chip.get());
 
                                 // Get the actual board_id
                                 dev.board_serial = tt_device->get_board_id();
@@ -1103,7 +1168,7 @@ int main(int argc, char* argv[]) {
                         if (has_memory) {
                             // Has SHM - assume device exists
                             dev.total_dram = 12ULL * 1024 * 1024 * 1024;
-                            dev.total_l1 = 1536ULL * 1024 * 1024;
+                            dev.total_l1 = 93ULL * 1024 * 1024;  // 93 MB (Wormhole default)
                             devices.push_back(dev);
                         }
                     }
@@ -1118,18 +1183,19 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
 
-            // Clean up dead processes if requested
+            // Clean up dead processes from ALL SHM files (enabled by default)
             if (auto_cleanup) {
-                int total_cleaned = 0;
-                for (auto& dev : devices) {
-                    if (dev.has_shm) {
-                        int cleaned = cleanup_dead_processes_in_shm(dev);
-                        total_cleaned += cleaned;
+                int total_cleaned = cleanup_dead_processes_in_all_shm();
+                if (total_cleaned > 0) {
+                    // Show cleanup message (brief in watch mode, detailed otherwise)
+                    if (watch_mode) {
+                        std::cout << Color::YELLOW << "⚠ Cleaned up " << total_cleaned << " dead process(es)\n"
+                                  << Color::RESET;
+                    } else {
+                        std::cout << Color::GREEN << "✓ Cleaned up " << total_cleaned
+                                  << " dead process(es) from all SHM files\n"
+                                  << Color::RESET;
                     }
-                }
-                if (total_cleaned > 0 && !watch_mode) {
-                    std::cout << Color::GREEN << "Cleaned up " << total_cleaned << " dead process(es) from SHM\n"
-                              << Color::RESET;
                 }
             }
 

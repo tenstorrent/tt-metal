@@ -168,7 +168,7 @@ public:
     // Get composite asic_id
     uint64_t asic_id() const { return asic_id_; }
 
-    // Enable/disable per-PID tracking (default: disabled for performance)
+    // Enable/disable per-PID tracking (default: enabled, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
     void set_per_pid_tracking(bool enabled) { per_pid_tracking_enabled_ = enabled; }
     bool is_per_pid_tracking_enabled() const { return per_pid_tracking_enabled_; }
 

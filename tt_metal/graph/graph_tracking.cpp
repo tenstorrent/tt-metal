@@ -268,10 +268,16 @@ void GraphTracker::track_allocate_cb(
         // CRITICAL: Serialize tracking calls to prevent race conditions
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
-        // Report to allocation server using CB-specific message type (if enabled)
+        // Report to legacy allocation server using CB-specific message type (if enabled)
         if (AllocationClient::is_enabled()) {
             // Use CB_ALLOC message type for proper tracking
             AllocationClient::report_cb_allocation(device->id(), size, addr);
+        }
+
+        // Report to shared memory tracking (if enabled)
+        auto* dev = dynamic_cast<const Device*>(device);
+        if (dev && dev->get_shm_stats_provider()) {
+            dev->get_shm_stats_provider()->record_allocation(getpid(), size, ShmBufferType::CB, device->id());
         }
 
         // Report to Tracy-based memory monitor (circular buffers are L1)
@@ -307,10 +313,16 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
         for (const auto& cb : cbs_to_deallocate) {
-            // Report to allocation server using CB-specific message type (if enabled)
+            // Report to legacy allocation server using CB-specific message type (if enabled)
             if (AllocationClient::is_enabled()) {
                 // Pass both address AND size for proper deallocation tracking
                 AllocationClient::report_cb_deallocation(device->id(), cb.size, cb.addr);
+            }
+
+            // Report to shared memory tracking (if enabled)
+            auto* dev = dynamic_cast<const Device*>(device);
+            if (dev && dev->get_shm_stats_provider()) {
+                dev->get_shm_stats_provider()->record_deallocation(getpid(), cb.size, ShmBufferType::CB, device->id());
             }
 
             // Report to Tracy-based memory monitor
@@ -358,10 +370,17 @@ void GraphTracker::track_kernel_load(
         // CRITICAL: Serialize tracking calls to prevent race conditions
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
-        // Report to allocation server using KERNEL-specific message type (if enabled)
+        // Report to legacy allocation server using KERNEL-specific message type (if enabled)
         // Report total_l1_size to accurately track actual L1 memory usage
         if (AllocationClient::is_enabled()) {
             AllocationClient::report_kernel_load(device->id(), total_l1_size, kernel_id, kernel_type);
+        }
+
+        // Report to shared memory tracking (if enabled)
+        auto* dev = dynamic_cast<const Device*>(device);
+        if (dev && dev->get_shm_stats_provider()) {
+            dev->get_shm_stats_provider()->record_allocation(
+                getpid(), total_l1_size, ShmBufferType::KERNEL, device->id());
         }
     }
 }
@@ -391,9 +410,16 @@ void GraphTracker::track_kernel_unload(uint64_t kernel_id, const IDevice* device
         std::lock_guard<std::mutex> tracking_lock(g_allocation_tracking_mutex);
 
         for (const auto& kernel : kernels_to_unload) {
-            // Report to allocation server using KERNEL-specific message type (if enabled)
+            // Report to legacy allocation server using KERNEL-specific message type (if enabled)
             if (AllocationClient::is_enabled()) {
                 AllocationClient::report_kernel_unload(device->id(), kernel.size, kernel.kernel_id);
+            }
+
+            // Report to shared memory tracking (if enabled)
+            auto* dev = dynamic_cast<const Device*>(device);
+            if (dev && dev->get_shm_stats_provider()) {
+                dev->get_shm_stats_provider()->record_deallocation(
+                    getpid(), kernel.size, ShmBufferType::KERNEL, device->id());
             }
         }
     }

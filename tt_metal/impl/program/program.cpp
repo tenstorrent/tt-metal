@@ -1449,16 +1449,8 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
         // Track kernel load for Fast Dispatch application programs (happens once when first generated)
-        // This is where program_transfer_info.binary_data is populated
-        uint64_t kernel_size = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
-        if (kernel_size > 0) {
-            // Calculate number of cores
-            uint32_t total_cores = 0;
-            std::vector<std::vector<CoreCoord>> logical_cores_list = this->logical_cores();
-            for (const auto& cores_for_type : logical_cores_list) {
-                total_cores += cores_for_type.size();
-            }
-
+        // Use per-kernel tracking for accurate L1 estimates
+        {
             // Determine which devices to track
             std::vector<const IDevice*> devices_to_track;
             const tt::tt_metal::distributed::MeshDevice* mesh_device =
@@ -1471,18 +1463,50 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
                 devices_to_track.push_back(device);
             }
 
-            uint64_t kernel_id = reinterpret_cast<uint64_t>(this);
             uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
 
-            // Debug output (DISABLED for cleaner logs)
-            // std::cout << "🔧 [DEBUG] generate_dispatch_commands: kernel_type=" << (int)kernel_type
-            //           << " binary_size=" << kernel_size << " bytes"
-            //           << " cores=" << total_cores
-            //           << " total_l1=" << (kernel_size * total_cores) << " bytes" << std::endl;
+            // Iterate through each individual kernel for accurate tracking
+            const auto& hal = MetalContext::instance().hal();
+            for (uint32_t programmable_core_type_index = 0;
+                 programmable_core_type_index < hal.get_programmable_core_type_count();
+                 programmable_core_type_index++) {
+                for (const auto& [kernel_handle, kernel] : this->get_kernels(programmable_core_type_index)) {
+                    if (!kernel) {
+                        continue;
+                    }
 
-            for (const IDevice* dev : devices_to_track) {
-                tt::tt_metal::GraphTracker::instance().track_kernel_load(
-                    kernel_size, kernel_id, dev, kernel_type, total_cores);
+                    // Get the cores this specific kernel runs on
+                    const std::set<CoreCoord>& kernel_cores = kernel->logical_cores();
+                    uint32_t num_cores = kernel_cores.size();
+
+                    if (num_cores == 0) {
+                        continue;
+                    }
+
+                    // Get the total binary size for this kernel (sum across all processors: BRISC, NCRISC, TRISCs)
+                    uint64_t kernel_binary_size = 0;
+                    try {
+                        for (int i = 0; i < kernel->expected_num_binaries(); i++) {
+                            kernel_binary_size += kernel->get_binary_packed_size(device, i);
+                        }
+                    } catch (...) {
+                        // Binary not available yet (can happen during compilation)
+                        continue;
+                    }
+
+                    if (kernel_binary_size == 0) {
+                        continue;
+                    }
+
+                    // Use kernel pointer + index as unique ID
+                    uint64_t kernel_id = reinterpret_cast<uint64_t>(kernel.get()) + kernel_handle;
+
+                    // Report this specific kernel load for all tracked devices
+                    for (const IDevice* dev : devices_to_track) {
+                        tt::tt_metal::GraphTracker::instance().track_kernel_load(
+                            kernel_binary_size, kernel_id, dev, kernel_type, num_cores);
+                    }
+                }
             }
         }
 
@@ -1526,6 +1550,62 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
+
+        // Track kernel load for trace dispatch (same as regular dispatch)
+        {
+            // Determine which devices to track
+            std::vector<const IDevice*> devices_to_track;
+            const tt::tt_metal::distributed::MeshDevice* mesh_device =
+                dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+            if (mesh_device != nullptr) {
+                for (IDevice* sub_device : mesh_device->get_devices()) {
+                    devices_to_track.push_back(sub_device);
+                }
+            } else {
+                devices_to_track.push_back(device);
+            }
+
+            uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
+
+            // Iterate through each individual kernel for accurate tracking
+            const auto& hal = MetalContext::instance().hal();
+            for (uint32_t programmable_core_type_index = 0;
+                 programmable_core_type_index < hal.get_programmable_core_type_count();
+                 programmable_core_type_index++) {
+                for (const auto& [kernel_handle, kernel] : this->get_kernels(programmable_core_type_index)) {
+                    if (!kernel) {
+                        continue;
+                    }
+
+                    const std::set<CoreCoord>& kernel_cores = kernel->logical_cores();
+                    uint32_t num_cores = kernel_cores.size();
+                    if (num_cores == 0) {
+                        continue;
+                    }
+
+                    uint64_t kernel_binary_size = 0;
+                    try {
+                        for (int i = 0; i < kernel->expected_num_binaries(); i++) {
+                            kernel_binary_size += kernel->get_binary_packed_size(device, i);
+                        }
+                    } catch (...) {
+                        continue;
+                    }
+
+                    if (kernel_binary_size == 0) {
+                        continue;
+                    }
+
+                    uint64_t kernel_id = reinterpret_cast<uint64_t>(kernel.get()) + kernel_handle;
+
+                    for (const IDevice* dev : devices_to_track) {
+                        tt::tt_metal::GraphTracker::instance().track_kernel_load(
+                            kernel_binary_size, kernel_id, dev, kernel_type, num_cores);
+                    }
+                }
+            }
+        }
+
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         trace_cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
@@ -1820,54 +1900,81 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     set_finalized();
 
     // Track kernel load for this program (happens once when first finalized)
+    // NEW: Track per-kernel instead of entire program blob for accurate L1 estimates
     // This tracks all kernel types: Application, Fabric, Dispatch
-    // Get actual kernel binary size (not config buffer size which is 0 for modern dispatch)
-    uint64_t kernel_size = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
 
-    // DEBUG: Log all finalize_offsets calls to understand when kernel data is available
-    std::cout << "🔧 [DEBUG] finalize_offsets called: kernel_type=" << (int)this->kernel_type_
-              << " binary_data.size=" << this->program_transfer_info.binary_data.size()
-              << " kernel_size=" << kernel_size << " bytes" << std::endl;
+    // Determine which devices to track
+    std::vector<const IDevice*> devices_to_track;
+    const tt::tt_metal::distributed::MeshDevice* mesh_device =
+        dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
 
-    if (kernel_size > 0) {
-        // Determine which devices to track
-        std::vector<const IDevice*> devices_to_track;
-        const tt::tt_metal::distributed::MeshDevice* mesh_device =
-            dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
+    if (mesh_device != nullptr) {
+        // Mesh device: track all sub-devices
+        for (IDevice* sub_device : mesh_device->get_devices()) {
+            devices_to_track.push_back(sub_device);
+        }
+    } else {
+        // Single device
+        devices_to_track.push_back(device);
+    }
 
-        if (mesh_device != nullptr) {
-            // Mesh device: track all sub-devices
-            for (IDevice* sub_device : mesh_device->get_devices()) {
-                devices_to_track.push_back(sub_device);
+    // Get kernel type from program metadata
+    uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
+
+    // NEW: Iterate through each individual kernel and track accurately
+    uint64_t total_estimated_l1 = 0;
+    uint32_t kernel_count = 0;
+
+    for (const auto& kernels_by_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_by_type) {
+            if (!kernel) {
+                continue;
             }
-        } else {
-            // Single device
-            devices_to_track.push_back(device);
+
+            // Get the cores this specific kernel runs on
+            const std::set<CoreCoord>& kernel_cores = kernel->logical_cores();
+            uint32_t num_cores = kernel_cores.size();
+
+            if (num_cores == 0) {
+                continue;
+            }
+
+            // Get the total binary size for this kernel (sum across all processors: BRISC, NCRISC, TRISCs)
+            uint64_t kernel_binary_size = 0;
+            try {
+                for (int i = 0; i < kernel->expected_num_binaries(); i++) {
+                    kernel_binary_size += kernel->get_binary_packed_size(device, i);
+                }
+            } catch (...) {
+                // Binary not available yet (can happen during compilation)
+                continue;
+            }
+
+            if (kernel_binary_size == 0) {
+                continue;
+            }
+
+            // Calculate per-kernel L1 footprint: binary_size × cores_it_runs_on
+            uint64_t kernel_l1_footprint = kernel_binary_size * num_cores;
+            total_estimated_l1 += kernel_l1_footprint;
+            kernel_count++;
+
+            // Use kernel pointer + index as unique ID
+            uint64_t kernel_id = reinterpret_cast<uint64_t>(kernel.get()) + kernel_handle;
+
+            // Report this specific kernel load for all tracked devices
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_kernel_load(
+                    kernel_binary_size, kernel_id, dev, kernel_type, num_cores);
+            }
         }
+    }
 
-        // Use program's compile-time ID as kernel identifier (reinterpret pointer as uint64_t)
-        // This uniquely identifies the program and persists across runs
-        uint64_t kernel_id = reinterpret_cast<uint64_t>(this);
-
-        // Get kernel type from program metadata
-        uint8_t kernel_type = static_cast<uint8_t>(this->kernel_type_);
-
-        // Calculate number of cores this program runs on
-        uint32_t total_cores = 0;
-        std::vector<std::vector<CoreCoord>> logical_cores_list = this->logical_cores();
-        for (const auto& cores_for_type : logical_cores_list) {
-            total_cores += cores_for_type.size();
-        }
-
-        std::cout << "🔧 [DEBUG] finalize_offsets: kernel_type=" << (int)kernel_type << " binary_size=" << kernel_size
-                  << " bytes"
-                  << " cores=" << total_cores << " total_l1=" << (kernel_size * total_cores) << " bytes" << std::endl;
-
-        // Report kernel load for all tracked devices
-        for (const IDevice* dev : devices_to_track) {
-            tt::tt_metal::GraphTracker::instance().track_kernel_load(
-                kernel_size, kernel_id, dev, kernel_type, total_cores);
-        }
+    // DEBUG: Log the improved tracking
+    if (kernel_count > 0) {
+        std::cout << "🔧 [DEBUG] finalize_offsets: kernel_type=" << (int)kernel_type
+                  << " tracked_kernels=" << kernel_count
+                  << " total_l1_estimate=" << (total_estimated_l1 / 1024.0 / 1024.0) << " MB" << std::endl;
     }
 }
 

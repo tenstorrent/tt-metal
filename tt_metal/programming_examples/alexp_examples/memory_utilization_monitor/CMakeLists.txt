@@ -59,84 +59,6 @@ target_compile_options(
 )
 
 # ============================================================================
-# tt_smi_umd: Enhanced tt-smi with UMD telemetry and ncurses TUI
-# ============================================================================
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_umd.cpp")
-    # Find ncurses library (like nvtop uses)
-    find_package(Curses REQUIRED)
-
-    add_executable(tt_smi_umd tt_smi_umd.cpp)
-
-    target_link_libraries(
-        tt_smi_umd
-        PUBLIC
-            TT::Metalium # TT-Metal provides UMD access
-        PRIVATE
-            pthread
-            stdc++fs
-            ${CURSES_LIBRARIES} # ncurses for TUI
-    )
-
-    target_include_directories(tt_smi_umd PRIVATE ${CURSES_INCLUDE_DIRS})
-
-    # Disable specific warnings
-    target_compile_options(
-        tt_smi_umd
-        PRIVATE
-            -Wno-error=unused-parameter
-            -Wno-unused-parameter
-    )
-endif()
-
-# ============================================================================
-# tt_smi_simple: Simplified telemetry tool for MMIO-based devices
-# ============================================================================
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple.cpp")
-    add_executable(tt_smi_simple tt_smi_simple.cpp)
-
-    target_link_libraries(
-        tt_smi_simple
-        PUBLIC
-            TT::Metalium # TT-Metal provides UMD access
-        PRIVATE
-            pthread
-            stdc++fs
-    )
-
-    # Disable specific warnings
-    target_compile_options(
-        tt_smi_simple
-        PRIVATE
-            -Wno-error=unused-parameter
-            -Wno-unused-parameter
-    )
-endif()
-
-# ============================================================================
-# tt_smi_simple_shm: Simple UMD + SHM monitoring (no allocation server)
-# ============================================================================
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_simple_shm.cpp")
-    add_executable(tt_smi_simple_shm tt_smi_simple_shm.cpp)
-
-    target_link_libraries(
-        tt_smi_simple_shm
-        PUBLIC
-            TT::Metalium # TT-Metal provides UMD access
-        PRIVATE
-            pthread
-            rt # For shm_open
-    )
-
-    # Disable specific warnings
-    target_compile_options(
-        tt_smi_simple_shm
-        PRIVATE
-            -Wno-error=unused-parameter
-            -Wno-unused-parameter
-    )
-endif()
-
-# ============================================================================
 # show_chip_ids: Debug utility to display all chip IDs from UMD
 # ============================================================================
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/show_chip_ids.cpp")
@@ -172,22 +94,8 @@ endif()
 set(INSTALL_TARGETS
     allocation_server_poc
     allocation_monitor_client
+    tt_smi
 )
-
-# Add tt_smi_umd to install if it was built
-if(TARGET tt_smi_umd)
-    list(APPEND INSTALL_TARGETS tt_smi_umd)
-endif()
-
-# Add tt_smi_simple to install if it was built
-if(TARGET tt_smi_simple)
-    list(APPEND INSTALL_TARGETS tt_smi_simple)
-endif()
-
-# Add tt_smi_simple_shm to install if it was built
-if(TARGET tt_smi_simple_shm)
-    list(APPEND INSTALL_TARGETS tt_smi_simple_shm)
-endif()
 
 install(TARGETS ${INSTALL_TARGETS} RUNTIME DESTINATION bin)
 
@@ -200,13 +108,5 @@ message(STATUS "━━━━━━━━━━━━━━━━━━━━━�
 message(STATUS "  Targets:")
 message(STATUS "    • allocation_server_poc     (with TT::Metalium)")
 message(STATUS "    • allocation_monitor_client (standalone)")
-if(TARGET tt_smi_umd)
-    message(STATUS "    • tt_smi_umd                (nvtop-style TUI with ncurses, UMD telemetry & real-time charts)")
-endif()
-if(TARGET tt_smi_simple)
-    message(STATUS "    • tt_smi_simple             (simple telemetry-only tool, no memory tracking)")
-endif()
-if(TARGET tt_smi_simple_shm)
-    message(STATUS "    • tt_smi_simple_shm         UMD + SHM, no allocation server needed!")
-endif()
+message(STATUS "    • tt_smi                    (UMD telemetry + SHM memory tracking)")
 message(STATUS "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

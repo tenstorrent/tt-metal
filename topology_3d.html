@@ -463,12 +463,12 @@
             // Create chip group with NOC grid
             const chipGroup = new THREE.Group();
             chipGroup.position.set(0, 0, 0);
-
+            
             // Render NOC grid (10x12)
             const tileSize = 0.25;
             const tileSpacing = 0.03;
             const tileGeo = new THREE.BoxGeometry(tileSize, 0.15, tileSize);
-
+            
             {
                 const tileMat = new THREE.MeshStandardMaterial({
                     color: 0x27ae60,
@@ -2510,7 +2510,7 @@
                 chipGroup.add(tile);
             }
             scene.add(chipGroup);
-
+            
             // Add chip label with spatial info
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -2533,7 +2533,7 @@
             label.position.set(0, 0 + 0.5, 0);
             label.rotation.x = -Math.PI / 2;
             scene.add(label);
-
+            
             chipObjects.push({
                 id: 0,
                 mesh: chipGroup,
@@ -2549,12 +2549,12 @@
             // Create chip group with NOC grid
             const chipGroup = new THREE.Group();
             chipGroup.position.set(8, 0, 0);
-
+            
             // Render NOC grid (10x12)
             const tileSize = 0.25;
             const tileSpacing = 0.03;
             const tileGeo = new THREE.BoxGeometry(tileSize, 0.15, tileSize);
-
+            
             {
                 const tileMat = new THREE.MeshStandardMaterial({
                     color: 0x27ae60,
@@ -4596,7 +4596,7 @@
                 chipGroup.add(tile);
             }
             scene.add(chipGroup);
-
+            
             // Add chip label with spatial info
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -4619,7 +4619,7 @@
             label.position.set(8, 0 + 0.5, 0);
             label.rotation.x = -Math.PI / 2;
             scene.add(label);
-
+            
             chipObjects.push({
                 id: 1,
                 mesh: chipGroup,
@@ -4635,12 +4635,12 @@
             // Create chip group with NOC grid
             const chipGroup = new THREE.Group();
             chipGroup.position.set(16, 0, 0);
-
+            
             // Render NOC grid (10x12)
             const tileSize = 0.25;
             const tileSpacing = 0.03;
             const tileGeo = new THREE.BoxGeometry(tileSize, 0.15, tileSize);
-
+            
             {
                 const tileMat = new THREE.MeshStandardMaterial({
                     color: 0x27ae60,
@@ -6682,7 +6682,7 @@
                 chipGroup.add(tile);
             }
             scene.add(chipGroup);
-
+            
             // Add chip label with spatial info
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -6705,7 +6705,7 @@
             label.position.set(16, 0 + 0.5, 0);
             label.rotation.x = -Math.PI / 2;
             scene.add(label);
-
+            
             chipObjects.push({
                 id: 2,
                 mesh: chipGroup,
@@ -6721,12 +6721,12 @@
             // Create chip group with NOC grid
             const chipGroup = new THREE.Group();
             chipGroup.position.set(24, 0, 0);
-
+            
             // Render NOC grid (10x12)
             const tileSize = 0.25;
             const tileSpacing = 0.03;
             const tileGeo = new THREE.BoxGeometry(tileSize, 0.15, tileSize);
-
+            
             {
                 const tileMat = new THREE.MeshStandardMaterial({
                     color: 0x27ae60,
@@ -8768,7 +8768,7 @@
                 chipGroup.add(tile);
             }
             scene.add(chipGroup);
-
+            
             // Add chip label with spatial info
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -8791,7 +8791,7 @@
             label.position.set(24, 0 + 0.5, 0);
             label.rotation.x = -Math.PI / 2;
             scene.add(label);
-
+            
             chipObjects.push({
                 id: 3,
                 mesh: chipGroup,
@@ -8886,14 +8886,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(0.42, 0.2, 0.14),
+                new THREE.Vector3(0.98, 0.2, -1.54),
                 new THREE.Vector3(2, 1.5, 12.36),
                 new THREE.Vector3(6, 1.5, 12.36),
-                new THREE.Vector3(8.42, 0.2, 0.14)
+                new THREE.Vector3(7.02, 0.2, 0.14)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -8902,17 +8902,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 0,
-                srcCh: 14,
+                srcCh: 2,
                 dst: 1,
-                dstCh: 14
+                dstCh: 9
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 0,
-                srcCh: 14,
+                srcCh: 2,
                 dst: 1,
-                dstCh: 14,
+                dstCh: 9,
                 line: line,
                 visible: true,
                 originalColor: 0x3498db,
@@ -8923,14 +8923,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(-0.14, 0.2, 0.14),
+                new THREE.Vector3(-0.7, 0.2, -1.54),
                 new THREE.Vector3(2, 2.25, 15.24),
                 new THREE.Vector3(6, 2.25, 15.24),
-                new THREE.Vector3(7.86, 0.2, 0.14)
+                new THREE.Vector3(9.26, 0.2, 0.14)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -8939,17 +8939,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 0,
-                srcCh: 15,
+                srcCh: 3,
                 dst: 1,
-                dstCh: 15
+                dstCh: 8
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 0,
-                srcCh: 15,
+                srcCh: 3,
                 dst: 1,
-                dstCh: 15,
+                dstCh: 8,
                 line: line,
                 visible: true,
                 originalColor: 0x3498db,
@@ -8960,14 +8960,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(1.26, 0.2, 0.14),
-                new THREE.Vector3(4, 2.125, 16.96),
-                new THREE.Vector3(12, 2.125, 16.96),
-                new THREE.Vector3(17.26, 0.2, -1.54)
+                new THREE.Vector3(0.7, 0.2, -1.54),
+                new THREE.Vector3(6, 2.125, 16.96),
+                new THREE.Vector3(18, 2.125, 16.96),
+                new THREE.Vector3(24.7, 0.2, -1.54)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x9b59b6,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -8976,17 +8976,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 0,
-                srcCh: 8,
-                dst: 2,
-                dstCh: 0
+                srcCh: 4,
+                dst: 3,
+                dstCh: 4
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 0,
-                srcCh: 8,
-                dst: 2,
-                dstCh: 0,
+                srcCh: 4,
+                dst: 3,
+                dstCh: 4,
                 line: line,
                 visible: true,
                 originalColor: 0x9b59b6,
@@ -8997,14 +8997,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(-0.98, 0.2, 0.14),
-                new THREE.Vector3(4, 2.875, 19.84),
-                new THREE.Vector3(12, 2.875, 19.84),
-                new THREE.Vector3(15.02, 0.2, -1.54)
+                new THREE.Vector3(-0.42, 0.2, -1.54),
+                new THREE.Vector3(6, 2.875, 19.84),
+                new THREE.Vector3(18, 2.875, 19.84),
+                new THREE.Vector3(24.98, 0.2, -1.54)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x9b59b6,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -9013,17 +9013,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 0,
-                srcCh: 9,
-                dst: 2,
-                dstCh: 1
+                srcCh: 5,
+                dst: 3,
+                dstCh: 2
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 0,
-                srcCh: 9,
-                dst: 2,
-                dstCh: 1,
+                srcCh: 5,
+                dst: 3,
+                dstCh: 2,
                 line: line,
                 visible: true,
                 originalColor: 0x9b59b6,
@@ -9034,15 +9034,15 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(9.26, 0.2, 0.14),
-                new THREE.Vector3(12, 2.125, 16.96),
-                new THREE.Vector3(20, 2.125, 16.96),
-                new THREE.Vector3(25.26, 0.2, -1.54)
+                new THREE.Vector3(8.98, 0.2, -1.54),
+                new THREE.Vector3(10, 1.5, 12.36),
+                new THREE.Vector3(14, 1.5, 12.36),
+                new THREE.Vector3(15.58, 0.2, -1.54)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
-                color: 0x9b59b6,
+            const material = new THREE.LineBasicMaterial({ 
+                color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
                 transparent: true
@@ -9050,20 +9050,20 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 1,
-                srcCh: 8,
-                dst: 3,
-                dstCh: 0
+                srcCh: 2,
+                dst: 2,
+                dstCh: 5
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 1,
-                srcCh: 8,
-                dst: 3,
-                dstCh: 0,
+                srcCh: 2,
+                dst: 2,
+                dstCh: 5,
                 line: line,
                 visible: true,
-                originalColor: 0x9b59b6,
+                originalColor: 0x3498db,
                 groupIndex: 0,
                 groupSize: 2
             });
@@ -9071,15 +9071,15 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(7.02, 0.2, 0.14),
-                new THREE.Vector3(12, 2.875, 19.84),
-                new THREE.Vector3(20, 2.875, 19.84),
-                new THREE.Vector3(23.02, 0.2, -1.54)
+                new THREE.Vector3(8.7, 0.2, -1.54),
+                new THREE.Vector3(10, 2.25, 15.24),
+                new THREE.Vector3(14, 2.25, 15.24),
+                new THREE.Vector3(16.7, 0.2, -1.54)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
-                color: 0x9b59b6,
+            const material = new THREE.LineBasicMaterial({ 
+                color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
                 transparent: true
@@ -9087,20 +9087,20 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 1,
-                srcCh: 9,
-                dst: 3,
-                dstCh: 1
+                srcCh: 4,
+                dst: 2,
+                dstCh: 4
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 1,
-                srcCh: 9,
-                dst: 3,
-                dstCh: 1,
+                srcCh: 4,
+                dst: 2,
+                dstCh: 4,
                 line: line,
                 visible: true,
-                originalColor: 0x9b59b6,
+                originalColor: 0x3498db,
                 groupIndex: 1,
                 groupSize: 2
             });
@@ -9108,14 +9108,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(16.42, 0.2, -1.54),
+                new THREE.Vector3(16.98, 0.2, -1.54),
                 new THREE.Vector3(18, 1.5, 12.36),
                 new THREE.Vector3(22, 1.5, 12.36),
-                new THREE.Vector3(24.42, 0.2, -1.54)
+                new THREE.Vector3(23.02, 0.2, 0.14)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -9124,17 +9124,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 2,
-                srcCh: 6,
+                srcCh: 2,
                 dst: 3,
-                dstCh: 6
+                dstCh: 9
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 2,
-                srcCh: 6,
+                srcCh: 2,
                 dst: 3,
-                dstCh: 6,
+                dstCh: 9,
                 line: line,
                 visible: true,
                 originalColor: 0x3498db,
@@ -9145,14 +9145,14 @@
         {
             // Multi-point curve with spatial spreading
             const curve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(15.86, 0.2, -1.54),
+                new THREE.Vector3(15.3, 0.2, -1.54),
                 new THREE.Vector3(18, 2.25, 15.24),
                 new THREE.Vector3(22, 2.25, 15.24),
-                new THREE.Vector3(23.86, 0.2, -1.54)
+                new THREE.Vector3(25.26, 0.2, 0.14)
             ]);
             const points = curve.getPoints(50);
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
+            const material = new THREE.LineBasicMaterial({ 
                 color: 0x3498db,
                 linewidth: 2.5,
                 opacity: 0.7,
@@ -9161,17 +9161,17 @@
             const line = new THREE.Line(geometry, material);
             line.userData = {
                 src: 2,
-                srcCh: 7,
+                srcCh: 3,
                 dst: 3,
-                dstCh: 7
+                dstCh: 8
             };
             scene.add(line);
-
+            
             connectionObjects.push({
                 src: 2,
-                srcCh: 7,
+                srcCh: 3,
                 dst: 3,
-                dstCh: 7,
+                dstCh: 8,
                 line: line,
                 visible: true,
                 originalColor: 0x3498db,
