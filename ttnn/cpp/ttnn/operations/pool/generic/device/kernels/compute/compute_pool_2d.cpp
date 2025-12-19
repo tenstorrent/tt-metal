@@ -224,7 +224,7 @@ void MAIN {
                     // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
                     // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
                     // smaller than 9 as the excess sticks are just filled with padding values
-                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
                     max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                         data_dst_idx, index_dst_idx);
                 } else {
