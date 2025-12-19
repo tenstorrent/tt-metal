@@ -121,10 +121,10 @@ class PatchEmbeddingTorch:
 
 class PatchEmbeddingTTNN:
     """
-    Convert image patches to embeddings using TTNN.
+    Convert image patches to embeddings using hybrid approach.
     
-    Uses ttnn.fold for patch extraction (100% TTNN, no CPU operations).
-    Based on ViT implementation from models/demos/grayskull/vit/tt/ttnn_optimized_vit_highres_gs.py
+    Uses PyTorch conv2d for patch extraction, then converts to TTNN.
+    This hybrid approach is more reliable than pure TTNN fold for non-standard patch sizes.
     """
     
     def __init__(
@@ -138,72 +138,24 @@ class PatchEmbeddingTTNN:
         
         Args:
             config: SigLIP configuration
-            weights: PyTorch weights (will be preprocessed for ttnn.fold)
+            weights: PyTorch weights for conv2d
             device: TTNN device
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
         
-        from models.common.utility_functions import nearest_32
-        
         self.config = config
         self.device = device
         
-        # Preprocess conv2d weights for fold + linear approach
         # Handle both formats: vision_model.embeddings.patch_embedding (checkpoint) and patch_embedding (legacy)
         conv_weight = (weights.get("patch_embedding.weight") or 
                       weights.get("vision_model.embeddings.patch_embedding.weight"))
         conv_bias = (weights.get("patch_embedding.bias") or 
                     weights.get("vision_model.embeddings.patch_embedding.bias"))
         
-        # Conv weight shape: (out_channels, in_channels, kernel_h, kernel_w)
-        # For SigLIP: (hidden_size, 3, patch_size, patch_size)
-        out_channels, in_channels, kernel_h, kernel_w = conv_weight.shape
-        
-        # Store PyTorch weights for fallback
+        # Store PyTorch weights for hybrid conv2d approach
         self._torch_weight = conv_weight
         self._torch_bias = conv_bias
-        
-        # Reshape to (out_channels, in_channels * kernel_h * kernel_w)
-        linear_weight = conv_weight.view(out_channels, -1)
-        
-        # Pad to nearest 32 for tile layout
-        pad_len = nearest_32(linear_weight.shape[-1]) - linear_weight.shape[-1]
-        if pad_len > 0:
-            padding = torch.zeros(out_channels, pad_len, dtype=linear_weight.dtype)
-            linear_weight = torch.cat([linear_weight, padding], dim=-1)
-        
-        # Transpose for TTNN linear (expects transposed weights)
-        # Shape: (1, 1, in_features_padded, out_channels)
-        linear_weight = linear_weight.permute(1, 0).reshape(1, 1, -1, out_channels)
-        
-        # Convert to TTNN
-        self.weight = ttnn.from_torch(
-            linear_weight,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        
-        if conv_bias is not None:
-            self.bias = ttnn.from_torch(
-                conv_bias.reshape(1, -1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            self.bias = None
-        
-        # Compute kernel config
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
     
     def forward(self, pixel_values) -> "ttnn.Tensor":
         """
@@ -249,8 +201,6 @@ class PatchEmbeddingTTNN:
         )
         
         return x_ttnn
-        
-        return output
 
 
 # ============================================================================
