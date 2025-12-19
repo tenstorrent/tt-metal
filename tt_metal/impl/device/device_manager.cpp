@@ -397,6 +397,9 @@ void DeviceManager::initialize_active_devices() {
         // Initialize fabric on mmio device
         init_fabric(active_devices);
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
+    } else {
+        log_warning(
+            tt::LogMetal, "Provided FabricConfig is not a supported TT_Fabric Config, skipping fabric initialization");
     }
 
     // Activate FD kernels
