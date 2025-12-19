@@ -127,7 +127,7 @@ def extract_ops_from_docs_rst_file(api_rst_path: str) -> set:
 # Main processing function
 def main() -> None:
     # Define file path
-    script_dir = Path(__file__).parent
+    script_dir = Path(__file__).parent.parent  # Assume script is in scripts/ directory
     api_rst_path = script_dir / DOCS_OP_LIST_PATH
 
     # Check if file exists
