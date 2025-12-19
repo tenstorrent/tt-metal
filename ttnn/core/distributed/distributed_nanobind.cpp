@@ -12,6 +12,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
