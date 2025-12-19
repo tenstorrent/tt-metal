@@ -137,8 +137,6 @@ async function run() {
           //     slack_channel_id: slackChannelId
           //   }
           // });
-
-
           core.info(`✓ Successfully mock triggered auto-triage for ${workflowFileName} / ${jobName}`);
 
           // Add a small delay to avoid rate limiting
