@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -14,6 +11,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -127,23 +125,16 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_ex_partial2);
-
-    cb_ex_partial2_obj.reserve_back(block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_ex_partial2_obj.push_back(block_h);
+    compute_kernel_lib::reduce<
+        PoolType::AVG,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        cb_in,
+        cb_scaler,
+        cb_ex_partial2,
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -176,40 +167,27 @@ void kernel_main() {
     cb_x2_obj.push_back(num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
-
     cb_x2_obj.wait_front(num_tiles_per_block);
 #ifdef RMSNORM
     cb_scaler_obj.wait_front(1);
 #endif  // RMSNORM
 
-    cb_ex_partial2_obj.reserve_back(block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
-
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, cb_ex_partial2);
-    index_h_offset = 0;
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_x2_obj.pop_front(num_tiles_per_block);
-    cb_ex_partial2_obj.push_back(block_h);
+    // RMS E(x2) #Layernorm //E(x) and E(x^2)
+    compute_kernel_lib::
+        reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            cb_x2,
+            cb_scaler,
+            cb_ex_partial2,
+            compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+            compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {
         cb_scaler_global_obj.wait_front(1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         pack_reconfig_data_format(cb_reduction_out);
         experimental::CircularBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
@@ -219,7 +197,7 @@ void kernel_main() {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_ex_external2_obj.wait_front(1);
-                reduce_tile(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                     cb_ex_external2,
                     cb_scaler_global,
                     0,

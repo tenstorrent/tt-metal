@@ -8,6 +8,8 @@
 #include "api/compute/mask.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -16,7 +18,7 @@ void kernel_main() {
     uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
-    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
@@ -32,39 +34,25 @@ void kernel_main() {
     int reduce_dst_idx = 0;
     const uint32_t mask_dst_idx = reduce_dst_idx + 1;
 
-    if (do_mask_h) {
+    if constexpr (do_mask_h) {
         cb_wait_front(cb_mask_h, onetile);
     }
 
-    uint32_t count = 0;
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            cb_input = tt::CBIndex::c_0;
             bool is_h_single_tile = (Ht == 1);
 
+            // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                tile_regs_acquire();
-                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
-                for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
-                    cb_wait_front(cb_input, onetile);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    cb_pop_front(cb_input, onetile);
-                }
-                reduce_uninit();
-                cb_reserve_back(cb_accum_dst, onetile);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
-                tile_regs_release();
-
-                cb_push_back(cb_accum_dst, onetile);
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
             }
 
-            if (do_mask_h) {
+            // Optional masking of last H tile
+            if constexpr (do_mask_h) {
                 tile_regs_acquire();
                 cb_wait_front(cb_input, onetile);
                 copy_tile_init_with_dt(cb_input);
@@ -84,36 +72,31 @@ void kernel_main() {
                 cb_push_back(cb_masked_input, onetile);
 
                 cb_pop_front(cb_input, onetile);
-                cb_input = cb_masked_input;
-            }
 
-            tile_regs_acquire();
-            cb_wait_front(cb_input, onetile);
-            if (!is_h_single_tile) {
-                cb_wait_front(cb_accum_dst, onetile);
-                copy_tile_init_with_dt(cb_accum_dst);
-                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
-            }
-
-            reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_uninit();
-            tile_regs_commit();
-
-            cb_reserve_back(cb_out, onetile);
-            tile_regs_wait();
-            pack_tile_with_dt(reduce_dst_idx, cb_out);
-            tile_regs_release();
-            cb_push_back(cb_out, onetile);
-
-            cb_pop_front(cb_input, onetile);
-            if (!is_h_single_tile) {
-                cb_pop_front(cb_accum_dst, onetile);
+                // Phase 2 with masked input: Reduce final masked tile with accumulation
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_masked_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            } else {
+                // Phase 2 without masking: Reduce final tile with accumulation
+                // - If Ht == 1 (single tile): iteration=0, no accumulator reload
+                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }
 
-    if (do_mask_h) {
+    if constexpr (do_mask_h) {
         cb_pop_front(cb_mask_h, onetile);
     }
     cb_pop_front(cb_scaler, onetile);

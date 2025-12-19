@@ -106,7 +106,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
     std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
-    auto reduce_op = ReduceOpMath::SUM;
+    auto reduce_op = ReduceOpMath::AVG;
     auto reduce_dim = ReduceOpDim::W;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
