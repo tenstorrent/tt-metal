@@ -29,6 +29,7 @@ class Qwen25VlContext:
     device: ttnn.MeshDevice
     tp_axis: int | None
     ccl_manager: CCLManager | None
+    fsdp_mesh_axis: int | None = None
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
@@ -49,13 +50,26 @@ class Qwen25VlTextEncoder(Module):
         device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
+        is_fsdp: bool = False,
     ) -> None:
         super().__init__()
+
+        # FSDP: For encoders, we can only use FSDP if there's a separate axis from TP.
+        # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
+        # has size > 1. If the mesh is 1xN, FSDP can't be enabled because there's no second axis.
+        fsdp_mesh_axis = None
+        if is_fsdp and parallel_config is not None:
+            tp_axis = parallel_config.tensor_parallel.mesh_axis
+            # Check if there's a different axis that can be used for FSDP
+            other_axis = 1 - tp_axis  # If TP is on axis 1, check axis 0; if TP is on axis 0, check axis 1
+            if device.shape[other_axis] > 1:
+                fsdp_mesh_axis = other_axis
 
         ctx = Qwen25VlContext(
             device=device,
             tp_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else None,
             ccl_manager=ccl_manager,
+            fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -235,9 +249,17 @@ class Qwen25VlAttention(Module):
             (padded_heads + 2 * opt_group_count) * head_dim,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
         )
         self.o_proj = ColParallelLinear(
-            padded_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+            padded_heads * head_dim,
+            hidden_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
         )
 
         self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -390,10 +412,22 @@ class Qwen25VlMlp(Module):
 
         # intermediate_size is much greater than hidden_size
         self.gate_proj = ColParallelLinear(
-            hidden_size, intermediate_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+            hidden_size,
+            intermediate_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
         )
         self.up_proj = ColParallelLinear(
-            hidden_size, intermediate_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
+            hidden_size,
+            intermediate_size,
+            bias=False,
+            mesh_device=ctx.device,
+            mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
+            ccl_manager=ctx.ccl_manager,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -401,6 +435,7 @@ class Qwen25VlMlp(Module):
             bias=False,
             mesh_device=ctx.device,
             mesh_axis=ctx.tp_axis,
+            fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
         )
 

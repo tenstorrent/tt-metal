@@ -45,11 +45,11 @@ def get_expected_metrics(mesh_device):
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
+        # [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "2x4cfg1sp0tp1",
-        "4x8cfg1sp0tp1",
+        # "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )

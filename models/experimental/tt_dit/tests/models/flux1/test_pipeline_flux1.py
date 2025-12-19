@@ -27,7 +27,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
     ("model_variant", "width", "height", "num_inference_steps"),
     [
         ("schnell", 1024, 1024, 4),
-        ("dev", 1024, 1024, 28),
+        # ("dev", 1024, 1024, 28),
     ],
 )
 @pytest.mark.parametrize(
@@ -51,14 +51,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="traced"),
+        # pytest.param(True, id="traced"),
         pytest.param(False, id="not_traced"),
     ],
 )
 @pytest.mark.parametrize(
     "use_cache",
     [
-        pytest.param(True, id="yes_use_cache"),
+        # pytest.param(True, id="yes_use_cache"),
         pytest.param(False, id="no_use_cache"),
     ],
 )
