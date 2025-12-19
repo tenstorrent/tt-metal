@@ -12,6 +12,7 @@ import torch.nn as nn
 import ttnn
 
 # Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
@@ -75,19 +76,8 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
     "mode, seq_len",
     [
         ("decode", 128),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128),
-        ("prefill", 256),
-        ("prefill", 512),
-        ("prefill", 1024),
-        ("prefill", 2048),
-        ("prefill", 4096),
-        ("prefill", 8192),
-        ("prefill", 16384),
-        ("prefill", 32768),
-        ("prefill", 65536),
-        ("prefill", 131072),
-    ],
+    ]
+    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
 @pytest.mark.parametrize(
     "weight_type",
@@ -110,11 +100,10 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
-    # Known issue: MoE sparse_matmul OOM for long sequence lengths.
-    if mode == "prefill" and seq_len > 32768:
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and batch_size_or_seq_len != 128:
         pytest.skip(
-            f"Known issue: DeepSeek-V3 MoE sparse_matmul OOM for prefill seq_len={seq_len} (>32768); "
-            "see https://github.com/tenstorrent/tt-metal/issues/34309"
+            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
         )
 
     batch_size = 1

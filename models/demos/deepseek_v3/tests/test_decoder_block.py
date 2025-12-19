@@ -10,6 +10,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
@@ -315,19 +316,8 @@ def run_test_forward_pass_decoder2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, 32),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128, 1),
-        ("prefill", 256, 1),
-        ("prefill", 512, 1),
-        ("prefill", 1024, 1),
-        ("prefill", 2048, 1),
-        ("prefill", 4096, 1),
-        ("prefill", 8192, 1),
-        ("prefill", 16384, 1),
-        ("prefill", 32768, 1),
-        ("prefill", 65536, 1),
-        ("prefill", 131072, 1),
-    ],
+    ]
+    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock1DBase],
@@ -346,11 +336,10 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Known issue: MoE sparse_matmul OOM for long sequence lengths.
-    if mode == "prefill" and seq_len > 32768:
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and batch_size_or_seq_len != 128:
         pytest.skip(
-            f"Known issue: DeepSeek-V3 MoE sparse_matmul OOM for prefill seq_len={seq_len} (>32768); "
-            "see https://github.com/tenstorrent/tt-metal/issues/34309"
+            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
         )
     test_closure(
         DecoderBlockClass,

@@ -90,7 +90,7 @@ class DeepseekGenerator:
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 131072  # TODO: Change this when needed?
+        self.hf_config.max_seq_len = 131072
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:

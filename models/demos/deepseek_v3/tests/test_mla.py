@@ -11,6 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -411,19 +412,8 @@ def run_test_forward_pass_mla2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, USERS_PER_ROW),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128, 1),
-        ("prefill", 256, 1),
-        ("prefill", 512, 1),
-        ("prefill", 1024, 1),
-        ("prefill", 2048, 1),
-        ("prefill", 4096, 1),
-        ("prefill", 8192, 1),
-        ("prefill", 16384, 1),
-        ("prefill", 32768, 1),
-        ("prefill", 65536, 1),
-        ("prefill", 131072, 1),
-    ],
+    ]
+    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -457,9 +447,11 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Skip all prefill seq lengths except 128
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
     if mode == "prefill" and seq_len != 128:
-        pytest.skip(f"Skipping prefill with seq_len={seq_len}, only keeping prefill 128")
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
 
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
