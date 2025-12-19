@@ -188,7 +188,10 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     // Process the last tile
-    cb_wait_front(cb_in, 1);
+    // Reader is sending full blocks, so we need to stay in sync.
+    // wait/pop the last tile + any remaining in the last block
+    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
+    cb_wait_front(cb_in, num_to_sync);
     transpose_wh_tile(cb_in, 0, input_dst);
 
     if constexpr (is_last_tile_full) {
@@ -202,10 +205,6 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     tile_regs_commit();
 
-    // Reader is sending full blocks, so we need to stay in sync.
-    // Pop the last tile + any remaining in the last block
-    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
-    cb_wait_front(cb_in, num_to_sync);
     cb_pop_front(cb_in, num_to_sync);
 }
 
