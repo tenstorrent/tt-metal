@@ -135,7 +135,6 @@ def run_conv_transpose2d(
             mirror_kernel=mirror_kernel,
             input_dtype=activations_dtype,
             dram_slice_config=dram_slice_config,
-            output_dtype=activations_dtype,
         )
 
         tt_bias_tensor = (
@@ -159,7 +158,6 @@ def run_conv_transpose2d(
                 compute_config=compute_config,
                 input_dtype=activations_dtype,
                 dram_slice_config=dram_slice_config,
-                output_dtype=activations_dtype,
             )
             if has_bias
             else None

@@ -319,7 +319,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         return prepare_conv_weights(
             mirrored_weight_tensor,
             input_memory_config,
-            Layout::ROW_MAJOR,
+            dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
             weights_format,
             in_channels,
             out_channels,

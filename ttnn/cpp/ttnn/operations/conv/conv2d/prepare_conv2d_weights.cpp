@@ -1150,7 +1150,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     // Conv1D doesn't support DRAM
     bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
-    if (is_dram_conv && !mm_conv /*DRAM with Mamtul doesn't need slicing*/) {
+    if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
