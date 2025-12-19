@@ -23,6 +23,7 @@ on:
 
 jobs:
   single-card-demo-tests:
+    if: ${{ inputs.runner-label == 'P100' || inputs.runner-label == 'P150' }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,15 +49,9 @@ jobs:
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
             cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
             owner_id: U06ECNVR0EN # Evan Smal
-          },
-          { # This test shall be executed on the BH with 20 cores
-            name: "panoptic_deeplab demo",
-            arch: blackhole,
-            runs-on: "tt-ubuntu-2204-p150b-viommu-stable",
-            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo',
-            owner_id: U08AWRT6U3E # Boris Janjic
           }
         ]
+
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs-on }}
     container:
@@ -130,3 +125,64 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  single-card-p150-demo-tests:
+    if: ${{ inputs.runner-label == 'p150b' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+            { # This test shall be executed on the BH with 20 cores
+              name: "panoptic_deeplab demo - 20 cores",
+              arch: blackhole,
+              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo',
+              owner_id: U09LK84G4TF # Nikola Milicevic
+            },
+            { # This test shall be executed on the BH P150 on 130 cores
+              name: "panoptic_deeplab demo - 130 cores",
+              arch: blackhole,
+              cmd: 'pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo',
+              owner_id: U09LK84G4TF # Nikola Milicevic
+            },
+          ]
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch_name }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Run frequent reg tests scripts
+        timeout-minutes: 180
+        run: ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
