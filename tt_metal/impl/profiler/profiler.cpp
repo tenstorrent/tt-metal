@@ -1049,11 +1049,12 @@ bool useFastDispatch(IDevice* device) {
     return MetalContext::instance().device_manager()->is_dispatch_firmware_active() && !isGalaxyMMIODevice(device);
 }
 
-void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
+void writeToCoreControlBuffer(
+    IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data, bool force_slow_dispatch) {
     ZoneScoped;
 
     const DeviceAddr control_vector_addr = getControlVectorAddress(device, virtual_core);
-    if (useFastDispatch(device)) {
+    if (useFastDispatch(device) && !force_slow_dispatch) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -1263,6 +1264,12 @@ void DeviceProfiler::resetControlBuffers(IDevice* device, const std::vector<Core
             control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0];
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] =
             control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0];
+        // Reset active indices to zero
+        this->active_dram_buffer_per_core_risc_map[virtual_core].clear();
+        log_info(
+            LogMetal,
+            "Reset control buffer {}",
+            core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0]);
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
@@ -2312,11 +2319,14 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
         temp_control_buffers[virtual_core] = core_control_buffers.at(virtual_core);
         bool index_0_present = false;
         bool index_1_present = false;
+        bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
 
         for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
-            if (risc_type == tracy::RiscType::TENSIX_RISC_AGG) {
+            if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                (!is_eth && risc_type == tracy::RiscType::ERISC)) {
                 continue;
             }
+
             const uint8_t active_dram_buffer_index =
                 this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type];
             index_0_present |= active_dram_buffer_index == 0;
@@ -2331,8 +2341,11 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
                 // This should match, otherwise it means something went out of sync with the host and device
                 TT_ASSERT(
                     dram_buffer_address == this->getProfilerDramBufferAddress(active_dram_buffer_index),
-                    "DRAM Buffer Address is not valid. Host and Device state mismatch. DRAM Buffer Address: {}, "
-                    "Expected DRAM Buffer Address: {}, Index: {}",
+                    "DRAM Buffer Address on risc {} virtual core {} is not valid. Host and Device state mismatch. DRAM "
+                    "buffer address on device: {}, "
+                    "Expected DRAM buffer address: {}, index: {}",
+                    enchantum::to_string(risc_type),
+                    virtual_core.str(),
                     dram_buffer_address,
                     this->getProfilerDramBufferAddress(active_dram_buffer_index),
                     active_dram_buffer_index);
@@ -2360,7 +2373,7 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
             virtual_cores_to_process_dram_index_1.push_back(virtual_core);
         }
 
-        writeToCoreControlBuffer(device, virtual_core, temp_control_buffers[virtual_core]);
+        writeToCoreControlBuffer(device, virtual_core, temp_control_buffers[virtual_core], true);
     }
 
     // Read DRAM buffers

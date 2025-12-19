@@ -314,6 +314,10 @@ public:
 
 bool useFastDispatch(IDevice* device);
 
-void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
+void writeToCoreControlBuffer(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const std::vector<uint32_t>& data,
+    bool force_slow_dispatch = false);
 
 }  // namespace tt::tt_metal

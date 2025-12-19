@@ -53,7 +53,8 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
-    // Used for device debug dump mode
+    // Used for device debug dump mode. Needs to come last in the control buffer
+    // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,
     DRAM_PROFILER_ADDRESS_NC_0,
     DRAM_PROFILER_ADDRESS_T0_0,
