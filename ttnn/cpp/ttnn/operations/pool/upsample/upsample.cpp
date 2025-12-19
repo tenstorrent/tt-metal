@@ -31,21 +31,12 @@ static MemoryConfig compute_bilinear_autoshard_memory_config(const ttnn::Tensor&
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     const uint32_t max_num_shards = batch_size * input_h * input_w;
     uint32_t num_shards = std::min(max_num_cores, max_num_shards);
-    while (num_shards > 0) {
-        /*
-        Operation currently requires that each core takes an equal number of input sticks,
-        and that the number of sticks per core is divisible by width, ie every core takes
-        whole rows as input. The below condition ensures that.
-        Maximizing the number of shards under said condition.
-        */
-        if (batch_size * input_h % num_shards == 0) {
-            break;
-        }
-        num_shards--;
-    }
+    // Calculate input shard with padding (like pool2d)
+    uint32_t total_input_sticks = batch_size * input_h * input_w;
+    uint32_t input_sticks_padded = tt::round_up(total_input_sticks, num_shards);
+    const uint32_t shard_height = input_sticks_padded / num_shards;
     const uint32_t num_cores = num_shards;
     const CoreRangeSet core_range_set = num_cores_to_corerangeset(num_cores, compute_grid_size, true);
-    const uint32_t shard_height = batch_size * input_h * input_w / num_cores;
     const uint32_t shard_width = num_channels;
     const auto shard_orientation = ShardOrientation::ROW_MAJOR;
     const auto shard_spec = ShardSpec(core_range_set, {shard_height, shard_width}, shard_orientation);
@@ -97,7 +88,6 @@ ttnn::Tensor ExecuteUpSample::invoke(
         }
         return output_tensor;
     }
-
     auto output_tensor = ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
     return output_tensor;
 }

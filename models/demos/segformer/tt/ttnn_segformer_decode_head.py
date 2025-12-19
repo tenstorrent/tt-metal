@@ -61,12 +61,7 @@ class TtSegformerDecodeHead:
                 encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
-            if encoder_hidden_state.shape[-2] == 16:
-                ncores = 16
-            elif encoder_hidden_state.shape[-2] == 32:
-                ncores = 32
-            else:
-                ncores = 64
+            ncores = 64
 
             shard_grid = get_shard_grid_from_num_cores(ncores, device)
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
@@ -78,8 +73,9 @@ class TtSegformerDecodeHead:
             input_memory_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-            encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
+
             encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
+            encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
 
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,

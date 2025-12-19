@@ -108,8 +108,19 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
             "Block sharded input should have only one CoreRange");
 
         auto shard_spec = args.output_mem_config.shard_spec().value();
-        shard_spec.shape = {
-            input.shard_spec()->shape[0] * args.scale_factor_h * args.scale_factor_w, input.shard_spec()->shape[1]};
+
+        if (args.mode == "bilinear") {
+            // Bilinear mode: Calculate output shard with padding (like pool2d) to handle non-exact work distribution
+            uint32_t num_cores = shard_spec.num_cores();
+            uint32_t total_output_sticks = out_n * out_h * out_w;
+            uint32_t output_sticks_padded = tt::round_up(total_output_sticks, num_cores);
+            uint32_t output_shard_height = output_sticks_padded / num_cores;
+            shard_spec.shape = {output_shard_height, input.shard_spec()->shape[1]};
+        } else {
+            // Nearest mode: Output shard is simply input shard multiplied by scale factors
+            shard_spec.shape = {
+                input.shard_spec()->shape[0] * args.scale_factor_h * args.scale_factor_w, input.shard_spec()->shape[1]};
+        }
         MemoryConfig mem_config = args.output_mem_config.with_shard_spec(shard_spec);
         return TensorSpec(output_shape, TensorLayout(output_data_type, PageConfig(output_layout), mem_config));
     }

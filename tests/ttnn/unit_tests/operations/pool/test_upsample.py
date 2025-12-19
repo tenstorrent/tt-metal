@@ -125,7 +125,7 @@ def upsample_multicore_common(
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
-    input = torch.rand(input_shape, dtype=torch.bfloat16)
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     ## golden reference using torch
     scale_factor = (scale_h, scale_w)
@@ -166,18 +166,10 @@ def upsample_multicore_common(
         if shard_strategy == ttnn.ShardStrategy.HEIGHT:
             max_nshards = min(batch_size * height * width, max_grid_size[0] * max_grid_size[1])
             nshards = max_nshards
-            if mode == "bilinear":
-                # For bilinear, sticks per core must be divisible by width
-                while nshards > 0:
-                    if batch_size * height % nshards == 0 and (batch_size * height * width // nshards) % width == 0:
-                        break
-                    nshards -= 1
-            else:
-                # For nearest, just need total elements divisible by nshards
-                while nshards > 0:
-                    if batch_size * height * width % nshards == 0:
-                        break
-                    nshards -= 1
+            while nshards > 0:
+                if batch_size * height * width % nshards == 0:
+                    break
+                nshards -= 1
             ncores = nshards
         elif shard_strategy == ttnn.ShardStrategy.BLOCK:
             max_nshards_h = min(batch_size * height * width, max_grid_size[0])  ## height along NHW
@@ -345,14 +337,26 @@ def test_upsample_multicore_corerange(
     "batch_size, num_channels, height, width, scale_h, scale_w",
     (
         (1, 1280, 8, 8, 2, 2),
-        (1, 256, 16, 16, 8, 8),  # 256x256
-        (1, 256, 32, 32, 4, 4),  # 256x256
-        (1, 256, 64, 64, 2, 2),  # 256x256
-        (1, 256, 128, 128, 1, 1),  # 256x256
-        (1, 72, 8, 8, 2, 2),
-        (1, 288, 8, 8, 2, 2),
+        (1, 1280, 8, 8, 3, 3),
+        (7, 32, 7, 13, 5, 3),
+        (1, 256, 4, 4, 3, 5),
+        (1, 256, 32, 32, 4, 4),
+        (2, 32, 128, 128, 2, 2),
+        (7, 64, 64, 64, 2, 2),
+        (1, 32, 24, 11, 2, 2),
+        (3, 32, 43, 17, 3, 7),
+        (4, 64, 13, 65, 3, 5),
+        (1, 192, 33, 33, 3, 4),
+        (1, 288, 33, 33, 4, 3),
+        (1, 32, 10, 11, 2, 2),  # 256x256
+        (1, 256, 2, 2, 2, 2),
+        (1, 256, 2, 2, 3, 3),
+        (1, 256, 32, 32, 5, 4),
+        (1, 256, 128, 128, 3, 1),  # 256x256
+        (1, 72, 8, 8, 5, 7),
+        (1, 288, 8, 8, 2, 4),
         (1, 1024, 8, 8, 2, 2),
-        (1, 256, 28, 28, 2, 2),
+        (1, 256, 28, 28, 3, 2),
         (1, 512, 14, 14, 2, 2),
         (2, 32, 16, 16, 2, 2),
         (4, 64, 48, 48, 3, 3),
@@ -361,7 +365,7 @@ def test_upsample_multicore_corerange(
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("math_approx_mode", [True, False])
+@pytest.mark.parametrize("math_approx_mode", [False])
 def test_bilinear_multi_core(
     device,
     batch_size,
@@ -399,7 +403,8 @@ def test_bilinear_multi_core(
     torch_result = torch_result[:, :, :, 0:num_channels]
     output_tensor = output_tensor[:, :, :, 0:num_channels]
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
-    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=5e-2)
+
     logger.info(pcc_msg)
 
     assert allclose

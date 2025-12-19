@@ -27,7 +27,8 @@ namespace ttnn::operations::pool::upsample::program {
 using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
-Tensor HaloTensorCreation(const Tensor& input) {
+std::pair<Tensor, SlidingWindowConfig> HaloTensorCreation(
+    const Tensor& input, uint32_t scale_factor_h, uint32_t scale_factor_w) {
     int batch_size = input.padded_shape()[0];
     int input_height = input.padded_shape()[1];
     int input_width = input.padded_shape()[2];
@@ -40,8 +41,10 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .input_hw = {input_height, input_width},
         .window_hw = {2, 2},        // kernel size
         .stride_hw = {1, 1},        // stride
-        .padding = {{1, 1, 0, 0}},  // padding
+        .padding = {{1, 1, 1, 1}},  // padding (all sides)
         .dilation_hw = {1, 1},      // dilation
+        .scale_h = scale_factor_h,  // upsampling scale factor height
+        .scale_w = scale_factor_w,  // upsampling scale factor width
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
         .core_range_set = input_tensor.memory_config().shard_spec().value().grid,
@@ -52,10 +55,9 @@ Tensor HaloTensorCreation(const Tensor& input) {
     Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output =
-        ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
+    auto halo_output = ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config());
 
-    return halo_output;
+    return {halo_output, sliding_window_config};
 }
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
@@ -69,7 +71,6 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     Program program = tt::tt_metal::CreateProgram();
-    IDevice* device = input.device();
 
     auto input_shape = input.padded_shape();
     auto output_shape = output.padded_shape();
@@ -84,10 +85,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     uint32_t output_stick_nbytes = output.padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.physical_volume() / output.padded_shape()[-1];
-    uint32_t input_nsticks = input.physical_volume() / input.padded_shape()[-1];
-
-    uint32_t batch_size = input.padded_shape()[0];
+    // uint32_t batch_size = input.padded_shape()[0];
     uint32_t in_h = input.padded_shape()[1];
     uint32_t in_w = input.padded_shape()[2];
     uint32_t out_w = output.padded_shape()[2];
@@ -98,7 +96,6 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
-    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
     uint32_t ncores_nhw = ncores;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     uint32_t input_block_size_bytes = input_stick_nbytes;
@@ -112,43 +109,19 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         out_shard_spec.num_cores(),
         ncores);
 
-    uint32_t in_nsticks_per_core = shard_spec.shape[0];
-    uint32_t out_nsticks_per_core = in_nsticks_per_core * scale_factor_h * scale_factor_w;
-
-    // extra limitation to avoid post upsample step of resharding
-    if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(
-            in_nsticks_per_core % in_w == 0,
-            "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this "
-            "restriction",
-            in_nsticks_per_core,
-            in_w);
-    } else {
-        TT_FATAL(false, "Unsupported sharding layout");
+    // Validate sharding layout support
+    if (input.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_FATAL(false, "Only HEIGHT_SHARDED layout is currently supported");
     }
 
-    uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
-    uint32_t output_nsticks_per_core = div_up(output_nsticks, ncores_nhw);
-
-    TT_FATAL(
-        in_nsticks_per_core == input_nsticks_per_core,
-        "Input sticks per shard {} should be same as input sticks per core {}",
-        in_nsticks_per_core,
-        input_nsticks_per_core);
-    TT_FATAL(
-        out_nsticks_per_core == output_nsticks_per_core,
-        "Output sticks per shard {} should be same as output sticks per core {}",
-        out_nsticks_per_core,
-        output_nsticks_per_core);
-    TT_FATAL(
-        input_nsticks_per_core % in_w == 0,
-        "Input sticks per core ({}) must be divisible by input width ({})",
-        input_nsticks_per_core,
-        in_w);
+    // Removed TT_FATAL checks for perfect divisibility - now supports uneven work distribution
 
     // creating halo input tensor
-    auto halo_in = HaloTensorCreation(input);
+    auto [halo_in, sliding_window_config] = HaloTensorCreation(input, scale_factor_h, scale_factor_w);
     auto halo_shard_shape = halo_in.shard_spec().value().shape;
+
+    // Generate op trace metadata for calculating min input offsets
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata_bilinear(sliding_window_config);
 
     // CBs
     using tt::tt_metal::CBHandle;
@@ -210,12 +183,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
-    log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
-    log_debug(
-        LogOp,
-        "input_nsticks_per_core: {}, output_nsticks_per_core: {}",
-        input_nsticks_per_core,
-        output_nsticks_per_core);
+    log_debug(LogOp, "ncores: {}", ncores);
 
     // Kernels
     // computation needed for the bilinear kernel. Passing them as an argument.
@@ -227,7 +195,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
     float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
-    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
+    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) + 0.5f;  // Now +0.5f due to left padding
 
     // Convert to fixed-point Q16.16 format for kernel
     int32_t scale_h_inv_fixed = (int32_t)(scale_h_inv * FIXED_ONE);
@@ -245,44 +213,42 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         std::ceil((float)(input_shape[3]) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH));
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_stick_nbytes,             // [0] stick_nbytes
-        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
-        scale_factor_h,                 // [2] scale_h
-        scale_factor_w,                 // [3] scale_w
-        in_w,                           // [4] in_w
-        out_w,                          // [5] out_w
-        in_h,                           // [6] in_h
-        halo_cb_id,                     // [7] halo_cb_id
-        tilize_reduce_cb_0,             // [8] tilize_reduce_cb_0
-        in_scalar_cb_id1,               // [9] in_scalar_cb_id
-        scale_h_inv_u32,                // [10] scale_h_inv_comp
-        scale_w_inv_u32,                // [11] scale_w_inv_comp
-        y_index_u32,                    // [12] y_starting_coordinate_u32
-        x_index_compute_u32,            // [13] x_starting_coordinate_u32
-        1,                              // [14] is_reader
-        num_input_width_blocks,         // [15] blocks
-        input_block_size_bytes,         // [16] input_block_size_bytes
+        input_stick_nbytes,      // [0] stick_nbytes
+        scale_factor_h,          // [1] scale_h (removed in_image_rows_per_core)
+        scale_factor_w,          // [2] scale_w
+        in_w,                    // [3] in_w
+        out_w,                   // [4] out_w
+        in_h,                    // [5] in_h
+        halo_cb_id,              // [6] halo_cb_id
+        tilize_reduce_cb_0,      // [7] tilize_reduce_cb_0
+        in_scalar_cb_id1,        // [8] in_scalar_cb_id
+        scale_h_inv_u32,         // [9] scale_h_inv_comp
+        scale_w_inv_u32,         // [10] scale_w_inv_comp
+        y_index_u32,             // [11] y_starting_coordinate_u32
+        x_index_compute_u32,     // [12] x_starting_coordinate_u32
+        1,                       // [13] is_reader
+        num_input_width_blocks,  // [14] blocks
+        input_block_size_bytes,  // [15] input_block_size_bytes
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
         // Former runtime args (now compile-time)
-        input_stick_nbytes,             // [0] stick_nbytes
-        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
-        scale_factor_h,                 // [2] scale_h
-        scale_factor_w,                 // [3] scale_w
-        in_w,                           // [4] in_w
-        out_w,                          // [5] out_w
-        in_h,                           // [6] in_h
-        halo_cb_id,                     // [7] halo_cb_id
-        tilize_reduce_cb_1,             // [8] tilize_reduce_cb_1
-        in_scalar_cb_id2,               // [9] in_scalar_cb_id
-        scale_h_inv_u32,                // [10] scale_h_inv_comp
-        scale_w_inv_u32,                // [11] scale_w_inv_comp
-        y_index_u32,                    // [12] y_starting_coordinate_u32
-        x_index_compute_u32,            // [13] x_starting_coordinate_u32
-        0,                              // [14] is_reader (0 for writer)
-        num_input_width_blocks,         // [15] blocks
-        input_block_size_bytes,         // [16] input_block_size_bytes
+        input_stick_nbytes,      // [0] stick_nbytes
+        scale_factor_h,          // [1] scale_h (removed in_image_rows_per_core)
+        scale_factor_w,          // [2] scale_w
+        in_w,                    // [3] in_w
+        out_w,                   // [4] out_w
+        in_h,                    // [5] in_h
+        halo_cb_id,              // [6] halo_cb_id
+        tilize_reduce_cb_1,      // [7] tilize_reduce_cb_1
+        in_scalar_cb_id2,        // [8] in_scalar_cb_id
+        scale_h_inv_u32,         // [9] scale_h_inv_comp
+        scale_w_inv_u32,         // [10] scale_w_inv_comp
+        y_index_u32,             // [11] y_starting_coordinate_u32
+        x_index_compute_u32,     // [12] x_starting_coordinate_u32
+        0,                       // [13] is_reader (0 for writer)
+        num_input_width_blocks,  // [14] blocks
+        input_block_size_bytes,  // [15] input_block_size_bytes
     };
 
     std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
@@ -303,7 +269,6 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         1 * in_ntiles_c,
         4,  // Number of input rows required for tilize reduction is 4 as we are processing single output row at a time.
         (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
-        output_nsticks_per_core,  // loop count with blocks
         num_input_width_blocks,
         input_block_size_bytes,
     };
@@ -322,27 +287,77 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         .compile_args = compute_compile_time_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
 
-    CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    // runtime args - now only start_input_row_in_image_id remains
-    uint32_t reader_nargs = 1;
+    // runtime args - start_output_idx, min_input_offset, and work count per core
+    uint32_t reader_nargs = 3;
     std::vector<uint32_t> reader_rt_args(reader_nargs);
-    reader_rt_args[0] = 0;  // start_input_row_in_image_id: denotes the position (index) of the first row of the input
-                            // shard in its corresponding batch Note: the first row of the input shard corresponds to
-                            // the second row (index 1) in the halo shard
+    uint32_t compute_nargs = 1;
+    std::vector<uint32_t> compute_rt_args(compute_nargs);
 
-    uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
+    // Calculate work distribution based on output sticks
+    uint32_t batch_size = input.padded_shape()[0];
+    uint32_t total_output_sticks = batch_size * output.padded_shape()[1] * output.padded_shape()[2];
+    uint32_t max_out_sticks_per_core = div_up(total_output_sticks, ncores_nhw);
 
-    uint32_t start_input_row_in_image_id = 0;
+    log_debug(
+        LogOp, "total_output_sticks: {}, max_out_sticks_per_core: {}", total_output_sticks, max_out_sticks_per_core);
+
+    uint32_t start_output_idx = 0;
 
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-        for (int32_t core = 0; core < ncores_nhw; ++core) {
-            CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
-            reader_rt_args[0] = start_input_row_in_image_id;         // Now at index 0 (only runtime arg)
+        // Get logical cores in the correct order based on shard orientation
+
+        auto logical_cores = corerange_to_cores(
+            shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+        uint32_t total_sticks_processed = 0;
+
+        for (uint32_t i = 0; i < logical_cores.size(); ++i) {
+            const auto& core_coord = logical_cores[i];
+
+            // Calculate actual output sticks for this core
+            uint32_t out_sticks_this_core =
+                std::min(max_out_sticks_per_core, total_output_sticks - total_sticks_processed);
+
+            // Calculate the output range for this core
+            uint32_t output_index_start = start_output_idx;
+            uint32_t output_index_end =
+                std::min(output_index_start + out_sticks_this_core, (uint32_t)op_trace_metadata.size()) - 1;
+
+            // Find the minimum input index for this core's output range
+            if (out_sticks_this_core == 0) {
+                // No work for this core
+                reader_rt_args[0] = start_output_idx;
+                reader_rt_args[1] = 0;
+                reader_rt_args[2] = 0;  // No work
+                SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+                SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
+
+                compute_rt_args[0] = 0;  // No work
+                SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
+
+                continue;
+            }
+            auto [min_trace_idx, max_trace_idx] =
+                sliding_window::find_minmax_trace_indices(op_trace_metadata, output_index_start, output_index_end);
+            uint32_t min_input_offset = op_trace_metadata[min_trace_idx];
+
+            // Set runtime arguments for reader/writer
+            reader_rt_args[0] = start_output_idx;
+            reader_rt_args[1] = min_input_offset;
+            reader_rt_args[2] = out_sticks_this_core;  // NEW: actual work for this core
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
-            start_input_row_in_image_id += num_rows_per_core;
-            start_input_row_in_image_id %= in_h;
+
+            // Set runtime arguments for compute kernel
+            compute_rt_args[0] = out_sticks_this_core;  // Work count for this core
+            SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
+
+            // Next core starts where this core ends
+            start_output_idx += out_sticks_this_core;
+
+            total_sticks_processed += out_sticks_this_core;
         }
     } else {
         TT_FATAL(false, "Unsupported memory layout");
@@ -369,7 +384,8 @@ void UpsampleBilinearProgramFactory::override_runtime_arguments(
 
     const auto& input_tensor = tensor_args.input_tensor;
 
-    auto halo_in = HaloTensorCreation(input_tensor);
+    auto [halo_in, _] =
+        HaloTensorCreation(input_tensor, operation_attributes.scale_factor_h, operation_attributes.scale_factor_w);
     auto* src_buffer = halo_in.buffer();
     auto* dst_buffer = output_tensor.buffer();
 
