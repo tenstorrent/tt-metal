@@ -9,8 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
-#include "ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }

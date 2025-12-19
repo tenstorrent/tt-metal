@@ -8,8 +8,8 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);

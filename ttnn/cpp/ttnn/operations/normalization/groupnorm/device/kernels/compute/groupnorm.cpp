@@ -18,8 +18,9 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -311,53 +312,44 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
                 // Partial/E[x]
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, cb_ex_partial);
-                cb_reserve_back(cb_ex_partial, 1);
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler, 1);
                 cb_wait_front(cb_x, out_block_hw_normal);
-
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_partial);
-                tile_regs_release();
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_x,
+                    cb_scaler,
+                    cb_ex_partial,
+                    out_block_h_actual,  // Ht
+                    block_w,             // Wt
+                    1);                  // num_batches
                 cb_pop_front(cb_x, out_block_hw_normal);
-                cb_push_back(cb_ex_partial, 1);
-                reduce_uninit<FP32_DEST_ACC>();
 
                 cb_wait_front(cb_ex_partial, 1);
             }
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
+                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    cb_ex_external_tiles_required,  // Ht (treat as column of tiles)
+                    1,                              // Wt
+                    1);                             // num_batches
+                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex, 1);
-                }
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
-                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                        cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
-                }
-                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex_global, 1);
-                if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex, 1);
                 }
             }
@@ -462,50 +454,42 @@ void kernel_main() {
                 cb_push_back(cb_xmm, out_block_hw_normal);
 
                 // Partial-Var(x)
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, cb_ex2_partial);
-                cb_reserve_back(cb_ex2_partial, 1);
-                tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
-                cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2_partial);
-                tile_regs_release();
-                cb_push_back(cb_ex2_partial, 1);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_xmm,
+                    cb_scaler,
+                    cb_ex2_partial,
+                    out_block_h_actual,  // Ht
+                    block_w,             // Wt
+                    1);                  // num_batches
                 cb_pop_front(cb_xmm, out_block_hw_normal);
-                reduce_uninit<FP32_DEST_ACC>();
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex2_global);
-                cb_reserve_back(cb_ex2_global, 1);
+                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex2_global,
+                    cb_ex_external_tiles_required,  // Ht (treat as column of tiles)
+                    1,                              // Wt
+                    1);                             // num_batches
+                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex2, 1);
-                }
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);  // TODO DELETE THIS AND ADD POP
-                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
-                        cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
-                }
-                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2_global);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex2_global, 1);
-                if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex2, 1);
                 }
             }

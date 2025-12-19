@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/tilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);

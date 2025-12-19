@@ -7,7 +7,7 @@
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "common.cpp"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
 #ifdef DST_ACCUM_MODE

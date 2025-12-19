@@ -23,7 +23,7 @@
  * start of your kernel before using any tilize functions.
  *
  * Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+ *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
  *
  *   // Initialize compute kernel hardware FIRST
  *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
