@@ -65,7 +65,7 @@ def dump_risc_debug_signals(
                 # Make sure that l1 address we are using is in the first 1MiB of the L1 cache (required for reading groups)
                 assert firmware_text_address < 0x100000
 
-                # Since we are rewritting the firmware text, we need to read the original data to restore it later
+                # Since we are rewriting the firmware text, we need to read the original data to restore it later
                 original_data = read_words_from_device(location, firmware_text_address, word_count=4)
 
                 l1_address = firmware_text_address

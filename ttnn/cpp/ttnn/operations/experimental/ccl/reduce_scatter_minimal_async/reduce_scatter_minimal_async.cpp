@@ -5,6 +5,7 @@
 #include "reduce_scatter_minimal_async.hpp"
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -31,13 +32,20 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    log_debug(tt::LogOp, "reduce_scatter_minimal_async: num_devices = {}", num_devices);
+    // Convert Ring to Linear for 2-device configs where wrapping is not possible
+    ttnn::ccl::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+
+    log_debug(
+        tt::LogOp,
+        "reduce_scatter_minimal_async: num_devices = {}, usable_topology = {}",
+        num_devices,
+        usable_topology);
 
     // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
         return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links, topology, memory_config, sub_device_id, cluster_axis);
+            input_tensor, dim, num_links, usable_topology, memory_config, sub_device_id, cluster_axis);
     }
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
@@ -65,7 +73,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         num_devices,
         memory_config.value_or(input_tensor.memory_config()),
         intermediate_memory_config,
-        topology,
+        usable_topology,
         multi_device_global_semaphore,
         barrier_semaphore,
         using_persistent_buffers,
