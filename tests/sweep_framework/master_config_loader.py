@@ -805,7 +805,8 @@ class MasterConfigLoader:
                     # Track unique shapes
                     shape_tuple = tuple(cfg["shape"])
                     if shape_tuple not in seen_shapes:
-                        unique_shapes.append(cfg["shape"])
+                        # Convert to tuple so it serializes as a string for proper deserialization
+                        unique_shapes.append(shape_tuple)
                         seen_shapes.add(shape_tuple)
 
                     dtypes.add(cfg["dtype"])
@@ -930,7 +931,8 @@ class MasterConfigLoader:
                     if invalid_reasons:
                         invalid_configs.append({"index": idx, "shape": shape, "reasons": invalid_reasons})
 
-                    input_shapes.append(cfg["shape"])
+                    # Convert shape to tuple so it serializes as a string for proper deserialization
+                    input_shapes.append(tuple(cfg["shape"]))
                     input_a_dtypes.append(cfg["dtype"])
                     input_a_layouts.append(cfg["layout"])
                     input_a_memory_configs.append(cfg["memory_config"])
