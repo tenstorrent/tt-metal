@@ -49,19 +49,21 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        auto& shared_variables = cached_workload.shared_variables.at(range);
         strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
             shared_variables.ag_shared_variables,
             program,
             attributes.strided_all_gather_async_struct,
             ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
             output_tensor.at(0));
-        minimal_matmul::program::helpers::override_program_parameters(
-            shared_variables.mm_shared_variables,
-            &attributes.matmul_struct,
-            program,
-            {output_tensor.at(0), tensor_args.weight_tensor},
-            {tensor_args.bias, tensor_args.input_tensor},
+
+        auto cached_program_proxy = minimal_matmul::program::MinimalMatmulProgramFactory::cached_program_t::proxy(
+            program, shared_variables.mm_shared_variables);
+
+        minimal_matmul::program::MinimalMatmulProgramFactory::override_runtime_arguments(
+            cached_program_proxy,
+            attributes.matmul_struct,
+            {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
             {output_tensor.at(1)});
     }
 }

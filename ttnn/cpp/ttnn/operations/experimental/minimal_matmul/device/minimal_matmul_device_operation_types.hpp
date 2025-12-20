@@ -35,6 +35,7 @@ struct tensor_args_t {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
+    std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
 };
 
 using spec_return_value_t = TensorSpec;

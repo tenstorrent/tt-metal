@@ -694,8 +694,9 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     auto output_addr = tensor_return_value.buffer()->address();
     auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
 
-    // minimal_matmul via DeviceOperation doesn't support fused_op_signaler logic for now, so in3 is 0
-    auto in3_addr = 0;
+    auto in3_addr = tensor_args.optional_input_tensor.has_value() && override_variables.read_local_slice_from_input
+                        ? tensor_args.optional_input_tensor.value().buffer()->address()
+                        : 0;
 
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
@@ -729,57 +730,5 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
         }
     }
 }
-
-namespace helpers {
-// Keep this if needed by other files (e.g. ccl op), otherwise it could be removed or deprecated.
-// The implementation is identical to override_runtime_arguments logic above but with vector inputs.
-void override_program_parameters(
-    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
-    const void* operation,
-    tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    auto in0_addr = input_tensors.at(0).buffer()->address();
-    auto in1_addr = input_tensors.at(1).buffer()->address();
-    auto output_addr = output_tensors.at(0).buffer()->address();
-    auto in2_addr =
-        optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-    auto in3_addr =
-        override_variables.read_local_slice_from_input ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
-    auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
-    auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
-    auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
-
-    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
-        CoreCoord core = override_variables.cores.at(i);
-        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
-        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
-        if (in1_idx == 0) {
-            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-            in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = output_addr;
-            in0_sender_args[2] = in2_addr;
-            in0_sender_args[3] = in3_addr;
-        } else {
-            auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[1] = output_addr;
-            in0_receiver_args[2] = in2_addr;
-        }
-        if (in0_idx == 0) {
-            auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-            in1_sender_args[0] = in1_addr;
-            in1_sender_args[1] = output_addr;
-            in1_sender_args[2] = in2_addr;
-        } else {
-            auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[1] = output_addr;
-            in1_receiver_args[2] = in2_addr;
-        }
-    }
-}
-
-}  // namespace helpers
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::program

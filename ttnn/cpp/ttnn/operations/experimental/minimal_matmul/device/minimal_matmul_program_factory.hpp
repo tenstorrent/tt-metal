@@ -35,18 +35,6 @@ struct MinimalMatmulProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-namespace helpers {
-// Keep this if needed by other files (e.g. ccl op), otherwise it could be removed or deprecated.
-// The implementation is identical to override_runtime_arguments logic above but with vector inputs.
-void override_program_parameters(
-    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
-    const void* operation,
-    tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors);
-}  // namespace helpers
-
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
