@@ -401,9 +401,6 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
     logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
 
-    logger.info(f"expert_mapping: {expert_mapping[2,:]}")
-    logger.info(f"expert_indices: {expert_indices[2,:,:,:]}")
-
     output_tokens, metadata, gathered_scores = ttnn.experimental.all_to_all_dispatch_selective_tilize(
         tt_input_tokens,
         tt_expert_indices,
@@ -416,18 +413,10 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"metadata shape: {metadata.shape}")
     logger.info(f"gathered_scores shape: {gathered_scores.shape}")
 
-    logger.info(f"input_tokens: {input_tokens}")
-    logger.info(f"output_tokens at device 2: {output_tokens[2,:,:]}")
-
-    # logger.info(f"expert_scores: {expert_scores}")
-    # logger.info(f"gathered_scores: {gathered_scores}")
-
-    # logger.info(f"output_tokens: {output_tokens}")
-    # logger.info(f"metadata: {metadata}")
-
-    golden_output_tokens, golden_metadata, golden_gathered_scores = get_a2a_dispatch_golden(
-        input_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
-    )
+    for _ in range(10):
+        golden_output_tokens, golden_metadata, golden_gathered_scores = get_a2a_dispatch_golden(
+            input_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+        )
     output_tokens = ttnn.to_torch(output_tokens, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
         tt_to_torch_dtype(dtype)
     )

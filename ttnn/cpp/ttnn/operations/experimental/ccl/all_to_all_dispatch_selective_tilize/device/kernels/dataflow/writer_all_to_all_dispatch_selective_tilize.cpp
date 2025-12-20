@@ -356,9 +356,6 @@ void kernel_main() {
     uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
     uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
 
-    DPRINT << "subtoken_offset: " << subtoken_offset << ENDL();
-    DPRINT << "subtoken_size: " << subtoken_size << ENDL();
-
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
@@ -498,13 +495,6 @@ void kernel_main() {
             uint16_t d = devices_for_experts[expert_chosen];
 
             if (send_preparation_buffer[(local_token * num_devices) + d] == 0) {
-                if (d == 2) {
-                    // print in this format:
-                    // target device 2, token 2, source device 0 (axis position 0), selected expert 4.
-                    DPRINT << "target device " << d << ", token " << local_token << ", source device " << dispatch_index
-                           << " (axis position " << dispatch_index << "), selected expert " << expert_chosen
-                           << " first value: " << BF16(*(uint16_t*)input_token_read_addr) << ENDL();
-                }
                 if (d == linearized_mesh_coord) {
                     // if the expert lives on the current device, we dispatch the input token to it
                     uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen) + subtoken_offset;
