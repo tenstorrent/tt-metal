@@ -46,10 +46,11 @@ endforeach()
 TT_ADD_INSPECTOR_RPC_SUPPORT(
     ttnn_core
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/core/inspector
+    CAPNPC_SRC_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector
     CAPNP_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp
-    IMPORT_CAPNP_SCHEMAS
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
+    CAPNPC_IMPORT_DIRS
+        ${PROJECT_SOURCE_DIR}/tt_metal/api
     RPC_CHANNEL_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp
 )
@@ -128,14 +129,7 @@ target_include_directories(
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
 )
-target_include_directories(
-    ttnn_core
-    SYSTEM
-    PRIVATE
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
-        ${CMAKE_CURRENT_BINARY_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/core/inspector
-)
+target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
     PUBLIC

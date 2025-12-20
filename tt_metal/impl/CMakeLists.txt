@@ -140,27 +140,14 @@ target_link_libraries(
 TT_ADD_INSPECTOR_RPC_SUPPORT(
     impl
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector
+    CAPNPC_SRC_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector
     CAPNP_SCHEMAS
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
+    CAPNPC_IMPORT_DIRS
+        ${PROJECT_SOURCE_DIR}/tt_metal/api
     RPC_CHANNEL_SCHEMAS
         ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/runtime_rpc.capnp
 )
-
-# Copy inspector_rpc.capnp.h to tt-metalium/include for public API access
-set(INSPECTOR_RPC_METALIUM_API_HEADER ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp.h)
-add_custom_command(
-    OUTPUT
-        ${INSPECTOR_RPC_METALIUM_API_HEADER}
-    COMMAND
-        ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h
-        ${INSPECTOR_RPC_METALIUM_API_HEADER}
-    DEPENDS
-        ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h
-    COMMENT
-        "Copying Cap'n Proto schema ${CMAKE_CURRENT_BINARY_DIR}/debug/inspector/inspector_rpc.capnp.h to ${INSPECTOR_RPC_METALIUM_API_HEADER}"
-)
-target_sources(impl PRIVATE ${INSPECTOR_RPC_METALIUM_API_HEADER})
 
 target_include_directories(
     impl
@@ -176,34 +163,3 @@ target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatb
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
-
-# Generate Inspector RPC stub file
-set(TRIAGE_INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
-set(TRIAGE_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/inspector_rpc.capnp)
-set(TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/runtime_rpc.capnp)
-set(TRIAGE_TTNN_INSPECTOR_RPC_CAPNP ${PROJECT_SOURCE_DIR}/tools/triage/ttnn_rpc.capnp)
-add_custom_command(
-    OUTPUT
-        ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
-    COMMAND
-        python3 ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_stub.py ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
-        ${TRIAGE_INSPECTOR_RPC_CAPNP} ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP} ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
-    DEPENDS
-        ${TRIAGE_INSPECTOR_RPC_CAPNP}
-        ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}
-        ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
-        ${PROJECT_SOURCE_DIR}/scripts/generate_rpc_stub.py
-    COMMENT
-        "Generating RPC stub for ${TRIAGE_INSPECTOR_RPC_CAPNP}, ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}, ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}"
-)
-add_custom_target(
-    inspector_rpc_stub
-    ALL
-    DEPENDS
-        ${TRIAGE_INSPECTOR_RPC_STUB_FILE}
-        ${TRIAGE_RUNTIME_INSPECTOR_RPC_CAPNP}
-        ${TRIAGE_TTNN_INSPECTOR_RPC_CAPNP}
-)
-
-# Optionally, ensure impl depends on the stub file
-add_dependencies(impl inspector_rpc_stub)

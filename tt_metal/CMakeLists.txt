@@ -26,6 +26,15 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
+# Add Cap'n Proto RPC support for Inspector
+TT_ADD_INSPECTOR_RPC_SUPPORT(
+    tt_metal
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/api
+    CAPNP_SCHEMAS
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
+    CAPNPC_SRC_PREFIX ${PROJECT_SOURCE_DIR}/tt_metal/api
+)
+
 set(TT_METAL_PUBLIC_API
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp

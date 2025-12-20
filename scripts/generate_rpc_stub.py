@@ -161,23 +161,23 @@ def fill_type_ids(schema, type_ids: dict[int, str], prefix: str = ""):
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: generate_rpc_stub.py <output_stub_file> <capnp_file>...")
+    if len(sys.argv) < 4:
+        print("Usage: generate_rpc_stub.py <output_stub_file> <import_dir>,... <capnp_file>...")
         sys.exit(0)
 
     output_stub_file = sys.argv[1]
-    capnp_files = sys.argv[2:]
+    import_dirs = sys.argv[2].split(",")
+    capnp_files = sys.argv[3:]
 
     try:
         # Import Cap'n Proto schema
         capnp.remove_import_hook()
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        parser = capnp.SchemaParser()
         modules = []
 
         type_ids: dict[int, str] = {}
         for capnp_file in capnp_files:
-            module = parser.load(capnp_file, imports=[os.path.dirname(p) for p in capnp.__path__])
+            parser = capnp.SchemaParser()
+            module = parser.load(capnp_file, imports=[os.path.dirname(p) for p in capnp.__path__] + import_dirs)
             fill_type_ids(module.schema, type_ids)
             modules.append(module)
 

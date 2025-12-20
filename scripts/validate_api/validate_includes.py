@@ -160,11 +160,6 @@ STD_HEADERS = {
     "wchar.h",
     "wctype.h",
     "unistd.h",
-    # Inspector RPC auto generated header by capnp
-    "inspector_rpc.capnp.h",
-    "capnp/generated-header-support.h",
-    "kj/windows-sanity.h",
-    "capnp/capability.h",
 }
 
 # Regex patterns
