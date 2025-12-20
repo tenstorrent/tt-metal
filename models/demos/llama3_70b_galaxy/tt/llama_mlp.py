@@ -168,17 +168,63 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(w3_out)
-
-        w2_in = ttnn.mul(
+        # 1. -x
+        x_neg = ttnn.multiply(
             w1_out_reduced,
-            w3_out_reduced,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            -1.0,
+            memory_config=w1_out_reduced.memory_config(),
             dtype=ttnn.bfloat16,
-            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        )
+        x_neg_interleaved = ttnn.sharded_to_interleaved(
+            x_neg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # or DRAM, but L1 is fine
         )
 
-        ttnn.deallocate(w3_out_reduced)
+        # 2. exp(-x)
+        x_exp = ttnn.exp(
+            x_neg_interleaved,
+            fast_and_approximate_mode=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=self.args.sub_core_grids,
+        )
+        ttnn.deallocate(x_neg_interleaved)
+
+        # 3. 1 + exp(-x)  (this is where sub_core_grids *does* apply)
+        x_exp_plus_one = ttnn.add(
+            x_exp,
+            1.0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=self.args.sub_core_grids,
+        )
+        ttnn.deallocate(x_exp)
+
+        x_exp_plus_one_sharded = ttnn.to_memory_config(x_exp_plus_one, w1_out_reduced.memory_config())
+
+        # 4. sigmoid(x) = 1 / (1 + exp(-x))
+        sigmoid_x_sharded = ttnn.reciprocal(
+            x_exp_plus_one_sharded,
+        )
+        ttnn.deallocate(x_exp_plus_one_sharded)
+
+        # 5. SiLU(x) = x * sigmoid(x)
+        w1_out_reduced_silu = ttnn.mul(
+            sigmoid_x_sharded,
+            w1_out_reduced,
+            memory_config=w1_out_reduced.memory_config(),
+            dtype=ttnn.bfloat16,  # or leave default
+        )
+        ttnn.deallocate(sigmoid_x_sharded)
         ttnn.deallocate(w1_out_reduced)
+
+        # 7. Now ff1ff3 = SiLU(w1) * w3 on sharded tensors
+        w2_in = ttnn.mul(
+            w1_out_reduced_silu,
+            w3_out_reduced,
+            dtype=ttnn.bfloat16,
+            memory_config=w3_out_reduced.memory_config(),
+        )
+        ttnn.deallocate(w1_out_reduced_silu)
+        ttnn.deallocate(w3_out_reduced)
 
         w2_out = ttnn.linear(
             w2_in,
