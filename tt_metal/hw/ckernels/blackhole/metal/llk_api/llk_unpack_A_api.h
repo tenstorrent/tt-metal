@@ -30,8 +30,7 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false,
-    bool disable_src_zero_flag = false>
+    bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -52,8 +51,7 @@ inline void llk_unpack_A_init(
         face_r_dim,
         num_faces,
         operand_unpack_src_format,
-        operand_unpack_dst_format,
-        disable_src_zero_flag);
+        operand_unpack_dst_format);
 }
 
 template <
