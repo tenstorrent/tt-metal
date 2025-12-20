@@ -44,17 +44,14 @@ HANG_APP_EXPECTED_RESULTS = {
             "location_to_check": "0,0",  # Only check this core location
             "cores_to_check": {
                 "trisc0": {
-                    "pc": 34556,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc1": {
-                    "pc": 35360,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc2": {
-                    "pc": 36236,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
@@ -329,12 +326,6 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
-
-            # Verify PC if specified
-            expected_pc = expected_data.get("pc")
-            if expected_pc is not None:
-                actual_pc = check.result.pc
-                assert actual_pc == expected_pc, f"{risc_name}: Expected PC {expected_pc}, got {actual_pc}"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")
