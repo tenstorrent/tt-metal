@@ -126,7 +126,7 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
@@ -134,12 +134,13 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+        w1_out_reduced = self.tt_ccl.line_all_reduce(
             w1_out,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            use_optimal_ccl_for_llama=False,
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(w1_out)
 
@@ -149,7 +150,7 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
@@ -158,37 +159,26 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+        w3_out_reduced = self.tt_ccl.line_all_reduce(
             w3_out,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            use_optimal_ccl_for_llama=False,
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(w3_out)
 
-        ff1ff3 = ttnn.mul(
+        w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
         )
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
-
-        w2_in = self.tt_ccl.line_all_gather(
-            ff1ff3,
-            dim=3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
-
-        ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
             w2_in,

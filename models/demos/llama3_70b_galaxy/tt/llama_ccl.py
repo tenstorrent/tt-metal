@@ -267,27 +267,27 @@ class TT_CCL:
         )
         persistent_buffers["SAMPLING"] = tt_buffer
 
-        # Binary Mult + Silu
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3584)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            if not self.is_qwen
-            else ttnn.from_torch(
-                torch.zeros((1, 1, self.max_batch_size, 3200)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        )
-        persistent_buffers["BINARY_MUL"] = tt_buffer
+        # # Binary Mult + Silu
+        # tt_buffer = (
+        #     ttnn.from_torch(
+        #         torch.zeros((1, 1, self.max_batch_size, 3584)),
+        #         device=self.mesh_device,
+        #         layout=ttnn.TILE_LAYOUT,
+        #         dtype=ttnn.bfloat8_b,
+        #         memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+        #         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        #     )
+        #     if not self.is_qwen
+        #     else ttnn.from_torch(
+        #         torch.zeros((1, 1, self.max_batch_size, 3200)),
+        #         device=self.mesh_device,
+        #         layout=ttnn.TILE_LAYOUT,
+        #         dtype=ttnn.bfloat8_b,
+        #         memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+        #         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        #     )
+        # )
+        # persistent_buffers["BINARY_MUL"] = tt_buffer
 
         return persistent_buffers
 
@@ -331,8 +331,9 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
-        num_input_cores_create_qkv = 10
-        N_per_shard = 1280 // num_input_cores_create_qkv * cluster_shape[cluster_axis]  # QKV
+        # num_input_cores_create_qkv = 10
+        # N_per_shard = 1280 // num_input_cores_create_qkv * cluster_shape[cluster_axis]  # QKV
+        N_per_shard = 3840 // 24 * cluster_shape[cluster_axis]  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -346,7 +347,7 @@ class TT_CCL:
             torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=buffer_mem_cfg,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
@@ -390,24 +391,24 @@ class TT_CCL:
 
         persistent_buffers = [[], []]
 
-        cluster_shape = (8, 4)
+        # cluster_shape = (8, 4)
 
-        # Create persistent buffers for cluster axis 1
-        cluster_axis = 1
-        buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
-        for _ in range(self.num_cbs):
-            tt_buffer = (
-                # 512 = 4 devices * 4 pages per packet * 32 tile_width
-                ttnn.from_torch(
-                    torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=buffer_mem_cfg,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-                )
-            )
-            persistent_buffers[cluster_axis].append(tt_buffer)
+        # # Create persistent buffers for cluster axis 1
+        # cluster_axis = 1
+        # buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        # for _ in range(self.num_cbs):
+        #     tt_buffer = (
+        #         # 512 = 4 devices * 4 pages per packet * 32 tile_width
+        #         ttnn.from_torch(
+        #             torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+        #             device=self.mesh_device,
+        #             layout=ttnn.TILE_LAYOUT,
+        #             dtype=ttnn.bfloat8_b,
+        #             memory_config=buffer_mem_cfg,
+        #             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        #         )
+        #     )
+        #     persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
 
