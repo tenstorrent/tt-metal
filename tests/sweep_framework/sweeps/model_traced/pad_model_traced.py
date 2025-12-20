@@ -122,21 +122,15 @@ def run(
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+    # NOTE: HOST storage type is not working properly for pad operation
+    # Always use DEVICE storage for now
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.pad(input_tensor_a, padding=padding, value=value)
