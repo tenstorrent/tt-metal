@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include "impl/program/program.hpp"
 #include <utility>
 #include <llrt/tt_cluster.hpp>
 

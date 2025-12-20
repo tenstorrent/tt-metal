@@ -21,6 +21,7 @@
 #include "impl/context/metal_context.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program.hpp"
 
 using namespace tt;
 

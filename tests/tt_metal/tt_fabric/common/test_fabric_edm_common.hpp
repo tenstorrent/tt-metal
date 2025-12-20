@@ -40,6 +40,7 @@
 #include <limits>
 
 #include <tt_metal/fabric/ccl/ccl_common.hpp>
+#include "impl/program/program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

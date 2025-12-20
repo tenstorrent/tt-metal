@@ -25,6 +25,7 @@
 
 // Access to internal API: ProgramImpl::finalize_offsets
 #include "impl/program/program_impl.hpp"
+#include "impl/program/program.hpp"
 
 namespace tt::tt_metal {
 

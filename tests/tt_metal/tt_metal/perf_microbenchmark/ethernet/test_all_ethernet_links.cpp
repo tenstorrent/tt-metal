@@ -38,6 +38,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/program/program.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

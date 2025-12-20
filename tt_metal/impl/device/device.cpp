@@ -45,6 +45,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "tt-metalium/program.hpp"
+#include "impl/program/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"

@@ -37,6 +37,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "impl/program/program.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

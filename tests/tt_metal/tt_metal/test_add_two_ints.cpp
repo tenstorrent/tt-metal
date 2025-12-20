@@ -27,6 +27,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
+#include "impl/program/program.hpp"
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1

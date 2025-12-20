@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

@@ -25,6 +25,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/program/program.hpp"
 
 namespace tt::tt_metal {
 
