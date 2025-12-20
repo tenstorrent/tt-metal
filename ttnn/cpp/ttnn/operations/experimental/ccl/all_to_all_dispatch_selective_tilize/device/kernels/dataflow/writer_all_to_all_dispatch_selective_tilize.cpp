@@ -374,7 +374,6 @@ void kernel_main() {
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
     constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
-    DPRINT << "dispatch_index: " << dispatch_index << ENDL();
     // Based on cluster axis, we only need to dispatch to the devices that are along the axis
     // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
     // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
@@ -477,7 +476,6 @@ void kernel_main() {
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
-    DPRINT << "subtoken_offset: " << subtoken_offset << " subtoken_size: " << subtoken_size << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
@@ -487,15 +485,23 @@ void kernel_main() {
         uint16_t* token_indices = detail::wait_indices<reuse_index, indices_tensor_cb_id, tile_height>(
             base_indices_ptr, tile_base, local_token);
         cb_wait_front(input_tensor_cb_id, 1);
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + subtoken_offset;
+        // The reader already reads from input+subtoken_offset and writes to CB at position 0
+        // So we read from CB position 0, not CB+subtoken_offset
+        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             // get the expert that is chosen for the current token
             uint16_t expert_chosen = detail::tile_col_offset(token_indices, k)[0];
             uint16_t d = devices_for_experts[expert_chosen];
 
-            DPRINT << "expert_chosen: " << expert_chosen << " d: " << d << ENDL();
             if (send_preparation_buffer[(local_token * num_devices) + d] == 0) {
+                if (d == 2) {
+                    // print in this format:
+                    // target device 2, token 2, source device 0 (axis position 0), selected expert 4.
+                    DPRINT << "target device " << d << ", token " << local_token << ", source device " << dispatch_index
+                           << " (axis position " << dispatch_index << "), selected expert " << expert_chosen
+                           << " first value: " << BF16(*(uint16_t*)input_token_read_addr) << ENDL();
+                }
                 if (d == linearized_mesh_coord) {
                     // if the expert lives on the current device, we dispatch the input token to it
                     uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen) + subtoken_offset;

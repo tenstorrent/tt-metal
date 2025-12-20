@@ -183,7 +183,8 @@ def get_a2a_dispatch_golden(input_tokens, expert_indices, expert_scores, expert_
     """
     devices = mesh_shape[0] * mesh_shape[1]
     dispatch_devices = mesh_shape[cluster_axis]
-    tokens_per_device = input_tokens.shape[1]
+    # input_tokens shape is [dispatch_devices, batch, seq_len, hidden_size]
+    # tokens_per_device = batch * seq_len
 
     selected_experts_k = expert_indices.shape[-1]
 
@@ -193,6 +194,7 @@ def get_a2a_dispatch_golden(input_tokens, expert_indices, expert_scores, expert_
     input_tokens_reshaped = input_tokens.reshape(
         devices, -1, input_tokens.shape[-1]
     )  # [devices, tokens_per_device, hidden_size]
+    tokens_per_device = input_tokens_reshaped.shape[1]
     output_tokens = torch.zeros_like(input_tokens_reshaped).repeat(
         1, dispatch_devices, 1
     )  # [devices, tokens_per_device*dispatch_devices, hidden_size]
@@ -232,14 +234,18 @@ def verify_a2a_dispatch_output_tokens(
     """
     Verify the output of the all-to-all dispatch selective tilize operation against the golden.
     """
+    logger.info(f"output_tokens shape: {output_tokens.shape}")
+    logger.info(f"golden_output_tokens shape: {golden_output_tokens.shape}")
+    output_tokens = output_tokens.reshape(golden_output_tokens.shape)
     devices = mesh_shape[0] * mesh_shape[1]
-    tokens_per_device = output_tokens.shape[-2]
 
     selected_experts_k = expert_indices.shape[-1]
 
     expert_indices_reshaped = expert_indices.reshape(
         devices, -1, expert_indices.shape[-1]
     )  # [devices, tokens_per_device, selected_experts_k]
+    logger.info(f"expert_indices_reshaped shape: {expert_indices_reshaped.shape}")
+    tokens_per_device = expert_indices_reshaped.shape[1]
 
     # Track which (source_device, token, target_device) have already been verified
     # to avoid redundant checks when multiple experts map to the same device
@@ -255,11 +261,27 @@ def verify_a2a_dispatch_output_tokens(
                     if get_other_axis_position(source_device_idx, mesh_shape, cluster_axis) == get_other_axis_position(
                         device_idx, mesh_shape, cluster_axis
                     ):
-                        assert torch.allclose(
-                            output_tokens[device_idx, t + (source_axis_pos * tokens_per_device), :],
-                            golden_output_tokens[device_idx, t + (source_axis_pos * tokens_per_device), :],
-                        ), f"Output token mismatch at target device {device_idx}, token {t}, source device {source_device_idx} (axis position {source_axis_pos}), selected expert {expert_id}."
-                    verified_buffer[source_device_idx, t, device_idx] = 1
+                        page_idx = t + (source_axis_pos * tokens_per_device)
+                        output_row = output_tokens[device_idx, page_idx, :]
+                        golden_row = golden_output_tokens[device_idx, page_idx, :]
+
+                        # Find exact mismatch locations
+                        diff_mask = output_row != golden_row
+                        if diff_mask.any():
+                            diff_indices = diff_mask.nonzero(as_tuple=True)[0]
+                            num_diffs = len(diff_indices)
+                            logger.error(
+                                f"Output token mismatch at target device {device_idx}, token {t}, "
+                                f"source device {source_device_idx} (axis position {source_axis_pos}), "
+                                f"selected expert {expert_id}, output page {page_idx}"
+                            )
+                            logger.error(f"  Total mismatches: {num_diffs} / {len(output_row)} elements")
+                            logger.error(f"  First 10 diff indices: {diff_indices[:10].tolist()}")
+                            logger.error(f"  Output values at diffs: {output_row[diff_indices[:10]].tolist()}")
+                            logger.error(f"  Golden values at diffs: {golden_row[diff_indices[:10]].tolist()}")
+                            assert False, f"Found {num_diffs} mismatches"
+
+                        verified_buffer[source_device_idx, t, device_idx] = 1
 
 
 @pytest.mark.parametrize(
@@ -394,12 +416,14 @@ def test_all_to_all_dispatch_selective_tilize_no_trace(
     logger.info(f"metadata shape: {metadata.shape}")
     logger.info(f"gathered_scores shape: {gathered_scores.shape}")
 
-    logger.info(f"expert_scores: {expert_scores}")
-    logger.info(f"gathered_scores: {gathered_scores}")
-
     logger.info(f"input_tokens: {input_tokens}")
-    logger.info(f"output_tokens: {output_tokens}")
-    logger.info(f"metadata: {metadata}")
+    logger.info(f"output_tokens at device 2: {output_tokens[2,:,:]}")
+
+    # logger.info(f"expert_scores: {expert_scores}")
+    # logger.info(f"gathered_scores: {gathered_scores}")
+
+    # logger.info(f"output_tokens: {output_tokens}")
+    # logger.info(f"metadata: {metadata}")
 
     golden_output_tokens, golden_metadata, golden_gathered_scores = get_a2a_dispatch_golden(
         input_tokens, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
