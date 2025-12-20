@@ -1,20 +1,43 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_with_unpadding_op.hpp"
+#include "untilize_with_unpadding_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/run_operation.hpp"
-#include "untilize_with_unpadding_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::untilize_with_unpadding {
 
-void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
+UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_tensor.memory_config().is_sharded()) {
+        TT_FATAL(
+            !operation_attributes.sub_core_grids.has_value(),
+            "Sharded untilize does not support sub core grid specification");
+        return program::UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
+    }
+    if (!operation_attributes.use_multicore) {
+        return program::UntilizeWithUnpaddingSingleCoreProgramFactory{};
+    }
+    if (!operation_attributes.enough_space_height) {
+        return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+    }
+    return program::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
+}
+
+void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor_a = tensor_args.input_tensor;
+
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
@@ -32,24 +55,24 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 "Expected single grid range and got {}",
                 input_tensor_a.shard_spec().value().grid.ranges().size());
             TT_FATAL(
-                this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
-                this->output_mem_config.memory_layout());
+                operation_attributes.output_mem_config.memory_layout());
             TT_FATAL(
                 input_tensor_a.physical_volume() /
                         (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (output_mem_config.is_sharded()) {
+            if (operation_attributes.output_mem_config.is_sharded()) {
                 TT_FATAL(
-                    this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                     "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
-                    this->output_mem_config.memory_layout());
+                    operation_attributes.output_mem_config.memory_layout());
             }
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            auto output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
+            auto output_shape = compute_output_specs(operation_attributes, tensor_args).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
                 TT_FATAL(
                     input_tensor_a.padded_shape()[i] == output_shape[i],
@@ -59,11 +82,12 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     i,
                     output_shape[i]);
             }
-            if (output_mem_config.is_sharded()) {
+            if (operation_attributes.output_mem_config.is_sharded()) {
                 TT_FATAL(
-                    this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
+                    operation_attributes.output_mem_config.memory_layout() ==
+                        input_tensor_a.memory_config().memory_layout(),
                     "Output memory config layout ({}) must match input tensor memory layout ({})",
-                    this->output_mem_config.memory_layout(),
+                    operation_attributes.output_mem_config.memory_layout(),
                     input_tensor_a.memory_config().memory_layout());
                 TT_FATAL(
                     input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
@@ -75,9 +99,9 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     output_shape[-1]);
             } else {
                 TT_FATAL(
-                    this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                    operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                     "Output memory config layout must be INTERLEAVED but got {}",
-                    this->output_mem_config.memory_layout());
+                    operation_attributes.output_mem_config.memory_layout());
                 TT_FATAL(
                     input_tensor_a.physical_volume() /
                             (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
@@ -98,32 +122,32 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             "Input tensor memory layout must be INTERLEAVED but got {}",
             input_tensor_a.memory_config().memory_layout());
         TT_FATAL(
-            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output memory config layout must be INTERLEAVED but got {}",
-            this->output_mem_config.memory_layout());
+            operation_attributes.output_mem_config.memory_layout());
     }
 
     // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
-    if (!this->use_pack_untilize) {
+    if (!operation_attributes.use_pack_untilize) {
         TT_FATAL(
             input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
             "Pack untilize must be enabled to support uint32/int32 data types");
     }
 }
 
-std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
+UntilizeWithUnpaddingDeviceOperation::spec_return_value_t UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     SmallVector<uint32_t> out_shape;
-    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_a = tensor_args.input_tensor;
     size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
-        out_shape.push_back(this->output_tensor_end[i] + 1);
+        out_shape.push_back(operation_attributes.output_tensor_end[i] + 1);
     }
     Shape output_shape(std::move(out_shape));
 
     DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
-    if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
+    if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape{};
@@ -137,20 +161,27 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
             shard_shape = {fused_height, shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
-        auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
-        return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config))};
+        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
     }
 
-    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config))};
+    return TensorSpec(
+        output_shape,
+        TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-UntilizeWithUnpadding::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
+UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input_tensor;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
@@ -165,30 +196,37 @@ UntilizeWithUnpadding::create_op_performance_model(
         compute_cycles = num_tiles * latency_untilize;
     }
     int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
-operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-    if (input_tensors.at(0).memory_config().is_sharded()) {
-        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded untilize does not support sub core grid specification");
-        return detail::untilize_with_unpadding_multi_core_sharded(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
-    }
-    if (!this->use_multicore) {
-        return detail::untilize_with_unpadding_single_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
-    }
-    if (!this->enough_space_height) {
-        return detail::untilize_with_unpadding_multi_core_block_interleaved(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
-    }
-    return detail::untilize_with_unpadding_multi_core_interleaved(
-        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
+std::tuple<
+    UntilizeWithUnpaddingDeviceOperation::operation_attributes_t,
+    UntilizeWithUnpaddingDeviceOperation::tensor_args_t>
+UntilizeWithUnpaddingDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    bool enough_space_width,
+    bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    operation_attributes_t operation_attributes{
+        .output_tensor_end = output_tensor_end,
+        .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
+        .use_multicore = use_multicore,
+        .use_pack_untilize = use_pack_untilize,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .enough_space_width = enough_space_width,
+        .enough_space_height = enough_space_height,
+        .sub_core_grids = sub_core_grids};
+
+    tensor_args_t tensor_args{.input_tensor = input_tensor};
+
+    return std::make_tuple(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
