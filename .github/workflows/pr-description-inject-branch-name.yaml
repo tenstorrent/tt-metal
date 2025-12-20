@@ -2,7 +2,7 @@ name: Inject git branch into PR description
 
 on:
   pull_request:
-    types: 
+    types:
       - opened
       - reopened
 
@@ -22,9 +22,9 @@ jobs:
             const placeholder = "{{branch_name}}";
             let body = pr.body || "";
 
-            if (body.includes(placeholder)) { 
+            if (body.includes(placeholder)) {
               const newBody = body.replaceAll(placeholder, branchName);
-              
+
               await github.rest.pulls.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
