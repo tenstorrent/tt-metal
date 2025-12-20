@@ -11,13 +11,14 @@ __all__ = []
 
 
 def load_capnp_schemas(files: list[str], all: list[str]):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".capnp")
+    imports = [os.path.dirname(p) for p in capnp.__path__] + [script_dir]
     for file in files:
-        schema = capnp.load(os.path.join(script_dir, file), imports=[os.path.dirname(p) for p in capnp.__path__])
+        schema = capnp.load(os.path.join(script_dir, file), imports=imports)
         for name, obj in schema.__dict__.items():
             if hasattr(obj, "schema"):  # Cap'n Proto struct/interface
                 setattr(__import__(__name__), name, obj)
                 all.append(name)
 
 
-load_capnp_schemas(["rpc.capnp", "runtime_rpc.capnp", "ttnn_rpc.capnp"], __all__)
+load_capnp_schemas(["tt-metalium/experimental/inspector_rpc.capnp", "runtime_rpc.capnp", "ttnn_rpc.capnp"], __all__)

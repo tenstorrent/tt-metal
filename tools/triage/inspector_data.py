@@ -148,11 +148,11 @@ class InspectorRpcSerialized:
     def __init__(self, directory: str, rpc_type):
         self.__directory = directory
         self.__methods = rpc_type.schema.methods
-        if not os.path.exists(directory):
-            raise ValueError(f"Serialized RPC data not found in directory {directory}")
 
     def __getattr__(self, method_name: str):
         if method_name in self.__methods:
+            if not os.path.exists(self.__directory):
+                raise ValueError(f"Serialized RPC data not found in directory {self.__directory}")
             serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
             if not os.path.exists(serialized_path):
                 raise InspectorUnserializedMethod(
