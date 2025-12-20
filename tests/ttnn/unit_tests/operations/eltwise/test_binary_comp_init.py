@@ -33,9 +33,10 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     "ttnn_function",
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
 )
-def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
+def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, device_module):
+    device = device_module
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device_module, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device_module, True)
 
     cq_id = 0
     mem_cfg = mem_configs
@@ -76,13 +77,14 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     "ttnn_function",
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
 )
-def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
+def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function, device_module):
+    device = device_module
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device_module, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device_module, True)
 
     cq_id = 0
     mem_cfg = mem_configs
-    _, output_tensor = data_gen_with_range_dtype(input_shapes, -1, 1, device, False, False, out_dtype)
+    _, output_tensor = data_gen_with_range_dtype(input_shapes, -1, 1, device_module, False, False, out_dtype)
     ttnn_function(
         input_tensor, other_tensor, memory_config=mem_cfg, dtype=out_dtype, queue_id=cq_id, output_tensor=output_tensor
     )
@@ -130,8 +132,9 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
         ttnn.ne,
     ),
 )
-def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, ttnn_function, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, ttnn_function, device_module):
+    device = device_module
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device_module, True)
 
     cq_id = 0
     mem_cfg = mem_configs
@@ -172,7 +175,8 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     (ttnn.eq, ttnn.ne),
 )
 @pytest.mark.parametrize("use_legacy", (True, False))
-def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device, use_legacy):
+def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device_module, use_legacy):
+    device = device_module
     in_data = torch.randint(0, 100, input_shapes, dtype=torch.int32)
     in_data[-1] = 65535
     # Make a copy of in_data so 50% of values are the same
