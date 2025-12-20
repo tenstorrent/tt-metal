@@ -229,3 +229,9 @@ def test_sort(device):
     input_tensor_2d_ttnn = ttnn.from_torch(input_tensor_2d, dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d_ttnn, dim=1)
     logger.info(f"Sorted Tensor along dim 1: {sorted_tensor_dim}, Indices: {indices_dim}")
+
+
+def test_narrow(device):
+    input_tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
+    narrowed_tensor = ttnn.narrow(input_tensor, 0, 12, 8)
+    logger.info("Narrowed Tensor Shape:", narrowed_tensor.shape)
