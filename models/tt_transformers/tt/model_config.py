@@ -2402,9 +2402,6 @@ class ModelArgs:
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
 
-        # Determine if trust_remote_code is needed (e.g., for Mistral-Small-3.1-24B-Instruct-2503)
-        needs_trust_remote_code = "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
-
         tokenizer = None
         try:
             # Try to load tokenizer from the original model path
@@ -2412,7 +2409,7 @@ class ModelArgs:
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
                 local_files_only=os.getenv("CI") == "true",
-                trust_remote_code=needs_trust_remote_code,
+                trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
         except Exception as e:
