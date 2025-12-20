@@ -143,7 +143,7 @@ class TtLlamaAttention(LightweightModule):
         # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_QKV_RING_MEMCFG"] if self.TG else wqkv_mem_config,
@@ -174,7 +174,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_WO_RING_MEMCFG"]
@@ -547,7 +547,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
