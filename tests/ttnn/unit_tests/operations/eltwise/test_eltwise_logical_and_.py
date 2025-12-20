@@ -82,8 +82,9 @@ def test_eltwise_logical_andi_test(
     in_mem_config,
     out_mem_config,
     data_seed,
-    device,
+    device_module,
 ):
+    device = device_module
     run_eltwise_logical_andi_tests(
         input_shape,
         dtype,

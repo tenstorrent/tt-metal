@@ -30,7 +30,8 @@ TILE_WIDTH = 32
     ],
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
-def test_silu_multi_core(device, input_shape, shard_strategy):
+def test_silu_multi_core(device_module, input_shape, shard_strategy):
+    device = device_module
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)

@@ -71,8 +71,9 @@ test_sweep_args = [
     (test_sweep_args),
 )
 def test_eltwise_softplus(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed, device
+    input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed, device_module
 ):
+    device = device_module
     run_eltwise_softplus_tests(
         input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed, device
     )
