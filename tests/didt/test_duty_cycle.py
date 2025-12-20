@@ -15,10 +15,7 @@ MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
 MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
-# This test was created to perform temperature readings on BH chip
-# The workload starts with loops of a non-matmul OP to bring the chip to
-# steady state, followed by sharded matmul which draws max power
-class FF1Test(OpTestBase):
+class DutyCycleTest(OpTestBase):
     def __init__(
         self,
         mesh_device,
@@ -37,8 +34,8 @@ class FF1Test(OpTestBase):
         loop_count=1,
         determinism_check_enabled=False,
         determinism_check_interval=False,
-        non_mm_loops=1000,
-        mm_loops=10,
+        non_mm_loops=5,
+        wl_loops=100,
     ):
         super().__init__(
             mesh_device,
@@ -59,25 +56,10 @@ class FF1Test(OpTestBase):
             determinism_check_interval,
         )
         self.non_mm_loops = (non_mm_loops,)
-        self.mm_loops = (mm_loops,)
+        self.wl_loops = (wl_loops,)
 
     def run_device_operation(self):
-        # run matmul once to cache kernel
-        ttnn.matmul(
-            self.activations,
-            self.weights,
-            program_config=self.program_config,
-            memory_config=self.out_mem_config,
-            dtype=self.out_dtype,
-            compute_kernel_config=self.compute_config,
-        )
-
-        for _ in range(self.non_mm_loops[0]):
-            ttnn.cos(
-                self.weights,
-            )
-
-        for _ in range(self.mm_loops[0] - 1):
+        for i in range(self.wl_loops[0]):
             ttnn.matmul(
                 self.activations,
                 self.weights,
@@ -86,6 +68,10 @@ class FF1Test(OpTestBase):
                 dtype=self.out_dtype,
                 compute_kernel_config=self.compute_config,
             )
+            for j in range(self.non_mm_loops[0]):
+                ttnn.cos(
+                    self.weights,
+                )
 
         return ttnn.matmul(
             self.activations,
@@ -97,15 +83,6 @@ class FF1Test(OpTestBase):
         )
 
 
-GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
-GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
-
-
-@pytest.mark.parametrize(
-    "gelu, math_fidelity",
-    GELU_FIDELITY_PARAMETRIZATION,
-    ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
-)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -117,18 +94,31 @@ GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
     ],
     indirect=["mesh_device"],
 )
+# number of workload repetitions (of alternating mm/non-mm workloads)
 @pytest.mark.parametrize(
-    "loop_counts",
-    [(1000, 20)],
-    ids=["loop0"],
+    "wl_loops",
+    [100, 1000, 10000],
+    ids=["rep-100x", "rep-1000x", "rep-10000x"],
 )
-def test_ff1_matmul(
+# the number of non-mm loops within each iteration (increasing this lowers the duty cycle)
+@pytest.mark.parametrize(
+    "non_mm_loops",
+    [
+        (1),
+        (2),
+        (3),
+        (4),
+        (5),
+        (6),
+    ],
+    ids=["duty-1", "duty-2", "duty-3", "duty-4", "duty-5", "duty-6"],
+)
+def test_duty_cycle(
     mesh_device,
-    gelu,
-    math_fidelity,
     didt_workload_iterations,
     determinism_check_interval,
-    loop_counts,
+    non_mm_loops,
+    wl_loops,
     grid_size=(8, 8),
 ):
     per_core_M = 4
@@ -153,12 +143,12 @@ def test_ff1_matmul(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=[ttnn.UnaryOpType.GELU, True] if gelu else None,
+        fused_activation=None,
     )
 
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
-        math_fidelity=math_fidelity,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -176,7 +166,7 @@ def test_ff1_matmul(
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
 
-    ff1_test = FF1Test(
+    duty_cycle_test = DutyCycleTest(
         mesh_device,
         in0_shape=in0_shape,
         in1_shape=in1_shape,
@@ -193,9 +183,9 @@ def test_ff1_matmul(
         loop_count=didt_workload_iterations,
         determinism_check_enabled=True if determinism_check_interval > 0 else False,
         determinism_check_interval=determinism_check_interval,
-        non_mm_loops=loop_counts[0],
-        mm_loops=loop_counts[1],
+        non_mm_loops=non_mm_loops,
+        wl_loops=wl_loops,
     )
 
     # Run test
-    ff1_test.run_op_test()
+    duty_cycle_test.run_op_test()
