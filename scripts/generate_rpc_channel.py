@@ -10,7 +10,6 @@ Creates a callback-based RPC server implementation.
 import re
 import sys
 import os
-from typing import List, Dict, Tuple
 from dataclasses import dataclass
 
 
@@ -18,12 +17,19 @@ from dataclasses import dataclass
 class MethodInfo:
     name: str
     ordinal: int
-    params: List[Tuple[str, str]]  # (name, type)
+    params: list[tuple[str, str]]  # (name, type)
     return_type: str
     return_name: str
 
 
-def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo], str]:
+@dataclass
+class CapnpInterface:
+    name: str
+    methods: list[MethodInfo]
+    cpp_namespace: str
+
+
+def parse_capnp_interface(capnp_file: str) -> CapnpInterface:
     """Parse Cap'n Proto schema file and extract interface methods."""
 
     with open(capnp_file, "r") as f:
@@ -108,10 +114,10 @@ def parse_capnp_interface(capnp_file: str) -> tuple[str, List[MethodInfo], str]:
 
         methods.append(MethodInfo(method_name, ordinal, params, return_type, return_name))
 
-    return (interface_name, methods, cpp_namespace)
+    return CapnpInterface(interface_name, methods, cpp_namespace)
 
 
-def generate_header(channel_name: str, methods: List[MethodInfo], capnp_file_path: str, cpp_namespace: str) -> str:
+def generate_header(channel_name: str, methods: list[MethodInfo], capnp_file_path: str, cpp_namespace: str) -> str:
     """Generate the header file content."""
 
     capnp_filename = os.path.basename(capnp_file_path)
@@ -197,7 +203,7 @@ private:
     return header
 
 
-def generate_source(channel_name: str, methods: List[MethodInfo], output_header: str, cpp_namespace: str) -> str:
+def generate_source(channel_name: str, methods: list[MethodInfo], output_header: str, cpp_namespace: str) -> str:
     """Generate the source file content."""
 
     output_header_filename = os.path.basename(output_header)
@@ -311,15 +317,15 @@ def main():
     output_source = sys.argv[3]
 
     try:
-        channel_name, methods, cpp_namespace = parse_capnp_interface(capnp_file)
+        channel = parse_capnp_interface(capnp_file)
 
         # Generate header
-        header_content = generate_header(channel_name, methods, capnp_file, cpp_namespace)
+        header_content = generate_header(channel.name, channel.methods, capnp_file, channel.cpp_namespace)
         with open(output_header, "w") as f:
             f.write(header_content)
 
         # Generate source
-        source_content = generate_source(channel_name, methods, output_header, cpp_namespace)
+        source_content = generate_source(channel.name, channel.methods, output_header, channel.cpp_namespace)
         with open(output_source, "w") as f:
             f.write(source_content)
 
