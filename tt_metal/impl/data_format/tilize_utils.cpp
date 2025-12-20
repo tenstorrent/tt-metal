@@ -283,6 +283,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 
 // AVX-optimized tilize for the common case: 16x16 faces, bfloat16 (2 bytes per element)
 // Each face row = 16 elements * 2 bytes = 32 bytes = one AVX2 register
+// PRECONDITION: Caller must verify face_row_bytes == 32 && cpu_supports_avx2() before calling
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
     tt::stl::Span<const T> in_row_major,
@@ -305,13 +306,9 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
     const size_t faces_per_tile_col = tile_W / face_W;
     const size_t elements_per_tile = tile_H * tile_W;
     const size_t elements_per_face = face_H * face_W;
-    const size_t face_row_bytes = face_W * sizeof(T);
 
     // Pre-allocate entire output buffer
     std::vector<T> tilized_output(in_row_major.size());
-
-    // Check if we can use AVX: face row must be 32 bytes AND CPU must support AVX2
-    const bool can_use_avx = (face_row_bytes == 32) && cpu_supports_avx2();
 
     for (size_t b = 0; b < B; b++) {
         const T* batch_src = in_row_major.data() + (b * batch_size);
@@ -332,24 +329,13 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces_avx(
                         const size_t src_row_start = (tile_row * tile_H) + (face_row_idx * face_H);
                         const size_t src_col_start = (tile_col * tile_W) + (face_col_idx * face_W);
 
-                        if (can_use_avx) {
-                            // AVX path: each row is exactly 32 bytes
-                            for (size_t row = 0; row < face_H; row++) {
-                                const T* src_row = batch_src + ((src_row_start + row) * W) + src_col_start;
-                                T* dst_row = face_dst + (row * face_W);
+                        // Each face row is exactly 32 bytes - copy using AVX
+                        for (size_t row = 0; row < face_H; row++) {
+                            const T* src_row = batch_src + ((src_row_start + row) * W) + src_col_start;
+                            T* dst_row = face_dst + (row * face_W);
 
-                                // Load 32 bytes and store (unaligned)
-                                simde__m256i data =
-                                    simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(src_row));
-                                simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst_row), data);
-                            }
-                        } else {
-                            // Fallback: use memcpy
-                            for (size_t row = 0; row < face_H; row++) {
-                                const T* src_row = batch_src + ((src_row_start + row) * W) + src_col_start;
-                                T* dst_row = face_dst + (row * face_W);
-                                std::memcpy(dst_row, src_row, face_row_bytes);
-                            }
+                            simde__m256i data = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(src_row));
+                            simde_mm256_storeu_si256(reinterpret_cast<simde__m256i*>(dst_row), data);
                         }
                     }
                 }
@@ -383,9 +369,17 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
     TT_FATAL(!in_row_major.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
+    TT_FATAL((tile_H % face_H == 0) and (tile_W % face_W == 0), "Tile dimensions must be divisible by face dimensions");
 
-    // Use AVX-optimized path for the common case (no transpose)
-    if (!transpose_face && !transpose_face_order) {
+    // Use AVX-optimized path for the common case:
+    // - No transpose operations
+    // - Face row size is exactly 32 bytes (one AVX2 register)
+    // - CPU supports AVX2
+    static const bool has_avx2 = cpu_supports_avx2();
+    constexpr size_t AVX2_REGISTER_BYTES = 32;
+    const size_t face_row_bytes = face_W * sizeof(T);
+
+    if (!transpose_face && !transpose_face_order && has_avx2 && (face_row_bytes == AVX2_REGISTER_BYTES)) {
         return convert_layout_row_major_to_tile_nfaces_avx(in_row_major, shape, tile_shape, face_shape);
     }
 
