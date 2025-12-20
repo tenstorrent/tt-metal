@@ -90,8 +90,6 @@ std::string get_platform_architecture_name();
 // TODO: functions below are to be moved out of the api directory and dispersed
 namespace detail {
 
-bool DispatchStateCheck(bool isFastDispatch);
-
 /**
  * Copies data from a host buffer into the specified buffer
  *

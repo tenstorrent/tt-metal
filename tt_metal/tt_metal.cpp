@@ -34,6 +34,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
+#include "impl/device/device.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"

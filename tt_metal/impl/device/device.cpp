@@ -35,6 +35,7 @@
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "impl/device/device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
