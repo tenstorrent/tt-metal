@@ -896,10 +896,10 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             )
 
             # Useful core grid based on batch size
