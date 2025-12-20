@@ -321,17 +321,17 @@ public:
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
     }
-    int get_watcher_dump_all() const { return watcher_settings.dump_all.load(std::memory_order_relaxed); }
+    bool get_watcher_dump_all() const { return watcher_settings.dump_all.load(std::memory_order_relaxed); }
     void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all.store(dump_all, std::memory_order_relaxed); }
-    int get_watcher_append() const { return watcher_settings.append.load(std::memory_order_relaxed); }
+    bool get_watcher_append() const { return watcher_settings.append.load(std::memory_order_relaxed); }
     void set_watcher_append(bool append) { watcher_settings.append.store(append, std::memory_order_relaxed); }
-    int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause.load(std::memory_order_relaxed); }
+    bool get_watcher_auto_unpause() const { return watcher_settings.auto_unpause.load(std::memory_order_relaxed); }
     void set_watcher_auto_unpause(bool auto_unpause) {
         watcher_settings.auto_unpause.store(auto_unpause, std::memory_order_relaxed);
     }
-    int get_watcher_noinline() const { return watcher_settings.noinline.load(std::memory_order_relaxed); }
+    bool get_watcher_noinline() const { return watcher_settings.noinline.load(std::memory_order_relaxed); }
     void set_watcher_noinline(bool noinline) { watcher_settings.noinline.store(noinline, std::memory_order_relaxed); }
-    int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    bool get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
     void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
     bool get_watcher_text_start() const { return watcher_settings.text_start; }
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
