@@ -27,6 +27,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <random>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
@@ -468,7 +469,24 @@ void generate_runtime_args_cmds(
             max_runtime_args_len * sizeof(uint32_t),
             constants.packed_write_max_unicast_sub_cmds,
             no_stride);
-        runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
+        // Watcher only: pre-fill the RTA payload region with 0xBEEF0000 | rand16
+        // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand
+        // This makes any unused runtime-arg slots obvious on device (equality tests likely to fail)
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+            uint32_t total_words = (calculator.write_offset_bytes() - data_offset) / sizeof(uint32_t);
+            uint32_t* command_start_ptr =
+                reinterpret_cast<uint32_t*>(command_obj.data()) + (data_offset / sizeof(uint32_t));
+            thread_local static std::mt19937 gen(std::random_device{}());
+            std::uniform_int_distribution<int> dist(0, 65535);
+            for (uint32_t count = 0; count < total_words; count++) {
+                uint16_t rnd = static_cast<uint16_t>(dist(gen));
+                const uint32_t known_garbage = 0xBEEF0000 | rnd;
+                command_start_ptr[count] = known_garbage;
+            }
+        }
+
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA,
             num_packed_cmds,
@@ -485,7 +503,6 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
-        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
