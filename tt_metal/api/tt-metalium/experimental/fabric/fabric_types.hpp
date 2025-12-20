@@ -35,6 +35,19 @@ enum class FabricUDMMode : uint32_t {
     ENABLED = 1,
 };
 
+// Fabric manager mode configuration
+enum class FabricManagerMode : uint32_t {
+    INIT_FABRIC = 1 << 0,
+    TERMINATE_FABRIC = 1 << 1,
+    ENABLED = (INIT_FABRIC & TERMINATE_FABRIC),
+    DEFAULT =
+        (INIT_FABRIC |
+         TERMINATE_FABRIC),  // Maintains behaviour of Metal runtime, which fully initializes and terminates fabric
+};
+FabricManagerMode operator|(FabricManagerMode lhs, FabricManagerMode rhs);
+FabricManagerMode operator&(FabricManagerMode lhs, FabricManagerMode rhs);
+bool has_flag(FabricManagerMode flags, FabricManagerMode test_flag);
+
 enum class FabricType {
     MESH = 1 << 0,
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
