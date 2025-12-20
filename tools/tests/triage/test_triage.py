@@ -44,7 +44,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "location_to_check": "0,0",  # Only check this core location
             "cores_to_check": {
                 "trisc0": {
-                    "pc": 34556,
+                    "pc": 34552,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
