@@ -312,9 +312,9 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and batch_size_or_seq_len != 128:
+    if mode == "prefill" and seq_len != 128:
         pytest.skip(
-            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
         )
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
