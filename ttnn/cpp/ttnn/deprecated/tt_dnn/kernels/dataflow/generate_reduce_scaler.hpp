@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Tile is assumed to have 16-bit elements
 // Scaler is assumed to be a 16-bit value double packed into a u32
