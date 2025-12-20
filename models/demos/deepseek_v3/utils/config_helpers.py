@@ -584,7 +584,6 @@ def shard_and_save(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
-    convert_meta=False,
 ) -> SavedWeight:
     """Shard a tensor and save it to a file."""
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
@@ -656,7 +655,7 @@ def shard_and_save(
     ttnn.dump_tensor(path, ttnn_tensor)
 
     # Always convert absolute paths to relative paths for portability
-    # This ensures SavedWeight objects always have relative paths regardless of convert_meta flag
+    # This ensures SavedWeight objects always have relative paths
     if path.is_absolute():
         path_str = str(path)
         mesh_idx = path_str.find("mesh_")
