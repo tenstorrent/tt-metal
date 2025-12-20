@@ -2469,36 +2469,6 @@ class ModelArgs:
                 logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
                 raise Exception(f"No fallback tokenizer found for base model: {self.base_model_name}")
 
-        # Set default Mistral chat template if tokenizer doesn't have one
-        # This is needed for Mistral-Small-3.1-24B-Instruct-2503 which doesn't include a chat template
-        # We use Mistral-7B's template as a reference since it's proven to work with Mistral models
-        if tokenizer.chat_template is None and "mistral" in self.model_name.lower():
-            logger.info("Setting default Mistral chat template from Mistral-7B-Instruct-v0.3.")
-            try:
-                # Use Mistral-7B's template as reference - it's more complete and handles tools, system messages, etc.
-                reference_tokenizer = AutoTokenizer.from_pretrained(
-                    "mistralai/Mistral-7B-Instruct-v0.3", local_files_only=os.getenv("CI") == "true"
-                )
-                if reference_tokenizer.chat_template:
-                    tokenizer.chat_template = reference_tokenizer.chat_template
-                    logger.info("Successfully copied Mistral-7B chat template.")
-                else:
-                    logger.warning("Mistral-7B template not available, using fallback.")
-            except Exception as e:
-                logger.warning(f"Failed to load Mistral-7B template, using simple fallback: {e}")
-                # Simple fallback template if we can't load the reference
-                mistral_template = """{% for message in messages %}
-                                    {% if message['role'] == 'system' %}
-                                    <|system|>
-                                    {{ message['content'] }}
-                                    {% elif message['role'] == 'user' %}
-                                    [INST] {{ message['content'] }} [/INST]
-                                    {% elif message['role'] == 'assistant' %}
-                                    {{ message['content'] }}{{ eos_token }}
-                                    {% endif %}
-                                    {% endfor %}"""
-                tokenizer.chat_template = mistral_template
-
         # Add meta-compatible stop token list to the HF tokenizer
         if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
