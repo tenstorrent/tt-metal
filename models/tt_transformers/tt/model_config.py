@@ -1727,9 +1727,11 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        # Default to 32 layers (standard for most vision models like Llama vision)
-        # This can be overridden by config values: num_hidden_layers or depth
-        # The default of 32 comes from the main branch and is appropriate for most vision transformer models
+        # Default to 32 layers - this is the standard for Llama vision models (e.g., Llama-3.2-11B-Vision uses 32)
+        # This default is only used when the config doesn't specify num_hidden_layers or depth
+        # Models that specify these values in their config (e.g., Mistral-Small-3.1-24B-Instruct-2503 uses 24)
+        # will use their specified values, not this default
+        # The default of 32 comes from the main branch and matches Llama vision model architecture
         self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 32
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
@@ -2399,6 +2401,7 @@ class ModelArgs:
             "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+            "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
         }
 
@@ -2406,35 +2409,24 @@ class ModelArgs:
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
 
-        # Minimal addition: Special handling for Mistral-Small-3.1-24B-Instruct-2503
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+        # Determine if trust_remote_code is needed (e.g., for Mistral-Small-3.1-24B-Instruct-2503)
+        needs_trust_remote_code = "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
+
+        tokenizer = None
+        try:
+            # Try to load tokenizer from the original model path
+            # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(
-                "mistralai/Mistral-Small-3.1-24B-Instruct-2503", trust_remote_code=True
+                self.TOKENIZER_PATH,
+                local_files_only=os.getenv("CI") == "true",
+                trust_remote_code=needs_trust_remote_code,
             )
-            logger.info("Manually setting Mistral instruct-style chat template on the tokenizer.")
+            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
 
-            mistral_template = """{% for message in messages %}
-                                    {% if message['role'] == 'system' %}
-                                    <|system|>
-                                    {{ message['content'] }}
-                                    {% elif message['role'] == 'user' %}
-                                    [INST] {{ message['content'] }} [/INST]
-                                    {% elif message['role'] == 'assistant' %}
-                                    {{ message['content'] }}{{ eos_token }}
-                                    {% endif %}
-                                    {% endfor %}"""
-            tokenizer.chat_template = mistral_template
-        else:
-            try:
-                # Try to load tokenizer from the original model path
-                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-                tokenizer = AutoTokenizer.from_pretrained(
-                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
-                )
-                logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
-            except Exception as e:
-                logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
-
+        # Only try fallback if initial load failed
+        if tokenizer is None:
             # Try to use base model tokenizer as fallback
             fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
 
@@ -2483,6 +2475,36 @@ class ModelArgs:
             else:
                 logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
                 raise Exception(f"No fallback tokenizer found for base model: {self.base_model_name}")
+
+        # Set default Mistral chat template if tokenizer doesn't have one
+        # This is needed for Mistral-Small-3.1-24B-Instruct-2503 which doesn't include a chat template
+        # We use Mistral-7B's template as a reference since it's proven to work with Mistral models
+        if tokenizer.chat_template is None and "mistral" in self.model_name.lower():
+            logger.info("Setting default Mistral chat template from Mistral-7B-Instruct-v0.3.")
+            try:
+                # Use Mistral-7B's template as reference - it's more complete and handles tools, system messages, etc.
+                reference_tokenizer = AutoTokenizer.from_pretrained(
+                    "mistralai/Mistral-7B-Instruct-v0.3", local_files_only=os.getenv("CI") == "true"
+                )
+                if reference_tokenizer.chat_template:
+                    tokenizer.chat_template = reference_tokenizer.chat_template
+                    logger.info("Successfully copied Mistral-7B chat template.")
+                else:
+                    logger.warning("Mistral-7B template not available, using fallback.")
+            except Exception as e:
+                logger.warning(f"Failed to load Mistral-7B template, using simple fallback: {e}")
+                # Simple fallback template if we can't load the reference
+                mistral_template = """{% for message in messages %}
+                                    {% if message['role'] == 'system' %}
+                                    <|system|>
+                                    {{ message['content'] }}
+                                    {% elif message['role'] == 'user' %}
+                                    [INST] {{ message['content'] }} [/INST]
+                                    {% elif message['role'] == 'assistant' %}
+                                    {{ message['content'] }}{{ eos_token }}
+                                    {% endif %}
+                                    {% endfor %}"""
+                tokenizer.chat_template = mistral_template
 
         # Add meta-compatible stop token list to the HF tokenizer
         if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
