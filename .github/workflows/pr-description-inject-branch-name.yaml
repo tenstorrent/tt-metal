@@ -1,12 +1,10 @@
-name: Inject Git Branch into PR Description
+name: Inject git branch into PR description
 
 on:
   pull_request:
     types: 
       - opened
       - reopened
-    # branches:
-    #   - main
 
 permissions:
   pull-requests: write
