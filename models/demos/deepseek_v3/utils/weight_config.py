@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import fcntl
 import json
 from contextlib import contextmanager
@@ -13,8 +15,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-
-# Import TENSOR_CACHE_EXTENSION from config_helpers since it's also used by shard_and_save
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
@@ -73,6 +73,38 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
 
 
+def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
+    """
+    Attempt to load weight config from cache.
+
+    Args:
+        config_path: Path to the config.json file
+        weight_cache_path: Base path for resolving relative weight paths
+        force_recalculate: If True, skip cache and return None
+
+    Returns:
+        Normalized weight config if cache hit, None if cache miss
+    """
+    if force_recalculate:
+        logger.info("Forcing recalculating weights")
+        return None
+    if not config_path.exists():
+        logger.info("Weight configuration file does not exist, forcing recalculating weights")
+        return None
+
+    with locked_file(config_path, "r", exclusive=False) as f:
+        weight_config = json.load(f, object_hook=try_decode_saved_weight)
+
+    try:
+        validate_weight_config_paths(weight_cache_path, weight_config)
+    except ValueError as e:
+        logger.warning(f"Cache validation failed, will recalculate weights: {e}")
+        return None
+
+    logger.info(f"Using weights cached at {weight_cache_path}")
+    return normalize_weight_config_paths(weight_cache_path, weight_config)
+
+
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
@@ -112,28 +144,16 @@ def get_weight_config(
         / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     )
     config_path = weight_cache_path / "config.json"
-    weight_path = weight_cache_path / "weights"
-    for _ in range(1):
-        if force_recalculate:
-            logger.info(f"Forcing recalculating weights")
-            break
-        if not config_path.exists():
-            logger.info(f"Weight configuration file does not exist, forcing recalculating weights")
-            break
-        with locked_file(config_path, "r", exclusive=False) as f:
-            weight_config = json.load(f, object_hook=try_decode_saved_weight)
-        try:
-            validate_weight_config_paths(weight_cache_path, weight_config)
-        except ValueError as e:
-            logger.warning(f"Cache validation failed, will recalculate weights: {e}")
-            break
-        logger.info(f"Using weights cached at {weight_cache_path}")
-        return normalize_weight_config_paths(weight_cache_path, weight_config)
 
-    # Only prepare state dicts if we need to convert weights
+    # Try to load from cache
+    cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
+    if cached_config is not None:
+        return cached_config
+
+    # Cache miss - need to convert weights
     logger.info(f"Caching weights at {weight_cache_path}")
     if state_dicts is None:
-        logger.info(f"State dict was not provided, preparing from random weights or model path")
+        logger.info("State dict was not provided, preparing from random weights or model path")
         from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
 
         model_state = prepare_model_state_dict(
@@ -248,25 +268,3 @@ def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) 
     else:
         # For other types (None, primitives, etc.), return as-is
         return weight_config
-
-
-def _normalize_weight_config_paths_inplace(root_path: Path, weight_config: WeightConfig) -> None:
-    """
-    Internal helper that mutates weight_config in-place (for backward compatibility only).
-    New code should use normalize_weight_config_paths instead.
-    """
-    if isinstance(weight_config, dict):
-        entries = weight_config.values()
-    elif isinstance(weight_config, (list, tuple)):
-        entries = weight_config
-    else:
-        entries = []
-
-    for entry in entries:
-        if entry is None:
-            continue
-        if isinstance(entry, SavedWeight):
-            if not entry.path.is_absolute():
-                entry.path = root_path / entry.path
-        else:
-            _normalize_weight_config_paths_inplace(root_path, entry)
