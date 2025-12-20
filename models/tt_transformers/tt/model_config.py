@@ -478,6 +478,7 @@ class ModelArgs:
         self.fuse_qkv = False
         self.fuse_mlp = False
         self.trust_remote_code_hf = False
+        self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -496,6 +497,7 @@ class ModelArgs:
         if HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
+            self.from_hf_url = True
 
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
@@ -1772,7 +1774,7 @@ class ModelArgs:
 
             if "text_config" in config or "vision_config" in config:
                 merged_text_config = merge_text_config(config)
-                self._set_params_from_dict(merged_text_config, is_hf=True)
+                self._set_params_from_dict(merged_text_config)
 
                 if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
                     self._set_vision_params(config["vision_config"])
@@ -1781,7 +1783,7 @@ class ModelArgs:
                         merged_vision_config = merge_vision_config(config)
                         self._set_vision_params(merged_vision_config)
             else:
-                self._set_params_from_dict(config, is_hf=True)
+                self._set_params_from_dict(config)
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
@@ -1851,20 +1853,14 @@ class ModelArgs:
         )
 
     def is_llama_vision(self):
-        return (
-            self.CKPT_DIR is not None
-            and ("llama" in self.CKPT_DIR.lower())
-            and ("vision" in self.CKPT_DIR.lower())
-        )
+        return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def is_vision(self):
         """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
         return (
             self.is_llama_vision()
             or (
-                "mistral" in self.model_name.lower()
-                and self.CKPT_DIR is not None
-                and "vision" in self.CKPT_DIR.lower()
+                "mistral" in self.model_name.lower() and self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower()
             )
             or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
         )
@@ -1974,10 +1970,12 @@ class ModelArgs:
                     from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
                         Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                     )
+
                     model_cls = AutoModelForCausalLM
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
                 elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
                     from transformers import Mistral3ForConditionalGeneration
+
                     model_cls = Mistral3ForConditionalGeneration
                 else:
                     model_cls = self.get_hf_model_cls()
@@ -2431,7 +2429,9 @@ class ModelArgs:
             try:
                 # Try to load tokenizer from the original model path
                 # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
