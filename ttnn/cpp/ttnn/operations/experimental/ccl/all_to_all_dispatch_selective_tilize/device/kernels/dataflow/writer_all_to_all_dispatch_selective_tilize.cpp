@@ -356,6 +356,9 @@ void kernel_main() {
     uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
     uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
 
+    DPRINT << "subtoken_offset: " << subtoken_offset << ENDL();
+    DPRINT << "subtoken_size: " << subtoken_size << ENDL();
+
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 

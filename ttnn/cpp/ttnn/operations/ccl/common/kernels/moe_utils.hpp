@@ -211,13 +211,12 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<false>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
-    noc_async_writes_flushed();
 }
 
 /*
@@ -333,12 +332,11 @@ inline void fabric_send_noc_unicast_with_semaphore(
         }
 
         // Send payload followed by header over the fabric.
-        perform_payload_send<false>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
-    noc_async_writes_flushed();
 }
 
 // Insert helper that handles the remote-device metadata path with fused atomic increment
