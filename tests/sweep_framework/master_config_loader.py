@@ -1737,7 +1737,8 @@ class MasterConfigLoader:
                     # Build input_specs list:
                     # [batch_size, output_channels, input_channels, input_height, input_width,
                     #  kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-                    input_spec = [
+                    # Use tuple so it serializes as a string for proper deserialization
+                    input_spec = (
                         params["batch_size"],
                         params["output_channels"],
                         params["input_channels"],
@@ -1753,7 +1754,7 @@ class MasterConfigLoader:
                         params["dilation_h"],
                         params["dilation_w"],
                         params["has_bias"],
-                    ]
+                    )
                     input_specs_list.append(input_spec)
                     # Extract compute_config if available
                     compute_configs_list.append(params.get("compute_config"))
