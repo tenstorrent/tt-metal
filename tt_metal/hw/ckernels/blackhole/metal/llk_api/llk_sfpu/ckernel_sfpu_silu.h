@@ -4,36 +4,32 @@
 
 #pragma once
 
-#include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpi.h"
+#include "ckernel_sfpu_sigmoid.h"
 
 namespace ckernel::sfpu {
 
-inline sfpi::vFloat silu_sigmoid_piecewise_linear_positive(sfpi::vFloat val) {
-    sfpi::vFloat result = 1.0f;
-    v_if(val <= 1.0f) {
-        result = 0.2415f * val + 0.5f;  // linear appx as y = 0.2415f + 0.5
-    }
-    v_elseif(val < 7.7f) {
-        result = POLYVAL5<sfpi::vFloat>(
-            -3.82558889e-04f, 9.22008486e-03f, -8.34694910e-02f, 3.39967832e-01f, 4.66254244e-01f, val);
-    }
-    v_endif;
-    return result;
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_silu() {
-    // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::abs(val);
-        result = silu_sigmoid_piecewise_linear_positive(result);
-        v_if(val < 0.0f) { result = 1.0f - result; }
-        v_endif;
-        sfpi::dst_reg[0] = val * result;
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // silu(x) = x * sigmoid(x)
+        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+
+        // Round to bfloat16 if not in fp32 accumulation mode
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE>
+inline void silu_init() {
+    _init_reciprocal_<false, false>();
 }
 
 }  // namespace ckernel::sfpu
