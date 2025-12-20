@@ -53,7 +53,7 @@ from tqdm import tqdm
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 32, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",

@@ -358,7 +358,7 @@ class TtLlamaAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

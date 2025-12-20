@@ -734,6 +734,7 @@ def prepare_generator_args(
         "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
         "ci-long-context-16k",  # 16k context, max_seq_len=32k, used for testing --max_seq_len=16k override
         "device-perf",  # Device perf
+        "DP-4-b32-qwen-accuracy",  # DP 4 throughput with qwen model and accuracy test
     ],
 )
 @pytest.mark.parametrize(
