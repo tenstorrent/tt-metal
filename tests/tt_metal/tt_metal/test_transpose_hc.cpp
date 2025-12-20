@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <vector>
+#include "impl/program/program.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

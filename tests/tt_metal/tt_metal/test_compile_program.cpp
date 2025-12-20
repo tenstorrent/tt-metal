@@ -39,6 +39,7 @@
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program.hpp"
 
 using std::vector;
 using namespace tt;

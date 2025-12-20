@@ -49,6 +49,7 @@
 #include <tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/program_impl.hpp"
+#include "impl/program/program.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>

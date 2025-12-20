@@ -11,6 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 
 #include "llrt.hpp"
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

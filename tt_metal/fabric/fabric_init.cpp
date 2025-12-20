@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program.hpp"
 #include "metal_soc_descriptor.h"
 
 // hack for test_basic_fabric_apis.cpp

@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/program/program.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
