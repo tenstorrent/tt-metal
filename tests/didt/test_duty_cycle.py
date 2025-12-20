@@ -94,7 +94,7 @@ class DutyCycleTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-# number of workload repetitions (of aternating mm/non-mm workloads)
+# number of workload repetitions (of alternating mm/non-mm workloads)
 @pytest.mark.parametrize(
     "wl_loops",
     [100, 1000, 10000],
