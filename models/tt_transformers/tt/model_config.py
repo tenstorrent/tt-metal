@@ -1691,32 +1691,28 @@ class ModelArgs:
     def _set_vision_params(self, config):
         vision_config = config.get("vision_config", config)
 
-        # Conservative: Set Mistral-specific defaults
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            default_chunk_size = 896
-            default_vision_dim = 1024
-            default_cross_attn_layers = 8
-        else:
-            default_chunk_size = -1
-            default_vision_dim = 1280
-            default_cross_attn_layers = -1
+        # Get vision_dim from config (same key for all models)
+        self.vision_dim = vision_config.get("hidden_size", 1280)
 
-        # Merge main branch logic with Mistral-specific defaults
-        self.vision_chunk_size = vision_config.get(
-            "vision_chunk_size", default_chunk_size if default_chunk_size != -1 else vision_config.get("image_size", -1)
-        )
-        self.image_size = vision_config.get(
-            "image_size", 896 if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name else -1
-        )
+        # Get vision_head_dim - Mistral has it in config, others calculate it
+        if "head_dim" in vision_config:
+            self.vision_head_dim = vision_config["head_dim"]
+        else:
+            num_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
+            self.vision_head_dim = self.vision_dim // num_heads
+
+        # Get image_size from config (same key for all models)
+        self.image_size = vision_config.get("image_size", -1)
+
+        # Optional values with reasonable fallbacks
+        chunk_size_fallback = self.image_size if self.image_size != -1 else vision_config.get("image_size", -1)
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", chunk_size_fallback)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
         self.vision_num_cross_attention_layers = vision_config.get(
-            "vision_num_cross_attention_layers",
-            default_cross_attn_layers
-            if default_cross_attn_layers != -1
-            else vision_config.get("num_global_layers", -1),
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", 8)
         )
-        self.vision_dim = vision_config.get("hidden_size", default_vision_dim)
 
+        # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
         self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
@@ -1725,7 +1721,7 @@ class ModelArgs:
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
         self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
-        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        # Note: vision_head_dim is already set above (from config for Mistral, calculated for others)
 
         # Default to 32 layers - this is the standard for Llama vision models (e.g., Llama-3.2-11B-Vision uses 32)
         # This default is only used when the config doesn't specify num_hidden_layers or depth
@@ -1738,9 +1734,6 @@ class ModelArgs:
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
         self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
-
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            self.vision_head_dim = vision_config.get("head_dim", 64)
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -1790,12 +1783,10 @@ class ModelArgs:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config)
 
-                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    self._set_vision_params(config["vision_config"])
-                else:
-                    if "vision_config" in config:
-                        merged_vision_config = merge_vision_config(config)
-                        self._set_vision_params(merged_vision_config)
+                if "vision_config" in config:
+                    # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
+                    merged_vision_config = merge_vision_config(config)
+                    self._set_vision_params({"vision_config": merged_vision_config})
             else:
                 self._set_params_from_dict(config)
         else:
@@ -1858,21 +1849,21 @@ class ModelArgs:
 
     def is_vision(self):
         """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
-        return (
-            self.is_llama_vision()
-            or (
-                "mistral" in self.model_name.lower() and self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower()
+        return self.is_llama_vision() or (
+            "mistral" in self.model_name.lower()
+            and (
+                (self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower())
+                or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
             )
-            or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
         )
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        # For Llama vision models, text keys always have "text_model." prefix
+        # Llama vision models use "text_model." prefix for text keys
+        # Other vision models (Mistral, etc.) don't use text_model prefix for text
         if self.is_llama_vision():
             text_prefix = self.state_dict_text_prefix
-        elif self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
-            text_prefix = self.state_dict_text_prefix
         else:
+            # Standard models and non-Llama vision: no prefix for text, prefix for vision
             text_prefix = "" if not is_vision else self.state_dict_text_prefix
 
         vision_prefix = self.state_dict_vision_prefix if is_vision else ""
@@ -1974,7 +1965,9 @@ class ModelArgs:
 
                     model_cls = AutoModelForCausalLM
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
+                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                    # Special case Mistral-Small-3.1-24B-Instruct-2503: HF's AutoModel doesn't work,
+                    # similar to Qwen2.5-VL, until fully integrated into a HF release
                     from transformers import Mistral3ForConditionalGeneration
 
                     model_cls = Mistral3ForConditionalGeneration
