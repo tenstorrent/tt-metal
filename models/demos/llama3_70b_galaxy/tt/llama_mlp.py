@@ -201,9 +201,9 @@ class TtLlamaMLP(LightweightModule):
 
         # ========== W1 Linear ==========
         # Convert inputs to torch before operation for per-device comparison
-        if debug_pcc:
-            x_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(x)]
-            w1_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(self.w1)]
+        # if debug_pcc:
+        #     x_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(x)]
+        #     w1_torch_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(self.w1)]
 
         w1_out = ttnn.linear(
             x,
@@ -313,28 +313,119 @@ class TtLlamaMLP(LightweightModule):
 
         use_torch_mul = os.environ.get("USE_TORCH_MUL") == "1"
 
+        # w1_out_reduced_after_silu = ttnn.silu(w1_out_reduced)
+
         if use_torch_mul:
             # Convert inputs to torch, do SiLU * mul in torch, convert back to ttnn
-            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
+            # mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=[8, 4])
 
-            # Convert w1_out_reduced and w3_out_reduced to torch
-            w1_torch = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)
-            w3_torch = ttnn.to_torch(w3_out_reduced, mesh_composer=mesh_composer)
+            # # Convert w1_out_reduced and w3_out_reduced to torch
+            # w1_torch = ttnn.to_torch(w1_out_reduced, mesh_composer=mesh_composer)
 
-            # Apply SiLU to w1 and multiply with w3
-            ff1ff3_torch = torch.nn.functional.silu(w1_torch.float()) * w3_torch.float()
+            # # Apply SiLU to w1 and multiply with w3
+            # w1_silu_torch = torch.nn.functional.silu(w1_torch.float())
 
-            # Convert back to ttnn with proper sharding
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=list(self.mesh_device.shape))
+            # # Convert back to ttnn with proper sharding
+            # mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=list(self.mesh_device.shape))
 
-            ff1ff3 = ttnn.from_torch(
-                ff1ff3_torch,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            # w1_silu_ttnn = ttnn.from_torch(
+            #     w1_silu_torch,
+            #     device=self.mesh_device,
+            #     dtype=ttnn.bfloat8_b,
+            #     layout=ttnn.TILE_LAYOUT,
+            #     mesh_mapper=mesh_mapper,
+            #     memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            # )
+
+            # Assume w1_out_reduced is WIDTH_SHARDED BF16 or BF8_B on your sub-core grid
+
+            # 0. Move to interleaved BF16 for numerics
+            # w1_interleaved = ttnn.sharded_to_interleaved(
+            #     w1_out_reduced,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,  # or DRAM, but L1 is fine
+            # )
+
+            sharde_mem_config = w1_out_reduced.memory_config()
+
+            w1_out_reduced_interleaved = ttnn.sharded_to_interleaved(
+                w1_out_reduced,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # or DRAM, but L1 is fine
             )
+            # Optional but recommended if source is BF8_B:
+            w1_out_reduced_bf16 = ttnn.typecast(
+                w1_out_reduced_interleaved, ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids
+            )
+
+            w1_out_reduced_bf16_sharded = ttnn.to_memory_config(w1_out_reduced_bf16, w1_out_reduced.memory_config())
+
+            # 1. -x
+            x_neg = ttnn.multiply(
+                w1_out_reduced_bf16_sharded,
+                -1.0,
+                memory_config=w1_out_reduced_bf16_sharded.memory_config(),
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.deallocate(w1_out_reduced_bf16_sharded)
+
+            x_neg_interleaved = ttnn.sharded_to_interleaved(
+                x_neg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # or DRAM, but L1 is fine
+            )
+
+            # 2. exp(-x)
+            x_exp = ttnn.exp(
+                x_neg_interleaved,
+                fast_and_approximate_mode=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sub_core_grids=self.args.sub_core_grids,
+            )
+            ttnn.deallocate(x_neg_interleaved)
+
+            # 3. 1 + exp(-x)  (this is where sub_core_grids *does* apply)
+            x_exp_plus_one = ttnn.add(
+                x_exp,
+                1.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sub_core_grids=self.args.sub_core_grids,
+            )
+            ttnn.deallocate(x_exp)
+
+            x_exp_plus_one_sharded = ttnn.to_memory_config(x_exp_plus_one, w1_out_reduced.memory_config())
+
+            # 4. sigmoid(x) = 1 / (1 + exp(-x))
+            sigmoid_x_sharded = ttnn.reciprocal(
+                x_exp_plus_one_sharded,
+            )
+            ttnn.deallocate(x_exp_plus_one_sharded)
+
+            # 5. SiLU(x) = x * sigmoid(x)
+            w1_out_reduced_silu = ttnn.mul(
+                sigmoid_x_sharded,
+                w1_out_reduced,
+                memory_config=w1_out_reduced.memory_config(),
+                dtype=ttnn.bfloat16,  # or leave default
+            )
+            ttnn.deallocate(sigmoid_x_sharded)
+            ttnn.deallocate(w1_out_reduced)
+
+            # 7. Now ff1ff3 = SiLU(w1) * w3 on sharded tensors
+            ff1ff3 = ttnn.mul(
+                w1_out_reduced_silu,
+                w3_out_reduced,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.deallocate(w1_out_reduced_silu)
+            ttnn.deallocate(w3_out_reduced)
+
+            ff1ff3_interleaved = ttnn.sharded_to_interleaved(
+                ff1ff3,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(ff1ff3)
+
+            ff1ff3_bf16 = ttnn.typecast(ff1ff3_interleaved, ttnn.bfloat8_b, sub_core_grids=self.args.sub_core_grids)
+            ff1ff3 = ttnn.to_memory_config(ff1ff3_bf16, sharde_mem_config)
+
         else:
             # # Save inputs and outputs for layers 6 and 7
             # if self.layer_num in [6, 7]:
@@ -349,26 +440,39 @@ class TtLlamaMLP(LightweightModule):
             #     torch.save(w3_out_reduced_torch, f"w3_out_reduced_layer{self.layer_num}.pt")
             #     print(f"Saved w3_out_reduced_layer{self.layer_num}.pt, shape: {w3_out_reduced_torch.shape}")
 
-            w1_out_reduced_silu_fp32 = ttnn.typecast(w1_out_reduced, ttnn.float32)
-            w1_out_reduced_silu_out_fp32 = ttnn.silu(w1_out_reduced_silu_fp32)
-            ttnn.deallocate(w1_out_reduced_silu_fp32)
+            # Move inputs to DRAM interleaved memory config
+            w1_out_reduced_dram = ttnn.to_memory_config(w1_out_reduced, ttnn.DRAM_MEMORY_CONFIG)
+            w3_out_reduced_dram = ttnn.to_memory_config(w3_out_reduced, ttnn.DRAM_MEMORY_CONFIG)
 
-            # Cast inputs to float32 for higher precision mul
-            w3_out_reduced_fp32 = ttnn.typecast(w3_out_reduced, ttnn.float32)
-            ttnn.deallocate(w3_out_reduced)
+            # Cast inputs to float32 with sub_core_grids
+            w1_out_reduced_fp32 = ttnn.typecast(
+                w1_out_reduced_dram, ttnn.float32, sub_core_grids=self.args.sub_core_grids
+            )
+            w3_out_reduced_fp32 = ttnn.typecast(
+                w3_out_reduced_dram, ttnn.float32, sub_core_grids=self.args.sub_core_grids
+            )
+            ttnn.deallocate(w1_out_reduced_dram)
+            ttnn.deallocate(w3_out_reduced_dram)
 
+            w1_out_reduced_fp32 = ttnn.to_memory_config(w1_out_reduced_fp32, w1_out_reduced.memory_config())
+            w3_out_reduced_fp32 = ttnn.to_memory_config(w3_out_reduced_fp32, w3_out_reduced.memory_config())
+
+            # Apply silu to w1
+            w1_out_reduced_silu_fp32 = ttnn.silu(w1_out_reduced_fp32)
+            ttnn.deallocate(w1_out_reduced_fp32)
+
+            # Multiply silu(w1) * w3
             ff1ff3_fp32 = ttnn.mul(
-                w1_out_reduced_silu_out_fp32,
+                w1_out_reduced_silu_fp32,
                 w3_out_reduced_fp32,
                 dtype=ttnn.float32,
-                memory_config=w1_out_reduced.memory_config(),
             )
+            ttnn.deallocate(w1_out_reduced_silu_fp32)
+            ttnn.deallocate(w3_out_reduced_fp32)
 
             # Cast output back to bfloat8_b
             ff1ff3 = ttnn.typecast(ff1ff3_fp32, ttnn.bfloat8_b)
             ttnn.deallocate(ff1ff3_fp32)
-            ttnn.deallocate(w1_out_reduced_silu_out_fp32)
-            ttnn.deallocate(w3_out_reduced_fp32)
 
             # Save ff1ff3 output for layers 6 and 7
             # if self.layer_num in [6, 7]:
@@ -399,9 +503,6 @@ class TtLlamaMLP(LightweightModule):
         #         allclose_result = comp_allclose(ff1ff3_torch, ff1ff3_tt_torch)
         #         status = "✓ PASS" if passing else "✗ FAIL"
         #         print(f"    Output PCC: {status} | {pcc_message} | {allclose_result}")
-
-        ttnn.deallocate(w3_out_reduced)
-        ttnn.deallocate(w1_out_reduced)
 
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,

@@ -93,7 +93,7 @@ def test_qwen_transformer_inference(
     reference_model.load_state_dict(reference_state_dict)
 
     generation_start_pos = 0
-    generation_length = 2
+    generation_length = 10
     all_tests_pass = True
 
     # Prepare page table for paged attention

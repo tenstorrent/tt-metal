@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
@@ -354,6 +353,7 @@ class TtTransformerBlock(LightweightModule):
             #     )
             # else:
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
+
         if mode == "decode":
             if self.unfuse_res_add:
                 h = ttnn.add(attn_out, h, dtype=ttnn.bfloat16)
@@ -385,7 +385,7 @@ class TtTransformerBlock(LightweightModule):
             #             self.ff_norm.norm.output_mem_config, mode
             #         )
             #     else:
-            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+            ff_in_sharded, _ = self.ff_norm(h, None, mode)
             attn_out.deallocate(True)
 
         # debug pcc
