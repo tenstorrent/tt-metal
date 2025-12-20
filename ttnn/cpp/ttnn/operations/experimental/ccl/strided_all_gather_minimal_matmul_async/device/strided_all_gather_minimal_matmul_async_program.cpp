@@ -56,7 +56,7 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             attributes.strided_all_gather_async_struct,
             ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
             output_tensor.at(0));
-        minimal_matmul::helpers::override_program_parameters(
+        minimal_matmul::program::helpers::override_program_parameters(
             shared_variables.mm_shared_variables,
             &attributes.matmul_struct,
             program,
@@ -109,7 +109,7 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
     // Matmul
-    auto mm_shared_variables = operations::experimental::minimal_matmul::detail::minimal_matmul_factory_helper(
+    auto mm_shared_variables = operations::experimental::minimal_matmul::program::minimal_matmul_factory_helper(
         program,
         all_gather_output_tensor,
         weight_tensor,
