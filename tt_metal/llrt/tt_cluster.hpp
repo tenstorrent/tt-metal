@@ -41,7 +41,7 @@ class RunTimeOptions;
 namespace tt_fabric {
 class ControlPlane;
 class FabricNodeId;
-}
+}  // namespace tt_fabric
 namespace tt_metal {
 class Hal;
 }
@@ -103,6 +103,12 @@ public:
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
+
+    // Returns map of logical chip ID to PCIe device ID
+    const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
+        return this->cluster_desc_->get_chips_with_mmio();
+    }
+
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
@@ -346,6 +352,8 @@ public:
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
+
+    uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
 
     const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);

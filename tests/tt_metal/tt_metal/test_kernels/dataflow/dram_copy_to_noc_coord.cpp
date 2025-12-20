@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#if defined(COMPILE_FOR_ERISC)
+#include "internal/ethernet/tunneling.h"
+#endif
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -26,6 +29,8 @@ void kernel_main() {
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
     std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
+    std::uint32_t eth_src_overflow_addr = get_arg_val<uint32_t>(11);
+    std::uint32_t eth_dest_overflow_addr = get_arg_val<uint32_t>(12);
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -55,7 +60,15 @@ void kernel_main() {
 #endif
 
     if (l1_overflow_addr) {
-        debug_sanitize_l1_access(l1_overflow_addr, 1);
+        experimental::CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);
+        l1_overflow_buffer[0] = 0xDEADBEEF;
+    }
+
+    if (eth_src_overflow_addr || eth_dest_overflow_addr) {
+        // Destructive if not caught properly
+#if defined(COMPILE_FOR_ERISC)
+        internal_::eth_send_packet(0, eth_src_overflow_addr, eth_dest_overflow_addr, 4);
+#endif
     }
 
     // NOC src address

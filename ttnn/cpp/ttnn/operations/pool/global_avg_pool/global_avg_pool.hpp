@@ -19,7 +19,6 @@ Tensor global_avg_pool2d(
 
 }  // namespace tt::tt_metal
 
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 

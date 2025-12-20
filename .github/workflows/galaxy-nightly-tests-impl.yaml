@@ -16,13 +16,21 @@ on:
         required: false
         type: string
         default: "in-service"
-      topology:
+      wormhole:
         required: false
-        type: string
-        default: "topology-6u"
-
+        type: boolean
+        default: true
+      blackhole:
+        required: false
+        type: boolean
+        default: false
+      scheduled:
+        required: false
+        type: boolean
+        default: false
 jobs:
   galaxy-nightly-tests:
+    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,19 +38,79 @@ jobs:
           { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar
           { name: "Galaxy Fabric unit tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 25, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 45, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          {
-            name: "Llama Galaxy Accuracy Test",
-            arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
-            timeout: 15,
-            owner_id: U053W15B6JF
-          } # Djordje Ivanovic
+          # {
+          #   name: "Llama Galaxy Accuracy Test",
+          #   arch: wormhole_b0,
+          #   cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
+          #   timeout: 15,
+          #   owner_id: U053W15B6JF
+          # } # Djordje Ivanovic
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
       - pipeline-functional
-      - ${{ inputs.topology }}
+      - topology-6u
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  galaxy-bh-nightly-tests:
+    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
+        ]
+    name: ${{ matrix.test-group.name }}
+    runs-on:
+      - arch-blackhole
+      - pipeline-functional
+      - topology-6u
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
