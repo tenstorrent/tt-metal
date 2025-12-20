@@ -6,18 +6,18 @@
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
 #include "core_config.h"
 
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 // clang-format on
 
 // Required defines

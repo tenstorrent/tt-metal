@@ -15,7 +15,7 @@
 #include "tt_metal/fabric/hw/inc/udm/udm_memory_pool.hpp"
 #include <type_traits>
 #include "tt_fabric_udm_impl.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 namespace tt::tt_fabric::udm {
 

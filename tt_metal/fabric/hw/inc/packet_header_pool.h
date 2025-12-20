@@ -7,8 +7,8 @@
 #include <cstdint>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "dev_mem_map.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "noc_nonblocking_api.h"
 #include "core_config.h"
 
