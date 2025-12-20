@@ -20,7 +20,7 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
     // In1 -> unpB
@@ -34,7 +34,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
@@ -45,9 +45,9 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpB_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
-    llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
+    llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(unpA_operand, unpA_operand);
 }
 
 inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {

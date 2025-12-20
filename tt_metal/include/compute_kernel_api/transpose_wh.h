@@ -33,13 +33,9 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_int32) {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-        UNPACK((llk_unpack_A_init<
-                BroadcastType::NONE,
-                false,
-                EltwiseBinaryReuseDestType::NONE,
-                UnpackToDestEn,
-                true /*disable_src_zero_flag*/>(true, false, icb)));
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
@@ -66,12 +62,8 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_int32) {
-        UNPACK((llk_unpack_A_init<
-                BroadcastType::NONE,
-                false,
-                EltwiseBinaryReuseDestType::NONE,
-                UnpackToDestEn,
-                true /*disable_src_zero_flag*/>(true, false, icb)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
