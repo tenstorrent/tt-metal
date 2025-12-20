@@ -54,7 +54,7 @@ HANG_APP_EXPECTED_RESULTS = {
                     "line": 40,
                 },
                 "trisc2": {
-                    "pc": 36236,
+                    "pc": 36262,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
