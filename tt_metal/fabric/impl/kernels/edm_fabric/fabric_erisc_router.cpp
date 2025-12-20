@@ -34,12 +34,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
 #include "hostdev/fabric_telemetry_msgs.h"
-<<<<<<< HEAD
-||||||| parent of 939efba02e (Initialize fabric telemetry in ERISC firmware)
-#include "fabric_telemetry_msgs.h"
-=======
 #include "eth_l1_address_map.h"
->>>>>>> 939efba02e (Initialize fabric telemetry in ERISC firmware)
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif

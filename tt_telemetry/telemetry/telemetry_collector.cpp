@@ -169,8 +169,12 @@ struct MetricTiming {
 };
 
 // Global vector to track all metric timings for reporting
+// NOTE: This is temporary debug instrumentation to identify slow metrics.
+// A cleaner design would track timing in the Metric base class, but that requires
+// modifying all existing metrics. This approach is non-invasive and can be easily removed.
+// Safe as global state since telemetry collector updates metrics sequentially (single-threaded).
+// TODO: Consider refactoring to track timing in Metric base class
 static std::vector<MetricTiming> metric_timings_;
-static std::mutex metric_timings_mutex_;
 
 // Helper function to update a collection of metrics with exception handling
 template <typename MetricType>
@@ -192,11 +196,8 @@ static size_t update_metrics_with_exception_handling(
                 std::chrono::duration_cast<std::chrono::milliseconds>(metric_end - metric_start).count();
 
             // Track all metric timings for summary reporting
-            {
-                std::lock_guard<std::mutex> lock(metric_timings_mutex_);
-                metric_timings_.push_back(
-                    {std::string(metric_type_name), metric->telemetry_path_string(), metric_duration_ms});
-            }
+            metric_timings_.push_back(
+                {std::string(metric_type_name), metric->telemetry_path_string(), metric_duration_ms});
 
             if (metric_duration_ms >= SLOW_METRIC_THRESHOLD_MS) {
                 log_warning(
@@ -225,10 +226,7 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
     // Clear previous timing data
-    {
-        std::lock_guard<std::mutex> lock(metric_timings_mutex_);
-        metric_timings_.clear();
-    }
+    metric_timings_.clear();
 
     // Track failed metrics to report summary at end of cycle
     size_t failed_metrics = 0;
@@ -280,25 +278,22 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
         string_metrics_.size());
 
     // Sort metric timings by duration (descending) and report top 10 slowest
-    {
-        std::lock_guard<std::mutex> lock(metric_timings_mutex_);
-        std::sort(metric_timings_.begin(), metric_timings_.end(), [](const MetricTiming& a, const MetricTiming& b) {
-            return a.duration_ms > b.duration_ms;
-        });
+    std::sort(metric_timings_.begin(), metric_timings_.end(), [](const MetricTiming& a, const MetricTiming& b) {
+        return a.duration_ms > b.duration_ms;
+    });
 
-        size_t top_n = std::min(static_cast<size_t>(10), metric_timings_.size());
-        if (top_n > 0) {
-            log_info(tt::LogAlways, "Top {} slowest metrics:", top_n);
-            for (size_t i = 0; i < top_n; ++i) {
-                const auto& timing = metric_timings_[i];
-                log_info(
-                    tt::LogAlways,
-                    "  #{}: {} ms - {} metric: {}",
-                    i + 1,
-                    timing.duration_ms,
-                    timing.metric_type,
-                    timing.metric_path);
-            }
+    size_t top_n = std::min(static_cast<size_t>(10), metric_timings_.size());
+    if (top_n > 0) {
+        log_info(tt::LogAlways, "Top {} slowest metrics:", top_n);
+        for (size_t i = 0; i < top_n; ++i) {
+            const auto& timing = metric_timings_[i];
+            log_info(
+                tt::LogAlways,
+                "  #{}: {} ms - {} metric: {}",
+                i + 1,
+                timing.duration_ms,
+                timing.metric_type,
+                timing.metric_path);
         }
     }
 }
