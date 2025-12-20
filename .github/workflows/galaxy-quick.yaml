@@ -2,6 +2,11 @@ name: "(Galaxy) Quick"
 
 on:
   workflow_dispatch:
+    inputs:
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
   schedule:
     - cron: "0 */4 * * *" # Runs BH every 4 hours
   push:
@@ -30,3 +35,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       scheduled: ${{ github.event_name == 'schedule' }}
+      extra-tag: ${{ inputs.extra-tag }}
