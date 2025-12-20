@@ -143,8 +143,8 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         mem_config_fb,
         *socket_config.sender_rank,
         *socket_config.receiver_rank,
-        socket_config.sender_mesh_id,
-        socket_config.receiver_mesh_id);
+        socket_config.sender_mesh_id.value(),
+        socket_config.receiver_mesh_id.value());
     // Build the SocketPeerDescriptor FlatBuffer (root object)
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
         builder,
