@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
 
@@ -32,6 +32,8 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
+    load_hf_state_dict,
+    load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -40,6 +42,11 @@ from models.tt_transformers.tt.load_checkpoints import (
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
+
+
+class CheckpointType(Enum):
+    Meta = auto()
+    HuggingFace = auto()
 
 
 class TensorGroup(Enum):
@@ -535,6 +542,9 @@ class ModelArgs:
         # Load model params
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
+
+        # Set checkpoint type - always HuggingFace since we only support HF_MODEL now
+        self.checkpoint_type = CheckpointType.HuggingFace
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
