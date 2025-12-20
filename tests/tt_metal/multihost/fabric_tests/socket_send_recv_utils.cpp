@@ -276,12 +276,12 @@ bool test_socket_send_recv_big_mesh(
     Rank controller_rank;
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (*std::get<0>(mesh_id_and_host_rank) == socket.get_config().sender_mesh_id) {
+        if (*std::get<0>(mesh_id_and_host_rank) == socket.get_config().sender_mesh_id.value()) {
             sender_ranks.push_back(rank);
             if (*std::get<1>(mesh_id_and_host_rank) == 0) {
                 controller_rank = rank;
             }
-        } else if (*std::get<0>(mesh_id_and_host_rank) == socket.get_config().receiver_mesh_id) {
+        } else if (*std::get<0>(mesh_id_and_host_rank) == socket.get_config().receiver_mesh_id.value()) {
             recv_ranks.push_back(rank);
         }
     }
@@ -337,7 +337,7 @@ bool test_socket_send_recv_big_mesh(
         src_vec.insert(src_vec.end(), src_vec_per_core.begin(), src_vec_per_core.end());
     }
 
-    if (*my_mesh_id == socket.get_config().sender_mesh_id) {
+    if (*my_mesh_id == socket.get_config().sender_mesh_id.value()) {
         const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
         for (int i = 0; i < num_txns; i++) {

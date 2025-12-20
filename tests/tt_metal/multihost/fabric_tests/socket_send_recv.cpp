@@ -217,6 +217,34 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
+TEST_F(MeshDeviceExaboxFixture, CustomContextValidation) {
+    // Create a SubContext with sender rank = 0 and receiver rank = 2
+    using namespace tt_metal::distributed::multihost;
+    std::vector<int> handshake_ranks = {0, 2};
+    auto parent_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto socket_connection = tt_metal::distributed::SocketConnection{
+        .sender_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)}};
+
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig{
+        .socket_storage_type = tt_metal::BufferType::L1,
+        .fifo_size = 1024,
+    };
+
+    if (parent_context->rank() == Rank{0}) {
+        auto sub_context = parent_context->create_sub_context(handshake_ranks);
+        tt_metal::distributed::SocketConfig socket_config(
+            {socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+    } else if (parent_context->rank() == Rank{2}) {
+        auto sub_context = parent_context->create_sub_context(handshake_ranks);
+        tt_metal::distributed::SocketConfig socket_config(
+            {socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+    }
+    parent_context->barrier();
+}
+
 TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
     auto& metal_context = tt::tt_metal::MetalContext::instance();
     const auto& distributed_context = metal_context.global_distributed_context();
