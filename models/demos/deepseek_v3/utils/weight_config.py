@@ -3,6 +3,7 @@
 
 import fcntl
 import json
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 
 # Import TENSOR_CACHE_EXTENSION from config_helpers since it's also used by shard_and_save
-from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
+from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION, incremental_weight_cache
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 
@@ -145,17 +146,29 @@ def get_weight_config(
         state_dicts = (model_state,)
 
     # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
+    # Enable incremental caching when rebuilding (not forcing recalculation)
+    # This allows reusing existing .tensorbin files if they exist
+    enable_incremental = not force_recalculate
+    if enable_incremental:
+        logger.info("Using incremental weight caching (will skip existing files)")
 
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    with incremental_weight_cache(enabled=enable_incremental):
+        logger.info("Converting weights to TTNN SavedWeight format...")
+        weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
 
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)
 
     # Save config with relative paths for portability
     # Use exclusive lock to prevent concurrent writes and corruption
-    with locked_file(config_path, "w", exclusive=True) as f:
+    # Write atomically to avoid truncated config.json on crash
+    config_tmp_path = config_path.with_suffix(".json.tmp")
+    with locked_file(config_tmp_path, "w", exclusive=True) as f:
         json.dump(weight_config, f, cls=WeightConfigEncoder)
+        f.flush()
+        os.fsync(f.fileno())  # Ensure data is written to disk
+    # Atomic replace: either old config.json exists or new one, never truncated
+    os.replace(config_tmp_path, config_path)
 
     # Return normalized config with absolute paths for runtime use
     normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)

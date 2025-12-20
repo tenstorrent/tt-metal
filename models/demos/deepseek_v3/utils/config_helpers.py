@@ -3,6 +3,7 @@
 
 import itertools
 import math
+import time
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
@@ -653,7 +654,11 @@ def shard_and_save(
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
+
+    logger.debug(f"Dumping tensor to cache: {path}")
+    start_time = time.time()
     ttnn.dump_tensor(path, ttnn_tensor)
+    logger.debug(f"Finished dumping tensor to cache: {path} in {time.time() - start_time:.2f} seconds")
 
     # Always convert absolute paths to relative paths for portability
     # This ensures SavedWeight objects always have relative paths regardless of convert_meta flag

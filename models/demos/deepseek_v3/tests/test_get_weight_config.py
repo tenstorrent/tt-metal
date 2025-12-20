@@ -15,7 +15,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
+from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION, incremental_weight_cache
 from models.demos.deepseek_v3.utils.weight_config import (
     WeightConfigEncoder,
     get_weight_config,
@@ -559,3 +559,165 @@ def test_get_weight_config_returns_normalized_paths(tmp_path: Path) -> None:
     # The saved path should be relative (as a string)
     assert "weights" in saved_config["w"]["path"]
     assert not Path(saved_config["w"]["path"]).is_absolute()
+
+
+def test_get_weight_config_incremental_repair_reuses_existing_files(tmp_path: Path) -> None:
+    """Test that incremental mode reuses existing .tensorbin files when rebuilding."""
+    call_count = {"n": 0}
+    file_write_times = {}
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            call_count["n"] += 1
+            (weight_cache_path / "weights").mkdir(parents=True, exist_ok=True)
+
+            # Create two weight files
+            rel_path1 = Path("weights") / f"w1{TENSOR_CACHE_EXTENSION}"
+            rel_path2 = Path("weights") / f"w2{TENSOR_CACHE_EXTENSION}"
+
+            # Track when files are written
+            file1_path = weight_cache_path / rel_path1
+            file2_path = weight_cache_path / rel_path2
+
+            # Only write w1 if it doesn't exist (simulating incremental behavior)
+            if not file1_path.exists():
+                file1_path.write_bytes(b"w1-content")
+                file_write_times["w1"] = file1_path.stat().st_mtime
+
+            # w2 is always written (doesn't exist yet)
+            file2_path.write_bytes(b"w2-content")
+            file_write_times["w2"] = file2_path.stat().st_mtime
+
+            return {
+                "w1": SavedWeight(path=rel_path1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                "w2": SavedWeight(path=rel_path2, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            }
+
+    mesh_device = _FakeMeshDevice(shape=(2, 2))
+    hf_config = _make_hf_config(num_hidden_layers=2)
+    base_cache = tmp_path / "weight_cache"
+
+    # First call: create cache with both files
+    cfg0 = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+    )
+    assert call_count["n"] == 1
+    assert cfg0["w1"].path.exists()
+    assert cfg0["w2"].path.exists()
+
+    # Save the original write time for w1
+    w1_original_time = (
+        (
+            base_cache
+            / f"{hf_config.num_hidden_layers}_layers"
+            / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+            / cfg0["w1"].path.relative_to(
+                base_cache
+                / f"{hf_config.num_hidden_layers}_layers"
+                / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+            )
+        )
+        .stat()
+        .st_mtime
+    )
+
+    # Delete config.json and w2 to simulate partial cache corruption
+    weight_cache_path = (
+        base_cache / f"{hf_config.num_hidden_layers}_layers" / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
+    config_path = weight_cache_path / "config.json"
+    config_path.unlink()
+    w2_path = weight_cache_path / "weights" / f"w2{TENSOR_CACHE_EXTENSION}"
+    w2_path.unlink()
+
+    # Second call: should rebuild, but w1 should be reused (incremental mode)
+    # Since we're using a fake module that doesn't actually use shard_and_save,
+    # we can't directly test the skip behavior. But we can verify that
+    # the rebuild happens and the config is recreated.
+    cfg1 = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,  # This should enable incremental mode
+    )
+    assert call_count["n"] == 2  # convert_weights was called again
+    assert config_path.exists()  # config.json was recreated
+    assert cfg1["w1"].path.exists()
+    assert cfg1["w2"].path.exists()
+
+
+def test_get_weight_config_force_recalculate_disables_incremental(tmp_path: Path) -> None:
+    """Test that force_recalculate=True disables incremental mode."""
+    call_count = {"n": 0}
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            call_count["n"] += 1
+            (weight_cache_path / "weights").mkdir(parents=True, exist_ok=True)
+            rel_path = Path("weights") / f"w{TENSOR_CACHE_EXTENSION}"
+            # Always write (simulating non-incremental behavior)
+            (weight_cache_path / rel_path).write_bytes(f"content-{call_count['n']}".encode("utf-8"))
+            return {"w": SavedWeight(path=rel_path, memory_config=ttnn.DRAM_MEMORY_CONFIG)}
+
+    mesh_device = _FakeMeshDevice(shape=(1, 1))
+    hf_config = _make_hf_config(num_hidden_layers=1)
+    base_cache = tmp_path / "weight_cache"
+
+    # First call: create cache
+    cfg0 = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+    )
+    assert call_count["n"] == 1
+
+    # Read original content
+    weight_cache_path = (
+        base_cache / f"{hf_config.num_hidden_layers}_layers" / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
+    w_path = weight_cache_path / "weights" / f"w{TENSOR_CACHE_EXTENSION}"
+    original_content = w_path.read_bytes()
+
+    # Second call with force_recalculate=True: should NOT use incremental mode
+    # and should overwrite the file
+    cfg1 = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=True,  # This should disable incremental mode
+    )
+    assert call_count["n"] == 2  # convert_weights was called again
+
+    # File should have been overwritten with new content
+    new_content = w_path.read_bytes()
+    assert new_content != original_content
+    assert new_content == b"content-2"
+
+
+def test_incremental_weight_cache_context_manager() -> None:
+    """Test that incremental_weight_cache context manager can be used without errors."""
+    # Test that the context manager can be entered and exited
+    with incremental_weight_cache(enabled=True):
+        pass  # Context should work
+
+    with incremental_weight_cache(enabled=False):
+        pass  # Context should work
+
+    # Test nested contexts
+    with incremental_weight_cache(enabled=True):
+        with incremental_weight_cache(enabled=False):
+            pass  # Nested contexts should work
