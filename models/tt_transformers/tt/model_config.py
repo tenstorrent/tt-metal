@@ -1727,7 +1727,9 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        # Use main branch default (32) but allow override from config
+        # Default to 32 layers (standard for most vision models like Llama vision)
+        # This can be overridden by config values: num_hidden_layers or depth
+        # The default of 32 comes from the main branch and is appropriate for most vision transformer models
         self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 32
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
@@ -1833,19 +1835,6 @@ class ModelArgs:
     vision_max_num_chunks={self.vision_max_num_chunks},
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
-
-    def is_llama_vision(self):
-        return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
-
-    def is_vision(self):
-        """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
-        return (
-            self.is_llama_vision()
-            or (
-                "mistral" in self.model_name.lower() and self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower()
-            )
-            or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
-        )
 
     def can_enable_trace(self, prefill_seq_len):
         """
@@ -2647,8 +2636,6 @@ class ModelArgs:
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):

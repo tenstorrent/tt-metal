@@ -24,7 +24,6 @@ class TTMistral3PatchMerger(LightweightModule):
     ):
         super().__init__()
         self.device = mesh_device
-        hidden_size = args.vision_dim
         self.spatial_merge_size = 2
         self.patch_size = args.vision_patch_size
         self.args = args
@@ -34,11 +33,6 @@ class TTMistral3PatchMerger(LightweightModule):
 
         def get_bias(name):
             return state_dict[f"{state_dict_prefix}{name}.bias"]
-
-        def cache_name(name):
-            if args.dummy_weights:
-                return None
-            return weight_cache_path / f"{state_dict_prefix}.{name}"
 
         def as_tensor(name, dtype, is_bias=False):
             tensor_data = get_bias(name) if is_bias else get_weight(name)
@@ -130,11 +124,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
         def get_bias(name):
             return state_dict[f"{state_dict_prefix}{name}.bias"]
 
-        def cache_name(name):
-            if args.dummy_weights:
-                return None
-            return weight_cache_path / f"{state_dict_prefix}.{name}"
-
         def as_tensor(name, dtype, is_bias=False):
             tensor_data = get_bias(name) if is_bias else get_weight(name)
             return ttnn.as_tensor(
@@ -147,14 +136,20 @@ class TTMistral3MultiModalProjector(LightweightModule):
             )
 
         self.linear_1_weight = as_tensor("linear_1", dtype)
-        self.linear_1_bias = as_tensor(
-            "linear_1", ttnn.bfloat16, is_bias=False
-        )  # Bias tensor created but not used - matches original Mistral model which has bias=False
+        # Note: linear_1.bias exists in state_dict but the original Mistral model uses bias=False for these layers
+        # We load it for completeness but don't use it in forward pass to match original behavior
+        try:
+            self.linear_1_bias = as_tensor("linear_1", ttnn.bfloat16, is_bias=True)
+        except KeyError:
+            self.linear_1_bias = None
 
         self.linear_2_weight = as_tensor("linear_2", dtype)
-        self.linear_2_bias = as_tensor(
-            "linear_2", ttnn.bfloat16, is_bias=False
-        )  # Bias tensor created but not used - matches original Mistral model which has bias=False
+        # Note: linear_2.bias exists in state_dict but the original Mistral model uses bias=False for these layers
+        # We load it for completeness but don't use it in forward pass to match original behavior
+        try:
+            self.linear_2_bias = as_tensor("linear_2", ttnn.bfloat16, is_bias=True)
+        except KeyError:
+            self.linear_2_bias = None
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
         image_features = self.norm(image_features, mode="decode")
@@ -163,13 +158,18 @@ class TTMistral3MultiModalProjector(LightweightModule):
         hidden_states = ttnn.linear(
             image_features,
             self.linear_1_weight,
+            bias=self.linear_1_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="gelu",  # Using GELU activation as per Mistral 3 model
         )
 
         hidden_states = ttnn.linear(
-            hidden_states, self.linear_2_weight, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            hidden_states,
+            self.linear_2_weight,
+            bias=self.linear_2_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return hidden_states

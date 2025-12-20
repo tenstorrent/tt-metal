@@ -40,10 +40,13 @@ class TtMistralVisionTransformer(LightweightModule):
             eps=1e-05,  # layer_norm_eps
         )
 
-    def forward(self, input_tensor, image_sizes=None):
+    def forward(self, input_tensor, image_sizes):
         """
         input_tensor shape: (B, C, H, W)
+        image_sizes: List of tuples [(height, width), ...] for each image in the batch
         """
+        if image_sizes is None or len(image_sizes) == 0:
+            raise ValueError("image_sizes must be provided and non-empty")
 
         x = self.vision_tower(input_tensor, image_sizes=image_sizes)
         x = ttnn.squeeze(ttnn.squeeze(x, 0), 0)
