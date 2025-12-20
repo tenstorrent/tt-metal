@@ -47,12 +47,14 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config);
