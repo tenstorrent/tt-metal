@@ -90,6 +90,16 @@ def state_dict(model_path):
     yield load_state_dict(model_path, "")
 
 
+@pytest.fixture(scope="function", autouse=True)
+def clear_state_dict_cache(state_dict):
+    """
+    Clear the LazyStateDict cache after each test to prevent memory accumulation.
+    This preserves file handles (mmap benefits) while freeing tensor memory.
+    """
+    yield
+    state_dict.clear_cache()
+
+
 @pytest.fixture(scope="session")
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
