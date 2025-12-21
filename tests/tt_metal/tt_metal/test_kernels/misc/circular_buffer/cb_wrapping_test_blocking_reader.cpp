@@ -24,7 +24,7 @@ void MAIN {
 }
 }  // namespace NAMESPACE
 #else
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() { core_agnostic_main(); }
 #endif
 

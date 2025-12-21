@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-
+#include "api/dataflow/dataflow_api.h"
 /**
  * Simplified matmul writer kernel for width-sharded output.
  *
