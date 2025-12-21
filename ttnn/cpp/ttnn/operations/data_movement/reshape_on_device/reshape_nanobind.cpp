@@ -55,6 +55,7 @@ void bind_reshape(nb::module_& mod) {
         Equivalent pytorch code:
 
         .. code-block:: python
+
             input_tensor = torch.arange(4.)
             W = 1
             Z = 1

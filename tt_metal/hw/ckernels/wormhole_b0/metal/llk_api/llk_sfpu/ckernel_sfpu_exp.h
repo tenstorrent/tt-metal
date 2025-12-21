@@ -167,9 +167,14 @@ sfpi_inline sfpi::vFloat _sfpu_round_nearest_int32_(sfpi::vFloat z, sfpi::vInt& 
 sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
-    // Clamp to prevent overflow/underflow
+    // Exp computation uses bit-wise manipulation using exponent and mantissa fields
+    // For large values (e.g. |x| > 89), some intermediate values can overflow
+    // To avoid this, we check the value of the input using two thresholds.
+    //
+    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
+    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
     constexpr float OVERFLOW_THRESHOLD = 128.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -128.0f;
+    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
 
     // Step 1: Compute k = round(x / ln(2))
     // z = x / ln(2) = x * (1/ln(2))

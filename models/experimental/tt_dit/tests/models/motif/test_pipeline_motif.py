@@ -96,7 +96,7 @@ def test_motif_pipeline(
         topology=topology,
         width=width,
         height=height,
-        model_checkpoint_path=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+        checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
     )
 
     # Setup CI environment
@@ -135,8 +135,8 @@ def test_motif_pipeline(
                 cfg_scale=5.0,
                 seed=seed,
                 traced=traced,
-                timer=benchmark_profiler,
-                timer_iteration=0,
+                profiler=benchmark_profiler,
+                profiler_iteration=0,
             )
 
         output_filename = f"{filename_prefix}_{number}.png"

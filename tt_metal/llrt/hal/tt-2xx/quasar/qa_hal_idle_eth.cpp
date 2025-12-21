@@ -6,8 +6,8 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::idle_eth;
 
 #include <cstdint>

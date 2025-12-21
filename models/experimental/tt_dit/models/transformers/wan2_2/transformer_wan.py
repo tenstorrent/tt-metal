@@ -416,14 +416,14 @@ class WanTransformer3DModel:
         self.rope.load_state_dict(torch.load(cache_dict["rope"]))
         self.condition_embedder.load_state_dict(torch.load(cache_dict["condition_embedder"]))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.rope.load_state_dict(substate(state_dict, "rope"))
-        self.patch_embed.load_state_dict(substate(state_dict, "patch_embedding"))
+        self.patch_embed.load_torch_state_dict(substate(state_dict, "patch_embedding"))
         self.condition_embedder.load_state_dict(substate(state_dict, "condition_embedder"))
         for i, block in enumerate(self.blocks):
             block.load_state_dict(substate(state_dict, f"blocks.{i}"))
-        self.norm_out.load_state_dict(substate(state_dict, "norm_out"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out.load_torch_state_dict(substate(state_dict, "norm_out"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
         self.scale_shift_table = bf16_tensor(state_dict["scale_shift_table"], device=self.mesh_device)
 

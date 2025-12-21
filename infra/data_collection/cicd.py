@@ -68,6 +68,13 @@ def create_cicd_json_for_data_analysis(
 
         logger.info(f"Processing raw GitHub job {github_job_id}")
 
+        # Ignore skipped jobs
+        # Reason: if an entire matrix is skipped then we can get duplicate skipped jobs with the same pydantic keys
+        # Which will fail pydantic model validation.
+        if raw_job.get("job_status") == "skipped":
+            logger.info(f"Job id:{github_job_id} is skipped. Skipping job upload.")
+            continue
+
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
             tests = []

@@ -10,7 +10,7 @@
 #include <tuple>
 #include <algorithm>
 #include "event_metadata.hpp"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include "kernel_profiler.hpp"
 
 namespace noc_event_profiler {

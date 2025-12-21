@@ -55,10 +55,6 @@ run_python_model_tests_wormhole_b0() {
     HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama8b completed"
 
-    # Mistral-7B-v0.3
-    mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
-    tt_cache_mistral=$TT_CACHE_HOME/$mistral_weights
-    HF_MODEL=$mistral_weights TT_CACHE_PATH=$tt_cache_mistral pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {

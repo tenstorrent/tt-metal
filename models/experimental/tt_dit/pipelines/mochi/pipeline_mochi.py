@@ -5,7 +5,6 @@
 
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
-import os
 
 import ttnn
 import numpy as np
@@ -17,23 +16,16 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from diffusers.models import AutoencoderKLMochi
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
-from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 
 
-from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig
+from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
-from ...utils.cache import (
-    get_cache_path,
-    get_and_create_cache_path,
-    cache_dict_exists,
-    save_cache_dict,
-    load_cache_dict,
-)
+from ...utils import cache
 
 
 # from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
@@ -149,7 +141,6 @@ class MochiPipeline(DiffusionPipeline):
         parallel_config: DiTParallelConfig,
         vae_parallel_config: MochiVAEParallelConfig,
         num_links: int,
-        use_cache: bool = False,
         use_reference_vae: bool = False,
         model_name: str = "genmo/mochi-1-preview",
         force_zeros_for_empty_prompt: bool = False,
@@ -173,7 +164,6 @@ class MochiPipeline(DiffusionPipeline):
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
-        self.use_cache = use_cache
         self.reload_dit_model = self.mesh_device.get_num_devices() <= 8  # Only required if VAE is memory-constrained.
 
         # Create CCL manager
@@ -231,27 +221,21 @@ class MochiPipeline(DiffusionPipeline):
         )
 
         # Load state dict into TT transformer
-        if use_cache:
-            cache_path = get_and_create_cache_path(
-                model_name="mochi-1-preview",
-                subfolder="transformer",
-                parallel_config=parallel_config,
-                mesh_shape=tuple(mesh_device.shape),
-                dtype="bf16",
-            )
-            # create cache if it doesn't exist
-            if not cache_dict_exists(cache_path):
-                logger.info(
-                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
+        if not cache.initialize_from_cache(
+            self.transformer,
+            torch_transformer.state_dict(),
+            "mochi-1-preview",
+            "transformer",
+            self.parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
+            if self.reload_dit_model:
+                raise NotImplementedError(
+                    "Cache must be enabled when DiT model reloading is enabled (reload_dit_model=True). Please set TT_DIT_CACHE_DIR environment variable to enable caching."
                 )
-                self.transformer.load_state_dict(torch_transformer.state_dict())
-                save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
             else:
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                self.transformer.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
-            logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer.load_state_dict(torch_transformer.state_dict())
+                logger.info("Loading transformer weights from PyTorch state dict")
+                self.transformer.load_torch_state_dict(torch_transformer.state_dict())
 
         # Load pretrained VAE (Torch)
         torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
@@ -300,6 +284,86 @@ class MochiPipeline(DiffusionPipeline):
             transformer=self.transformer,
             vae=self.vae,
         )
+
+    @staticmethod
+    def create_pipeline(
+        mesh_device,
+        checkpoint_name,
+        sp_axis=None,
+        tp_axis=None,
+        vae_sp_axis=None,
+        vae_tp_axis=None,
+        vae_mesh_shape=None,
+        num_links=None,
+        use_reference_vae=False,
+        force_zeros_for_empty_prompt=False,
+    ):
+        default_config = {
+            (2, 4): {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "vae_mesh_shape": (1, 8),
+                "vae_sp_axis": 0,
+                "vae_tp_axis": 1,
+                "num_links": 1,
+            },
+            (4, 8): {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "vae_mesh_shape": (4, 8),
+                "vae_sp_axis": 0,
+                "vae_tp_axis": 1,
+                "num_links": 4,
+            },
+        }
+
+        mesh_shape = tuple(mesh_device.shape)
+
+        sp_axis = sp_axis or default_config[mesh_shape]["sp_axis"]
+        tp_axis = tp_axis or default_config[mesh_shape]["tp_axis"]
+        vae_sp_axis = vae_sp_axis or default_config[mesh_shape]["vae_sp_axis"]
+        vae_tp_axis = vae_tp_axis or default_config[mesh_shape]["vae_tp_axis"]
+        vae_mesh_shape = vae_mesh_shape or default_config[mesh_shape]["vae_mesh_shape"]
+        num_links = num_links or default_config[mesh_shape]["num_links"]
+
+        sp_factor = mesh_device.shape[sp_axis]
+        tp_factor = mesh_device.shape[tp_axis]
+
+        # Create parallel config
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+        )
+
+        if vae_mesh_shape[vae_sp_axis] == 1:
+            w_parallel_factor = 1
+        else:
+            w_parallel_factor = 2
+
+        vae_parallel_config = MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+            w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
+            h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
+        )
+        assert (
+            vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
+        )
+        assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+
+        # Create the TT Mochi pipeline
+        pipeline = MochiPipeline(
+            mesh_device=mesh_device,
+            vae_mesh_shape=vae_mesh_shape,
+            parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            num_links=num_links,
+            use_reference_vae=use_reference_vae,
+            model_name=checkpoint_name,
+            force_zeros_for_empty_prompt=force_zeros_for_empty_prompt,
+        )
+
+        return pipeline
 
     def _get_t5_prompt_embeds(
         self,
@@ -503,7 +567,6 @@ class MochiPipeline(DiffusionPipeline):
         num_frames,
         dtype,
         device,
-        generator,
         latents=None,
     ):
         height = height // self.vae_spatial_scale_factor
@@ -514,13 +577,8 @@ class MochiPipeline(DiffusionPipeline):
 
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
-        if isinstance(generator, list) and len(generator) != batch_size:
-            raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
-            )
 
-        latents = randn_tensor(shape, generator=generator, device=torch.device(device), dtype=torch.float32)
+        latents = torch.randn(shape, dtype=torch.float32, device=torch.device(device))
         latents = latents.to(dtype)
         return latents
 
@@ -560,7 +618,7 @@ class MochiPipeline(DiffusionPipeline):
         timesteps: List[int] = None,
         guidance_scale: float = 4.5,
         num_videos_per_prompt: Optional[int] = 1,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        seed: Optional[int] = None,
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
@@ -572,6 +630,7 @@ class MochiPipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
+        traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -653,26 +712,20 @@ class MochiPipeline(DiffusionPipeline):
 
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")
-            if self.use_cache:
-                cache_path = get_cache_path(
-                    model_name="mochi-1-preview",
-                    subfolder="transformer",
-                    parallel_config=self.parallel_config,
-                    mesh_shape=tuple(self.mesh_device.shape),
-                    dtype="bf16",
-                )
-                assert os.path.exists(
-                    cache_path
-                ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-                cache_dict = load_cache_dict(cache_path)
-                self.transformer.from_cached_state_dict(cache_dict)
-            else:
-                raise NotImplementedError(
-                    "use_cache must be True when DiT model reloading is enabled (reload_dit_model=True)"
-                )
-            logger.info("Recreated MochiTransformer3DModel")
+
+            cache.initialize_from_cache(
+                self.transformer,
+                None,  # state_dict is not needed here
+                "mochi-1-preview",
+                "transformer",
+                self.parallel_config,
+                tuple(self.mesh_device.shape),
+            )
 
         # 4. Prepare latent variables
+        if seed is not None:
+            torch.manual_seed(seed)
+
         num_channels_latents = self.transformer_config.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
@@ -682,7 +735,6 @@ class MochiPipeline(DiffusionPipeline):
             num_frames,
             prompt_embeds.dtype,
             device,
-            generator,
             latents,
         )
         print(f"preparing latents with H: {height}, W: {width}, num_frames: {num_frames}")
@@ -829,3 +881,9 @@ class MochiPipeline(DiffusionPipeline):
             return (video,)
 
         return MochiPipelineOutput(frames=video)
+
+    def run_single_prompt(self, *args, **kwargs):
+        return self.__call__(*args, **kwargs).frames
+
+    def synchronize_devices(self):
+        ttnn.synchronize_device(self.mesh_device)

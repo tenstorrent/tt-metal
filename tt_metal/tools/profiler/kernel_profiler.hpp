@@ -9,16 +9,16 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 #include "risc_common.h"
-#include "dataflow_api_addrgen.h"
-#include "accessor/tensor_accessor.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/tensor/tensor_accessor.h"
 #else
 #include "ckernel.h"
 #endif
 
 #include "hostdevcommon/profiler_common.h"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 
 #define DO_PRAGMA(x) _Pragma(#x)
 

@@ -35,7 +35,15 @@ class RMSNormSingleCore:
         return normalized * gamma_tensor
 
     @staticmethod
-    def op(input_tensor, gamma_tensor, output_tensor, epsilon=1e-6, numel=None, fp32_dest_acc_en=False):
+    def op(
+        input_tensor,
+        gamma_tensor,
+        output_tensor,
+        epsilon=1e-6,
+        numel=None,
+        fp32_dest_acc_en=False,
+        rsqrt_fast_approx=False,
+    ):
         """
         Execute RMS norm operation using generic_op.
 
@@ -46,6 +54,7 @@ class RMSNormSingleCore:
             epsilon: Small value to avoid division by zero
             numel: Number of elements to use for RMS calculation (defaults to input logical volume)
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
+            rsqrt_fast_approx: Whether to use fast approximation for rsqrt
 
         Returns:
             Output tensor with RMS norm applied
@@ -193,6 +202,7 @@ class RMSNormSingleCore:
             num_tiles,
             0,  # epsilon_index
             1,  # scalar_index
+            1 if rsqrt_fast_approx else 0,
         ]
 
         compute_kernel_descriptor = ttnn.KernelDescriptor(

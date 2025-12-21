@@ -170,7 +170,7 @@ endif()
 
 # old-style
 foreach(ARCH IN LISTS ARCHS)
-    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}")
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}")
     set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
@@ -242,7 +242,7 @@ endforeach()
 foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
     string(REPLACE ":" ";" ARCH_CPU_LIST ${ARCH_CPU})
     list(GET ARCH_CPU_LIST 0 ARCH)
-    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}")
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/${ARCH}")
     set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
@@ -367,10 +367,10 @@ foreach(ARCH IN LISTS ARCHS)
     list(
         APPEND
         GPP_INCLUDES
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/${ARCH_ALIAS}_defines
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/noc
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}/overlay
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/${ARCH_ALIAS}_defines
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/${ARCH}/overlay
         -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
@@ -418,10 +418,10 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/api/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/${ARCH}/noc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH}/metal/llk_io
     )
@@ -510,108 +510,109 @@ target_sources(
         FILES
             ${blackhole_kernels}
             ${wormhole_kernels}
-            inc/accessor/array_wrapper.h
-            inc/accessor/const.h
-            inc/accessor/dspec.h
-            inc/accessor/helpers.h
-            inc/accessor/tensor_accessor.h
-            inc/accessor/tensor_accessor_args.h
-            inc/accessor/shard_pages_address_iterator.h
-            inc/accessor/pages_address_iterator.h
-            inc/accessor/page.h
-            inc/atomic_rwptr.h
-            inc/bit_utils.h
-            inc/tt-1xx/blackhole/c_tensix_core.h
-            inc/tt-1xx/blackhole/cfg_defines.h
-            inc/tt-1xx/blackhole/core_config.h
-            inc/tt-1xx/blackhole/dev_mem_map.h
-            inc/tt-1xx/blackhole/eth_chan_noc_mapping.h
-            inc/tt-1xx/blackhole/eth_fw_api.h
-            inc/tt-1xx/blackhole/eth_l1_address_map.h
-            inc/tt-1xx/blackhole/noc/noc.h
-            inc/tt-1xx/blackhole/noc/noc_overlay_parameters.h
-            inc/tt-1xx/blackhole/noc/noc_parameters.h
-            inc/tt-1xx/blackhole/noc_nonblocking_api.h
-            inc/tt-1xx/blackhole/stream_interface.h
-            inc/tt-1xx/blackhole/stream_io_map.h
-            inc/tt-1xx/blackhole/tdma_xmov.h
-            inc/tt-1xx/blackhole/tensix.h
-            inc/tt-1xx/blackhole/tensix_types.h
-            inc/circular_buffer.h
-            inc/circular_buffer_init.h
-            inc/cmd_defs.h
-            inc/compile_time_args.h
-            inc/dataflow_api.h
-            inc/dataflow_cmd_bufs.h
-            inc/dataflow_internal.h
-            inc/debug/assert.h
-            inc/debug/dprint.h
-            inc/debug/dprint_buffer.h
-            inc/debug/dprint_pages.h
-            inc/debug/dprint_tensix.h
-            inc/debug/dprint_tile.h
-            inc/debug/eth_link_status.h
-            inc/debug/fw_debug.h
-            inc/debug/noc_logging.h
-            inc/debug/ring_buffer.h
-            inc/debug/sanitize.h
-            inc/debug/stack_usage.h
-            inc/debug/watcher_common.h
-            inc/debug/waypoint.h
-            inc/dev_msgs.h
-            inc/fabric_telemetry_msgs.h
-            inc/ethernet/dataflow_api.h
-            inc/ethernet/erisc.h
-            inc/ethernet/tt_eth_api.h
-            inc/ethernet/tt_eth_ss_regs.h
-            inc/ethernet/tunneling.h
-            inc/firmware_common.h
-            inc/mod_div_lib.h
-            inc/tt-2xx/quasar/c_tensix_core.h
-            inc/tt-2xx/quasar/cfg_defines.h
-            inc/tt-2xx/quasar/core_config.h
-            inc/tt-2xx/quasar/dev_mem_map.h
-            inc/tt-2xx/quasar/eth_chan_noc_mapping.h
-            inc/tt-2xx/quasar/eth_fw_api.h
-            inc/tt-2xx/quasar/eth_l1_address_map.h
-            inc/tt-2xx/quasar/noc/noc.h
-            inc/tt-2xx/quasar/noc/noc_overlay_parameters.h
-            inc/tt-2xx/quasar/noc/noc_parameters.h
-            inc/tt-2xx/quasar/noc_nonblocking_api.h
-            inc/tt-2xx/quasar/stream_interface.h
-            inc/tt-2xx/quasar/stream_io_map.h
-            inc/tt-2xx/quasar/tdma_xmov.h
-            inc/tt-2xx/quasar/tensix.h
-            inc/tt-2xx/quasar/tensix_types.h
-            inc/remote_circular_buffer_api.h
-            inc/risc_attribs.h
-            inc/tt-1xx/risc_common.h
-            inc/tensix_functions.h
-            inc/utils/bfloat16.h
-            inc/utils/float32.h
-            inc/utils/int32.h
-            inc/utils/utils.h
-            inc/vptr_uint.h
-            inc/tt-1xx/wormhole/c_tensix_core.h
-            inc/tt-1xx/wormhole/core_config.h
-            inc/tt-1xx/wormhole/dev_mem_map.h
-            inc/tt-1xx/wormhole/eth_chan_noc_mapping.h
-            inc/tt-1xx/wormhole/eth_fw_api.h
-            inc/tt-1xx/wormhole/eth_l1_address_map.h
-            inc/tt-1xx/wormhole/noc/noc.h
-            inc/tt-1xx/wormhole/noc/noc_overlay_parameters.h
-            inc/tt-1xx/wormhole/noc/noc_parameters.h
-            inc/tt-1xx/wormhole/noc_nonblocking_api.h
-            inc/tt-1xx/wormhole/stream_interface.h
-            inc/tt-1xx/wormhole/stream_io_map.h
-            inc/tt-1xx/wormhole/tdma_xmov.h
-            inc/tt-1xx/wormhole/tensix.h
-            inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
-            inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
-            inc/dataflow_api_addrgen.h
-            inc/dataflow_api_common.h
-            inc/socket_api.h
-            inc/socket.h
+            # API Headers
+            inc/api/alignment.h
+            inc/api/compile_time_args.h
+            inc/api/remote_circular_buffer.h
+            inc/api/socket_api.h
+            inc/api/dataflow/dataflow_api.h
+            inc/api/debug/assert.h
+            inc/api/debug/dprint.h
+            inc/api/debug/dprint_pages.h
+            inc/api/debug/dprint_tensix.h
+            inc/api/debug/dprint_tile.h
+            inc/api/debug/eth_link_status.h
+            inc/api/debug/noc_logging.h
+            inc/api/debug/ring_buffer.h
+            inc/api/debug/waypoint.h
+            inc/api/numeric/bfloat16.h
+            inc/api/numeric/float32.h
+            inc/api/numeric/int32.h
+            inc/api/tensor/tensor_accessor.h
+            inc/api/tensor/tensor_accessor_args.h
+            inc/api/tensor/shard_pages_address_iterator.h
+            inc/api/tensor/pages_address_iterator.h
+            inc/api/tensor/page.h
+            # Interface Headers - Host-Device boundary
+            inc/hostdev/dev_msgs.h
+            inc/hostdev/fabric_telemetry_msgs.h
+            inc/hostdev/socket.h
+            # Interface Headers
+            inc/internal/atomic_rwptr.h
+            inc/internal/bit_utils.h
+            inc/internal/circular_buffer_interface.h
+            inc/internal/circular_buffer_init.h
+            inc/internal/firmware_common.h
+            inc/internal/mod_div_lib.h
+            inc/internal/risc_attribs.h
+            inc/internal/tensix_functions.h
+            inc/internal/vptr_uint.h
+            inc/internal/dataflow/dataflow_api_addrgen.h
+            inc/internal/dataflow/dataflow_api_common.h
+            inc/internal/dataflow/dataflow_cmd_bufs.h
+            inc/internal/debug/dprint_buffer.h
+            inc/internal/debug/fw_debug.h
+            inc/internal/debug/sanitize.h
+            inc/internal/debug/stack_usage.h
+            inc/internal/debug/watcher_common.h
+            inc/internal/ethernet/dataflow_api.h
+            inc/internal/ethernet/erisc.h
+            inc/internal/ethernet/tt_eth_api.h
+            inc/internal/ethernet/tt_eth_ss_regs.h
+            inc/internal/ethernet/tunneling.h
+            inc/internal/tensor/array_wrapper.h
+            inc/internal/tensor/const.h
+            inc/internal/tensor/dspec.h
+            inc/internal/tensor/helpers.h
+            inc/internal/tt-1xx/blackhole/c_tensix_core.h
+            inc/internal/tt-1xx/blackhole/cfg_defines.h
+            inc/internal/tt-1xx/blackhole/core_config.h
+            inc/internal/tt-1xx/blackhole/dev_mem_map.h
+            inc/internal/tt-1xx/blackhole/eth_chan_noc_mapping.h
+            inc/internal/tt-1xx/blackhole/eth_fw_api.h
+            inc/internal/tt-1xx/blackhole/eth_l1_address_map.h
+            inc/internal/tt-1xx/blackhole/noc/noc.h
+            inc/internal/tt-1xx/blackhole/noc/noc_overlay_parameters.h
+            inc/internal/tt-1xx/blackhole/noc/noc_parameters.h
+            inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h
+            inc/internal/tt-1xx/blackhole/stream_interface.h
+            inc/internal/tt-1xx/blackhole/stream_io_map.h
+            inc/internal/tt-1xx/blackhole/tdma_xmov.h
+            inc/internal/tt-1xx/blackhole/tensix.h
+            inc/internal/tt-1xx/blackhole/tensix_types.h
+            inc/internal/tt-2xx/quasar/c_tensix_core.h
+            inc/internal/tt-2xx/quasar/cfg_defines.h
+            inc/internal/tt-2xx/quasar/core_config.h
+            inc/internal/tt-2xx/quasar/dev_mem_map.h
+            inc/internal/tt-2xx/quasar/eth_chan_noc_mapping.h
+            inc/internal/tt-2xx/quasar/eth_fw_api.h
+            inc/internal/tt-2xx/quasar/eth_l1_address_map.h
+            inc/internal/tt-2xx/quasar/noc/noc.h
+            inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
+            inc/internal/tt-2xx/quasar/noc/noc_parameters.h
+            inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
+            inc/internal/tt-2xx/quasar/stream_interface.h
+            inc/internal/tt-2xx/quasar/stream_io_map.h
+            inc/internal/tt-2xx/quasar/tdma_xmov.h
+            inc/internal/tt-2xx/quasar/tensix.h
+            inc/internal/tt-2xx/quasar/tensix_types.h
+            inc/internal/tt-1xx/risc_common.h
+            inc/internal/tt-1xx/wormhole/c_tensix_core.h
+            inc/internal/tt-1xx/wormhole/core_config.h
+            inc/internal/tt-1xx/wormhole/dev_mem_map.h
+            inc/internal/tt-1xx/wormhole/eth_chan_noc_mapping.h
+            inc/internal/tt-1xx/wormhole/eth_fw_api.h
+            inc/internal/tt-1xx/wormhole/eth_l1_address_map.h
+            inc/internal/tt-1xx/wormhole/noc/noc.h
+            inc/internal/tt-1xx/wormhole/noc/noc_overlay_parameters.h
+            inc/internal/tt-1xx/wormhole/noc/noc_parameters.h
+            inc/internal/tt-1xx/wormhole/noc_nonblocking_api.h
+            inc/internal/tt-1xx/wormhole/stream_interface.h
+            inc/internal/tt-1xx/wormhole/stream_io_map.h
+            inc/internal/tt-1xx/wormhole/tdma_xmov.h
+            inc/internal/tt-1xx/wormhole/tensix.h
+            inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
+            inc/internal/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             # Toolchain
             toolchain/erisc-b0-app.ld
             toolchain/erisc-b0-app-sections.ld

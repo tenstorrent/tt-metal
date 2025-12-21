@@ -12,8 +12,10 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/nanobind_helpers.hpp"
@@ -502,7 +504,7 @@ void py_module(nb::module_& mod) {
         nb::arg("dispatch_core_config"),
         nb::arg("mesh_shape") = nb::none(),
         nb::arg("offset") = nb::none(),
-        nb::arg("physical_device_ids") = std::vector<int>{},
+        nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"));
 
@@ -571,8 +573,8 @@ void py_module(nb::module_& mod) {
                     col_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*col_dim}}
                             : MeshMapperConfig::Placement{MeshMapperConfig::Replicate{}});
             },
-            nb::arg("row_dim"),
-            nb::arg("col_dim"),
+            nb::arg("row_dim") = nb::none(),
+            nb::arg("col_dim") = nb::none(),
             nb::arg("mesh_shape_override") = nb::none(),
             R"doc(
            Creates a 2D MeshMapperConfig with the given placements and mesh shape override.

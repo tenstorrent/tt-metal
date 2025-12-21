@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;

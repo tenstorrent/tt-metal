@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
-#include "tt_metal/hw/inc/risc_attribs.h"
-
+#include "internal/ethernet/tt_eth_api.h"
+#include "internal/risc_attribs.h"
 #include <cstdint>
 #include <cstddef>
 

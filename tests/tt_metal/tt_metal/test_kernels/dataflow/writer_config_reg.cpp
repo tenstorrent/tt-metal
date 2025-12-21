@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint_tensix_pack.h"
-#include "debug/dprint_tensix_unpack.h"
+#include "api/debug/dprint_tensix_pack.h"
+#include "api/debug/dprint_tensix_unpack.h"
 #include "ckernel.h"
 
 #include <array>

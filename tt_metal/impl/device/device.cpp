@@ -309,9 +309,15 @@ void Device::init_command_queue_device() {
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (watcher_lock) {

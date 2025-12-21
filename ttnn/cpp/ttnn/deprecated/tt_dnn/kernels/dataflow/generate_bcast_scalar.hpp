@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // W-bcast scalar
 // Tile is assumed to have 16-bit elements

@@ -7,7 +7,7 @@
 #include <array>
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "edm_fabric_worker_adapters.hpp"
 
 namespace tt::tt_fabric {
