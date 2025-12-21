@@ -113,52 +113,53 @@ class Generator:
         enable_trace,
         sampling_params=None,
     ):
-        if self.already_warmed_up_prefill:
-            return
-        self.already_warmed_up_prefill = True
+        return
+        # if self.already_warmed_up_prefill:
+        #     return
+        # self.already_warmed_up_prefill = True
 
-        sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
+        # sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
-        for model_id in range(self.data_parallel):
-            for supported_length in sequence_lengths_to_warmup:
-                # When model_id = 0, we compile all operators for the first time
-                # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
-                if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
-                ):
-                    continue
+        # for model_id in range(self.data_parallel):
+        #     for supported_length in sequence_lengths_to_warmup:
+        #         # When model_id = 0, we compile all operators for the first time
+        #         # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
+        #         if model_id != 0 and (
+        #             supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
+        #         ):
+        #             continue
 
-                warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
-                warmup_empty_slots = list(range(1))
+        #         warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
+        #         warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
+        #         warmup_empty_slots = list(range(1))
 
-                logger.info(f"Warming up prefill for sequence length: {supported_length}")
+        #         logger.info(f"Warming up prefill for sequence length: {supported_length}")
 
-                page_table_warmup = None
-                # second check is some tests set the kv_cache to [None] instead of None
-                if kv_cache is not None and kv_cache[model_id] is not None:
-                    block_size = get_block_size(kv_cache[model_id])
-                    num_blocks = num_blocks_in_seq(supported_length, block_size)
-                    page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
+        #         page_table_warmup = None
+        #         # second check is some tests set the kv_cache to [None] instead of None
+        #         if kv_cache is not None and kv_cache[model_id] is not None:
+        #             block_size = get_block_size(kv_cache[model_id])
+        #             num_blocks = num_blocks_in_seq(supported_length, block_size)
+        #             page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
 
-                # chunked prefill not supported without paged attention
-                if page_table_warmup is None and max_prefill_chunk_size_cutoff(
-                    supported_length, self.model_args[0].max_prefill_chunk_size
-                ):
-                    logger.warning(
-                        "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
-                    )
-                    break
+        #         # chunked prefill not supported without paged attention
+        #         if page_table_warmup is None and max_prefill_chunk_size_cutoff(
+        #             supported_length, self.model_args[0].max_prefill_chunk_size
+        #         ):
+        #             logger.warning(
+        #                 "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
+        #             )
+        #             break
 
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    page_table_warmup,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    warmup_empty_slots,
-                    enable_trace,
-                    model_id,
-                )
+        #         self.prefill_forward_text(
+        #             warmup_tokens,
+        #             page_table_warmup,
+        #             kv_cache,
+        #             warmup_prompt_lens,
+        #             warmup_empty_slots,
+        #             enable_trace,
+        #             model_id,
+        #         )
 
     def _capture_trace_prefill(
         self,
@@ -458,6 +459,7 @@ class Generator:
                 else:
                     del tt_logits
         else:
+            # Prepare inputs prefill prolazi tu izgleda nije hang
             (
                 prefill_input,
                 rot_mats_global_prefill,
