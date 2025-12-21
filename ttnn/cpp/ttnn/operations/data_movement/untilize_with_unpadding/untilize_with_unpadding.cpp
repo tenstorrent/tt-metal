@@ -1,14 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding.hpp"
-
-#include "device/untilize_with_unpadding_op.hpp"
 #include "ttnn/run_operation.hpp"
-
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -98,19 +96,16 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
-        return operation::run(
-            UntilizeWithUnpadding{// output_end,
-                                  ttnn::Shape(output_end),
-                                  memory_config.value_or(input_tensor.memory_config()),
-                                  use_multicore,
-                                  use_pack_untilize,
-                                  fp32_dest_acc_en,
-                                  enough_space_width,
-                                  enough_space_height,
-                                  sub_core_grids},
-            {input_tensor},
-            {},
-            {})[0];
+        return ttnn::prim::untilize_with_unpadding(
+            input_tensor,
+            ttnn::Shape(output_end),
+            memory_config,
+            use_multicore,
+            use_pack_untilize,
+            fp32_dest_acc_en,
+            enough_space_width,
+            enough_space_height,
+            sub_core_grids);
     };
 
     return build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);

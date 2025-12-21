@@ -48,7 +48,7 @@ namespace ttnn {
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
 tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -94,7 +94,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -634,7 +634,7 @@ void append_fabric_mux_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -681,7 +681,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -753,7 +753,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1290,7 +1290,7 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -1382,7 +1382,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -2009,7 +2009,7 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -2105,7 +2105,7 @@ namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::det
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -2151,7 +2151,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
+    const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,

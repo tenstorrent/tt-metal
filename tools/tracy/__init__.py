@@ -171,6 +171,7 @@ def generate_report(
         device_only=False,
         analyze_noc_traces=collect_noc_traces,
         device_analysis_types=device_analysis_types,
+        force_legacy_device_logs=False,
     )
 
 

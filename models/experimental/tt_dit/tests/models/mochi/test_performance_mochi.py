@@ -4,14 +4,12 @@
 
 import statistics
 import pytest
-import torch
 import ttnn
 from loguru import logger
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
-from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 
 
 @pytest.mark.parametrize(
@@ -38,7 +36,6 @@ from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, Paral
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -55,7 +52,6 @@ def test_mochi_pipeline_performance(
     vae_tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
-    use_cache: bool,
     is_ci_env: bool,
     galaxy_type: str,
 ) -> None:
@@ -92,40 +88,7 @@ def test_mochi_pipeline_performance(
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
     logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
-    # Create parallel config
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    if vae_mesh_shape[vae_sp_axis] == 1:
-        w_parallel_factor = 1
-    else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
-        h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
-
-    # Create the TT Mochi pipeline
-    tt_pipe = TTMochiPipeline(
-        mesh_device=mesh_device,
-        vae_mesh_shape=vae_mesh_shape,
-        parallel_config=parallel_config,
-        vae_parallel_config=vae_parallel_config,
-        num_links=num_links,
-        use_cache=use_cache,
-        use_reference_vae=False,
-        model_name=model_name,
-    )
-
-    # Use a generator for deterministic results.
-    generator = torch.Generator("cpu").manual_seed(0)
+    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
 
     # Test prompts
     prompts = [
@@ -147,7 +110,7 @@ def test_mochi_pipeline_performance(
             num_frames=num_frames,
             height=image_h,
             width=image_w,
-            generator=generator,
+            seed=0,  # Make deterministic
         ).frames[0]
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -200,7 +163,7 @@ def test_mochi_pipeline_performance(
                     num_frames=num_frames,
                     height=image_h,
                     width=image_w,
-                    generator=generator,
+                    seed=0,  # Make deterministic
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                 ).frames[0]

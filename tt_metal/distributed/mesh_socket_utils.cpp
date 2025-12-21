@@ -9,7 +9,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include "tt_metal/hw/inc/socket.h"
+#include "tt_metal/hw/inc/hostdev/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
 

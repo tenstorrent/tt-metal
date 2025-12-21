@@ -299,7 +299,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
           MESH_DEVICE: TG
         run: |
           pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600

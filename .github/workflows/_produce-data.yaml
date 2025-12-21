@@ -58,6 +58,8 @@ on:
       - "(Galaxy) Quick"
       - "(Galaxy) APC fast tests"
       - "(Galaxy) DeepSeek tests"
+      - "(TM-DM) Data Movement Test Suite"
+      - "(TM-Fabric) Fabric Tests"
 
     types:
       - completed

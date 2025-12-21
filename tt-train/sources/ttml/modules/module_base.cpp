@@ -15,6 +15,7 @@ void ModuleBase::register_tensor(const autograd::TensorPtr& tensor_ptr, const st
     if (!is_inserted) {
         throw std::logic_error("Names of two tensors coincide");
     }
+    tensor_ptr->set_requires_grad(true);
 }
 
 void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::string& name) {
@@ -30,12 +31,13 @@ void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::str
 void ModuleBase::override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name) {
     if (auto it = m_named_tensors.find(name); it != m_named_tensors.end()) {
         it->second = tensor_ptr;
+        tensor_ptr->set_requires_grad(true);
     } else {
         throw std::logic_error(fmt::format("Tensor with such name does not exist. Name {}", name));
     }
 }
 
-void ModuleBase::override_module(const ModuleBasePtr& module_ptr, const std::string& name) {
+void ModuleBase::override_module(const std::string& name, const ModuleBasePtr& module_ptr) {
     if (auto it = m_named_modules.find(name); it != m_named_modules.end()) {
         it->second = module_ptr;
     } else {
@@ -49,6 +51,30 @@ void ModuleBase::create_name(const std::string& name) {
 
 const std::string& ModuleBase::get_name() const {
     return m_name;
+}
+
+const std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() const {
+    return m_named_modules;
+}
+
+std::map<std::string, ModuleBasePtr>& ModuleBase::named_modules() {
+    return m_named_modules;
+}
+
+const std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() const {
+    return m_named_tensors;
+}
+
+std::map<std::string, autograd::TensorPtr>& ModuleBase::named_tensors() {
+    return m_named_tensors;
+}
+
+std::shared_ptr<ModuleBase> ModuleBase::get_module(const std::string& name) const {
+    auto it = m_named_modules.find(name);
+    if (it == m_named_modules.end()) {
+        throw std::logic_error(fmt::format("Module with name '{}' not found", name));
+    }
+    return it->second;
 }
 
 serialization::NamedParameters ModuleBase::parameters() const {

@@ -24,12 +24,12 @@ void MAIN {
 }
 }  // namespace NAMESPACE
 #else
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include "debug/debug.h"
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 
 using namespace tt;
 

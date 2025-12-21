@@ -8,7 +8,7 @@
 
 #include "chlkc_list.h"
 #include "ckernel.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 

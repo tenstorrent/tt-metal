@@ -139,9 +139,9 @@ void create_arc_metrics(
                         firmware_provider,
                         "EthernetFirmwareVersion",
                         [firmware_provider]() -> std::optional<std::string> {
-                            // Decode using tt_version constructor which handles the bit packing
-                            tt::umd::tt_version eth_ver(firmware_provider->get_eth_fw_version());
-                            return eth_ver.str();
+                            // Decode using semver_t::from_eth_fw_tag() to handle bit packing
+                            tt::umd::semver_t eth_ver(tt::umd::semver_t::from_eth_fw_tag(firmware_provider->get_eth_fw_version()));
+                            return eth_ver.to_string();
                         },
                         MetricUnit::UNITLESS));
 

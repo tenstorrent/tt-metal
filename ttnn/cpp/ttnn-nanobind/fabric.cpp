@@ -56,6 +56,19 @@ void bind_fabric_api(nb::module_& mod) {
         .value("DISABLED", tt::tt_fabric::FabricUDMMode::DISABLED)
         .value("ENABLED", tt::tt_fabric::FabricUDMMode::ENABLED);
 
+    nb::enum_<tt::tt_fabric::FabricManagerMode>(mod, "FabricManagerMode", R"(
+        Specifies the fabric manager mode configuration.
+        Values:
+            DEFAULT: Fabric is not managed by a separate process (default).
+            ENABLED: Fabric is maintained by a separate fabric manager process.
+            INIT_FABRIC: Initialize the fabric.
+            TERMINATE_FABRIC: Terminate the fabric.
+        )")
+        .value("DEFAULT", tt::tt_fabric::FabricManagerMode::DEFAULT)
+        .value("ENABLED", tt::tt_fabric::FabricManagerMode::ENABLED)
+        .value("INIT_FABRIC", tt::tt_fabric::FabricManagerMode::INIT_FABRIC)
+        .value("TERMINATE_FABRIC", tt::tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
+
     mod.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
@@ -63,7 +76,8 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("reliability_mode") = nb::cast(tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE),
         nb::arg("num_planes") = nb::none(),
         nb::arg("fabric_tensix_config") = nb::cast(tt::tt_fabric::FabricTensixConfig::DISABLED),
-        nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED));
+        nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
+        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT));
 }
 
 }  // namespace ttnn::fabric

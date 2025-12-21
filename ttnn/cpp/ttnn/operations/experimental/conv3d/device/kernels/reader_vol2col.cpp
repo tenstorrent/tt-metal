@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
     // If we're doing replicate padding, clamp idx into [lower_bound, upper_bound].

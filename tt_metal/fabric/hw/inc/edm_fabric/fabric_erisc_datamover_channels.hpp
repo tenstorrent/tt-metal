@@ -10,12 +10,12 @@
 #include <tuple>
 #include <utility>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "internal/ethernet/tunneling.h"
 #endif
-#include "tt_metal/hw/inc/utils/utils.h"
-#include "risc_attribs.h"
+#include "api/alignment.h"
+#include "internal/risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"

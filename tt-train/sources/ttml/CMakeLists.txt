@@ -69,6 +69,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/lora_model.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
@@ -312,9 +313,9 @@ if(NOT TARGET TT::Metalium)
             "$ENV{TT_METAL_HOME}/tt_metal"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
             "$ENV{TT_METAL_HOME}/tt_metal/api/"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
             "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"

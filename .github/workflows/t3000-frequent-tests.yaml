@@ -11,7 +11,7 @@ on:
         options:
           - all
           - tteager
-          - ethernet
+          # - ethernet (GH #34582)
           - trace stress
           - falcon40b
           - llama3.2-vision

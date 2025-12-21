@@ -42,6 +42,14 @@ struct Conv3dDeviceOperation {
         const Tensor& weight_tensor,
         const std::optional<Tensor>& bias_tensor,
         const Conv3dConfig& config,
+        tt::tt_metal::DataType dtype_,
+        uint32_t output_channels_,
+        const std::array<uint32_t, 3>& kernel_size_,
+        const std::array<uint32_t, 3>& stride_,
+        const std::array<uint32_t, 3>& padding_,
+        const std::array<uint32_t, 3>& dilation_,
+        const std::string& padding_mode_,
+        uint32_t groups_,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };

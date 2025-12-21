@@ -1,0 +1,20 @@
+lora_config:
+  # LoRA rank (r) - dimensionality of the low-rank adaptation
+  r: 128
+
+  # Alpha parameter for LoRA scaling
+  lora_alpha: 1.0
+
+  # Dropout probability for LoRA layers
+  lora_dropout: 0.0
+
+  # Whether bias should be trainable
+  is_bias_trainable: false
+
+  # TODO: Add regex support for target modules
+  # Target modules to apply LoRA (optional - if not specified, applies to all applicable modules)
+  # Examples: [
+  #   "llama/llama_block_9/attention/q_linear/",
+  #   "llama/llama_block_9/attention/kv_linear/",
+  #   "llama/llama_block_9/attention/out_linear/",
+  # ]

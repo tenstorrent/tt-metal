@@ -30,7 +30,7 @@
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -706,6 +706,14 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
         case dev_msgs::DebugSanitizeL1AddrOverflow:
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (read or write past the end of local memory).";
+            break;
+        case dev_msgs::DebugSanitizeEthDestL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send to core with L1 destination overflow).";
+            break;
+        case dev_msgs::DebugSanitizeEthSrcL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send with L1 source overflow).";
             break;
         default:
             error_msg = fmt::format(
