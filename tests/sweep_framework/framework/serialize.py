@@ -143,6 +143,10 @@ def deserialize_structured(object):
         if isinstance(object, (int, float, bool)):
             return object
 
+        # Handle lists - convert to tuples for consistency
+        if isinstance(object, list):
+            return tuple(object)
+
         if isinstance(object, dict):
             # Check if this is a structured object with "type" field (e.g., MemoryConfig)
             if "type" in object:
@@ -166,10 +170,13 @@ def deserialize_structured(object):
                     return maybe_enum
             elif object in ["sum", "mean", "max", "min", "std", "var"]:
                 return object
-        try:
-            return eval(object)
-        except (SyntaxError, NameError):
-            return str(object)
+            try:
+                return eval(object)
+            except (SyntaxError, NameError):
+                return str(object)
+
+        # For anything else, return as-is
+        return object
     except Exception as e:
         logger.exception(f"Deserialize structured failed {e}")
         raise
