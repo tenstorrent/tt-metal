@@ -53,16 +53,13 @@ void bind_squeeze(nb::module_& mod) {
         Equivalent pytorch code:
 
         .. code-block:: python
+
             input_tensor = torch.rand((1,1,1,256), dtype=torch.bfloat16)
             output_tensor = torch.squeeze(input_tensor, 2) # tensor of shape (1,1,256), where at dimension 2 we removed it
-
-
 
         Args:
             * :attr:`input_tensor`: Input Tensor.
             * :attr:`dim`: Dim where we want to squeeze
-
-
         )doc");
 }
 

@@ -47,7 +47,8 @@ def mesh_device(request, device_params):
     # Override mesh shape based on MESH_DEVICE environment variable
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
-        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
+        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
+
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
 
