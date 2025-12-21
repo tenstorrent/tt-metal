@@ -29,7 +29,7 @@ inline void calculate_silu() {
 
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    _init_reciprocal_<false, false>();
+    sigmoid_init<false>();
 }
 
 }  // namespace ckernel::sfpu
