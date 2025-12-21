@@ -1477,13 +1477,17 @@ class MasterConfigLoader:
                 # Return separate lists for Cartesian product
                 result = {}
 
-                # Build input_shape as list of dicts
+                # Build input_shape as list of dicts (like add_llama.py format)
+                # BUT convert lists to tuples for serialization
                 unique_shapes = []
                 seen_shapes = set()
                 for cfg in paired_configs:
                     shape_tuple = tuple([tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(tensor_count)])
                     if shape_tuple not in seen_shapes:
-                        shape_dict = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
+                        # Create dict with tuple values (not list values) so eval() works
+                        shape_dict = {
+                            f"input_{chr(97+i)}": tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(tensor_count)
+                        }
                         unique_shapes.append(shape_dict)
                         seen_shapes.add(shape_tuple)
 
@@ -1527,8 +1531,8 @@ class MasterConfigLoader:
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
-                    # Build input_shape dict
-                    input_shape = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
+                    # Build input_shape dict with tuple values (not list values) for serialization
+                    input_shape = {f"input_{chr(97+i)}": tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(tensor_count)}
                     input_shapes.append(input_shape)
 
                     # Extract dtypes, layouts, and memory configs for each input

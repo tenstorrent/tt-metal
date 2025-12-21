@@ -139,15 +139,25 @@ def serialize_structured(object, warnings=[]):
 
 def deserialize_structured(object):
     try:
+        # Handle primitive types that don't need deserialization
+        if isinstance(object, (int, float, bool)):
+            return object
+
         if isinstance(object, dict):
-            type = eval(object["type"])
-            data = object["data"]
-            # If data is a dict/object, convert it back to JSON string for from_json method
-            if isinstance(data, (dict, list)):
-                # Convert string enum values back to integers for from_json
-                data = convert_enum_strings_to_values(data)
-                data = json.dumps(data)
-            return type.from_json(data)
+            # Check if this is a structured object with "type" field (e.g., MemoryConfig)
+            if "type" in object:
+                type = eval(object["type"])
+                data = object["data"]
+                # If data is a dict/object, convert it back to JSON string for from_json method
+                if isinstance(data, (dict, list)):
+                    # Convert string enum values back to integers for from_json
+                    data = convert_enum_strings_to_values(data)
+                    data = json.dumps(data)
+                return type.from_json(data)
+            else:
+                # This is a plain data dict (e.g., input_shape for multi-input ops)
+                # Convert any lists to tuples for consistency
+                return {k: tuple(v) if isinstance(v, list) else v for k, v in object.items()}
 
         elif isinstance(object, str):
             if "." in object:
