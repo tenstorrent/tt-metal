@@ -11,6 +11,7 @@ from typing import Any
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.weight_config import (
+    WeightConfigEncoder,
     locked_file,
     try_decode_saved_weight,
     validate_weight_config_paths,
@@ -18,29 +19,28 @@ from models.demos.deepseek_v3.utils.weight_config import (
 
 # Regex patterns for cache directory structure
 CACHE_DIR_PATTERN = re.compile(r"(\d+)_layers/mesh_(\d+)x(\d+)$")
-CACHE_CONFIG_PATTERN = re.compile(r"(\d+)_layers/mesh_(\d+)x(\d+)/config\.json$")
 
 
 def discover_cache_directories(root_path: Path) -> list[Path]:
     """
-    Find all cache directories containing config.json.
+    Find all cache directories by their structure pattern.
 
-    Looks for directories matching the pattern: */{num_layers}_layers/mesh_{rows}x{cols}/config.json
+    Looks for directories matching the pattern: */{num_layers}_layers/mesh_{rows}x{cols}
 
     Args:
         root_path: Root directory to search recursively
 
     Returns:
-        List of cache directory paths (parent of config.json)
+        List of cache directory paths matching the mesh pattern
     """
     cache_dirs = []
 
-    for config_file in root_path.rglob("config.json"):
-        # Check if path matches expected pattern
-        path_str = str(config_file)
-        if CACHE_CONFIG_PATTERN.search(path_str):
-            # Return the directory containing config.json (the cache directory)
-            cache_dirs.append(config_file.parent)
+    for mesh_dir in root_path.rglob("mesh_*"):
+        # Check if it's a directory and matches expected pattern
+        if mesh_dir.is_dir():
+            path_str = str(mesh_dir)
+            if CACHE_DIR_PATTERN.search(path_str):
+                cache_dirs.append(mesh_dir)
 
     return sorted(cache_dirs)
 
@@ -98,6 +98,63 @@ def collect_saved_weights(weight_config: Any, path_prefix: str = "") -> list[tup
             saved_weights.extend(collect_saved_weights(entry, current_prefix))
 
     return saved_weights
+
+
+def repair_absolute_paths(cache_dir: Path, weight_config: Any) -> tuple[Any, int]:
+    """
+    Repair absolute paths in weight config by converting them to relative paths.
+
+    Args:
+        cache_dir: Cache directory path (base for relative paths)
+        weight_config: Weight configuration (dict, list, tuple, or nested structures)
+
+    Returns:
+        Tuple of (repaired_weight_config, num_repaired) where num_repaired is the count of fixed paths
+    """
+    if isinstance(weight_config, dict):
+        repaired = {}
+        total_repaired = 0
+        for key, value in weight_config.items():
+            if value is None:
+                repaired[key] = None
+            else:
+                repaired_value, count = repair_absolute_paths(cache_dir, value)
+                repaired[key] = repaired_value
+                total_repaired += count
+        return repaired, total_repaired
+    elif isinstance(weight_config, (list, tuple)):
+        repaired = []
+        total_repaired = 0
+        for item in weight_config:
+            if item is None:
+                repaired.append(None)
+            else:
+                repaired_item, count = repair_absolute_paths(cache_dir, item)
+                repaired.append(repaired_item)
+                total_repaired += count
+        # Preserve tuple type if input was a tuple
+        return (tuple(repaired) if isinstance(weight_config, tuple) else repaired), total_repaired
+    elif isinstance(weight_config, SavedWeight):
+        if weight_config.path.is_absolute():
+            # Validate that the absolute path is within the cache directory
+            cache_dir_resolved = cache_dir.resolve()
+            abs_path_resolved = weight_config.path.resolve()
+            try:
+                # Try to get relative path
+                rel_path = abs_path_resolved.relative_to(cache_dir_resolved)
+            except ValueError:
+                # Path is not within cache_dir
+                raise ValueError(f"Absolute path '{weight_config.path}' is not within cache directory '{cache_dir}'")
+            # Verify the file exists
+            if not abs_path_resolved.exists():
+                raise ValueError(f"Absolute path points to non-existent file: {abs_path_resolved}")
+            # Create new SavedWeight with relative path
+            return SavedWeight(path=rel_path, memory_config=weight_config.memory_config), 1
+        # Already relative, no repair needed
+        return weight_config, 0
+    else:
+        # For other types (None, primitives, etc.), return as-is
+        return weight_config, 0
 
 
 def find_orphaned_files(cache_dir: Path, referenced_paths: set[Path]) -> list[Path]:
@@ -246,6 +303,56 @@ def validate_cache_directory(cache_dir: Path, verbose: bool = False) -> dict[str
             result["errors"].append(f"{result['stats']['missing_files']} missing file(s)")
         if result["stats"]["invalid_extensions"] > 0:
             result["errors"].append(f"{result['stats']['invalid_extensions']} invalid extension(s)")
+
+    return result
+
+
+def repair_cache_directory(cache_dir: Path, verbose: bool = False) -> dict[str, Any]:
+    """
+    Repair absolute paths in a cache directory's config.json.
+
+    Args:
+        cache_dir: Cache directory path
+        verbose: Whether to print detailed information
+
+    Returns:
+        Dictionary with repair results
+    """
+    config_path = cache_dir / "config.json"
+    result = {
+        "cache_dir": cache_dir,
+        "repaired": False,
+        "num_repaired": 0,
+        "errors": [],
+    }
+
+    if not config_path.exists():
+        result["errors"].append("config.json not found")
+        return result
+
+    # Load and decode config (with exclusive lock for write)
+    try:
+        with locked_file(config_path, "r", exclusive=False) as f:
+            weight_config = json.load(f, object_hook=try_decode_saved_weight)
+    except Exception as e:
+        result["errors"].append(f"Failed to load config.json: {e}")
+        return result
+
+    # Repair absolute paths
+    try:
+        repaired_config, num_repaired = repair_absolute_paths(cache_dir, weight_config)
+        result["num_repaired"] = num_repaired
+
+        if num_repaired > 0:
+            # Write repaired config back to disk (with exclusive lock)
+            with locked_file(config_path, "w", exclusive=True) as f:
+                json.dump(repaired_config, f, cls=WeightConfigEncoder, indent=2)
+            result["repaired"] = True
+            if verbose:
+                print(f"Repaired {num_repaired} absolute path(s) in {cache_dir}")
+    except Exception as e:
+        result["errors"].append(f"Failed to repair paths: {e}")
+        return result
 
     return result
 
@@ -421,46 +528,110 @@ def print_summary(stats: dict[str, Any]) -> None:
 def main():
     """Main entry point with argparse."""
     parser = argparse.ArgumentParser(description="Validate weight cache directories and print a comprehensive summary.")
-    parser.add_argument(
+
+    # Create mutually exclusive group for cache discovery methods
+    discovery_group = parser.add_mutually_exclusive_group()
+    discovery_group.add_argument(
         "--root",
         type=str,
         default=None,
         help="Root directory to search for cache directories (default: current directory or DEEPSEEK_V3_CACHE env var)",
     )
+    discovery_group.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Validate a single cache directory (directory containing config.json). Mutually exclusive with --root.",
+    )
+
     parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print detailed error information for each cache",
     )
+    parser.add_argument(
+        "--repair-absolute-paths",
+        action="store_true",
+        help="Repair absolute paths by converting them to relative paths in config.json files",
+    )
 
     args = parser.parse_args()
 
-    # Determine root path
-    if args.root:
-        root_path = Path(args.root)
+    # Handle single cache directory mode
+    if args.cache_dir:
+        cache_dir = Path(args.cache_dir)
+
+        if not cache_dir.exists():
+            print(f"Error: Cache directory does not exist: {cache_dir}")
+            return 1
+
+        if not cache_dir.is_dir():
+            print(f"Error: Path is not a directory: {cache_dir}")
+            return 1
+
+        config_path = cache_dir / "config.json"
+        if not config_path.exists():
+            print(f"Error: config.json not found in directory: {cache_dir}")
+            return 1
+
+        # Use the single directory
+        cache_dirs = [cache_dir]
+        print(f"Validating cache directory: {cache_dir}")
+        print()
     else:
-        cache_env = os.getenv("DEEPSEEK_V3_CACHE")
-        if cache_env:
-            root_path = Path(cache_env)
+        # Recursive search mode
+        # Determine root path
+        if args.root:
+            root_path = Path(args.root)
         else:
-            root_path = Path.cwd()
+            cache_env = os.getenv("DEEPSEEK_V3_CACHE")
+            if cache_env:
+                root_path = Path(cache_env)
+            else:
+                root_path = Path.cwd()
 
-    if not root_path.exists():
-        print(f"Error: Root path does not exist: {root_path}")
-        return 1
+        if not root_path.exists():
+            print(f"Error: Root path does not exist: {root_path}")
+            return 1
 
-    print(f"Searching for cache directories in: {root_path}")
-    print()
+        print(f"Searching for cache directories in: {root_path}")
+        print()
 
-    # Discover cache directories
-    cache_dirs = discover_cache_directories(root_path)
+        # Discover cache directories
+        cache_dirs = discover_cache_directories(root_path)
 
-    if not cache_dirs:
-        print("No cache directories found.")
-        return 0
+        if not cache_dirs:
+            print("No cache directories found.")
+            return 0
 
-    print(f"Found {len(cache_dirs)} cache directory(ies)")
-    print()
+        print(f"Found {len(cache_dirs)} cache directory(ies)")
+        print()
+
+    # Repair absolute paths if requested
+    if args.repair_absolute_paths:
+        print("Repairing absolute paths...")
+        print()
+        total_repaired = 0
+        repair_errors = []
+        for cache_dir in cache_dirs:
+            repair_result = repair_cache_directory(cache_dir, verbose=args.verbose)
+            total_repaired += repair_result["num_repaired"]
+            if repair_result["errors"]:
+                repair_errors.extend([(cache_dir, error) for error in repair_result["errors"]])
+
+        if repair_errors:
+            print("REPAIR ERRORS")
+            print("-" * 80)
+            for cache_dir, error in repair_errors:
+                print(f"  {cache_dir}: {error}")
+            print()
+
+        if total_repaired > 0:
+            print(f"Repaired {total_repaired} absolute path(s) across {len(cache_dirs)} cache directory(ies)")
+            print()
+        else:
+            print("No absolute paths found to repair.")
+            print()
 
     # Collect statistics
     stats = collect_cache_statistics(cache_dirs, verbose=args.verbose)
