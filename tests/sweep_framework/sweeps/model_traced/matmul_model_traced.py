@@ -26,13 +26,10 @@ model_traced_params = loader.get_suite_parameters("matmul", all_cases=False)
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_a_shape": [(1, 1, 32, 32)],  # First matrix shape
-        "input_b_shape": [(1, 1, 32, 32)],  # Second matrix shape
+        "input_shape": [(1, 1, 32, 32)],  # First matrix shape
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "input_b_dtype": [ttnn.bfloat16],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
@@ -45,8 +42,7 @@ if model_traced_params:
 
 
 def run(
-    input_a_shape,
-    input_b_shape,
+    input_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -60,13 +56,40 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Handle both sample suite (tuple/list) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+        # This is model_traced suite - dict with 'self' and 'other' keys
+        shape_a = tuple(input_shape["self"]) if isinstance(input_shape["self"], (list, tuple)) else input_shape["self"]
+        shape_b = (
+            tuple(input_shape["other"]) if isinstance(input_shape["other"], (list, tuple)) else input_shape["other"]
+        )
+    else:
+        # This is sample suite - use simple shapes
+        if isinstance(input_shape, (tuple, list)):
+            shape_a = tuple(input_shape)
+        else:
+            shape_a = (
+                tuple(input_shape)
+                if hasattr(input_shape, "__iter__") and not isinstance(input_shape, str)
+                else input_shape
+            )
+
+        # Create compatible shapes for matrix multiplication
+        # shape_a: [..., M, K], shape_b: [..., K, N]
+        if isinstance(shape_a, (tuple, list)) and len(shape_a) >= 2:
+            M, K = shape_a[-2], shape_a[-1]
+            N = 64  # Fixed output dimension for this test
+            shape_b = shape_a[:-2] + (K, N)  # Same batch dims, K x N
+        else:
+            raise ValueError(f"Invalid input_shape for matmul: {input_shape}")
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_a_shape)
+    )(shape_a)
 
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_b_shape)
+    )(shape_b)
 
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())

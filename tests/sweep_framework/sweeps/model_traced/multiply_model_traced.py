@@ -10,7 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
-from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -27,8 +26,7 @@ model_traced_params = loader.get_suite_parameters("multiply", all_cases=False)
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_a_shape": [(1, 1, 32, 32)],
-        "input_b_shape": [(1, 1, 32, 32)],
+        "input_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -57,30 +55,8 @@ def mesh_device_fixture():
     del device
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Invalidate test vectors with incompatible configurations.
-    """
-    # Check for mixed integer and float dtypes - this causes numerical errors
-    input_a_dtype = test_vector.get("input_a_dtype")
-    input_b_dtype = test_vector.get("input_b_dtype")
-
-    # Define integer dtypes
-    integer_dtypes = [ttnn.int32, ttnn.uint32, ttnn.uint16]
-
-    # Check if one is integer and other is float
-    a_is_int = input_a_dtype in integer_dtypes
-    b_is_int = input_b_dtype in integer_dtypes
-
-    if a_is_int != b_is_int:
-        return True, "Mixed integer and float dtypes are not supported for multiply operation"
-
-    return False, None
-
-
 def run(
-    input_a_shape,
-    input_b_shape,
+    input_shape,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,
@@ -94,12 +70,26 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Handle both sample suite (tuple) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+        # This is model_traced suite - dict with 'self' and 'other' keys
+        shape_a = input_shape["self"]
+        shape_b = input_shape["other"]
+    else:
+        # This is sample suite - use same shape for both inputs
+        if isinstance(input_shape, (tuple, list)):
+            shape_a = tuple(input_shape)
+            shape_b = tuple(input_shape)
+        else:
+            shape_a = input_shape
+            shape_b = input_shape
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_a_shape)
+    )(shape_a)
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_b_shape)
+    )(shape_b)
 
     torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
 

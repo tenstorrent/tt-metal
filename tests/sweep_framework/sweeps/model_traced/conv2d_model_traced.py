@@ -33,8 +33,7 @@ parameters = {
         "input_specs": [
             # Contains following params
             # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-            # Use tuple so it serializes as a string for proper deserialization
-            (1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False),
+            [1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False],
         ],
         "is_conv1d": [False],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device

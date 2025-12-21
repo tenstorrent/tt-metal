@@ -25,8 +25,7 @@ model_traced_params = loader.get_suite_parameters("subtract", all_cases=False)
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_a_shape": [(1, 1, 32, 32)],
-        "input_b_shape": [(1, 1, 32, 32)],
+        "input_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -44,8 +43,7 @@ if model_traced_params:
 
 
 def run(
-    input_a_shape,
-    input_b_shape,
+    input_shape,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,
@@ -60,12 +58,20 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Handle both sample suite (tuple) and model_traced suite (dict with 'self'/'other')
+    if isinstance(input_shape, dict):
+        shape_a = input_shape.get("self", input_shape.get("input_a", (1, 1, 32, 32)))
+        shape_b = input_shape.get("other", input_shape.get("input_b", (1, 1, 32, 32)))
+    else:
+        shape_a = input_shape
+        shape_b = input_shape
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_a_shape)
+    )(shape_a)
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_b_shape)
+    )(shape_b)
 
     golden_function = ttnn.get_golden_function(ttnn.subtract)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
