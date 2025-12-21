@@ -143,24 +143,27 @@ See `reference/config.py` for all available options.
 
 ### Downloading Checkpoints
 
-Download the pre-trained TransFuser model checkpoint from the official repository:
+Download the pre-trained TransFuser model checkpoint from AWS S3:
 
 ```bash
-# Download checkpoint (example: model_seed1_39.pth)
-# Option 1: Direct download from TransFuser repository
-wget https://github.com/autonomousvision/transfuser/releases/download/v1.0/model_seed1_39.pth
+# Download the 2022 model checkpoints (recommended)
+wget https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/models_2022.zip -P model_ckpt
+cd model_ckpt && unzip models_2022.zip && cd ..
 
-# Option 2: Clone the repository and use checkpoints from there
-git clone https://github.com/autonomousvision/transfuser.git
-# Checkpoints are typically in the transfuser/models_2022/transfuser/ directory
+# This creates the following structure:
+# model_ckpt/models_2022/transfuser/model_seed1_39.pth
 ```
 
 **Checkpoint location:**
-- Place the checkpoint file (e.g., `model_seed1_39.pth`) in your working directory or specify the full path when running tests/demo.
+- The tests expect the checkpoint at: `model_ckpt/models_2022/transfuser/model_seed1_39.pth`
+- Ensure this path exists before running tests
 
-**Alternative checkpoint paths:**
-- Some checkpoints may be in `model_ckpt/models_2022/transfuser/` directory structure
-- Adjust the checkpoint path in your code accordingly
+**Alternative: Download 2021 models**
+```bash
+# Original 2021 models (different architecture)
+wget https://s3.eu-central-1.amazonaws.com/avg-projects/transfuser/models.zip -P model_ckpt
+cd model_ckpt && unzip models.zip && cd ..
+```
 
 ### Downloading Data
 
