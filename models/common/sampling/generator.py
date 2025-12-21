@@ -53,6 +53,7 @@ class SamplingGenerator:
         self.cq_id = cq_id
         self.args = args
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
+        self.sub_core_grid_sampling = getattr(args, "sub_core_grid_sampling", None)
         self.enable_internal_trace = enable_internal_trace
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
@@ -268,7 +269,7 @@ class SamplingGenerator:
         seeds_tt = ttnn.from_torch(seed, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # reset seed for each user_id
-        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
+        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grid_sampling)
         seeds_tt.deallocate()
         user_ids_tt.deallocate()
 
