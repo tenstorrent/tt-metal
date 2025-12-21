@@ -39,8 +39,9 @@ class TestSignbit:
         self,
         input_shapes,
         dst_mem_config,
-        device,
+        device_module,
     ):
+        device = device_module
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
@@ -61,8 +62,9 @@ class TestSignbit:
         self,
         input_shapes,
         dst_mem_config,
-        device,
+        device_module,
     ):
+        device = device_module
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_constant, constant=-0.0), torch.bfloat16)
         ]

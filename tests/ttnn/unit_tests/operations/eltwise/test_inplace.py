@@ -14,7 +14,8 @@ from torch.nn import functional as F
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_mul_inplace(device, h, w):
+def test_mul_inplace(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.mul_)
@@ -30,7 +31,8 @@ def test_mul_inplace(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_add_inplace(device, h, w):
+def test_add_inplace(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.add_)
@@ -46,7 +48,8 @@ def test_add_inplace(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_sub_inplace(device, h, w):
+def test_sub_inplace(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.sub_)

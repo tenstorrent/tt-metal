@@ -12,7 +12,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     "testing_dtype",
     ["bfloat16", "float32"],
 )
-def test_fmod_nan(testing_dtype, device):
+def test_fmod_nan(testing_dtype, device_module):
+    device = device_module
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
     if testing_dtype == "bfloat16":

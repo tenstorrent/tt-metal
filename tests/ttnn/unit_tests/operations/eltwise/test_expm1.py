@@ -18,7 +18,8 @@ def flush_subnormal_values(tensor):
     return tensor
 
 
-def test_expm1_arange_masking(device):
+def test_expm1_arange_masking(device_module):
+    device = device_module
     # Expm1 Working range - Overflow from 88.5(inf) as in exp
     low = -math.inf
     high = 88.5
@@ -63,7 +64,8 @@ def test_expm1_arange_masking(device):
         (0.69140625, 88.5, 0.001, 0.01),
     ],
 )
-def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
+def test_expm1_allclose(low, high, expected_atol, expected_rtol, device_module):
+    device = device_module
     num_elements = math.prod([1, 3, 320, 320])
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
