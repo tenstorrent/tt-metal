@@ -14,7 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 384])
 @pytest.mark.parametrize("w", [64, 1024])
-def test_rms_norm(device, batch_size, h, w):
+def test_rms_norm(device_module, batch_size, h, w):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
@@ -34,7 +35,8 @@ def test_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32])
-def test_rms_norm_row_major(device, batch_size, h, w):
+def test_rms_norm_row_major(device_module, batch_size, h, w):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
@@ -55,7 +57,8 @@ def test_rms_norm_row_major(device, batch_size, h, w):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_large_rms_norm(device, batch_size, h, w, dtype):
+def test_large_rms_norm(device_module, batch_size, h, w, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=dtype)

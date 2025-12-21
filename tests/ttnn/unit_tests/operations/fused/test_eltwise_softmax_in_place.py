@@ -69,5 +69,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_softmax_in_place_test(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
+def test_eltwise_softmax_in_place_test(input_shape, dtype, dlayout, in_mem_config, data_seed, device_module):
+    device = device_module
     run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device)
