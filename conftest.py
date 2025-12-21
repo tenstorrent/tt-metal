@@ -940,7 +940,7 @@ def pytest_runtest_teardown(item, nextitem):
     if metal_timeout_enabled is not None or using_xdist:
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
-        if test_failed:
+        if test_failed and hasattr(item, "pci_ids"):
             logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
             reset_tensix(set(item.pci_ids))
 

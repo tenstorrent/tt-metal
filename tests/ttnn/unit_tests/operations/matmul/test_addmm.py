@@ -11,7 +11,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("matrix_size", [4, 8, 16, 32, 64, 128, 256, 512, 1024])
-def test_addmm_square_matrices(device, dtype, matrix_size):
+def test_addmm_square_matrices(device_module, dtype, matrix_size):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((matrix_size, matrix_size), dtype=torch.bfloat16)
@@ -54,7 +55,8 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
 @pytest.mark.parametrize("matrix_size", [4, 8, 16, 32])
 @pytest.mark.parametrize("alpha", [-0.5, 0.5, 1.0, 1.5])
 @pytest.mark.parametrize("beta", [-0.5, 0.0, 0.5, 1.0, 1.5])
-def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
+def test_addmm_with_alpha_beta(device_module, dtype, matrix_size, alpha, beta):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(matrix_size, matrix_size, dtype=torch.bfloat16)
@@ -107,7 +109,8 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
         (32, 128, 64),
     ],
 )
-def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
+def test_addmm_rectangular_matrices(device_module, dtype, matrix_dims):
+    device = device_module
     torch.manual_seed(0)
 
     n, m, p = matrix_dims
@@ -152,7 +155,8 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("size", [4, 8, 16, 32, 64])
 @pytest.mark.parametrize("case_type", ["matrix_vector"])  # TODO "vector_matrix" not working
-def test_vector_matrix_multiplication(device, dtype, size, case_type):
+def test_vector_matrix_multiplication(device_module, dtype, size, case_type):
+    device = device_module
     """
     Test vector-matrix and matrix-vector multiplication cases:
     - vector_matrix: n=1, testing (1, m) @ (m, p) + (1, p)
@@ -224,7 +228,8 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
         (95, 127, 63),  # Larger dimensions not multiple of 32
     ],
 )
-def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
+def test_addmm_non_tile_multiple_dimensions(device_module, dtype, shape):
+    device = device_module
     torch.manual_seed(0)
 
     n, m, p = shape
@@ -265,7 +270,8 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
 
-def test_alpha_zero_should_throw_error(device):
+def test_alpha_zero_should_throw_error(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(4, 4, dtype=torch.bfloat16)
@@ -300,7 +306,8 @@ def test_alpha_zero_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with alpha=0 should throw an error.")
 
 
-def test_input_tensor_with_invalid_shape_should_throw_error(device):
+def test_input_tensor_with_invalid_shape_should_throw_error(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(8, 8, dtype=torch.bfloat16)
@@ -335,7 +342,8 @@ def test_input_tensor_with_invalid_shape_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with incompatible shapes should throw an error.")
 
 
-def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
+def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(8, 8, dtype=torch.bfloat16)
@@ -364,7 +372,8 @@ def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
     ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor, beta=0.0)
 
 
-def test_cast_to_another_dtype(device):
+def test_cast_to_another_dtype(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(4, 4, dtype=torch.bfloat16)
@@ -394,7 +403,8 @@ def test_cast_to_another_dtype(device):
     assert output_tensor.dtype == ttnn.float32, "Output tensor must be float32"
 
 
-def test_unsupported_dtype_should_throw_error(device):
+def test_unsupported_dtype_should_throw_error(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn(4, 4, dtype=torch.bfloat16)
@@ -430,7 +440,8 @@ def test_unsupported_dtype_should_throw_error(device):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
-def test_addmm_with_output_tensor_inplace_op(device, dtype):
+def test_addmm_with_output_tensor_inplace_op(device_module, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((32, 32), dtype=torch.bfloat16)
@@ -479,7 +490,8 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
 
 
-def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
+def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device_module):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((32, 32), dtype=torch.bfloat16)
