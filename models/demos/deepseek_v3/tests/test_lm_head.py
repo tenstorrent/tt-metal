@@ -74,7 +74,7 @@ def test_forward_pass(
 
     # Setup: Get weight_config using the helper function
     weight_config = get_test_weight_config(
-        LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=True
+        LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
     )
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
