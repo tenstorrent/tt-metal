@@ -40,11 +40,6 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // Should be removed and tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size_in_bytes = get_local_cb_interface(operandA_id).fifo_page_size;
-    const uint32_t unpB_tile_size_in_bytes = get_local_cb_interface(operandB_id).fifo_page_size;
-
     _llk_unpack_AB_matmul_init_(
         transpose,
         ct_dim,
@@ -55,9 +50,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b,
-        unpA_tile_size_in_bytes,
-        unpB_tile_size_in_bytes);
+        partial_face_b);
 }
 
 inline void llk_unpack_AB_matmul(

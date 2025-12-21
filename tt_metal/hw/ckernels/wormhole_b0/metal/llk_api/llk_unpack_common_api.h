@@ -33,6 +33,9 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+
+    // Currently, there is a constraint that tile size is equal to the fifo page size
+    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
     const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
@@ -65,6 +68,9 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
+
+    // Currently, there is a constraint that tile size is equal to the fifo page size
+    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, to_from_int8>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size);
@@ -76,6 +82,9 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
+
+    // Currently, there is a constraint that tile size is equal to the fifo page size
+    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, to_from_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size);
@@ -137,24 +146,3 @@ inline void llk_unpack_reconfig_data_format(
 inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
 
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }
-
-// All TILE_SIZE related functions were deprecared in BBE for WH.  The following is needed for pack_shifted so just
-// keeping here.
-// FIXME: Need to review and adjust accordingly
-constexpr static std::int32_t MUL_HEADERLESS_TILE_SIZE_AND_INDEX(uint format, uint index) {
-    switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::Float32): return ((index << 8));
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return ((index << 7));
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return ((index << 6) + (index << 2));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index << 5) + (index << 2));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index << 4) + (index << 2));
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return ((index << 6));
-        // Keep default as Bfp8?
-        default: return ((index << 6) + (index << 2));
-    };
-}
