@@ -355,6 +355,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         narrow_tile);
 }
 
+// TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
