@@ -10,7 +10,7 @@
 
 #include <optional>
 #include <vector>
-
+check
 constexpr int log2(int n) {
     int log = 0;
     while (n >>= 1) {
