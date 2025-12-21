@@ -227,6 +227,7 @@ Result conv_transpose2d_L1(
             output_parallel_config,
             groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             opt_conv_op_block_config.act_block_h_ntiles,
+            input_height,
             input_width,
             mm_conv && auto_shard,
             out_channels,  // explicit out_channels for grouped convolutions
