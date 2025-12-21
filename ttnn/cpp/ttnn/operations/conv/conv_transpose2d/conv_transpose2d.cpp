@@ -716,7 +716,9 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
     const IOShape& output_slice_start, const IOShape& output_slice_end) const {
     auto compute_grid_size = device->compute_with_storage_grid_size();
     auto conv_config = this->conv_config;
-    auto [input_start, input_end] = get_input_slice(output_slice_start, output_slice_end);
+    auto [input_slice, this_slice_padding, this_slice_out_padding] =
+        get_input_slice_and_padding(output_slice_start, output_slice_end);
+    auto [input_start, input_end] = input_slice;
     uint32_t input_slice_height = std::get<0>(input_end) - std::get<0>(input_start);
     uint32_t input_slice_width = std::get<1>(input_end) - std::get<1>(input_start);
     uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
@@ -724,7 +726,10 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
     uint32_t width_rounding_value =
         (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
-    if (output_slice_width % width_rounding_value != 0) {
+    bool single_slice =
+        (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
+
+    if ((output_slice_width % width_rounding_value != 0) && !single_slice) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
         output_slice_width += additional_padded_width;
     }
@@ -733,6 +738,26 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
         if (!conv_config.weights_dtype.has_value()) {
             conv_config.weights_dtype = weight_tensor.dtype();
         }
+        auto conv2d_dims = compute_conv_transpose2d_dimensions(
+            input_slice_height,
+            input_slice_width,
+            kernel_size,
+            stride,
+            this_slice_padding,
+            this_slice_out_padding,
+            dilation);
+        TT_ASSERT(
+            conv2d_dims.output_height == output_slice_height,
+            "Calculated output slice height {} from input slice does not match provided output slice height {}.",
+            conv2d_dims.output_height,
+            output_slice_height);
+
+        TT_ASSERT(
+            conv2d_dims.output_width == output_slice_width,
+            "Calculated output slice width {} from input slice does not match provided output slice width {}.",
+            conv2d_dims.output_width,
+            output_slice_width);
+
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
             false,
@@ -742,8 +767,8 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
             output_slice_height,
             output_slice_width,
             weight_tensor.logical_shape()[3],
-            input_slice_height,
-            input_slice_width,
+            conv2d_dims.full_input_height,
+            conv2d_dims.full_input_width,
             device->compute_with_storage_grid_size(),
             input_layout,
             input_dtype,
