@@ -176,6 +176,7 @@ class Generator:
             and tt_out_logits_all_users is None
             and not return_logits
         ):
+            # Turning off until https://github.com/tenstorrent/tt-metal/issues/29685 is resolved
             use_batched_prefill = False
 
         if return_logits:
