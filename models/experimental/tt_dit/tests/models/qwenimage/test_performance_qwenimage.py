@@ -20,7 +20,7 @@ from ....utils.diagnostic_timing import DiagnosticTimingCollector
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 2x4 config with SP enabled - SP on axis 0 enables FSDP weight sharding (no CFG parallel)
+        # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
         [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
@@ -39,7 +39,7 @@ from ....utils.diagnostic_timing import DiagnosticTimingCollector
     "is_fsdp",
     [
         pytest.param(True, id="fsdp_enabled"),
-        # pytest.param(False, id="fsdp_disabled"),  # Uncomment to compare with/without FSDP
+        # pytest.param(False, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
     ],
 )
 def test_qwenimage_pipeline_performance(
@@ -63,9 +63,9 @@ def test_qwenimage_pipeline_performance(
 
     benchmark_profiler = BenchmarkProfiler()
 
-    # Skip 4U.
+    # skip 4u
     if galaxy_type == "4U":
-        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        # pipelines fail if a performance test is skipped without providing a benchmark output
         if is_ci_env:
             with benchmark_profiler("run", iteration=0):
                 pass
@@ -95,10 +95,10 @@ def test_qwenimage_pipeline_performance(
         topology=topology,
         width=image_w,
         height=image_h,
-        is_fsdp=is_fsdp,  # Enable FSDP to avoid model load/unload cycle
+        is_fsdp=is_fsdp,  # enable fsdp to avoid model load/unload cycle
     )
 
-    # Test prompts - diverse set for comprehensive performance testing
+    # test prompts - diverse set for comprehensive performance testing
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
         'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
@@ -110,7 +110,7 @@ def test_qwenimage_pipeline_performance(
     ]
 
     # =========================================================================
-    # WARMUP RUN (not timed for performance metrics)
+    # warmup run (not timed for performance metrics)
     # =========================================================================
     logger.info("Running warmup iteration...")
     timer_warmup = DiagnosticTimingCollector(enable_sync_timing=True, enable_profiler=False)
@@ -130,13 +130,13 @@ def test_qwenimage_pipeline_performance(
     logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
 
     # =========================================================================
-    # PERFORMANCE MEASUREMENT RUNS
+    # performance measurement runs
     # =========================================================================
     logger.info("Running performance measurement iterations...")
     all_timings = []
     num_perf_runs = 1
 
-    # Optional Tracy profiling (if available)
+    # optional tracy profiling (if available)
     profiler = None
     try:
         from tracy import Profiler
@@ -151,11 +151,11 @@ def test_qwenimage_pipeline_performance(
         for i in range(num_perf_runs):
             logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-            # Create diagnostic timing collector for this run
+            # create diagnostic timing collector for this run
             timer = DiagnosticTimingCollector(enable_sync_timing=True, enable_profiler=(i == 0))
             pipeline.timing_collector = timer
 
-            # Run pipeline with different prompt
+            # run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
 
             with benchmark_profiler("run", iteration=i):
@@ -181,7 +181,7 @@ def test_qwenimage_pipeline_performance(
             logger.info("Tracy profiling disabled")
 
     # =========================================================================
-    # CALCULATE STATISTICS
+    # calculate statistics
     # =========================================================================
     clip_times = [t.clip_encoding_time for t in all_timings]
     t5_times = [t.t5_encoding_time for t in all_timings]
@@ -189,7 +189,7 @@ def test_qwenimage_pipeline_performance(
     vae_times = [t.vae_decoding_time for t in all_timings]
     total_times = [t.total_time for t in all_timings]
 
-    # Calculate per-step denoising times
+    # calculate per-step denoising times
     all_denoising_steps = []
     for timing in all_timings:
         all_denoising_steps.extend(timing.denoising_step_times)
@@ -234,7 +234,7 @@ def test_qwenimage_pipeline_performance(
 
     print("-" * 100)
 
-    # Additional metrics
+    # additional metrics
     if total_times and all_denoising_steps:
         avg_total_time = statistics.mean(total_times)
         avg_step_time = statistics.mean(all_denoising_steps)
@@ -244,7 +244,7 @@ def test_qwenimage_pipeline_performance(
         print(f"Denoising throughput: {num_inference_steps / total_denoising_time:.2f} steps/second")
         print(f"Overall throughput: {1 / avg_total_time:.4f} images/second")
 
-        # Breakdown percentages
+        # breakdown percentages
         avg_encoding_time = statistics.mean(total_encoding_times)
         avg_vae_time = statistics.mean(vae_times)
 
@@ -253,17 +253,17 @@ def test_qwenimage_pipeline_performance(
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
 
-    # Validate that we got reasonable results
+    # validate that we got reasonable results
     assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
     assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
     assert all(
         len(t.denoising_step_times) == num_inference_steps for t in all_timings
     ), f"All runs should have {num_inference_steps} denoising steps"
 
-    # Clean up
+    # clean up
     pipeline.timing_collector = None
 
-    # Validate performance
+    # validate performance
     measurements = {
         "clip_encoding_time": statistics.mean(clip_times),
         "t5_encoding_time": statistics.mean(t5_times),
@@ -294,7 +294,7 @@ def test_qwenimage_pipeline_performance(
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
-        # In CI, dump a performance report
+        # in ci, dump a performance report
         profiler_model_name = f"qwenimage_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
@@ -312,11 +312,11 @@ def test_qwenimage_pipeline_performance(
             )
             pass_perf_check = False
 
-    # Don't fail the test on perf - we're diagnosing
+    # don't fail the test on perf - we're diagnosing
     if not pass_perf_check:
         logger.warning("\n".join(assert_msgs))
 
-    # Synchronize all devices
+    # synchronize all devices
     ttnn.synchronize_device(mesh_device)
 
     logger.info("Performance test completed successfully!")

@@ -27,7 +27,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
     ("model_variant", "width", "height", "num_inference_steps"),
     [
         ("schnell", 1024, 1024, 4),
-        # ("dev", 1024, 1024, 28),
+        ("dev", 1024, 1024, 28),
     ],
 )
 @pytest.mark.parametrize(
@@ -44,14 +44,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 @pytest.mark.parametrize(
     ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        # pytest.param(True, True, True, id="encoder_cpu"),
+        pytest.param(True, True, True, id="encoder_cpu"),
         pytest.param(True, False, False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        # pytest.param(True, id="traced"),
+        pytest.param(True, id="traced"),
         pytest.param(False, id="not_traced"),
     ],
 )

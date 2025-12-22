@@ -43,7 +43,7 @@ from ....utils.tracing import Tracer
 
 
 # =============================================================================
-# Qwen25VL Text Encoder Tests - T3K and Galaxy Frequent
+# qwen25vl text encoder tests - t3k and galaxy frequent
 # =============================================================================
 
 
@@ -102,13 +102,13 @@ def test_qwenimage_encoder_accuracy(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[tp_axis], mesh_axis=tp_axis),
     )
 
-    # Load reference PyTorch model
+    # load reference pytorch model
     torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
         "Qwen/Qwen-Image", subfolder="text_encoder"
     )
     torch_text_model = torch_model.model.language_model
 
-    # Create TT model
+    # create tt model
     model = Qwen25VlTextEncoder(
         vocab_size=torch_model.config.vocab_size,
         hidden_size=torch_model.config.hidden_size,
@@ -126,7 +126,7 @@ def test_qwenimage_encoder_accuracy(
     )
     model.load_torch_state_dict(torch_text_model.state_dict())
 
-    # Prepare inputs
+    # prepare inputs
     tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
     m = torch.randint(0, sequence_length + 1, [batch_size])
     attention_mask = torch.arange(sequence_length) < m.unsqueeze(1)
@@ -137,7 +137,7 @@ def test_qwenimage_encoder_accuracy(
     tt_pos_embeds_cos = tensor.from_torch(cos, device=encoder_submesh)
     tt_pos_embeds_sin = tensor.from_torch(sin, device=encoder_submesh)
 
-    # Run TT model
+    # run tt model
     logger.info("Running TT model...")
     tt_hidden_states = model.forward(
         tt_tokens,
@@ -147,7 +147,7 @@ def test_qwenimage_encoder_accuracy(
     tt_prompt_embeds = tt_hidden_states[-1]
     tt_prompt_embeds_torch = tensor.to_torch(tt_prompt_embeds)
 
-    # Run reference PyTorch model
+    # run reference pytorch model
     logger.info("Running PyTorch reference model...")
     with torch.no_grad():
         out = torch_model.forward(
@@ -157,19 +157,19 @@ def test_qwenimage_encoder_accuracy(
         )
         prompt_embeds = out.hidden_states[-1]
 
-    # Validate output dimensions
+    # validate output dimensions
     assert len(out.hidden_states) == len(
         tt_hidden_states
     ), f"Hidden states count mismatch: expected {len(out.hidden_states)}, got {len(tt_hidden_states)}"
 
-    # Check accuracy
+    # check accuracy
     assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.95, relative_rmse=0.35)
 
     logger.info("Encoder accuracy test passed!")
 
 
 # =============================================================================
-# QwenImage VAE Decoder Tests - T3K and Galaxy Frequent
+# qwenimage vae decoder tests - t3k and galaxy frequent
 # =============================================================================
 
 
@@ -208,12 +208,12 @@ def test_qwenimage_vae_decoder_accuracy(
     Tests the VAE decoder component accuracy by comparing TT output against
     PyTorch reference implementation.
     """
-    # Skip if submesh is larger than parent mesh
+    # skip if submesh is larger than parent mesh
     parent_mesh_shape = tuple(mesh_device.shape)
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
         pytest.skip("submesh shape is larger than parent mesh shape, skipping")
 
-    # Skip 4U Galaxy configuration
+    # skip 4u galaxy configuration
     if galaxy_type == "4U":
         pytest.skip("4U Galaxy configuration not supported for this test")
 
@@ -224,14 +224,14 @@ def test_qwenimage_vae_decoder_accuracy(
 
     tp_axis = 1
 
-    # Load reference PyTorch model
+    # load reference pytorch model
     torch_model = vae_reference.AutoencoderKLQwenImage.from_pretrained("Qwen/Qwen-Image", subfolder="vae")
     assert isinstance(torch_model, vae_reference.AutoencoderKLQwenImage)
     torch_model.eval()
 
     in_channels = torch_model.config["z_dim"]
 
-    # Create TT model
+    # create tt model
     ccl_manager = CCLManager(vae_submesh, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(
         tensor_parallel=ParallelFactor(factor=vae_submesh.shape[tp_axis], mesh_axis=tp_axis)
@@ -249,28 +249,28 @@ def test_qwenimage_vae_decoder_accuracy(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    # Prepare input
+    # prepare input
     inp = torch.randn(batch_size, in_channels, height, width)
     tt_inp = tensor.from_torch(inp.permute(0, 2, 3, 1), device=vae_submesh)
 
-    # Run reference PyTorch model
+    # run reference pytorch model
     logger.info("Running PyTorch reference model...")
     with torch.no_grad():
         torch_output = torch_model.decode(inp.unsqueeze(2)).sample.squeeze(2)
 
-    # Run TT model
+    # run tt model
     logger.info("Running TT model...")
     tt_out = tt_model.forward(tt_inp)
     tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
 
-    # Check accuracy
+    # check accuracy
     assert_quality(torch_output, tt_out_torch, pcc=0.9997, relative_rmse=0.023)
 
     logger.info("VAE decoder accuracy test passed!")
 
 
 # =============================================================================
-# QwenImage Denoising Transformer Tests - T3K and Galaxy Frequent
+# qwenimage denoising transformer tests - t3k and galaxy frequent
 # =============================================================================
 
 
@@ -319,7 +319,7 @@ def test_qwenimage_transformer_accuracy(
     Tests the transformer component accuracy by comparing TT output against
     PyTorch reference implementation.
     """
-    # Skip 4U Galaxy configuration
+    # skip 4u galaxy configuration
     if galaxy_type == "4U":
         pytest.skip("4U Galaxy configuration not supported for this test")
 
@@ -330,7 +330,7 @@ def test_qwenimage_transformer_accuracy(
 
     logger.info(f"Running on mesh {mesh_device.shape} with sp={sp_factor}, tp={tp_factor}")
 
-    # Load reference PyTorch model
+    # load reference pytorch model
     torch_model = transformer_reference.QwenImageTransformer2DModel.from_pretrained(
         "Qwen/Qwen-Image", subfolder="transformer"
     )
@@ -343,7 +343,7 @@ def test_qwenimage_transformer_accuracy(
     joint_attention_dim = torch_model.config.joint_attention_dim
     patch_size = 2
 
-    # Create TT model
+    # create tt model
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
