@@ -61,6 +61,7 @@ jobs:
             {"model":"vgg_unet"},
             {"model":"vanilla_unet"},
             {"model":"efficientnetb0"},
+            {"model":"efficientdetd0"},
             {"model":"vovnet"},
             {"model":"retinanet"},
             {"model":"ufld_v2"},
