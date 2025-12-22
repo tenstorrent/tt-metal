@@ -1,18 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_device_operation.hpp"
+#include "untilize_op.hpp"
 
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "untilize_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "factories/untilize_single_core_program_factory.hpp"
-#include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
-#include "factories/untilize_multi_core_block_program_factory.hpp"
-#include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
-#include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
-#include "factories/untilize_multi_core_program_factory.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -50,27 +46,21 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     return 2;
 }
 
-void UntilizeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
-void UntilizeDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    const auto& input_tensor_a = tensor_args.input;
+    const auto& input_tensor_a = input_tensors.at(0);
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
     uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
 
     bool input_is_sharded = input_tensor_a.is_sharded();
-    bool output_is_sharded = operation_attributes.output_mem_config.is_sharded();
+    bool output_is_sharded = this->output_mem_config.is_sharded();
 
     BufferType input_buffer_type = input_tensor_a.memory_config().buffer_type();
-    BufferType output_buffer_type = operation_attributes.output_mem_config.buffer_type();
+    BufferType output_buffer_type = this->output_mem_config.buffer_type();
 
     TensorMemoryLayout input_memory_layout = input_tensor_a.memory_config().memory_layout();
-    TensorMemoryLayout output_memory_layout = operation_attributes.output_mem_config.memory_layout();
+    TensorMemoryLayout output_memory_layout = this->output_mem_config.memory_layout();
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
@@ -81,7 +71,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
 
     // Special conditions for sub_core_grids special case
-    if (operation_attributes.sub_core_grids.has_value()) {
+    if (this->sub_core_grids.has_value()) {
         TT_FATAL(
             input_memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Input memory layout must be interleaved when sub_core_grid argument provided");
@@ -89,7 +79,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
             output_memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Output memory layout must be interleaved when sub_core_grid argument provided");
         TT_FATAL(
-            operation_attributes.use_multicore,
+            this->use_multicore == true,
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
     }
 
@@ -109,7 +99,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // We don't support input or output uneven sharding for the single core implementation
-    if (!operation_attributes.use_multicore) {
+    if (!this->use_multicore) {
         // Check for input uneven sharding
         if (input_is_sharded) {
             std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
@@ -128,8 +118,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         }
         // Check for output uneven sharding
         if (output_is_sharded) {
-            std::array<uint32_t, 2> output_shard_shape =
-                operation_attributes.output_mem_config.shard_spec().value().shape;
+            std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
             uint32_t output_shard_width = output_shard_shape[1];
             uint32_t output_shard_height = output_shard_shape[0];
             TT_FATAL(
@@ -149,7 +138,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     // supported if the input and output memory layouts are identical (i.e. height->height, width->width, block->block)
     // and the input and output shard specs are identical. Otherwise uneven output sharding is not supported.
     if (output_is_sharded) {
-        std::array<uint32_t, 2> output_shard_shape = operation_attributes.output_mem_config.shard_spec().value().shape;
+        std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
         uint32_t output_shard_width = output_shard_shape[1];
         uint32_t output_shard_height = output_shard_shape[0];
 
@@ -160,13 +149,13 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 input_memory_layout == output_memory_layout,
                 "Input and output memory layouts must be identical if output is uneven sharded");
             TT_FATAL(
-                input_tensor_a.shard_spec().value() == operation_attributes.output_mem_config.shard_spec().value(),
+                input_tensor_a.shard_spec().value() == this->output_mem_config.shard_spec().value(),
                 "Input and output shard specs must be identical if output is uneven sharded");
         }
     }
 
     // Multicore implementation doesn't support input DRAM sharding
-    if (operation_attributes.use_multicore && input_is_sharded) {
+    if (this->use_multicore && input_is_sharded) {
         TT_FATAL(input_buffer_type == BufferType::L1, "Multicore implementation doesn't support DRAM sharding");
     }
 
@@ -176,17 +165,16 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
-    if (!operation_attributes.use_pack_untilize) {
+    if (!this->use_pack_untilize) {
         TT_FATAL(
             input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
             "Pack untilize must be enabled to support uint32/int32 data types");
     }
 }
 
-UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
     return {TensorSpec(
@@ -194,65 +182,71 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
         TensorLayout::fromPaddedShape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
-            operation_attributes.output_mem_config,
+            this->output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()))};
 }
 
-UntilizeDeviceOperation::tensor_return_value_t UntilizeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
-tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    operation::Hash hash = operation::hash_operation<UntilizeDeviceOperation>(
-        operation_attributes.output_mem_config,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume(),
-        operation_attributes.use_multicore,
-        operation_attributes.use_pack_untilize,
-        operation_attributes.fp32_dest_acc_en,
-        operation_attributes.sub_core_grids,
-        operation_attributes.enough_space_width,
-        operation_attributes.enough_space_height,
-        operation_attributes.pf_type);
-    return hash;
-}
-
-UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input;
-    const auto& output_tensor = operation_attributes.output_mem_config;
+operation::ProgramWithCallbacks Untilize::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    auto& output_tensor = output_tensors.at(0);
 
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
     BufferType input_buffer_type = input_tensor_a.memory_config().buffer_type();
-    BufferType output_buffer_type = output_tensor.buffer_type();
+    BufferType output_buffer_type = output_tensor.memory_config().buffer_type();
 
     TensorMemoryLayout input_memory_layout = input_tensor_a.memory_config().memory_layout();
-    TensorMemoryLayout output_memory_layout = output_tensor.memory_layout();
+    TensorMemoryLayout output_memory_layout = output_tensor.memory_config().memory_layout();
 
-    if (!operation_attributes.use_multicore) {
+    if (!this->use_multicore) {
         // Single core implementation
-        return program::UntilizeSingleCoreProgramFactory{};
+        return detail::untilize_single_core(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-    if (operation_attributes.sub_core_grids.has_value()) {
+    if (this->sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
         // Note that this implementation does not support sharding, which is enforced in validate().
-        return program::UntilizeMultiCoreSubCoreGridsProgramFactory{};
+        return detail::untilize_multi_core_sub_core_grids(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
     }
-    if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
+    if (!this->enough_space_height && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
-        return program::UntilizeMultiCoreBlockProgramFactory{};
+        return detail::untilize_multi_core_block(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
         output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout &&
@@ -260,64 +254,12 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // Optimized special case implementation for when both input and output are sharded, both are located in L1,
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
-        return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        return detail::untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
 
     // Default multi core implementation
-    return program::UntilizeMultiCoreProgramFactory{};
-}
-
-std::tuple<UntilizeDeviceOperation::operation_attributes_t, UntilizeDeviceOperation::tensor_args_t>
-UntilizeDeviceOperation::invoke(
-    const Tensor& input,
-    tt::tt_metal::MemoryConfig output_mem_config,
-    bool use_multicore,
-    bool use_pack_untilize,
-    bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
-    bool enough_space_height,
-    uint32_t pf_type) {
-    return {
-        UntilizeDeviceOperation::operation_attributes_t{
-            .output_mem_config = std::move(output_mem_config),
-            .use_multicore = use_multicore,
-            .use_pack_untilize = use_pack_untilize,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
-            .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
-        UntilizeDeviceOperation::tensor_args_t{.input = input}};
-}
-
-tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
-UntilizeDeviceOperation::create_op_performance_model(
-    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
-    const UntilizeDeviceOperation::tensor_args_t& inputs,
-    tensor_return_value_t& output) {
-    const auto& input_tensor = inputs.input;
-    const auto& output_tensor = output;
-    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles =
-        std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
-    int compute_cycles = 0;
-    const int max_tiles_per_row = 8;
-    const int latency_untilize = 390;      // measured latency for untilize_block
-    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
-    if (std::ceil(static_cast<float>(input_tensor.padded_shape()[-1]) / static_cast<float>(tile_width)) <=
-        max_tiles_per_row) {
-        compute_cycles = num_tiles * latency_pack_untilize;
-    } else {
-        compute_cycles = num_tiles * latency_untilize;
-    }
-
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
-        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
-    return result;
+    return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement
