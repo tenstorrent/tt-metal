@@ -72,7 +72,7 @@ ttnn::Tensor transform_weights_for_conv_transpose2d(const ttnn::Tensor& conv_wei
 
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     const std::string& weights_format,
     uint32_t in_channels,
