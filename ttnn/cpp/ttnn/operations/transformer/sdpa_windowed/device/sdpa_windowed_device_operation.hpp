@@ -14,6 +14,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::transformer::sdpa_windowed {
 
