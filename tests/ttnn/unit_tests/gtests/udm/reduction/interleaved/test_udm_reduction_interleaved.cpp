@@ -91,7 +91,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/ttnn/unit_tests/gtests/udm/kernels/dataflow_reduce.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/kernels/dataflow_reduce.cpp",
             gcores_info.gcores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -104,7 +104,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/ttnn/unit_tests/gtests/udm/kernels/compute_reduce.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/reduction/interleaved/kernels/compute_reduce.cpp",
             gcores_info.gcores,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = true,  // Use FP32 accumulation for better precision

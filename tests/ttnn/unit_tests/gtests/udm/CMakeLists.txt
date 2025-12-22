@@ -6,10 +6,10 @@ add_executable(unit_tests_ttnn_udm)
 target_sources(
     unit_tests_ttnn_udm
     PRIVATE
-        test_udm_copy.cpp
-        test_udm_add.cpp
-        test_udm_reduction.cpp
-        test_udm_reduction_interleaved.cpp
+        copy/test_udm_copy.cpp
+        eltwise/test_udm_add.cpp
+        reduction/sharded/test_udm_reduction.cpp
+        reduction/interleaved/test_udm_reduction_interleaved.cpp
 )
 
 target_link_libraries(

@@ -91,7 +91,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/ttnn/unit_tests/gtests/udm/kernels/dataflow_add.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/eltwise/kernels/dataflow_add.cpp",
             gcores_info.gcores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -105,7 +105,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         tt::tt_metal::experimental::udm::CreateMeshKernel(
             mesh_builder,
             program,
-            "tests/ttnn/unit_tests/gtests/udm/kernels/compute_add.cpp",
+            "tests/ttnn/unit_tests/gtests/udm/eltwise/kernels/compute_add.cpp",
             gcores_info.gcores,
             tt::tt_metal::ComputeConfig{});
 
