@@ -27,7 +27,18 @@ uint32_t get_code_profiling_buffer_addr() {
 }
 }  // namespace
 
-CodeProfiler::CodeProfiler(EthCoreBufferReadback& eth_readback) : eth_readback_(eth_readback) {}
+CodeProfiler::CodeProfiler(EthCoreBufferReadback& eth_readback) : eth_readback_(eth_readback) {
+    // Setup code profiling CSV path
+    std::ostringstream code_profiling_results_oss;
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    code_profiling_results_oss << "code_profiling_results_" << arch_name << ".csv";
+
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::string(OUTPUT_DIR);
+
+    code_profiling_csv_file_path_ = output_path / code_profiling_results_oss.str();
+}
 
 void CodeProfiler::set_enabled(bool enabled) { enabled_ = enabled; }
 
@@ -150,19 +161,11 @@ void CodeProfiler::report_code_profiling_results() const {
 }
 
 void CodeProfiler::initialize_code_profiling_results_csv_file() {
-    std::ostringstream code_profiling_results_oss;
-    auto arch_name = tt::tt_metal::hal::get_arch_name();
-    code_profiling_results_oss << "code_profiling_results_" << arch_name << ".csv";
-
-    std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+    std::filesystem::path output_path = code_profiling_csv_file_path_.parent_path();
 
     if (!std::filesystem::exists(output_path)) {
         std::filesystem::create_directories(output_path);
     }
-
-    code_profiling_csv_file_path_ = output_path / code_profiling_results_oss.str();
 
     // Create detailed CSV file with header
     std::ofstream code_profiling_csv_stream(
