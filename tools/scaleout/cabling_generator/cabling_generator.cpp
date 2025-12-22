@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cabling_generator.hpp"
+#include "descriptor_merger.hpp"
+#include "protobuf_utils.hpp"
 
 #include <board/board.hpp>
 #include <connector/connector.hpp>
@@ -13,6 +15,7 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <google/protobuf/text_format.h>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
@@ -26,24 +29,6 @@
 namespace tt::scaleout_tools {
 
 namespace {
-
-// Helper to load protobuf descriptors
-template <typename Descriptor>
-Descriptor load_descriptor_from_textproto(const std::string& file_path) {
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file: " + file_path);
-    }
-
-    std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
-
-    Descriptor descriptor;
-    if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
-        throw std::runtime_error("Failed to parse textproto file: " + file_path);
-    }
-    return descriptor;
-}
 
 // Find node descriptor by name - search inline first, then fallback to file
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descriptor(
@@ -339,6 +324,23 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
         graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
+// Helper to load cluster descriptor from a single path (file or directory)
+// If path is a directory, finds all .textproto files and merges them
+tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor load_cluster_descriptor_from_path(
+    const std::string& path) {
+    if (DescriptorMerger::is_directory(path)) {
+        auto descriptor_files = DescriptorMerger::find_descriptor_files(path);
+        std::cout << "Found " << descriptor_files.size() << " cabling descriptor files in directory: " << path
+                  << std::endl;
+        for (const auto& file : descriptor_files) {
+            std::cout << "  - " << file << std::endl;
+        }
+        return DescriptorMerger::merge_descriptors(descriptor_files);
+    } else {
+        return load_cluster_descriptor(path);
+    }
+}
+
 }  // anonymous namespace
 
 // Common initialization logic shared by all constructors
@@ -365,12 +367,11 @@ void CablingGenerator::initialize_cluster(
 }
 
 // Constructor with full deployment descriptor
+// cluster_descriptor_path can be a single file or a directory
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
-    // Load descriptors from file paths
-    auto cluster_descriptor =
-        load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path);
+    // Load descriptors from file paths (supports directory for cluster descriptor)
+    auto cluster_descriptor = load_cluster_descriptor_from_path(cluster_descriptor_path);
     auto deployment_descriptor =
         load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
             deployment_descriptor_path);
