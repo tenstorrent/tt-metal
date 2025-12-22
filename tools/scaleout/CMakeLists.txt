@@ -40,7 +40,6 @@ target_sources(
         FILES
             board/board.hpp
             cabling_generator/cabling_generator.hpp
-            cabling_generator/descriptor_merger.hpp
             cabling_generator/protobuf_utils.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
@@ -50,7 +49,6 @@ target_sources(
         node/node_types.cpp
         board/board.cpp
         cabling_generator/cabling_generator.cpp
-        cabling_generator/descriptor_merger.cpp
         connector/connector.cpp
         factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
