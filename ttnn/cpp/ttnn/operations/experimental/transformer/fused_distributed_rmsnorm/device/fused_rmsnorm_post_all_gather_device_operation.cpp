@@ -2,25 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rmsnorm_post_all_gather_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/math.hpp"
+#include "fused_rmsnorm_post_all_gather_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 
-#include <optional>
+#include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
 
-void FusedRMSNormPostAllGather::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+FusedRMSNormPostAllGatherDeviceOperation::program_factory_t
+FusedRMSNormPostAllGatherDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return program::FusedRMSNormPostAllGatherProgramFactory{};
+}
+
+void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors");
-    const auto& a = input_tensors.at(0);
-    const auto& stats = input_tensors.at(1);
+    const auto& a = tensor_args.input_tensor;
+    const auto& stats = tensor_args.stats_tensor;
+    const auto& weight_opt = tensor_args.weight;
+    const auto& transformation_mat_opt = tensor_args.transformation_mat;
+    const auto& rope_cos_opt = tensor_args.rope_cos;
+    const auto& rope_sin_opt = tensor_args.rope_sin;
 
     // Helper lambda to assert tensor properties: tilized, bfloat16, on device, allocated
     auto check_tile_bf16_device_alloc = [](const Tensor& tensor, const std::string& name) {
@@ -30,10 +40,8 @@ void FusedRMSNormPostAllGather::validate(
         TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
     };
 
-    for (size_t idx = 0; idx < input_tensors.size(); ++idx) {
-        const auto& tensor = input_tensors[idx];
-        check_tile_bf16_device_alloc(tensor, "Input tensor " + std::to_string(idx));
-    }
+    check_tile_bf16_device_alloc(a, "Input tensor 0");
+    check_tile_bf16_device_alloc(stats, "Input tensor 1");
 
     // stats has 1 tile columns per device
     TT_FATAL(
@@ -52,12 +60,12 @@ void FusedRMSNormPostAllGather::validate(
             a.padded_shape()[i]);
     }
 
-    TT_FATAL(this->num_heads > 0, "Number of heads must be greater than 0, got: {}", this->num_heads);
+    TT_FATAL(args.num_heads > 0, "Number of heads must be greater than 0, got: {}", args.num_heads);
     TT_FATAL(
-        a.padded_shape()[-1] % this->num_heads == 0,
+        a.padded_shape()[-1] % args.num_heads == 0,
         "Input last dimension must be divisible by number of heads, got hidden_dim: {} vs num_heads: {}",
         a.padded_shape()[-1],
-        this->num_heads);
+        args.num_heads);
 
     TT_FATAL(
         a.logical_shape()[-1] == a.padded_shape()[-1],
@@ -70,10 +78,9 @@ void FusedRMSNormPostAllGather::validate(
     TT_FATAL(a.logical_shape()[1] == 1, "Input dim 1 must be 1, got: {}", a.logical_shape()[1]);
     TT_FATAL(a.logical_shape()[0] == 1, "Expecting input batch dimension to be 1, got: {}", a.logical_shape()[0]);
 
-    TT_FATAL(optional_input_tensors.size() == 4, "Must have 4 optional input tensors");
-    if (optional_input_tensors.at(0).has_value()) {
+    if (weight_opt.has_value()) {
         // Gamma is given
-        const auto& weight = optional_input_tensors.at(0).value();
+        const auto& weight = weight_opt.value();
         check_tile_bf16_device_alloc(weight, "Weight");
 
         TT_FATAL(
@@ -91,14 +98,14 @@ void FusedRMSNormPostAllGather::validate(
             weight.logical_shape()[0]);
     }
 
-    if (optional_input_tensors.at(1).has_value()) {
+    if (transformation_mat_opt.has_value()) {
         // ROPE fusion is enabled
-        TT_FATAL(optional_input_tensors.at(2).has_value(), "Rope cos tensor is required when ROPE fusion is enabled");
-        TT_FATAL(optional_input_tensors.at(3).has_value(), "Rope sin tensor is required when ROPE fusion is enabled");
+        TT_FATAL(rope_cos_opt.has_value(), "Rope cos tensor is required when ROPE fusion is enabled");
+        TT_FATAL(rope_sin_opt.has_value(), "Rope sin tensor is required when ROPE fusion is enabled");
 
-        const auto& transformation_mat = optional_input_tensors.at(1).value();
-        const auto& rope_cos = optional_input_tensors.at(2).value();
-        const auto& rope_sin = optional_input_tensors.at(3).value();
+        const auto& transformation_mat = transformation_mat_opt.value();
+        const auto& rope_cos = rope_cos_opt.value();
+        const auto& rope_sin = rope_sin_opt.value();
 
         check_tile_bf16_device_alloc(transformation_mat, "Transformation_mat");
         check_tile_bf16_device_alloc(rope_cos, "Rope cos");
@@ -120,7 +127,7 @@ void FusedRMSNormPostAllGather::validate(
 
         // Ensure rope_cos and rope_sin have 4 dimensions: [1, 1, a.padded_shape()[2], head_dim]
         auto seq_len = a.padded_shape()[2];
-        auto head_dim = a.padded_shape()[3] / this->num_heads;
+        auto head_dim = a.padded_shape()[3] / args.num_heads;
         for (const auto& rope_tensor : {std::cref(rope_cos), std::cref(rope_sin)}) {
             TT_FATAL(
                 rope_tensor.get().padded_shape().size() == 4,
@@ -140,43 +147,56 @@ void FusedRMSNormPostAllGather::validate(
     }
 }
 
-std::vector<TensorSpec> FusedRMSNormPostAllGather::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+spec_return_value_t FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
-    output_shape[1] = this->num_heads;
-    output_shape[3] /= this->num_heads;
+    output_shape[1] = args.num_heads;
+    output_shape[3] /= args.num_heads;
 
-    return {TensorSpec(
+    return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            this->dtype.value_or(input_tensor.dtype()),
-            tt::tt_metal::PageConfig(Layout::TILE),
-            input_tensor.memory_config()))};
+            args.dtype.value_or(input_tensor.dtype()), tt::tt_metal::PageConfig(Layout::TILE), args.memory_config));
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks FusedRMSNormPostAllGather::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& a = input_tensors.at(0);
-    const auto& stats = input_tensors.at(1);
-    const auto& weight = optional_input_tensors.at(0);
-    const auto& transformation_mat = optional_input_tensors.at(1);
-    const auto& rope_cos = optional_input_tensors.at(2);
-    const auto& rope_sin = optional_input_tensors.at(3);
-    auto& output_tensor = output_tensors.at(0);
-
-    return fused_rmsnorm_post_allgather_multi_core(
-        a,
-        stats,
-        output_tensor,
-        weight,
-        transformation_mat,
-        rope_cos,
-        rope_sin,
-        this->eps,
-        this->num_heads,
-        this->compute_kernel_config);
+tensor_return_value_t FusedRMSNormPostAllGatherDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
-}  // namespace ttnn::operations::experimental::transformer
+
+std::tuple<
+    FusedRMSNormPostAllGatherDeviceOperation::operation_attributes_t,
+    FusedRMSNormPostAllGatherDeviceOperation::tensor_args_t>
+FusedRMSNormPostAllGatherDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    const Tensor& stats_tensor,
+    float eps,
+    uint32_t num_heads,
+    const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& transformation_mat,
+    const std::optional<const Tensor>& rope_cos,
+    const std::optional<const Tensor>& rope_sin,
+    const MemoryConfig& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<DataType>& dtype) {
+    return {
+        operation_attributes_t{
+            .eps = eps,
+            .num_heads = num_heads,
+            .memory_config = memory_config,
+            .compute_kernel_config = compute_kernel_config,
+            .dtype = dtype,
+        },
+        tensor_args_t{
+            .input_tensor = input_tensor,
+            .stats_tensor = stats_tensor,
+            .weight = weight.has_value() ? std::optional<Tensor>(weight.value()) : std::nullopt,
+            .transformation_mat =
+                transformation_mat.has_value() ? std::optional<Tensor>(transformation_mat.value()) : std::nullopt,
+            .rope_cos = rope_cos.has_value() ? std::optional<Tensor>(rope_cos.value()) : std::nullopt,
+            .rope_sin = rope_sin.has_value() ? std::optional<Tensor>(rope_sin.value()) : std::nullopt,
+        }};
+}
+
+}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
