@@ -13,13 +13,13 @@
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/stack_usage.h"
+#include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "remote_circular_buffer_api.h"
+#include "api/remote_circular_buffer.h"
 #endif
 
 extern "C" [[gnu::section(".start")]]

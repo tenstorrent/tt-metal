@@ -4,7 +4,7 @@
 
 #pragma once
 #include "chlkc_list.h"
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"

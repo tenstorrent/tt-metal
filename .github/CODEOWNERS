@@ -54,9 +54,9 @@ tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowne
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @tenstorrent/codeowner-bypass
-tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema @tenstorrent/codeowner-bypass
-tt_metal/hw/inc/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/codeowner-bypass
-tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT @tenstorrent/codeowner-bypass
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT @tenstorrent/codeowner-bypass
@@ -65,7 +65,7 @@ tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @TT-BrianLiu @tenstorrent
 tt_metal/impl/context/ @jbaumanTT @nhuang-tt @aliuTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
-tt_metal/impl/debug/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
+tt_metal/impl/debug/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
@@ -120,6 +120,7 @@ tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @
 tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/ @tt-asaigal @tt-aho @aliuTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/debug_tools/inspector @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 
 # misc tests
 tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
@@ -273,6 +274,7 @@ models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-b
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
@@ -346,11 +348,11 @@ models/vllm_test_utils/ @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
 
 # tt-triage
-tools/tt-triage.py @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
-tools/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
-tools/tests/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
-scripts/install_debugger.sh @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
-scripts/ttexalens_ref.txt @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/codeowner-bypass
+tools/tt-triage.py @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tools/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tools/tests/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+scripts/install_debugger.sh @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+scripts/ttexalens_ref.txt @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass

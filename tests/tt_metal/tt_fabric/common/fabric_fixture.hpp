@@ -378,7 +378,7 @@ enum NocSendType : uint8_t {
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& pair_ordered_dirs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
