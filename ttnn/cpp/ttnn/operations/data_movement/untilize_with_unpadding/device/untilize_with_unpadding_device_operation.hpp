@@ -52,7 +52,7 @@ struct UntilizeWithUnpaddingDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const ttnn::Shape& output_tensor_end,
-        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<MemoryConfig>& output_mem_config,
         bool use_multicore,
         bool use_pack_untilize,
         bool fp32_dest_acc_en,
