@@ -2,13 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import json
+from typing import Any
 
 import ttnn
 
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 TTNN_NAME = ttnn.__name__
+
+
+# =============================================================================
+# TYPE REGISTRY: Safe type lookup for deserialization (replaces eval)
+# =============================================================================
+
+_TTNN_TYPE_REGISTRY: dict[str, type] = {}
+
+
+def _build_type_registry() -> None:
+    """Build whitelist of known ttnn types for safe deserialization."""
+    serializable_types = ["MemoryConfig", "ShardSpec", "CoreRangeSet", "CoreRange", "CoreCoord"]
+    for type_name in serializable_types:
+        if hasattr(ttnn, type_name):
+            t = getattr(ttnn, type_name)
+            _TTNN_TYPE_REGISTRY[type_name] = t
+            _TTNN_TYPE_REGISTRY[f"ttnn.{type_name}"] = t
+        try:
+            t = getattr(ttnn._ttnn.tensor, type_name)
+            _TTNN_TYPE_REGISTRY[f"ttnn._ttnn.tensor.{type_name}"] = t
+        except AttributeError:
+            pass
+
+
+def _resolve_type(type_name: str) -> type:
+    """Resolve type name to type using whitelist registry."""
+    if type_name in _TTNN_TYPE_REGISTRY:
+        return _TTNN_TYPE_REGISTRY[type_name]
+    raise ValueError(f"Unknown type '{type_name}'. Add to _TTNN_TYPE_REGISTRY if valid.")
+
+
+_build_type_registry()
 
 
 def convert_enum_values_to_strings(data):
@@ -80,30 +114,69 @@ def _ttnn_type_from_name(type_name):
     return the_type
 
 
-def _deserialize_ttnn_enum(obj_name: str):
-    uq_obj_name_parts = list(filter(lambda p: p != TTNN_NAME, obj_name.split(".")))
-    enum_type = _ttnn_type_from_name(uq_obj_name_parts[0])
+def _deserialize_ttnn_enum(obj_name: str) -> Any | None:
+    """Safely deserialize a ttnn enum member from its string representation.
 
+    Example: "ttnn.DataType.BFLOAT16" -> ttnn.DataType.BFLOAT16
+
+    Uses getattr() instead of eval() for safe attribute access.
+    """
+    parts = [p for p in obj_name.split(".") if p != TTNN_NAME]
+    if len(parts) < 2:
+        return None
+    enum_type = _ttnn_type_from_name(parts[0])
     if enum_type is None:
         return None
+    member_name = parts[1]
+    if not hasattr(enum_type, member_name):
+        return None
+    return getattr(enum_type, member_name)
 
-    return eval(f"enum_type.{uq_obj_name_parts[1]}")
 
+def _safe_literal_eval(s: str) -> Any:
+    """Safely parse Python literals without code execution.
 
-def deserialize(object):
+    Only parses: strings, bytes, numbers, tuples, lists, dicts, sets, booleans, None.
+    Does NOT execute arbitrary code.
+
+    Args:
+        s: String representation of a Python literal
+
+    Returns:
+        The parsed Python object, or the original string if parsing fails.
+    """
     try:
-        if isinstance(object, dict):
-            type = _ttnn_type_from_name(object["type"])
-            return type.from_json(object["data"])
+        return ast.literal_eval(s)
+    except (SyntaxError, ValueError):
+        return s
 
-        elif isinstance(object, str) and "." in object:
-            maybe_enum = _deserialize_ttnn_enum(object)
-            if maybe_enum is not None:
-                return maybe_enum
-        try:
-            return eval(object)
-        except (SyntaxError, NameError) as e:
-            return str(object)
+
+def deserialize(obj: Any) -> Any:
+    """Deserialize an object from its serialized representation.
+
+    Handles:
+    - Dicts with {"type": ..., "data": ...} -> ttnn object via from_json
+    - Dotted strings -> ttnn enum members
+    - Literal strings -> Python primitives via ast.literal_eval
+    """
+    try:
+        if isinstance(obj, dict):
+            type_class = _ttnn_type_from_name(obj["type"])
+            if type_class is None:
+                raise ValueError(f"Unknown type: {obj['type']}")
+            return type_class.from_json(obj["data"])
+
+        if isinstance(obj, str):
+            # Try enum deserialization for dotted names
+            if "." in obj:
+                maybe_enum = _deserialize_ttnn_enum(obj)
+                if maybe_enum is not None:
+                    return maybe_enum
+
+            # Try literal parsing for primitives (safe, no code execution)
+            return _safe_literal_eval(obj)
+
+        return obj
 
     except Exception as e:
         logger.exception(f"deserialize failed {e}")
@@ -148,8 +221,8 @@ def deserialize_structured(object):
         # Handle dicts - check if it's a serialized ttnn object or a plain dict
         if isinstance(object, dict):
             if "type" in object and "data" in object:
-                # This is a serialized ttnn object
-                obj_type = eval(object["type"])
+                # This is a serialized ttnn object - use type registry instead of eval
+                obj_type = _resolve_type(object["type"])
                 data = object["data"]
                 # If data is a dict/object, convert it back to JSON string for from_json method
                 if isinstance(data, (dict, list)):
@@ -169,10 +242,8 @@ def deserialize_structured(object):
                     return maybe_enum
             elif object in ["sum", "mean", "max", "min", "std", "var"]:
                 return object
-            try:
-                return eval(object)
-            except (SyntaxError, NameError):
-                return str(object)
+            # Safe literal parsing (no code execution)
+            return _safe_literal_eval(object)
 
         # Fallback - return as-is
         return object
