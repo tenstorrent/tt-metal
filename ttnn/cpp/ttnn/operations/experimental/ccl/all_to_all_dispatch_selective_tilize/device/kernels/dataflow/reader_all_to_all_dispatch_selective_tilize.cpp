@@ -93,6 +93,8 @@ void kernel_main() {
     uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                 // 10
     uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
     uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
+    uint32_t drain_tilize_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);       // 13
+    uint32_t drain_tilize_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);       // 14
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);

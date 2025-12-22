@@ -229,6 +229,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
+    TT_FATAL(num_cores == num_links, "Number of cores must be equal to number of links");
+    TT_FATAL(
+        selective_tilize_core_range_set.num_cores() >= num_links,
+        "Number of selective tilize cores must be greater than or equal to number of links");
+    TT_FATAL(
+        selective_tilize_core_range_set.num_cores() % num_links == 0,
+        "Number of selective tilize cores must be divisible by number of links");
     uint32_t subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), dram_alignment);
     uint32_t subtoken_units_of_work = tt::div_up(aligned_input_page_size, subtoken_bytes_aligned);
     uint32_t max_indices_pages_per_packet = fabric_max_packet_size / aligned_indices_page_size;
@@ -466,6 +473,29 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         sender_core_grid,
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, writer_defines, named_compile_time_args));
 
+    std::vector<uint32_t> selective_tilize_runtime_args = {
+        output_tensor.buffer()->address(),
+        metadata_tensor.buffer()->address(),
+        output_scores_tensor.buffer()->address(),
+
+    };
+
+    uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);
+
+    std::vector<CoreCoord> drain_tilizer_cores;
+    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+        // Only first num_links tilizer cores are drain cores (one per link/sender)
+        if (i < num_links) {
+            selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = 1;
+            drain_tilizer_cores.push_back(selective_tilize_cores.at(i));
+        } else {
+            selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = 0;
+        }
+        tt::tt_metal::SetRuntimeArgs(
+            program, selective_tilize_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
+    }
+
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),            // 0
         indices_tensor.buffer()->address(),          // 1
@@ -486,10 +516,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     reader_runtime_args.push_back(0);
     uint32_t indices_end_idx = reader_runtime_args.size();
     reader_runtime_args.push_back(0);
+    uint32_t drain_tilize_core_noc_x_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t drain_tilize_core_noc_y_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
 
     uint32_t link_id = 0;
     uint32_t subtoken_offset = 0;
     uint32_t indices_start = 0;
+
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         if (subtoken_cores_group_1.contains(sender_cores.at(i))) {
             reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
@@ -499,6 +534,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             }
             reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
             subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
+            auto drain_tilize_core = drain_tilizer_cores.at(i);
+            auto worker_core = mesh_device->worker_core_from_logical_core(drain_tilize_core);
+            reader_runtime_args.at(drain_tilize_core_noc_x_idx) = worker_core.x;
+            reader_runtime_args.at(drain_tilize_core_noc_y_idx) = worker_core.y;
         } else if (subtoken_cores_group_2.contains(sender_cores.at(i))) {
             reader_runtime_args.at(subtoken_offset_idx) = subtoken_offset;
             uint32_t subtoken_size = subtoken_units_per_core_g2 * subtoken_bytes_aligned;
@@ -507,6 +546,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             }
             reader_runtime_args.at(subtoken_size_idx) = subtoken_size;
             subtoken_offset += reader_runtime_args.at(subtoken_size_idx);
+            auto drain_tilize_core = drain_tilizer_cores.at(i);
+            auto worker_core = mesh_device->worker_core_from_logical_core(drain_tilize_core);
+            reader_runtime_args.at(drain_tilize_core_noc_x_idx) = worker_core.x;
+            reader_runtime_args.at(drain_tilize_core_noc_y_idx) = worker_core.y;
         }
 
         if (indices_cores_group_1.contains(sender_cores.at(i))) {
@@ -536,15 +579,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
         link_id++;
-    }
-
-    std::vector<uint32_t> selective_tilize_runtime_args = {
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        output_scores_tensor.buffer()->address(),
-    };
-    for (const auto& core : selective_tilize_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, selective_tilize_kernel_id, core, selective_tilize_runtime_args);
     }
 
     return {

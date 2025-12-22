@@ -116,31 +116,34 @@ void kernel_main() {
 
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
     zero_buffer_async(ed_addr, experts * dispatch_devices * l1_alignment * sizeof(uint32_t));
-    zero_buffer_barrier();
-
-    // Signal all sender cores that E-D buffer has been zeroed
-    // Set local semaphore to 1, then multicast write to all sender cores
-    uint32_t ed_ready_sem_addr = get_semaphore(ed_buffer_ready_semaphore_id);
-    volatile tt_l1_ptr uint32_t* ed_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_ready_sem_addr);
-    noc_semaphore_set(ed_ready_sem_ptr, 1);
-
-    // Use safe multicast address that handles NOC 0 vs NOC 1 coordinate ordering
-    uint64_t sender_mcast_noc_addr = get_safe_multicast_noc_addr(
-        sender_mcast_start_x, sender_mcast_start_y, sender_mcast_end_x, sender_mcast_end_y, ed_ready_sem_addr);
-
-    // Multicast write the semaphore value (1) to all sender cores
-    // Sender cores wait for value 1 to know E-D buffer is ready
-    noc_semaphore_set_multicast(ed_ready_sem_addr, sender_mcast_noc_addr, num_sender_cores);
-    noc_async_write_barrier();
-
-    constexpr auto output_args = TensorAccessorArgs<0>();
-    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto output_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
-
     size_t rt_args_idx = 0;
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 0
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);       // 1
     uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 2
+    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);       // 3
+    zero_buffer_barrier();
+
+    // Signal all sender cores that E-D buffer has been zeroed
+    // Set local semaphore to 1, then multicast write to all sender cores
+    if (is_drain_tilizer_core) {
+        uint32_t ed_ready_sem_addr = get_semaphore(ed_buffer_ready_semaphore_id);
+        volatile tt_l1_ptr uint32_t* ed_ready_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_ready_sem_addr);
+        noc_semaphore_set(ed_ready_sem_ptr, 1);
+
+        // Use safe multicast address that handles NOC 0 vs NOC 1 coordinate ordering
+        uint64_t sender_mcast_noc_addr = get_safe_multicast_noc_addr(
+            sender_mcast_start_x, sender_mcast_start_y, sender_mcast_end_x, sender_mcast_end_y, ed_ready_sem_addr);
+
+        // Multicast write the semaphore value (1) to all sender cores
+        // Sender cores wait for value 1 to know E-D buffer is ready
+        noc_semaphore_set_multicast(ed_ready_sem_addr, sender_mcast_noc_addr, num_sender_cores);
+        noc_async_write_barrier();
+    }
+
+    constexpr auto output_args = TensorAccessorArgs<0>();
+    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto output_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
     const auto output_tensor_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
     const auto metadata_tensor_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
