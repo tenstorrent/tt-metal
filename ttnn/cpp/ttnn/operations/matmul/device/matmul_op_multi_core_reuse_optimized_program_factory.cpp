@@ -115,8 +115,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
 
-    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * (transpose_a ? 1 : K);
-    uint32_t num_tiles_per_block_in1 = K * per_core_N;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
@@ -458,19 +456,38 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 
+    bool is_batch_distributed = (num_blocks_per_core_group_1 > 1) || (num_blocks_per_core_group_2 > 1);
+    TT_FATAL(
+        (!is_batch_distributed) || (((num_blocks_per_core_group_1 * g1_numcores) +
+                                     (num_blocks_per_core_group_2 * (num_cores - g1_numcores))) == B),
+        "There are cases where batch is set but the product does not match the batch size");
+
+    uint32_t in0_start_tile_stride, in1_start_tile_stride;
+    if (is_batch_distributed) {
+        in0_start_tile_stride = M * K;
+        in1_start_tile_stride = K * N;
+    } else {
+        in0_start_tile_stride = per_core_M * (transpose_a ? 1 : K);
+        in1_start_tile_stride = per_core_N * (transpose_b ? K : 1);
+    }
+
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
         uint32_t num_output_blocks_per_core =
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
         // Write runtime args to device
-        mm_reader_args[1] = num_blocks_written * num_tiles_per_block_in0;          // in0_tensor_start_tile_id
-        mm_reader_args[2] = num_output_blocks_per_core;                            // batch
-
-        mm_writer_args[1] =
-            (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1;  // in1_tensor_start_tile_id
+        mm_reader_args[2] = num_output_blocks_per_core;                    // batch
         mm_writer_args[2] = num_output_blocks_per_core;                    // batch
         mm_writer_args[4] = num_blocks_written * num_tiles_per_block_out;  // out_tensor_start_tile_id
+
+        if (is_batch_distributed) {
+            mm_reader_args[1] = num_blocks_written * in0_start_tile_stride;  // in0_tensor_start_tile_id
+            mm_writer_args[1] = num_blocks_written * in1_start_tile_stride;  // in1_tensor_start_tile_id
+        } else {
+            mm_reader_args[1] = (i / per_core_N) * in0_start_tile_stride;
+            mm_writer_args[1] = (i % per_core_N) * in1_start_tile_stride;
+        }
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_id, core, mm_writer_args);
