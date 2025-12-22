@@ -43,6 +43,18 @@ foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
+TT_ADD_INSPECTOR_RPC_SUPPORT(
+    ttnn_core
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/core/inspector
+    CAPNPC_SRC_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector
+    CAPNP_SCHEMAS
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp
+    CAPNPC_IMPORT_DIRS
+        ${PROJECT_SOURCE_DIR}/tt_metal/api
+    RPC_CHANNEL_SCHEMAS
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/inspector/ttnn_rpc.capnp
+)
+
 set_target_properties(
     ttnn_core
     PROPERTIES
@@ -61,7 +73,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
     PRIVATE
-        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -84,6 +95,7 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
+        core/inspector/inspector.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp

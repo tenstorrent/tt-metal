@@ -4,9 +4,10 @@
 
 # Cap'N Proto file schema: https://capnproto.org/language.html
 
-@0xf8b5d6e3c2a19074;
+@0xd9769c4def840384;
 
 using Cxx = import "/capnp/c++.capnp";
+using Rpc = import "/tt-metalium/experimental/inspector_rpc.capnp";
 $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state
@@ -126,7 +127,7 @@ struct MetalDeviceIdToUniqueId {
     uniqueId @1 :UInt64;
 }
 
-interface Inspector {
+interface RuntimeInspector extends(Rpc.InspectorChannel) {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
 

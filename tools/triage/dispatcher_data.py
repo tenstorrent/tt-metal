@@ -70,7 +70,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
-        self.programs = inspector_data.getPrograms().programs
+        self.programs = inspector_data.runtime_rpc.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
 
@@ -88,7 +88,7 @@ class DispatcherData:
         # This ensures correct firmware paths for all devices and build configs
         # Prefill cache from no-arg RPC (ok if this fails - we'll fall back)
         try:
-            all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
+            all_build_envs = inspector_data.runtime_rpc.getAllBuildEnvs().buildEnvs
             for build_env in all_build_envs:
                 # build_env.metalDeviceId is logical - remap to unique_id for cache key
                 unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
@@ -193,7 +193,7 @@ class DispatcherData:
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
         if self.use_rpc_kernel_find:
             try:
-                return self.inspector_data.getKernel(watcher_kernel_id).kernel
+                return self.inspector_data.runtime_rpc.getKernel(watcher_kernel_id).kernel
             except:
                 pass
         if watcher_kernel_id in self.kernels:

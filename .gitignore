@@ -145,3 +145,5 @@ Testing
 .auto_triage/data
 .auto_triage/output
 .github/actions/*/node_modules/
+
+tools/triage/.capnp/

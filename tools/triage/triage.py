@@ -334,6 +334,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
 
 console: Console
+progress_disabled = False
 
 
 def init_console(args: ScriptArguments) -> None:
@@ -349,6 +350,7 @@ def init_console(args: ScriptArguments) -> None:
 
 def create_progress() -> Progress:
     global console
+    global progress_disabled
 
     return Progress(
         SpinnerColumn(),
@@ -358,6 +360,7 @@ def create_progress() -> Progress:
         TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
         console=console,
         transient=True,
+        disable=progress_disabled,
     )
 
 
