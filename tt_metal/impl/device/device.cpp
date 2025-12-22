@@ -545,15 +545,15 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
     static std::unique_ptr<AllocatorImpl> alloc{};
-    TT_FATAL(false, "allocator_impl is deprecaated for device");
+    log_info(tt::LogMetal, "Warning alocator_impl is depracated program for device");
     return alloc;
 }
 
 const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
 
-const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_device_id*/) const {
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
     static std::unique_ptr<AllocatorImpl> alloc{};
-    TT_FATAL(false, "allocator_impl is deprecaated for device");
+    log_info(tt::LogMetal, "Warning allocator_impl is deprecated for device {}", sub_device_id);
     return alloc;
 }
 
