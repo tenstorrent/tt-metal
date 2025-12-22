@@ -456,18 +456,20 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 
-    bool is_batch_distributed = (num_blocks_per_core_group_1 > 1) || (num_blocks_per_core_group_2 > 1);
-    TT_FATAL(
-        (!is_batch_distributed) || (((num_blocks_per_core_group_1 * g1_numcores) +
-                                     (num_blocks_per_core_group_2 * (num_cores - g1_numcores))) == B),
-        "There are cases where batch is set but the product does not match the batch size");
+    // There are two cases:
+    // (a) each core processes all M,N dimensions of b number of batches
+    // (b) each core processes a subset of M,N dimensions of b number of batches
+    // The start_tile_id is computed differently in each case.
+    // Only case (b)'s start _tile is impacted by the transpose_a and transpose_b flags.
+    // We detect case (b) with `is_work_split_by_batch` boolean.
+    bool is_work_split_by_batch = (per_core_M_per_batch == M) && (per_core_N == N);
 
     uint32_t in0_start_tile_stride, in1_start_tile_stride;
-    if (is_batch_distributed) {
+    if (is_work_split_by_batch) {
         in0_start_tile_stride = M * K;
         in1_start_tile_stride = K * N;
     } else {
-        in0_start_tile_stride = per_core_M * (transpose_a ? 1 : K);
+        in0_start_tile_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
         in1_start_tile_stride = per_core_N * (transpose_b ? K : 1);
     }
 
@@ -481,12 +483,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         mm_writer_args[2] = num_output_blocks_per_core;                    // batch
         mm_writer_args[4] = num_blocks_written * num_tiles_per_block_out;  // out_tensor_start_tile_id
 
-        if (is_batch_distributed) {
+        if (is_work_split_by_batch) {
             mm_reader_args[1] = num_blocks_written * in0_start_tile_stride;  // in0_tensor_start_tile_id
             mm_writer_args[1] = num_blocks_written * in1_start_tile_stride;  // in1_tensor_start_tile_id
         } else {
-            mm_reader_args[1] = (i / per_core_N) * in0_start_tile_stride;
-            mm_writer_args[1] = (i % per_core_N) * in1_start_tile_stride;
+            mm_reader_args[1] = (i / per_core_N) * in0_start_tile_stride;  // in0_tensor_start_tile_id
+            mm_writer_args[1] = (i % per_core_N) * in1_start_tile_stride;  // in1_tensor_start_tile_id
         }
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
