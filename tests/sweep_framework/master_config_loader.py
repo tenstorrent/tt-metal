@@ -1203,63 +1203,84 @@ class MasterConfigLoader:
             try:
                 # Extract BOTH tensors from each config
                 tensor_configs = []
+                scalar_value = None
                 for arg in config:
                     tensor_config = self.extract_tensor_config(arg)
                     if tensor_config:
                         tensor_configs.append(tensor_config)
                         if len(tensor_configs) >= 2:
                             break  # We have both tensors
+                    # Check for scalar values (for tensor-scalar operations like multiply)
+                    elif len(tensor_configs) == 1 and scalar_value is None:
+                        for arg_key, arg_val in arg.items():
+                            # Check for numeric scalar (int or float)
+                            if isinstance(arg_val, (int, float)):
+                                scalar_value = arg_val
+                                break
+                            # Check for string representation of numeric value
+                            elif isinstance(arg_val, str):
+                                try:
+                                    # Try to parse as float
+                                    scalar_value = float(arg_val)
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
 
-                if len(tensor_configs) < 2:
+                # Accept either 2 tensors OR 1 tensor + 1 scalar
+                if len(tensor_configs) < 1:
                     failed_configs += 1
                     continue
 
-                # Parse both tensor configs
+                if len(tensor_configs) < 2 and scalar_value is None:
+                    failed_configs += 1
+                    continue
+
+                # Parse tensor configs (handle both tensor-tensor and tensor-scalar)
                 try:
-                    # First tensor (input_a)
+                    # First tensor (input_a) - always present
                     parsed_dtype_a = self.parse_dtype(tensor_configs[0].dtype)
                     parsed_layout_a = self.parse_layout(tensor_configs[0].layout)
                     parsed_mem_config_a = self.parse_memory_config(
                         tensor_configs[0].memory_config, tensor_configs[0].shape
                     )
 
-                    # Second tensor (input_b)
-                    parsed_dtype_b = self.parse_dtype(tensor_configs[1].dtype)
-                    parsed_layout_b = self.parse_layout(tensor_configs[1].layout)
-                    parsed_mem_config_b = self.parse_memory_config(
-                        tensor_configs[1].memory_config, tensor_configs[1].shape
-                    )
-
-                    if all(
-                        [
-                            parsed_dtype_a,
-                            parsed_layout_a,
-                            parsed_mem_config_a,
-                            parsed_dtype_b,
-                            parsed_layout_b,
-                            parsed_mem_config_b,
-                        ]
-                    ):
-                        # Note: matmul requires input_b to be INTERLEAVED, but we allow sharded configs
-                        # The test will convert input_b to INTERLEAVED if needed
-                        # So we don't filter out matmul configs here - let the test handle the conversion
-
-                        # All configs are valid (test will handle conversions)
-                        paired_configs.append(
-                            {
-                                "shape_a": tensor_configs[0].shape,
-                                "shape_b": tensor_configs[1].shape,
-                                "dtype_a": parsed_dtype_a,
-                                "dtype_b": parsed_dtype_b,
-                                "layout_a": parsed_layout_a,
-                                "layout_b": parsed_layout_b,
-                                "memory_config_a": parsed_mem_config_a,
-                                "memory_config_b": parsed_mem_config_b,
-                                "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
-                                "traced_source": source,
-                                "traced_machine_info": machine_info,
-                            }
+                    # Second input - either tensor or scalar
+                    if len(tensor_configs) >= 2:
+                        # Tensor-tensor operation
+                        parsed_dtype_b = self.parse_dtype(tensor_configs[1].dtype)
+                        parsed_layout_b = self.parse_layout(tensor_configs[1].layout)
+                        parsed_mem_config_b = self.parse_memory_config(
+                            tensor_configs[1].memory_config, tensor_configs[1].shape
                         )
+                        shape_b = tensor_configs[1].shape
+                    else:
+                        # Tensor-scalar operation (use None for scalar placeholders)
+                        parsed_dtype_b = None
+                        parsed_layout_b = None
+                        parsed_mem_config_b = None
+                        shape_b = None
+
+                    if parsed_dtype_a and parsed_layout_a and parsed_mem_config_a:
+                        # Build config dict
+                        config_dict = {
+                            "shape_a": tensor_configs[0].shape,
+                            "shape_b": shape_b,
+                            "dtype_a": parsed_dtype_a,
+                            "dtype_b": parsed_dtype_b,
+                            "layout_a": parsed_layout_a,
+                            "layout_b": parsed_layout_b,
+                            "memory_config_a": parsed_mem_config_a,
+                            "memory_config_b": parsed_mem_config_b,
+                            "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
+                            "traced_source": source,
+                            "traced_machine_info": machine_info,
+                        }
+
+                        # Add scalar value if present
+                        if scalar_value is not None:
+                            config_dict["scalar"] = scalar_value
+
+                        paired_configs.append(config_dict)
                     else:
                         failed_configs += 1
                 except (AttributeError, Exception) as e:
@@ -1349,10 +1370,18 @@ class MasterConfigLoader:
                 traced_machine_info_list = []
                 traced_config_names = []
 
+                # Separate lists for optional scalar parameter
+                scalars = []
+
                 for idx, cfg in enumerate(paired_configs):
-                    # Pass shapes as a dict with "self" and "other" keys
-                    # Convert to tuples for proper serialization
-                    input_shapes.append({"self": tuple(cfg["shape_a"]), "other": tuple(cfg["shape_b"])})
+                    # Handle both tensor-tensor and tensor-scalar operations
+                    if cfg["shape_b"] is not None:
+                        # Tensor-tensor: Pass shapes as a dict with "self" and "other" keys
+                        input_shapes.append({"self": tuple(cfg["shape_a"]), "other": tuple(cfg["shape_b"])})
+                    else:
+                        # Tensor-scalar: Only pass the tensor shape
+                        input_shapes.append({"self": tuple(cfg["shape_a"])})
+
                     input_a_dtypes.append(cfg["dtype_a"])
                     input_b_dtypes.append(cfg["dtype_b"])
                     input_a_layouts.append(cfg["layout_a"])
@@ -1363,6 +1392,9 @@ class MasterConfigLoader:
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
+
+                    # Add scalar value if present
+                    scalars.append(cfg.get("scalar", None))
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1375,6 +1407,7 @@ class MasterConfigLoader:
                     "input_a_memory_config",
                     "input_b_memory_config",
                     "output_memory_config",
+                    "scalar",  # For tensor-scalar operations (None for tensor-tensor)
                     "traced_source",
                     "traced_machine_info",
                     # NOTE: traced_config_name is metadata only, not passed to run()
@@ -1389,6 +1422,7 @@ class MasterConfigLoader:
                     input_a_memory_configs,
                     input_b_memory_configs,
                     output_memory_configs,
+                    scalars,  # Add scalar values
                     traced_source_list,
                     traced_machine_info_list,
                     # traced_config_names,
@@ -1425,10 +1459,15 @@ class MasterConfigLoader:
         """
         Get parameters for multi-input operations (3+ tensor inputs).
         Handles operations like where (ternary), addcmul, etc.
+        For paged_update_cache, the 4th tensor is optional (min 3, max 4).
         """
         # Extract configurations for ALL tensors
         paired_configs = []
         failed_configs = 0
+
+        # For paged_update_cache, allow 3 or 4 tensors (4th is optional)
+        is_paged_update_cache = "paged_update_cache" in operation_name.lower()
+        min_tensor_count = tensor_count - 1 if is_paged_update_cache else tensor_count
 
         for config_idx, (config, source, machine_info) in enumerate(configs):
             try:
@@ -1438,15 +1477,20 @@ class MasterConfigLoader:
                     tensor_config = self.extract_tensor_config(arg)
                     if tensor_config:
                         tensor_configs.append(tensor_config)
+                        # Continue collecting up to tensor_count (don't break early)
                         if len(tensor_configs) >= tensor_count:
                             break
 
-                if len(tensor_configs) < tensor_count:
+                # Accept min_tensor_count to tensor_count tensors
+                if len(tensor_configs) < min_tensor_count:
                     failed_configs += 1
                     continue
 
-                # Parse all tensor configs
+                # Parse all tensor configs (actual count may be less than tensor_count if optional)
                 parsed_config = {"traced_source": source, "traced_machine_info": machine_info}
+                actual_tensor_count = len(tensor_configs)
+                parse_failed = False
+
                 for i, tc in enumerate(tensor_configs):
                     suffix = chr(97 + i)  # a, b, c, d, ...
                     try:
@@ -1456,12 +1500,16 @@ class MasterConfigLoader:
                         parsed_config[f"memory_config_{suffix}"] = self.parse_memory_config(tc.memory_config, tc.shape)
                     except Exception as e:
                         failed_configs += 1
+                        parse_failed = True
                         break
 
-                if (
-                    len(parsed_config) == tensor_count * 4 + 2
-                ):  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info
-                    paired_configs.append(parsed_config)
+                if not parse_failed:
+                    # Verify we have all required fields for the actual tensors parsed
+                    expected_fields = (
+                        actual_tensor_count * 4 + 2
+                    )  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info
+                    if len(parsed_config) == expected_fields:
+                        paired_configs.append(parsed_config)
 
             except Exception as e:
                 failed_configs += 1
@@ -1529,16 +1577,27 @@ class MasterConfigLoader:
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
+                    # Determine actual tensor count in this config (may be less than expected for optional tensors)
+                    actual_tensor_count = sum(1 for i in range(tensor_count) if f"shape_{chr(97+i)}" in cfg)
+
                     # Build input_shape dict with tuple values (not list values) for serialization
-                    input_shape = {f"input_{chr(97+i)}": tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(tensor_count)}
+                    input_shape = {
+                        f"input_{chr(97+i)}": tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(actual_tensor_count)
+                    }
                     input_shapes.append(input_shape)
 
-                    # Extract dtypes, layouts, and memory configs for each input
-                    for i in range(tensor_count):
+                    # Extract dtypes, layouts, and memory configs for each input (up to actual count)
+                    for i in range(actual_tensor_count):
                         suffix = chr(97 + i)
                         dtypes[i].append(cfg[f"dtype_{suffix}"])
                         layouts[i].append(cfg[f"layout_{suffix}"])
                         memory_configs[i].append(cfg[f"memory_config_{suffix}"])
+
+                    # For missing optional tensors, append None
+                    for i in range(actual_tensor_count, tensor_count):
+                        dtypes[i].append(None)
+                        layouts[i].append(None)
+                        memory_configs[i].append(None)
 
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
