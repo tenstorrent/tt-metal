@@ -60,6 +60,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self.hack_warned = False
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -154,7 +155,30 @@ class SamplingGenerator:
     ):
         if penalties_on:
             self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+
+        # HACK: Allow us to force argmax to run customer evals whilst debugging accuracy issue with sampling
+        # Gather the output across all devices and untilize the tensor (for argmax)
+        if not self.hack_warned:
+            logging.warning("HACK: Forcing argmax and ignoring all other sampling parameters!")
+            self.hack_warned = True
+        tt_log_probs = self.tt_ccl.line_all_gather(
+            logits[0],
+            dim=3,
+            num_links=3,
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="SAMPLING",
+        )
+
+        tt_log_probs = ttnn.untilize(tt_log_probs, use_multicore=True)
+
+        tt_log_probs = ttnn.reshape(
+            tt_log_probs,
+            ttnn.Shape([1, 1, 1, tt_log_probs.shape[-1]]),
+            ttnn.Shape([1, 1, tt_log_probs.shape[-2], tt_log_probs.shape[-1]]),
+        )
+        tt_tokens = ttnn.argmax(tt_log_probs, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
+
         return tt_tokens, tt_log_probs
 
     def capture_trace(
