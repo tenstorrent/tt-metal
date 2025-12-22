@@ -40,7 +40,6 @@ target_sources(
         FILES
             board/board.hpp
             cabling_generator/cabling_generator.hpp
-            cabling_generator/protobuf_utils.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
