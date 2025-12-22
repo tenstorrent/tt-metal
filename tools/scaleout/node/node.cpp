@@ -6,7 +6,10 @@
 #include "node_types.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <map>
+#include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace tt::scaleout_tools {
 
@@ -48,10 +51,19 @@ get_port_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescripto
 
 }  // anonymous namespace
 
+// Base class for all node types
+class NodeBase {
+public:
+    virtual ~NodeBase() = default;
+    virtual Topology get_topology() const { return Topology::MESH; }
+    virtual tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const = 0;
+};
+
 // N300 Node class
-class N300T3KNode {
+class N300T3KNode : public NodeBase {
 protected:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(const std::string& motherboard, const bool default_cabling = false) {
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
+        const std::string& motherboard, const bool default_cabling = false) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard(motherboard);
 
@@ -79,34 +91,34 @@ protected:
 // N300 LB Node class
 class N300LBNode : public N300T3KNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("X12DPG-QT6", false);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl("X12DPG-QT6", false);
     }
 };
 
 class N300LBDefaultNode : public N300T3KNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("X12DPG-QT6", true);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl("X12DPG-QT6", true);
     }
 };
 
 // N300 QB Node class
 class N300QBNode : public N300T3KNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("SIENAD8-2L2T", false);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl("SIENAD8-2L2T", false);
     }
 };
 
 class N300QBDefaultNode : public N300T3KNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("SIENAD8-2L2T", true);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl("SIENAD8-2L2T", true);
     }
 };
 
-class WHGalaxyNode {
+class WHGalaxyNode : public NodeBase {
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
@@ -143,7 +155,8 @@ public:
         XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
     };
 
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(
+protected:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         WHGalaxyTopology topology = WHGalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("S7T-MB");
@@ -183,35 +196,43 @@ public:
 
         return node;
     }
+
+public:
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(WHGalaxyTopology::MESH);
+    }
 };
 
 // WH Galaxy X Torus Node class
 class WHGalaxyXTorusNode : public WHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return WHGalaxyNode::create(WHGalaxyTopology::X_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(WHGalaxyTopology::X_TORUS);
     }
+    Topology get_topology() const override { return Topology::X_TORUS; }
 };
 
 // WH Galaxy Y Torus Node class
 class WHGalaxyYTorusNode : public WHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return WHGalaxyNode::create(WHGalaxyTopology::Y_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(WHGalaxyTopology::Y_TORUS);
     }
+    Topology get_topology() const override { return Topology::Y_TORUS; }
 };
 
 // WH Galaxy XY Torus Node class
 class WHGalaxyXYTorusNode : public WHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return WHGalaxyNode::create(WHGalaxyTopology::XY_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(WHGalaxyTopology::XY_TORUS);
     }
+    Topology get_topology() const override { return Topology::XY_TORUS; }
 };
 
-class P150LBNode {
+class P150LBNode : public NodeBase {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("H13DSG-O-CPU");
 
@@ -222,9 +243,10 @@ public:
 };
 
 // P150 QB AE Node class
-class P150QBAENode {
-public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(const bool default_cabling = false) {
+class P150QBAENode : public NodeBase {
+protected:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
+        const bool default_cabling = false) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("SIENAD8-2L2T");
 
@@ -246,20 +268,21 @@ public:
 
         return node;
     }
+
+public:
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override { return create_impl(false); }
 };
 
 class P150QBAEDefaultNode : public P150QBAENode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return P150QBAENode::create(true);
-    }
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override { return create_impl(true); }
 };
 
 
 // P300 QB GE Node class
-class P300QBGENode {
+class P300QBGENode : public NodeBase {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("B850M-C");
 
@@ -274,7 +297,7 @@ public:
     }
 };
 
-class BHGalaxyNode {
+class BHGalaxyNode : public NodeBase {
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
@@ -311,7 +334,8 @@ public:
         XY_TORUS = X_TORUS | Y_TORUS,  // Both X and Y torus
     };
 
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(
+protected:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         BHGalaxyTopology topology = BHGalaxyTopology::MESH) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("S7T-MB");
@@ -350,53 +374,106 @@ public:
 
         return node;
     }
+
+public:
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(BHGalaxyTopology::MESH);
+    }
 };
 
 // BH Galaxy X Torus Node class
 class BHGalaxyXTorusNode : public BHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return BHGalaxyNode::create(BHGalaxyTopology::X_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(BHGalaxyTopology::X_TORUS);
     }
+    Topology get_topology() const override { return Topology::X_TORUS; }
 };
 
 // BH Galaxy Y Torus Node class
 class BHGalaxyYTorusNode : public BHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return BHGalaxyNode::create(BHGalaxyTopology::Y_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(BHGalaxyTopology::Y_TORUS);
     }
+    Topology get_topology() const override { return Topology::Y_TORUS; }
 };
 
 // BH Galaxy XY Torus Node class
 class BHGalaxyXYTorusNode : public BHGalaxyNode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return BHGalaxyNode::create(BHGalaxyTopology::XY_TORUS);
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
+        return create_impl(BHGalaxyTopology::XY_TORUS);
     }
+    Topology get_topology() const override { return Topology::XY_TORUS; }
 };
+
+// Helper function to create a node instance from NodeType
+static std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
+    switch (node_type) {
+        case NodeType::N300_LB: return std::make_unique<N300LBNode>();
+        case NodeType::N300_LB_DEFAULT: return std::make_unique<N300LBDefaultNode>();
+        case NodeType::N300_QB: return std::make_unique<N300QBNode>();
+        case NodeType::N300_QB_DEFAULT: return std::make_unique<N300QBDefaultNode>();
+        case NodeType::WH_GALAXY: return std::make_unique<WHGalaxyNode>();
+        case NodeType::WH_GALAXY_X_TORUS: return std::make_unique<WHGalaxyXTorusNode>();
+        case NodeType::WH_GALAXY_Y_TORUS: return std::make_unique<WHGalaxyYTorusNode>();
+        case NodeType::WH_GALAXY_XY_TORUS: return std::make_unique<WHGalaxyXYTorusNode>();
+        case NodeType::P150_LB: return std::make_unique<P150LBNode>();
+        case NodeType::P150_QB_AE: return std::make_unique<P150QBAENode>();
+        case NodeType::P150_QB_AE_DEFAULT: return std::make_unique<P150QBAEDefaultNode>();
+        case NodeType::P300_QB_GE: return std::make_unique<P300QBGENode>();
+        case NodeType::BH_GALAXY: return std::make_unique<BHGalaxyNode>();
+        case NodeType::BH_GALAXY_X_TORUS: return std::make_unique<BHGalaxyXTorusNode>();
+        case NodeType::BH_GALAXY_Y_TORUS: return std::make_unique<BHGalaxyYTorusNode>();
+        case NodeType::BH_GALAXY_XY_TORUS: return std::make_unique<BHGalaxyXYTorusNode>();
+        default: return nullptr;
+    }
+}
 
 // Factory function to create node descriptors by name
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descriptor(NodeType node_type) {
-    switch (node_type) {
-        case NodeType::N300_LB: return N300LBNode::create();
-        case NodeType::N300_LB_DEFAULT: return N300LBDefaultNode::create();
-        case NodeType::N300_QB: return N300QBNode::create();
-        case NodeType::N300_QB_DEFAULT: return N300QBDefaultNode::create();
-        case NodeType::WH_GALAXY: return WHGalaxyNode::create();
-        case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
-        case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
-        case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
-        case NodeType::P150_LB: return P150LBNode::create();
-        case NodeType::P150_QB_AE: return P150QBAENode::create();
-        case NodeType::P150_QB_AE_DEFAULT: return P150QBAEDefaultNode::create();
-        case NodeType::P300_QB_GE: return P300QBGENode::create();
-        case NodeType::BH_GALAXY: return BHGalaxyNode::create();
-        case NodeType::BH_GALAXY_X_TORUS: return BHGalaxyXTorusNode::create();
-        case NodeType::BH_GALAXY_Y_TORUS: return BHGalaxyYTorusNode::create();
-        case NodeType::BH_GALAXY_XY_TORUS: return BHGalaxyXYTorusNode::create();
+    auto node = create_node_instance(node_type);
+    if (!node) {
+        throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
     }
-    throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
+    return node->create();
+}
+
+// Helper function to get topology for a NodeType (uses virtual function from node instances)
+Topology get_node_type_topology(NodeType node_type) {
+    auto node = create_node_instance(node_type);
+    if (!node) {
+        return Topology::MESH;  // Unknown node types default to MESH
+    }
+    return node->get_topology();
+}
+
+// Check if a node type is a torus topology
+bool is_a_torus(NodeType node_type) {
+    Topology topology = get_node_type_topology(node_type);
+    return topology == Topology::X_TORUS || topology == Topology::Y_TORUS || topology == Topology::XY_TORUS;
+}
+
+// Check if two node types have the same base architecture (WH vs BH)
+bool has_same_torus_architecture(NodeType type1, NodeType type2) {
+    const std::string name1 = std::string(enchantum::to_string(type1));
+    const std::string name2 = std::string(enchantum::to_string(type2));
+    return (name1.starts_with("WH_GALAXY") && name2.starts_with("WH_GALAXY")) ||
+           (name1.starts_with("BH_GALAXY") && name2.starts_with("BH_GALAXY"));
+}
+
+// Check if two torus node types are compatible for merging
+bool is_torus_compatible(NodeType type1, NodeType type2) {
+    Topology topo1 = get_node_type_topology(type1);
+    Topology topo2 = get_node_type_topology(type2);
+
+    // Both must be torus topologies
+    if (topo1 == Topology::MESH || topo2 == Topology::MESH) {
+        return false;
+    }
+
+    return has_same_torus_architecture(type1, type2);
 }
 
 }  // namespace tt::scaleout_tools
