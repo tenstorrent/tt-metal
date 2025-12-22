@@ -23,17 +23,18 @@ namespace ttnn::operations::experimental::ccl::slice_reshard_async {
 
 struct operation_attributes_t {
     std::vector<IDevice*> devices;
-    const uint32_t dim;
-    const uint32_t output_dim_offset;
-    const uint32_t output_dim_shape;
-    const uint32_t cluster_axis;
-    const GlobalSemaphore& final_semaphore;
-    const GlobalSemaphore& barrier_semaphore;
-    const uint32_t num_links;
-    const MemoryConfig output_mem_config;
-    const ttnn::ccl::Topology topology;
-    const uint32_t ring_size;
+    uint32_t dim;
+    uint32_t output_dim_offset;
+    uint32_t output_dim_shape;
+    uint32_t cluster_axis;
+    GlobalSemaphore final_semaphore;
+    GlobalSemaphore barrier_semaphore;
+    uint32_t num_links;
+    MemoryConfig output_mem_config;
+    ttnn::ccl::Topology topology;
+    uint32_t ring_size;
 
+    // Constructor required because GlobalSemaphore is not default constructible
     operation_attributes_t(
         std::vector<IDevice*> devices,
         uint32_t dim,
