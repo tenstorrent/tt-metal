@@ -181,66 +181,6 @@ class RMSNorm(LightweightModule):
         return tt_out
 
 
-def create_norm_for_model(
-    model_name,
-    base_model_name,
-    device,
-    dim,
-    state_dict,
-    weight_key,
-    layer_num=None,
-    state_dict_prefix=None,
-    weight_cache_path=None,
-    weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    weight_dtype=ttnn.bfloat16,
-    eps: float = 1e-05,
-    add_unit_offset=False,
-    sharded_output_config=None,
-    # RMSNorm-specific params
-    is_distributed=None,
-    sharded_program_config=None,
-    ccl_topology=None,
-    tt_ccl=None,
-):
-    """Factory function to create appropriate norm for model type."""
-    is_allam_7b = model_name == "ALLaM-7B-Instruct-preview" or base_model_name == "ALLaM-7B"
-
-    if is_allam_7b:
-        return SimpleRMSNorm(
-            device=device,
-            dim=dim,
-            state_dict=state_dict,
-            weight_key=weight_key,
-            layer_num=layer_num,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_memory_config=weight_memory_config,
-            weight_dtype=weight_dtype,
-            eps=eps,
-            add_unit_offset=add_unit_offset,
-            sharded_output_config=sharded_output_config,
-        )
-    else:
-        return RMSNorm(
-            device=device,
-            dim=dim,
-            state_dict=state_dict,
-            weight_key=weight_key,
-            layer_num=layer_num,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_memory_config=weight_memory_config,
-            weight_dtype=weight_dtype,
-            eps=eps,
-            add_unit_offset=add_unit_offset,
-            is_distributed=is_distributed,
-            sharded_program_config=sharded_program_config,
-            sharded_output_config=sharded_output_config,
-            ccl_topology=ccl_topology,
-            tt_ccl=tt_ccl,
-        )
-
-
 class SimpleRMSNorm(LightweightModule):
     """
     Simplified RMSNorm for ALLaM models that directly calls ttnn.rms_norm.
