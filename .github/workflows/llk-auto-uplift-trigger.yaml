@@ -363,7 +363,7 @@ jobs:
 
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
+          # Special handling for tt-metal-l2-nightly.yaml to pass C++ and unit test configuration flags
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
             gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" -f run_cpp_tests=true \
             -f run_metal_iommu_tests=true \
