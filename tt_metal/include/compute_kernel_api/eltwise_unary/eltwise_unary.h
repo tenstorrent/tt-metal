@@ -15,6 +15,7 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
@@ -26,6 +27,16 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure(icb, icb)));
+#else
+    UNPACK((llk_unpack_hw_configure(icb)));
+    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, false /*transpose*/, DST_ACCUM_MODE>(icb)));
+
+    PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE, false /*int32 dest*/>(icb, icb)));
+#endif
 }
 
 // clang-format off
