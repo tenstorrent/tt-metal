@@ -93,7 +93,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: "ttnn_ops_docs_check_"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}

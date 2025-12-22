@@ -17,8 +17,8 @@ import ttnn
 # Constants
 # Skipped operations should not be included in the documentation check
 SKIPPED_OPS = [
-    "ttnn.allocate_tensor_on_device",  # Missing docs for OP causing docs build crash, need to create documentation and add do docs page, GH issue: #34681
-    "ttnn.allocate_tensor_on_host",  # Missing docs for OP causing docs build crash, need to create documentation and add do docs page, GH issue: #34681
+    "ttnn.allocate_tensor_on_device",  # Missing docs for OP causing docs build crash, need to create documentation and add to docs page, GH issue: #34681
+    "ttnn.allocate_tensor_on_host",  # Missing docs for OP causing docs build crash, need to create documentation and add to docs page, GH issue: #34681
     "ttnn.composite_example",  # Example operation.
     "ttnn.composite_example_multiple_return",  # Example operation.
     "ttnn.fused_rms_1_1_32_8192",  # Internal operation only.
@@ -99,7 +99,7 @@ def get_registered_operations(include_experimental=False) -> set:
     return registered_ops
 
 
-def extract_ops_from_docs_rst_file(api_rst_path: str) -> set:
+def extract_ops_from_docs_rst_file(api_rst_path: str | Path) -> set:
     """
     Extract all ttnn operations from docs file by checking each line
 
