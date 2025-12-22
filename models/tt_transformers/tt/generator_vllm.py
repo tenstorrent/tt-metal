@@ -374,7 +374,7 @@ class LlamaForCausalLM(Generator):
             and mesh_device.get_num_devices() == 1
             and is_wormhole_b0()
         ):
-            MAX_PROMPT_LEN = 65536
+            MAX_PROMPT_LEN = 32768
             if max_seq_len > MAX_PROMPT_LEN:
                 raise ValueError(
                     f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
