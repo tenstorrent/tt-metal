@@ -125,6 +125,15 @@ jobs:
                 "cmd": "run_t3000_gemma3_tests",
                 "timeout": 75,
                 "owner_id": "U093901FR8U" # Milos Stojko
+            },
+            {
+                "name": "t3k ViT Gemma3 perf tests op-to-op",
+                "model-name": "gemma-3-27b-it",
+                "model-type": "ViT",
+                "arch": "wormhole_b0",
+                "cmd": "run_t3000_gemma3_tests_op_to_op",
+                "timeout": 25,
+                "owner_id": "U094PKWHNJ0" # Petar Milojevic
             }
           ]')
 
