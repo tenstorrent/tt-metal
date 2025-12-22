@@ -135,6 +135,11 @@ class Transformer(LightweightModule):
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
+            self.sampling_prefill = SamplingGenerator(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+            )
             self.sampling = SamplingGenerator(
                 args=args,
                 mesh_device=mesh_device,

@@ -158,6 +158,7 @@ class Generator:
                     warmup_empty_slots,
                     enable_trace,
                     model_id,
+                    sampling_params,
                 )
 
     def _capture_trace_prefill(
@@ -348,7 +349,7 @@ class Generator:
             # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
                 enable_trace_current_prompt = False
-                sampling_module = getattr(self.model[model_id], "sampling", None)
+                sampling_module = getattr(self.model[model_id], "sampling_prefill", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_sampling_params)
                 sampling_module.reset_seed(formatted_sampling_params.seed)
@@ -404,7 +405,7 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             if sampling_executed:
-                tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
+                tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
                     out,
                     enable_trace=False,
                 )
