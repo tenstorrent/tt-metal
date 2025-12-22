@@ -1,55 +1,6 @@
 #pragma once
 
-#include <cstdint>
-
-constexpr int32_t LUT_FIXED_SHIFT = 16;
-constexpr int32_t LUT_FIXED_ONE = 1 << LUT_FIXED_SHIFT;
-constexpr int32_t LUT_FIXED_HALF = 1 << (LUT_FIXED_SHIFT - 1);
-
-constexpr int32_t ct_fixed_mul(int32_t a, int32_t b) {
-    return static_cast<int32_t>((static_cast<int64_t>(a) * b) >> LUT_FIXED_SHIFT);
-}
-
-constexpr uint16_t fixed_to_bf16_constexpr(int32_t fixed_val) {
-    if (fixed_val == 0) {
-        return 0x0000;
-    }
-    if (fixed_val == LUT_FIXED_ONE) {
-        return 0x3F80;
-    }
-
-    uint32_t val = static_cast<uint32_t>(fixed_val);
-
-    int msb_pos = 0;
-    for (int i = 31; i >= 0; --i) {
-        if (val & (1u << i)) {
-            msb_pos = i;
-            break;
-        }
-    }
-
-    int exponent = 127 + (msb_pos - LUT_FIXED_SHIFT);
-    if (exponent <= 0) {
-        return 0x0000;
-    }
-    if (exponent >= 255) {
-        return 0x7F80;
-    }
-
-    int mantissa_shift = msb_pos - 23;
-    uint32_t mantissa = 0;
-    if (mantissa_shift > 0) {
-        mantissa = (val >> mantissa_shift) & 0x7FFFFF;
-    } else if (mantissa_shift < 0) {
-        mantissa = (val << (-mantissa_shift)) & 0x7FFFFF;
-    } else {
-        mantissa = val & 0x7FFFFF;
-    }
-
-    uint32_t float_bits = (static_cast<uint32_t>(exponent) << 23) | mantissa;
-
-    return static_cast<uint16_t>(float_bits >> 16);
-}
+#include "fixed_point_arithmetic.hpp"
 
 //
 // BilinearWeightsLUT: Compile-time lookup table for bilinear interpolation weights
@@ -92,10 +43,10 @@ constexpr uint16_t fixed_to_bf16_constexpr(int32_t fixed_val) {
 //
 // Example (2x2 upsampling):
 //   Creates 4 weight sets for the 4 possible output positions within each 2x2 block:
-//     Phase (0,0): weights for output pixel at relative position (0.25, 0.25)
-//     Phase (0,1): weights for output pixel at relative position (0.25, 0.75)
-//     Phase (1,0): weights for output pixel at relative position (0.75, 0.25)
-//     Phase (1,1): weights for output pixel at relative position (0.75, 0.75)
+//     Phase (0,0): weights for output pixel at relative position (0.25, 0.25) from top left input pixel
+//     Phase (0,1): weights for output pixel at relative position (0.25, 0.75) from top left input pixel
+//     Phase (1,0): weights for output pixel at relative position (0.75, 0.25) from top left input pixel
+//     Phase (1,1): weights for output pixel at relative position (0.75, 0.75) from top left input pixel
 //
 //   Each output position has 4 pre-computed weights stored as BF16 in the LUT.
 //
@@ -110,39 +61,39 @@ struct BilinearWeightsLUT {
         };
         WeightArray arr{};
 
-        constexpr int32_t scale_h_inv = LUT_FIXED_ONE / ScaleH;
-        constexpr int32_t scale_w_inv = LUT_FIXED_ONE / ScaleW;
-        constexpr int32_t y_start = (LUT_FIXED_ONE / (2 * ScaleH)) - LUT_FIXED_HALF;
-        constexpr int32_t x_start = (LUT_FIXED_ONE / (2 * ScaleW)) - LUT_FIXED_HALF;
+        constexpr int32_t scale_h_inv = FIXED_ONE / ScaleH;
+        constexpr int32_t scale_w_inv = FIXED_ONE / ScaleW;
+        constexpr int32_t y_start = (FIXED_ONE / (2 * ScaleH)) - FIXED_HALF;
+        constexpr int32_t x_start = (FIXED_ONE / (2 * ScaleW)) - FIXED_HALF;
 
         uint32_t idx = 0;
         for (uint32_t i = 0; i < ScaleH; ++i) {
             for (uint32_t j = 0; j < ScaleW; ++j) {
-                int32_t src_y_fixed = y_start + i * scale_h_inv;
-                int32_t src_x_fixed = x_start + j * scale_w_inv;
+                int32_t src_y_fixed = y_start + static_cast<int32_t>(i) * scale_h_inv;
+                int32_t src_x_fixed = x_start + static_cast<int32_t>(j) * scale_w_inv;
 
-                int32_t dy_fixed = src_y_fixed - ((src_y_fixed >> LUT_FIXED_SHIFT) << LUT_FIXED_SHIFT);
-                int32_t dx_fixed = src_x_fixed - ((src_x_fixed >> LUT_FIXED_SHIFT) << LUT_FIXED_SHIFT);
+                int32_t dy_fixed = src_y_fixed - ((src_y_fixed >> FIXED_POINT_SHIFT) << FIXED_POINT_SHIFT);
+                int32_t dx_fixed = src_x_fixed - ((src_x_fixed >> FIXED_POINT_SHIFT) << FIXED_POINT_SHIFT);
 
                 if (dy_fixed < 0) {
-                    dy_fixed += LUT_FIXED_ONE;
+                    dy_fixed += FIXED_ONE;
                 }
                 if (dx_fixed < 0) {
-                    dx_fixed += LUT_FIXED_ONE;
+                    dx_fixed += FIXED_ONE;
                 }
 
-                int32_t one_minus_dy = LUT_FIXED_ONE - dy_fixed;
-                int32_t one_minus_dx = LUT_FIXED_ONE - dx_fixed;
+                int32_t one_minus_dy = FIXED_ONE - dy_fixed;
+                int32_t one_minus_dx = FIXED_ONE - dx_fixed;
 
-                int32_t w1_fixed = ct_fixed_mul(one_minus_dx, one_minus_dy);
-                int32_t w2_fixed = ct_fixed_mul(dx_fixed, one_minus_dy);
-                int32_t w3_fixed = ct_fixed_mul(one_minus_dx, dy_fixed);
-                int32_t w4_fixed = ct_fixed_mul(dx_fixed, dy_fixed);
+                int32_t w1_fixed = fixed_mul(one_minus_dx, one_minus_dy);
+                int32_t w2_fixed = fixed_mul(dx_fixed, one_minus_dy);
+                int32_t w3_fixed = fixed_mul(one_minus_dx, dy_fixed);
+                int32_t w4_fixed = fixed_mul(dx_fixed, dy_fixed);
 
-                uint16_t bf16_w1 = fixed_to_bf16_constexpr(w1_fixed);
-                uint16_t bf16_w2 = fixed_to_bf16_constexpr(w2_fixed);
-                uint16_t bf16_w3 = fixed_to_bf16_constexpr(w3_fixed);
-                uint16_t bf16_w4 = fixed_to_bf16_constexpr(w4_fixed);
+                uint16_t bf16_w1 = fixed_to_bf16(w1_fixed);
+                uint16_t bf16_w2 = fixed_to_bf16(w2_fixed);
+                uint16_t bf16_w3 = fixed_to_bf16(w3_fixed);
+                uint16_t bf16_w4 = fixed_to_bf16(w4_fixed);
 
                 arr.data[idx++] = (static_cast<uint32_t>(bf16_w2) << 16) | bf16_w1;
                 arr.data[idx++] = (static_cast<uint32_t>(bf16_w4) << 16) | bf16_w3;

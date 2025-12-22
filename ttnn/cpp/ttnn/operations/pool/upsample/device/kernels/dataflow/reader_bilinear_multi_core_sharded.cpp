@@ -46,6 +46,15 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
 //   coordinates and bilinear weights for each output position. Handles wraparound
 //   at row/batch boundaries and computes addresses for the 4 input neighbors needed
 //   for each output pixel.
+
+// Explanation:
+// Advancement is done in row-major order. For each output pixel, the advancer
+// calculates the fixed-point input coordinates, determines the 4 neighboring input
+// pixels (with boundary clamping), and retrieves the pre-computed bilinear weights
+// A phase is defined as the position within the scale factor grid, which is used to look up
+// the appropriate weights from a LUT.
+// There is scale_h * scale_w unique phases, each with its own set of weights.
+
 //
 // Template Parameters:
 //   OUT_H, OUT_W: Output dimensions
@@ -163,7 +172,7 @@ struct BilinearIndexAdvancer {
         uint16_t& weight_top_left_bf16,
         uint16_t& weight_top_right_bf16,
         uint16_t& weight_bottom_left_bf16,
-        uint16_t& weight_bottom_right_bf16) {
+        uint16_t& weight_bottom_right_bf16) const {
         // Convert fixed-point coordinates to integer pixel positions
         uint32_t y1_raw = fixed_to_int(y_coordinate);
         uint32_t x1_raw = fixed_to_int(x_coordinate);
