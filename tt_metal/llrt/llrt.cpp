@@ -54,6 +54,12 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }
 }  // namespace
 
+namespace tt::tt_metal {
+
+void on_dispatch_timeout_detected();
+
+}  // namespace tt::tt_metal
+
 // llrt = lower-level runtime
 namespace tt::llrt {
 
@@ -301,6 +307,9 @@ void wait_until_cores_done(
                     }
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+                tt::tt_metal::on_dispatch_timeout_detected();
+
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
