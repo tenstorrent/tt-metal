@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       run_bh_quietbox_2:
-        description: 'Run multi-card tests on QuietBox 2 (2xP300)'
+        description: 'Run multi-card tests on QuietBox 2 (2xP300) (formerly called BH QB GE)'
         required: false
         type: boolean
         default: true
