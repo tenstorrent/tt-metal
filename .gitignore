@@ -145,3 +145,4 @@ Testing
 .auto_triage/data
 .auto_triage/output
 .github/actions/*/node_modules/
+models/experimental/petr/resources/*.pth
