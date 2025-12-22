@@ -150,7 +150,7 @@ class TtLlamaAttention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
+            # cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
         self.wqkv_interleaved = ttnn.as_tensor(
             qkv_cat,
@@ -185,9 +185,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else cache_name("wo"),
+            # cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
+            # if (self.use_fused_all_gather_matmul or self.TG)
+            # else cache_name("wo"),
         )
         self.wo_interleaved = ttnn.as_tensor(
             pt_wo,
@@ -310,7 +310,7 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and not tt_ccl.is_qwen:
             self.prefetcher_setup.insert_tensor(self.wqkv)
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
@@ -363,9 +363,9 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                # cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                # if weight_cache_path and not configuration.dummy_weights
+                # else None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -392,7 +392,7 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
@@ -546,7 +546,7 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
