@@ -293,22 +293,22 @@ def run_ring_joint_sdpa(
 
             passing = True
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
-            print("spatial")
-            print(f"{out_pcc}")
+            logger.debug("spatial")
+            logger.debug(f"{out_pcc}")
             mse = ((gt_out - tt_out) ** 2).mean()
-            print(f"mse: {mse}")
+            logger.debug(f"mse: {mse}")
             if max_mse is not None and mse > max_mse:
                 passing = False
             passing = passing and out_pass
 
             if joint_seq_len > 0:
-                print("prompt")
+                logger.debug("prompt")
                 for joint_replica_id in range(tt_joint_out.shape[0]):
                     joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
                     out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
-                    print(f"{out_pcc}")
+                    logger.debug(f"{out_pcc}")
                     mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
-                    print(f"mse: {mse}")
+                    logger.debug(f"mse: {mse}")
                     if max_mse is not None and mse > max_mse:
                         passing = False
                     passing = passing and out_pass
