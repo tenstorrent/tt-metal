@@ -141,6 +141,31 @@ def get_types_from_binding_framework():
 ALL_TYPES = get_types_from_binding_framework()
 ```
 
+#### TypeError: Unable to convert function return value to a Python type!
+
+Error message:
+```
+Traceback (most recent call last):
+  File "tt-metal/./test_topk.py", line 44, in <module>
+    tensor = ttnn.from_torch(tensor)
+  File ".../decorators.py", line 729, in __call__
+    output = self.decorated_function(*function_args, **function_kwargs)
+  File ".../decorators.py", line 541, in call_wrapper
+    if ttnn.CONFIG.report_path is not None:
+
+TypeError: Unable to convert function return value to a Python type!
+The signature was:
+    (self) -> std::optional<std::filesystem::__cxx11::path>
+```
+
+**What this means**: A typecaster header was missing in the place where the binding was defined.
+
+In this case, the `CONFIG` member `report_path` didn't have the typecasters included where it was defined.
+If we search for `report_path` in `ttnn/cpp/ttnn-nanobind`, we find the binding definition in `core.cpp`.
+The error message identifies the types `std::optional` and `std::filesystem::__cxx11::path`, so we know
+that the typecaster headers required are `#include <nanobind/stl/optional.h>` and `#include <nanobind/stl/filesystem.h>`.
+
+
 ---
 
 # Pybind11 to Nanobind Migration Guide
@@ -156,7 +181,7 @@ This guide documents the common patterns, bugfixes, and differences observed dur
 |----------|----------|-------|
 | `namespace py = pybind11;` | `namespace nb = nanobind;` | Namespace alias |
 | `PYBIND11_MODULE(name, m)` | `NB_MODULE(name, m)` | Module macro |
-| `py::module_` | `nb::module_` | Note the underscore |
+| `py::module` | `nb::module_` | Note the underscore |
 | `py::module::import("json")` | `nb::module_::import_("json")` | Note trailing underscore in `import_` |
 | `py::function` / `py::object` / `py::handle` | `nb::callable` / `nb::object` / `nb::handle` | Object types |
 | `.def_readwrite(...)` | `.def_rw(...)` | Read-write member |
@@ -222,19 +247,20 @@ Nanobind requires explicit includes for each STL type:
 
 ```cpp
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/array.h>
-#include <nanobind/stl/tuple.h>
-#include <nanobind/stl/variant.h>
+#include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/function.h>
 #include <nanobind/stl/map.h>
-#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/shared_ptr.h>
-#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
-#include <nanobind/stl/function.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/operators.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/ndarray.h>
