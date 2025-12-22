@@ -18,20 +18,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
-
-ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, true /*transpose within 16x16 face*/, cbid)));
-
-    MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
-          DST_ACCUM_MODE,
-          BroadcastType::NONE,
-          false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
-}
 #include "compute_kernel_api/transpose_wh.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ckernel_mutex_guard.h"
@@ -70,55 +56,29 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Postcondition: out_cb has rows produced
 
     constexpr uint32_t num_tiles = rows * cols;
-
-    constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
-    constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
-
     cb_wait_front(scale_cb, 1);
+    cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
-    const uint32_t num_tiles_to_wait = dst_tiles * cols;
-    uint32_t in0_wait_tiles = num_tiles_to_wait;
-
     max_tile_init();
+    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
 
-    uint32_t row_start_idx = 0;
-    for (uint32_t g = 0; g < granularity; g++) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
+    for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
         if (do_eltwise_max) {
-            cb_wait_front(prev_cb, g * dst_tiles);
-            /**
-             * Copy previous max values into DST register.
-             * Note that this special invocation of copy_tile is necessary to produce
-             * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
-             */
-            sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
-            for (uint32_t i = 0; i < dst_tiles; i++) {
-                const uint32_t cur_max_dst_idx = i;
-                copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);
-            }
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
         }
 
-        /**
-         * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
-         */
-        reduce_block_max_row_init<cols>();
-        for (uint32_t i = 0; i < dst_tiles; i++) {
-            const uint32_t reduce_dst_idx = i;
-            reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
-        }
-        reduce_block_max_row_uninit();
-
-        for (uint32_t i = 0; i < dst_tiles; i++) {
-            const uint32_t cur_max_dst_idx = i;
-            pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
-        }
+        pack_tile(reduce_dst_idx, out_cb);
         release_dst();
-
-        row_start_idx += dst_tiles;
-        in0_wait_tiles += num_tiles_to_wait;
     }
 
     cb_push_back(out_cb, rows);
@@ -287,7 +247,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-
     sub_tiles_transpA_bcastB_cols_init_short(in0_cb, in1_cb);
     // sub_bcast_cols_init_short(in0_cb, in1_cb);
 
@@ -299,11 +258,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
-    if constexpr (write_result_inplace) {
-        cb_pop_front(in0_cb, rows * cols);
-        cb_reserve_back(in0_cb, rows * cols);
-    }
-
     constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
     uint32_t in0_index = 0;
@@ -313,6 +267,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_transpA_bcastB_cols(in0_cb, in1_cb, in0_index, i, j);
                 // sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+
                 {
                     ckernel::T6MutexLockGuard lock(ckernel::mutex::SFPU);
                     exp_tile<true, true>(j);
@@ -344,10 +299,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_release();
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
-        if constexpr (write_result_inplace) {
-            // Granular write output to enable following matmul unpack to start early.
-            cb_push_back(in0_cb, cols);
-        }
+    }
+    if constexpr (write_result_inplace) {
+        cb_pop_front(in0_cb, rows * cols);
+        cb_reserve_back(in0_cb, rows * cols);
+        cb_push_back(in0_cb, rows * cols);
     }
     cb_push_back(reduce_cb, rows);
 }
@@ -704,16 +660,7 @@ void calculate_exponential_first_column(int scale_bf16) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result;
-            if constexpr (!DST_ACCUM_MODE) {
-                // bfloat16-accurate implementation of exp ( < 1 ULP)
-                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
-            } else {
-                // float32 version of exp (< 150 float32 ULP)
-                // this is more accurate than exp_21f, but also slower
-                result = ckernel::sfpu::_sfpu_exp_61f_(val);
-            }
-
+            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -949,21 +896,15 @@ void matmul_blocks(
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    const uint32_t output_num_tiles = M * N;
-    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
-
+    uint32_t output_num_tiles = M * N;
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
-    const uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
-    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
 
     reconfig_data_format(in1_cb, in0_cb);
     // cb_wait_front(in1_cb, K * N);
     cb_reserve_back(out_cb, output_num_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
@@ -984,12 +925,8 @@ void matmul_blocks(
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
-<<<<<<< HEAD
-                uint32_t out_row_offset = r * N;
-=======
                 uint32_t global_r = r + subblock_h * in0_subblock;
                 // uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
->>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                 for (uint32_t c = 0; c < subblock_w; c++) {
                     uint32_t global_c = c + out_col_offset;
                     uint32_t global_idx = output_transpose_order ? global_c * M + global_r : global_r * N + global_c;
@@ -1001,16 +938,9 @@ void matmul_blocks(
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
-        in0_wait_tiles += in0_subblock_num_tiles;
-        // Somewhat granularize the push of in0 subblocks
-        cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
     }
-<<<<<<< HEAD
-    cb_pop_front(in1_cb, K * N);
-=======
     // cb_pop_front(in1_cb, K * N);
     cb_push_back(out_cb, output_num_tiles);
->>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
 }
 
 void matmul_reduce_blocks(

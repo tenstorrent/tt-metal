@@ -134,6 +134,7 @@ void MAIN {
                 uint32_t alias_mm2_prev_out = cb_out_im_A;
                 uint32_t alias_mm2_cur_out = cb_out_im_B;
 
+                cb_wait_front(cb_q_in, q_chunk_tiles);
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
