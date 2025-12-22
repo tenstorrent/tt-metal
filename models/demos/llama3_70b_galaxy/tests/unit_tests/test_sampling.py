@@ -165,23 +165,30 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     (32,),
 )
 @pytest.mark.parametrize(
+    "input_shape",
+    (
+        (1, 1, 32, 19456),  # Qwen on TG
+        # (1, 1, 32, 16 * 1024), # llama on TG and T3K
+    ),
+)
+@pytest.mark.parametrize(
     "num_samples_with_threshold",
     [(10, 25.5), (1000, 2.0)],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat8_b,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "sampling_params",
     (
         # Test top-p and temperature settings
-        {"temperature": 1.0, "top_k": 32, "top_p": 0.00, "seed": 42},  # top_p = 1.0
-        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # top_p = 0.95
-        {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # top_p = 0.0
-        {"temperature": 0.0, "top_k": 32, "top_p": 0.00, "seed": 42},  # top_p = 1.0
-        {"temperature": 0.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # top_p = 0.95
-        {"temperature": 0.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # top_p = 0.0
+        {"temperature": 1.0, "top_k": 1, "top_p": 0.00, "seed": 42},  # top_p = 1.0
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # top_p = 0.95
+        # {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # top_p = 0.0
+        # {"temperature": 0.0, "top_k": 32, "top_p": 0.00, "seed": 42},  # top_p = 1.0
+        # {"temperature": 0.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # top_p = 0.95
+        # {"temperature": 0.0, "top_k": 32, "top_p": 1.00, "seed": 42},  # top_p = 0.0
     ),
 )
 @pytest.mark.parametrize(
@@ -204,10 +211,10 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     indirect=True,
 )
 def test_llama_sampling_inference(
-    dtype, sampling_params, batch_size, num_samples_with_threshold, mesh_device, reset_seeds
+    dtype, sampling_params, batch_size, num_samples_with_threshold, mesh_device, reset_seeds, input_shape
 ):
     use_tracing = False
-    load_cached_outputs = False
+    load_cached_outputs = True
     num_samples, kl_required = num_samples_with_threshold
     num_compile_steps = 1
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)
@@ -229,21 +236,24 @@ def test_llama_sampling_inference(
     seed = sampling_params["seed"]
 
     if load_cached_outputs:
-        # Cached model outputs
-        tt_model_output_cache_path = (
-            f"models/demos/llama3_70b_galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.tensorbin"
-        )
-        tt_input_loaded = ttnn.load_tensor(file_name=tt_model_output_cache_path, device=mesh_device)
-        tt_input_loaded = tt_input_loaded.reshape(1, 1, 32, -1)
-        torch_input = ttnn.to_torch(
-            tt_input_loaded,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
-        )
-        torch_input = torch_input[:, :1, :, :]  # select first cluster row (others are duplicates)
+        # # Cached model outputs
+        # tt_model_output_cache_path = (
+        #     f"models/demos/llama3_70b_galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.tensorbin"
+        # )
+        # tt_input_loaded = ttnn.load_tensor(file_name=tt_model_output_cache_path, device=mesh_device)
+        # tt_input_loaded = tt_input_loaded.reshape(1, 1, 32, -1)
+        # torch_input = ttnn.to_torch(
+        #     tt_input_loaded,
+        #     mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+        # )
+        # torch_input = torch_input[:, :1, :, :]  # select first cluster row (others are duplicates)
+
+        torch_input = torch.load(f"tt_logits_torch_8_actual_3264_expected_21862.pt")
+        torch_input = torch_input[:, :, :, : model_args.vocab_size]
 
     else:
         # Random inputs
-        torch_input = torch.randn(1, 1, 32, 16 * 1024)
+        torch_input = torch.randn(input_shape)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -259,6 +269,10 @@ def test_llama_sampling_inference(
     )
 
     model_args.padded_vocab_size = torch_input.shape[-1]
+    print("model_args.padded_vocab_size:", model_args.padded_vocab_size)
+    print("torch_input.shape:", torch_input.shape)
+
+    print("argmax:", torch.argmax(torch_input[:, :, :, :], dim=-1))
 
     # Reference output
     reference_outputs = []

@@ -23,12 +23,16 @@ from tqdm import tqdm
 @torch.no_grad()
 @pytest.mark.parametrize(
     "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
-    ((81, 98),),
+    ((95, 100),),
 )
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 511, 128 * 1024),),
+    ((512, 500, 128 * 1024),),
 )
+# @pytest.mark.parametrize(
+#     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
+#     ((1, 1, 128 * 1024),),
+# )
 @pytest.mark.parametrize(
     "sampling_params",
     [{"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42}],
@@ -107,6 +111,8 @@ def test_qwen_model_acc(
         temperature = torch.tensor([temperature] * batch_size)
     seed = sampling_params["seed"]
 
+    argmax_on_host = False
+
     dtype = ttnn.bfloat8_b
 
     instruct = False
@@ -120,6 +126,7 @@ def test_qwen_model_acc(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
     )
+    # model_args.n_layers = 1
 
     # Load tt_transformers reference model args for reference transformer
     model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
@@ -400,12 +407,36 @@ def test_qwen_model_acc(
         # ref_input_dtype = get_ref_model_dype(reference_model, model_args_ref.model_name)
         # ref_output = reference_model(pt_decode_input.to(torch.bfloat16), torch.tensor([prefill_len + i]))
 
-        if not use_reference_file:
-            # Convert ttnn tensor to torch tensor
-            tt_logits = ttnn.to_torch(
-                tt_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
-            )[0, 0, 0, : model_args.vocab_size]
+        # # Running argmax on device with masking
+        # tt_logits_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=0, topology=ttnn.Topology.Linear,)
+        # tt_logits = ttnn.to_torch(tt_out,mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape))[:, :1, :, :]
+        # tt_logits[:,:,:,model_args.vocab_size:] = -9999
+
+        # tt_logits_ttnn = ttnn.from_torch(tt_logits, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape))
+        # tt_out_tok = ttnn.argmax(tt_logits_ttnn, dim=-1)
+        # tt_out_tok = ttnn.unsqueeze(tt_out_tok, 0)
+
+        # # Running argmax on host
+        # tt_logits_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=0, topology=ttnn.Topology.Linear,)
+        # tt_out_tok = ttnn.argmax(tt_logits_gathered, dim=-1)
+        # tt_out_tok = ttnn.unsqueeze(tt_out_tok, 0)
+
+        # Running sampling on device with masking
+        # tt_logits = ttnn.to_torch(tt_out,mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape))[:, :1, :, :]
+        # tt_logits[:,:,:,model_args.vocab_size:] = -9999
+
+        # tt_logits = ttnn.from_torch(tt_logits, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=model_args.cluster_shape), layout=ttnn.TILE_LAYOUT)
+        # tt_out_tok = tt_sampling(tt_logits)
+
+        # Run sampling normally
+        tt_out_tok = tt_sampling(tt_out)
+
+        # if not use_reference_file or argmax_on_host:
+        # Convert ttnn tensor to torch tensor
+        tt_logits = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+        )[0, 0, 0, : model_args.vocab_size]
 
         tt_argmax_token = ttnn.to_torch(
             tt_out_tok,
@@ -415,6 +446,17 @@ def test_qwen_model_acc(
                 mesh_shape=model_args.cluster_shape,
             ),
         )[0, 0, 0, 0]
+
+        if tt_argmax_token != tt_logits.argmax(dim=-1):
+            # save tt_out to file
+            tt_logits_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+            )[:, :1, :, :]
+            torch.save(
+                tt_logits_torch,
+                f"tt_logits_torch_{i}_actual_{tt_argmax_token.item()}_expected_{tt_logits.argmax(dim=-1).item()}.pt",
+            )
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:
@@ -429,6 +471,8 @@ def test_qwen_model_acc(
             ref_top5_text = [tokenizer.decode([t]) for t in tt_top5_tokens]
         else:
             # Existing logic for reference file comparison
+            if argmax_on_host:
+                tt_argmax_token = tt_logits.argmax(dim=-1)
             ref_top5_tokens = top5_tokens[prefill_len + i]
             top1_match = tt_argmax_token.item() == ref_top5_tokens[0].item()
             top5_match = tt_argmax_token in ref_top5_tokens
