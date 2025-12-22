@@ -72,7 +72,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     tt::tt_metal::experimental::udm::MeshKernelHandle kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
-        "tests/ttnn/unit_tests/gtests/udm/kernels/copy.cpp",
+        "tests/ttnn/unit_tests/gtests/udm/copy/kernels/copy.cpp",
         gcores_info.gcores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,

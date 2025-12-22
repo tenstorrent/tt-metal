@@ -219,7 +219,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto reader_sender_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
-        "tests/ttnn/unit_tests/gtests/udm/kernels/reader_sender_unary_sharded_reduce.cpp",
+        "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_sender_unary_sharded_reduce.cpp",
         sender_gcores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -229,7 +229,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto reader_receiver_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
-        "tests/ttnn/unit_tests/gtests/udm/kernels/reader_receiver_unary_sharded_reduce.cpp",
+        "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/reader_receiver_unary_sharded_reduce.cpp",
         receiver_gcores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -244,7 +244,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto compute_kernel_id = tt::tt_metal::experimental::udm::CreateMeshKernel(
         mesh_builder,
         program,
-        "tests/ttnn/unit_tests/gtests/udm/kernels/compute_sharded_reduce.cpp",
+        "tests/ttnn/unit_tests/gtests/udm/reduction/sharded/kernels/compute_sharded_reduce.cpp",
         all_gcores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_all_to_all_args});
 
