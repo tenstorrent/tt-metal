@@ -1374,13 +1374,13 @@ class MasterConfigLoader:
                 scalars = []
 
                 for idx, cfg in enumerate(paired_configs):
-                    # Handle both tensor-tensor and tensor-scalar operations
-                    if cfg["shape_b"] is not None:
-                        # Tensor-tensor: Pass shapes as a dict with "self" and "other" keys
-                        input_shapes.append({"self": tuple(cfg["shape_a"]), "other": tuple(cfg["shape_b"])})
-                    else:
-                        # Tensor-scalar: Only pass the tensor shape
-                        input_shapes.append({"self": tuple(cfg["shape_a"])})
+                    # Skip tensor-scalar operations for now (test files don't support them yet)
+                    # TODO: Update test files to use scalar parameter instead of creating second tensor
+                    if cfg["shape_b"] is None:
+                        continue
+
+                    # Tensor-tensor: Pass shapes as a dict with "self" and "other" keys
+                    input_shapes.append({"self": tuple(cfg["shape_a"]), "other": tuple(cfg["shape_b"])})
 
                     input_a_dtypes.append(cfg["dtype_a"])
                     input_b_dtypes.append(cfg["dtype_b"])
@@ -1393,7 +1393,7 @@ class MasterConfigLoader:
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
 
-                    # Add scalar value if present
+                    # Add scalar value if present (will be None for tensor-tensor ops)
                     scalars.append(cfg.get("scalar", None))
 
                 # Convert to exact configurations format (prevents Cartesian product)
