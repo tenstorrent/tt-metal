@@ -11,9 +11,9 @@ const int TILE_HEIGHT = 16;
 const int TILE_WIDTH = 16;
 
 // Simple triple-loop matrix multiplication
-std::vector<double> simple_matrix_multiply(
-    const std::vector<double>& A, const std::vector<double>& B, int M, int K, int N) {
-    std::vector<double> C(M * N, 0.0);
+std::vector<float> simple_matrix_multiply(
+    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N) {
+    std::vector<float> C(M * N, 0.0);
 
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
@@ -26,15 +26,14 @@ std::vector<double> simple_matrix_multiply(
     return C;
 }
 
-// Helper to calculate 1D index from 2D coordinates
-// row_stride corresponds to the number of columns in the full matrix
-inline int get_idx(int row, int col, int row_stride) { return row * row_stride + col; }
+// Helper to calculate 1D index from 2D coordinates.
+// columns corresponds to the number of columns in the full matrix
+inline int get_idx(int row, int col, int columns) { return row * columns + col; }
 
 /**
- * 2. Create a function tile_matmul that multiplies a single tile
- * * This function computes a partial matrix multiplication for a specific tile.
+ * Function that multiplies a single tile.
  * It accumulates results into the C matrix.
- * * @param A        Input vector for Matrix A
+ * @param A        Input vector for Matrix A
  * @param B        Input vector for Matrix B
  * @param C        Output vector for Matrix C (result accumulated here)
  * @param M, K, N  Global dimensions of the matrices
@@ -43,9 +42,9 @@ inline int get_idx(int row, int col, int row_stride) { return row * row_stride +
  * @param k_offset        The global K index where the calculation strip starts
  */
 void tile_matmul(
-    const std::vector<double>& A,
-    const std::vector<double>& B,
-    std::vector<double>& C,
+    const std::vector<float>& A,
+    const std::vector<float>& B,
+    std::vector<float>& C,
     int K,
     int N,  // We need K for A's stride, N for B and C's stride
     int row_offset,
@@ -57,7 +56,7 @@ void tile_matmul(
         // Note: User specified M and N divisible by TILE_HEIGHT, implying square output tiles
         for (int j = 0; j < TILE_HEIGHT; ++j) {
             // We accumulate the dot product for the specific tile elements
-            double sum = 0.0;
+            float sum = 0.0;
 
             // Iterate over the TILE_WIDTH (Cols of A, Rows of B)
             for (int k = 0; k < TILE_WIDTH; ++k) {
@@ -69,8 +68,8 @@ void tile_matmul(
                 int global_col_B = col_offset + j;
 
                 // Access data using 1D indices
-                double val_A = A[get_idx(global_row_A, global_col_A, K)];
-                double val_B = B[get_idx(global_row_B, global_col_B, N)];
+                float val_A = A[get_idx(global_row_A, global_col_A, K)];
+                float val_B = B[get_idx(global_row_B, global_col_B, N)];
 
                 sum += val_A * val_B;
             }
@@ -85,10 +84,10 @@ void tile_matmul(
 }
 
 /**
- * 3. Implement a main matrix multiplication function using tiling
+ * Main matrix multiplication function using tiling
  */
-std::vector<double> tiled_matrix_multiply(
-    const std::vector<double>& A, const std::vector<double>& B, int M, int K, int N) {
+std::vector<float> tiled_matrix_multiply(
+    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N) {
     // 1. Input ensures data is contiguous (std::vector)
     // Validate assumptions
     assert(M % TILE_HEIGHT == 0 && "M must be divisible by TILE_HEIGHT");
@@ -96,9 +95,9 @@ std::vector<double> tiled_matrix_multiply(
     assert(K % TILE_WIDTH == 0 && "K must be divisible by TILE_WIDTH");
 
     // Initialize Result Matrix C with zeros
-    std::vector<double> C(M * N, 0.0);
+    std::vector<float> C(M * N, 0.0);
 
-    // 4 & 5. Loop over the matrix in steps of tile sizes
+    // Loop over the matrix in steps of tile sizes
 
     // Iterate over rows of C (M dimension)
     for (int i = 0; i < M; i += TILE_HEIGHT) {
@@ -117,7 +116,7 @@ std::vector<double> tiled_matrix_multiply(
 }
 
 // Helper to print matrices
-void print_matrix(const std::vector<double>& mat, int rows, int cols, const std::string& name) {
+void print_matrix(const std::vector<float>& mat, int rows, int cols, const std::string& name) {
     std::cout << "Matrix " << name << " (" << rows << "x" << cols << "):" << std::endl;
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
@@ -130,19 +129,19 @@ void print_matrix(const std::vector<double>& mat, int rows, int cols, const std:
 
 // Helper function to verify matrix multiplication
 bool verify_matrix_multiply(
-    const std::vector<double>& A, const std::vector<double>& B, const std::vector<double>& C, int M, int K, int N) {
+    const std::vector<float>& A, const std::vector<float>& B, const std::vector<float>& C, int M, int K, int N) {
     // Create a reference implementation to compare against
     auto start = std::chrono::high_resolution_clock::now();
-    std::vector<double> ref_C = simple_matrix_multiply(A, B, M, K, N);
+    std::vector<float> ref_C = simple_matrix_multiply(A, B, M, K, N);
     auto end = std::chrono::high_resolution_clock::now();
 
     auto tiled_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     std::cout << "Reference implementation took " << tiled_duration.count() << " microseconds" << std::endl;
 
     // Compare results with some tolerance
-    const double EPSILON = 1e-6;
+    constexpr float RELTOL = 0.00001;
     for (size_t i = 0; i < C.size(); i++) {
-        if (std::abs(C[i] - ref_C[i]) > EPSILON) {
+        if (std::abs(C[i] - ref_C[i]) / ref_C[i] > RELTOL) {
             std::cerr << "Mismatch at index " << i << ": " << C[i] << " vs " << ref_C[i] << std::endl;
             return false;
         }
@@ -158,8 +157,8 @@ int main() {
     int N = 1600;
 
     // Create Dummy Data (Linear sequence for easy verification)
-    std::vector<double> A(M * K);
-    std::vector<double> B(K * N);
+    std::vector<float> A(M * K);
+    std::vector<float> B(K * N);
 
     for (int i = 0; i < M * K; ++i) {
         A[i] = i + 1;  // 1, 2, 3...
@@ -168,16 +167,16 @@ int main() {
         B[i] = (i + 1) * 2;  // 2, 4, 6...
     }
 
+    std::cout << "Tiling Params: Height=" << TILE_HEIGHT << ", Width=" << TILE_WIDTH << "\n" << std::endl;
     // Perform Multiplication
     auto start = std::chrono::high_resolution_clock::now();
-    std::vector<double> tiled_C = tiled_matrix_multiply(A, B, M, K, N);
+    std::vector<float> tiled_C = tiled_matrix_multiply(A, B, M, K, N);
     auto end = std::chrono::high_resolution_clock::now();
 
     auto tiled_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "Tiled implementation took " << tiled_duration.count() << " microseconds" << std::endl;
+    std::cout << "Tiled implementation took     " << tiled_duration.count() << " microseconds" << std::endl;
 
     // Output Results
-    std::cout << "Tiling Params: Height=" << TILE_HEIGHT << ", Width=" << TILE_WIDTH << "\n" << std::endl;
     //    print_matrix(A, M, K, "A");
     //    print_matrix(B, K, N, "B");
     //    print_matrix(tiled_C, M, N, "Tiled C");
