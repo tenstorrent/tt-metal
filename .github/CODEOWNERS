@@ -127,6 +127,8 @@ tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+# nanobind
+ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT @tenstorrent/codeowner-bypass
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
@@ -369,6 +371,8 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstor
 # tt-train
 # primary owners
 tt-train/** @ayerofieiev-tt @tenstorrent/codeowner-bypass
+# nanobind
+tt-train/**/*nanobind* @ayerofieiev-tt @nsextonTT @tenstorrent/codeowner-bypass
 # kernel development
 tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @tenstorrent/codeowner-bypass
 # ops
