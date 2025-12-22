@@ -149,6 +149,148 @@ def test_mlp_1d_config_power_user_overrides():
     assert config.activation_dtype == ttnn.bfloat16
 
 
+# Pulled from deduped perf sweep of existing model tests in CI
+LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
+LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
+
+_slow = pytest.mark.slow
+
+
+def _list_test_cases() -> list[pytest.param]:
+    # fmt: off
+    return [
+        # === Fast tests (minimal coverage set) ===
+        # Single device
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-128-mixed-8B"),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-decode-32-uniform-8B"),
+        # Multi-device (1x8)
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-128-mixed-8B"),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-1024-mixed-8B"),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-decode-32-mixed-8B"),
+        # 70B (larger dims)
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-1024-mixed-70B"),
+        # === Slow tests (full coverage from models sweep) ===
+        # (1,1) mesh - from DP-32 (8B)
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-1024-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-decode-32-mixed-8B", marks=_slow),
+        # (1,2) mesh - from DP-16 (8B)
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-128-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-1024-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-decode-32-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-uniform-8B", marks=_slow),
+        # (1,8) mesh - from DP-4 (8B)
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-uniform-8B", marks=_slow),
+        # (1,8) mesh - from DP-4_70B (70B, mixed dtype only)
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-128-mixed-70B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-256-mixed-70B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-512-mixed-70B", marks=_slow),
+        pytest.param((1, 8), 1, 2048, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-2048-mixed-70B", marks=_slow),
+        pytest.param((1, 8), 1, 4096, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-4096-mixed-70B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-decode-32-mixed-70B", marks=_slow),
+    ]
+    # fmt: on
+
+
+# [INFO] generate random tensor for every test case is too expensive; cache weights and reuse them across test cases
+# [INFO] separate out ttnn_mesh_device parameter allows for sharing the same mesh device across test cases
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1), (1, 2), (1, 8)],
+    ids=["1x1", "1x2", "1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape,batch_size,seq_len,mode,act_dtype,w1_dtype,w2_dtype,w3_dtype,hf_model_name,pcc",
+    _list_test_cases(),
+)
+def test_mlp_1d_vs_reference(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    mesh_shape,
+    batch_size,
+    seq_len,
+    mode,
+    act_dtype,
+    w1_dtype,
+    w2_dtype,
+    w3_dtype,
+    hf_model_name,
+    pcc,
+):
+    """
+    Test MLP1D constructed via direct APIs (MLP1DConfig) matches HF reference MLP.
+
+    Configs pulled from perf sweep CSVs (b{batch_size}-DP-{dp}_{model}).
+    """
+
+    # get reference model; generate and load deterministic, random weights into the reference model
+    seed = 1234
+    torch.manual_seed(seed)
+
+    # HF model (default small) for reference; skip global init to only seed MLP.
+    config = AutoConfig.from_pretrained(hf_model_name)
+    config.num_hidden_layers = 1
+
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+    first_layer = hf_model.model.layers[0]
+    reference_mlp = first_layer.mlp
+
+    # Initialize only the MLP submodule deterministically (cached for speed).
+    _get_or_init_mlp_weights(hf_model_name, reference_mlp)
+
+    # Build MLP1D TT model and load the same weights in
+    # TT expects weights in TTNN layout (in_features, out_features) - transpose from PyTorch layout
+    # todo)) transpose could be part of the MLP1D config! --> use dim and hidden_dim to figure out!
+    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
+    dim = config.hidden_size
+    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
+
+    # Create LazyWeights
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    cache_dir = Path("model_cache/mlp_1d")
+    lazy_w1 = LazyWeight(source=w1_torch, dtype=w1_dtype, cache_dir_weight_name=(cache_dir, "w1"))
+    lazy_w2 = LazyWeight(source=w2_torch, dtype=w2_dtype, cache_dir_weight_name=(cache_dir, "w2"))
+    lazy_w3 = LazyWeight(source=w3_torch, dtype=w3_dtype, cache_dir_weight_name=(cache_dir, "w3"))
+
+    # Use from_config for power-user path (custom settings)
+    tt_model = MLP1D(lazy_w1, lazy_w2, lazy_w3)
+
+    # Run TT model with the same input -- torch_input -- converted to ttnn tensor lazily on the fly
+    # [INFO] we use LazyWeight on input for the benefit of faster testing (cached input); in production, the input is already a ttnn tensor.
+    tt_input = LazyWeight(
+        source=torch_input,
+        dtype=act_dtype,
+        # cache_dir_weight_name=(cache_dir, "input"), # todo)) needs better fingerprinting for input tensor to enable
+    )
+    tt_output = tt_model.forward(tt_input, mode)
+    tt_output_torch = to_torch_auto_compose(tt_output)
+    ttnn.SetDefaultDevice(None)
+
+    # Now both models are ready to go
+    # Run reference model
+    with torch.no_grad():
+        reference_output = reference_mlp(torch_input)
+
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"MLP1D (direct API) vs HF reference: {pcc_message}")
+
+    assert passing, f"MLP1D output does not meet PCC requirement {pcc}: {pcc_message}."
+    logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+
+
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(1, 8)],
@@ -176,6 +318,7 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
     reference_mlp = hf_model.model.layers[0].mlp
 
     # Generate random weights directly for this test
+    # todo)) using _get_or_init_mlp_weights instead here would interfere with the test_mlp_1d_vs_reference test; this problem could be solved by provenance-based fingerprinting the torch.tensor inputs
     with torch.no_grad():
         for param in reference_mlp.parameters():
             param.copy_(torch.randn_like(param))
@@ -237,147 +380,6 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, 0.98)
     assert passing, f"MLP1D with custom prefill config failed PCC: {pcc_message}"
     logger.info(f"test_mlp_1d_config_prefill_override: PASSED - {pcc_message}")
-
-
-# Pulled from deduped perf sweep of existing model tests in CI
-LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
-LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
-
-_slow = pytest.mark.slow
-
-
-def _list_test_cases() -> list[pytest.param]:
-    # fmt: off
-    return [
-        # === Fast tests (minimal coverage set) ===
-        # Single device
-        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-128-mixed-8B"),
-        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-decode-32-uniform-8B"),
-        # Multi-device (1x8)
-        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-128-mixed-8B"),
-        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-1024-mixed-8B"),
-        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-decode-32-mixed-8B"),
-        # 70B (larger dims)
-        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-1024-mixed-70B"),
-        # === Slow tests (full coverage from models sweep) ===
-        # (1,1) mesh - from DP-32 (8B)
-        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-128-uniform-8B", marks=_slow),
-        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-256-mixed-8B", marks=_slow),
-        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-512-mixed-8B", marks=_slow),
-        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-1024-mixed-8B", marks=_slow),
-        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-decode-32-mixed-8B", marks=_slow),
-        # (1,2) mesh - from DP-16 (8B)
-        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-128-mixed-8B", marks=_slow),
-        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-uniform-8B", marks=_slow),
-        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-256-mixed-8B", marks=_slow),
-        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-512-mixed-8B", marks=_slow),
-        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-1024-mixed-8B", marks=_slow),
-        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-decode-32-mixed-8B", marks=_slow),
-        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-uniform-8B", marks=_slow),
-        # (1,8) mesh - from DP-4 (8B)
-        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-uniform-8B", marks=_slow),
-        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-256-mixed-8B", marks=_slow),
-        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-512-mixed-8B", marks=_slow),
-        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-uniform-8B", marks=_slow),
-        # (1,8) mesh - from DP-4_70B (70B, mixed dtype only)
-        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-128-mixed-70B", marks=_slow),
-        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-256-mixed-70B", marks=_slow),
-        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-512-mixed-70B", marks=_slow),
-        pytest.param((1, 8), 1, 2048, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-2048-mixed-70B", marks=_slow),
-        pytest.param((1, 8), 1, 4096, "prefill", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-prefill-4096-mixed-70B", marks=_slow),
-        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_70B, 0.98, id="1x8-decode-32-mixed-70B", marks=_slow),
-    ]
-    # fmt: on
-
-
-# [INFO] generate random tensor for every test case is too expensive; cache weights and reuse them across test cases
-# [INFO] separate out ttnn_mesh_device parameter allows for sharing the same mesh device across test cases
-@pytest.mark.parametrize(
-    "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 8)],
-    ids=["1x1", "1x2", "1x8"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape,batch_size,seq_len,mode,w1_dtype,w2_dtype,w3_dtype,hf_model_name,pcc",
-    _list_test_cases(),
-)
-def test_mlp_1d_vs_reference(
-    ttnn_mesh_device: ttnn.MeshDevice,
-    mesh_shape,
-    batch_size,
-    seq_len,
-    mode,
-    w1_dtype,
-    w2_dtype,
-    w3_dtype,
-    hf_model_name,
-    pcc,
-):
-    """
-    Test MLP1D constructed via direct APIs (MLP1DConfig) matches HF reference MLP.
-
-    Configs pulled from perf sweep CSVs (b{batch_size}-DP-{dp}_{model}).
-    """
-
-    # get reference model; generate and load deterministic, random weights into the reference model
-    seed = 1234
-    torch.manual_seed(seed)
-
-    # HF model (default small) for reference; skip global init to only seed MLP.
-    config = AutoConfig.from_pretrained(hf_model_name)
-    config.num_hidden_layers = 1
-
-    with no_init_weights():
-        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
-    first_layer = hf_model.model.layers[0]
-    reference_mlp = first_layer.mlp
-
-    # Initialize only the MLP submodule deterministically (cached for speed).
-    _get_or_init_mlp_weights(hf_model_name, reference_mlp)
-
-    # Build MLP1D TT model and load the same weights in
-    # TT expects weights in TTNN layout (in_features, out_features) - transpose from PyTorch layout
-    # todo)) transpose could be part of the MLP1D config! --> use dim and hidden_dim to figure out!
-    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
-    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
-    w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
-    dim = config.hidden_size
-    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
-
-    # Create LazyWeights
-    ttnn.SetDefaultDevice(ttnn_mesh_device)
-    cache_dir = Path("model_cache/mlp_1d")
-    lazy_w1 = LazyWeight(source=w1_torch, dtype=w1_dtype, cache_dir_weight_name=(cache_dir, "w1"))
-    lazy_w2 = LazyWeight(source=w2_torch, dtype=w2_dtype, cache_dir_weight_name=(cache_dir, "w2"))
-    lazy_w3 = LazyWeight(source=w3_torch, dtype=w3_dtype, cache_dir_weight_name=(cache_dir, "w3"))
-
-    # Use from_config for power-user path (custom settings)
-    tt_model = MLP1D(lazy_w1, lazy_w2, lazy_w3)
-
-    # Run TT model with the same input -- torch_input -- converted to ttnn tensor lazily on the fly
-    # [INFO] we use LazyWeight on input for the benefit of faster testing (cached input); in production, the input is already a ttnn tensor.
-    tt_input = LazyWeight(
-        source=torch_input,
-        dtype=ttnn.bfloat8_b,
-        # cache_dir_weight_name=(cache_dir, "input"), # todo)) needs better fingerprinting for input tensor
-    )
-    tt_output = tt_model.forward(tt_input, mode)
-    tt_output_torch = to_torch_auto_compose(tt_output)
-    ttnn.SetDefaultDevice(None)
-
-    # Now both models are ready to go
-    # Run reference model
-    with torch.no_grad():
-        reference_output = reference_mlp(torch_input)
-
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"MLP1D (direct API) vs HF reference: {pcc_message}")
-
-    assert passing, f"MLP1D output does not meet PCC requirement {pcc}: {pcc_message}."
-    logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
 
 
 # ============================================================================

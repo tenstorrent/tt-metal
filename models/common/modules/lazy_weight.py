@@ -183,6 +183,7 @@ class LazyWeight:
         parts = []
 
         # source
+        # todo)) add fingerprinting for the source tensor to enable cache invalidation when the source tensor changes
 
         # dtype
         parts.append(f"dtype_{self.dtype.name}")
