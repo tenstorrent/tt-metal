@@ -4,7 +4,6 @@
 
 #include <filesystem>
 #include <memory>
-#include <cstdlib>
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
