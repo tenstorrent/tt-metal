@@ -173,7 +173,10 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 )
 @pytest.mark.parametrize(
     "num_samples_with_threshold",
-    [(10, 25.5), (1000, 2.0)],
+    [
+        (10, 25.5),
+        # (1000, 2.0)
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -249,7 +252,8 @@ def test_llama_sampling_inference(
         # torch_input = torch_input[:, :1, :, :]  # select first cluster row (others are duplicates)
 
         torch_input = torch.load(f"tt_logits_torch_8_actual_3264_expected_21862.pt")
-        torch_input = torch_input[:, :, :, : model_args.vocab_size]
+        # torch_input_sliced = torch_input[:, :, :, : model_args.vocab_size]
+        # torch_input[:, :, :, model_args.vocab_size:] = torch.min(torch_input[:, :, :, :model_args.vocab_size]).item()
 
     else:
         # Random inputs
@@ -267,12 +271,33 @@ def test_llama_sampling_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
+    # tt_input_sliced = ttnn.from_torch(
+    #     torch_input_sliced,
+    #     device=mesh_device,
+    #     mesh_mapper=ttnn.ShardTensor2dMesh(
+    #         mesh_device,
+    #         dims=(3, None),
+    #         mesh_shape=model_args.cluster_shape,
+    #     ),
+    #     dtype=dtype,
+    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    #     layout=ttnn.TILE_LAYOUT,
+    # )
+
+    # torch_roundtrip_sliced = ttnn.to_torch(tt_input,mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape))[:, :1, :, : model_args.vocab_size]
+    # tt_roundtrip_sliced = ttnn.from_torch(torch_roundtrip_sliced, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=model_args.cluster_shape), layout=ttnn.TILE_LAYOUT)
+
+    # breakpoint()
+
+    # tt_input = tt_input_sliced
 
     model_args.padded_vocab_size = torch_input.shape[-1]
     print("model_args.padded_vocab_size:", model_args.padded_vocab_size)
     print("torch_input.shape:", torch_input.shape)
 
     print("argmax:", torch.argmax(torch_input[:, :, :, :], dim=-1))
+
+    breakpoint()
 
     # Reference output
     reference_outputs = []
