@@ -28,7 +28,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        # 2x4 config with SP enabled - SP on axis 0 enables FSDP weight sharding (no CFG parallel)
+        # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
         [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
@@ -82,7 +82,7 @@ def test_qwenimage_pipeline(
         topology=topology,
         width=width,
         height=height,
-        is_fsdp=True,  # Enable FSDP to avoid model load/unload cycle
+        is_fsdp=True,  # enable fsdp to avoid model load/unload cycle
     )
     pipeline.timing_collector = TimingCollector()
 
