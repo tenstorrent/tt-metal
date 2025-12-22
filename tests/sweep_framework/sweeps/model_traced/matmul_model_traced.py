@@ -52,9 +52,11 @@ def run(
     input_b_layout,
     input_b_memory_config,
     output_memory_config,
+    scalar=None,  # For tensor-scalar operations
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
