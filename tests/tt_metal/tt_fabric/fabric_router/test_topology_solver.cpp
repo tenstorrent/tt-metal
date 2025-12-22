@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <filesystem>
+#include <memory>
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -113,6 +114,73 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(neighbors102.size(), 2u) << "ASIC 102 should have 2 neighbor entries (2 eth connections)";
     EXPECT_EQ(neighbors102[0], tt::tt_metal::AsicID{103}) << "ASIC 102 should be connected to ASIC 103";
     EXPECT_EQ(neighbors102[1], tt::tt_metal::AsicID{103}) << "ASIC 102 should have 2 connections to ASIC 103";
+}
+
+// AdjacencyGraph Tests with Different User Types
+namespace {
+struct CustomNode {
+    int id;
+    std::string name;
+    bool operator<(const CustomNode& other) const { return id < other.id || (id == other.id && name < other.name); }
+    bool operator==(const CustomNode& other) const { return id == other.id && name == other.name; }
+};
+
+enum class NodeType { PROCESSOR, MEMORY, IO };
+}  // namespace
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithInt) {
+    AdjacencyGraph<int>::AdjacencyMap adj_map{{1, {2, 3}}, {2, {1}}};
+    AdjacencyGraph<int> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors(1).size(), 2u);
+    EXPECT_EQ(graph.get_neighbors(2).size(), 1u);
+    EXPECT_TRUE(graph.get_neighbors(99).empty());
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithString) {
+    AdjacencyGraph<std::string>::AdjacencyMap adj_map{{"a", {"b"}}, {"b", {"a"}}};
+    AdjacencyGraph<std::string> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors("a").size(), 1u);
+    EXPECT_TRUE(graph.get_neighbors("z").empty());
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithCustomStruct) {
+    CustomNode n1{1, "alpha"}, n2{2, "beta"};
+    AdjacencyGraph<CustomNode>::AdjacencyMap adj_map{{n1, {n2}}, {n2, {n1}}};
+    AdjacencyGraph<CustomNode> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors(n1).size(), 1u);
+    EXPECT_TRUE(graph.get_neighbors(CustomNode{99, "nonexistent"}).empty());
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithEnum) {
+    AdjacencyGraph<NodeType>::AdjacencyMap adj_map{
+        {NodeType::PROCESSOR, {NodeType::MEMORY}}, {NodeType::MEMORY, {NodeType::PROCESSOR}}};
+    AdjacencyGraph<NodeType> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors(NodeType::PROCESSOR).size(), 1u);
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithPair) {
+    using NodePair = std::pair<int, int>;
+    AdjacencyGraph<NodePair>::AdjacencyMap adj_map{{{1, 0}, {{2, 0}}}, {{2, 0}, {{1, 0}}}};
+    AdjacencyGraph<NodePair> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors({1, 0}).size(), 1u);
+    EXPECT_TRUE(graph.get_neighbors({99, 0}).empty());
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphWithSharedPtr) {
+    using NodePtr = std::shared_ptr<int>;
+    auto n1 = std::make_shared<int>(1);
+    auto n2 = std::make_shared<int>(2);
+    AdjacencyGraph<NodePtr>::AdjacencyMap adj_map{{n1, {n2}}, {n2, {n1}}};
+    AdjacencyGraph<NodePtr> graph(adj_map);
+    EXPECT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_neighbors(n1).size(), 1u);
+    auto nonexistent = std::make_shared<int>(99);
+    EXPECT_TRUE(graph.get_neighbors(nonexistent).empty());
 }
 
 // MappingConstraints Tests
