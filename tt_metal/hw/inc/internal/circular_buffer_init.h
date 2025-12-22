@@ -66,6 +66,13 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
             if (init_wr_tile_ptr) {
                 local_interface.fifo_wr_tile_ptr = 0;
             }
+            // Initialize tile indices to 0 (at start of CB)
+            if (read) {
+                local_interface.fifo_rd_tile_idx = 0;
+            }
+            if (write) {
+                local_interface.fifo_wr_tile_idx = 0;
+            }
             cb_id++;
         } else {
             circular_buffer_config_addr += UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
@@ -97,6 +104,13 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
         "    sw zero, %[off_tiles_acked](%[liptr])\n\t"  // local_interface.tiles_acked_received_init = 0;
         ".if %[init_wr_tile_ptr]\n\t"
         "    sw zero, %[off_fifo_tile_wr_ptr](%[liptr])\n\t"  // local_interface.fifo_wr_tile_ptr = 0;
+        ".endif\n\t"
+        // Initialize tile indices to 0 (at start of CB)
+        ".if %[read]\n\t"
+        "    sw zero, %[off_fifo_rd_tile_idx](%[liptr])\n\t"  // local_interface.fifo_rd_tile_idx = 0;
+        ".endif\n\t"
+        ".if %[write]\n\t"
+        "    sw zero, %[off_fifo_wr_tile_idx](%[liptr])\n\t"  // local_interface.fifo_wr_tile_idx = 0;
         ".endif\n\t"
 
         // Advance to next cb config.
@@ -156,6 +170,8 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
           [off_fifo_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_ptr)),
           [off_tiles_acked] "i"(offsetof(LocalCBInterface, tiles_acked_received_init)),
           [off_fifo_tile_wr_ptr] "i"(offsetof(LocalCBInterface, fifo_wr_tile_ptr)),
+          [off_fifo_rd_tile_idx] "i"(offsetof(LocalCBInterface, fifo_rd_tile_idx)),
+          [off_fifo_wr_tile_idx] "i"(offsetof(LocalCBInterface, fifo_wr_tile_idx)),
           [local_cb_interface_size] "i"(sizeof(CBInterface)),
           [circular_buffer_byte_size] "i"(UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t)),
           [read] "i"(read ? 1 : 0),

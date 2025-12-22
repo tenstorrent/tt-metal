@@ -16,6 +16,7 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
@@ -29,6 +30,16 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+#else
+    UNPACK((llk_unpack_hw_configure(icb)));
+    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, false /*transpose*/, DST_ACCUM_MODE>(icb)));
+
+    PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE, false /*int32 dest*/>(icb, icb)));
+#endif
 }
 
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
