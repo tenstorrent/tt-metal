@@ -110,7 +110,7 @@ class SD35JointAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        q_chunk_size, k_chunk_size = self.sdpa_chunk_size_map.get(
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
             (
                 is_blackhole(),
                 self.parallel_config.sequence_parallel.factor,
@@ -120,8 +120,8 @@ class SD35JointAttention(Module):
         )
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=k_chunk_size,
+            q_chunk_size=ring_sdpa_chunk_size[0],
+            k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
