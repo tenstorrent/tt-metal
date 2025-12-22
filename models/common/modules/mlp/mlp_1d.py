@@ -98,14 +98,13 @@ class MLP1DConfig:
     linear_dtype: ttnn.DataType | None = None
     mul_dtype: ttnn.DataType | None = None
     prefill_len_cutoff: int | None = None
-    is_single_device: bool | None = None  # todo)) remove this
 
     def is_resolved(self) -> bool:
         """Check if all fields except optional ones are resolved."""
         # activation_dtype is optional override for linear_dtype and mul_dtype
         optional = {"activation_dtype"}
         # topology: None for single_device (CCL not needed)
-        if self.is_single_device:
+        if self.mesh_device and self.mesh_device.get_num_devices() == 1:
             optional.add("topology")
 
         return all(getattr(self, f) is not None for f in self.__dataclass_fields__ if f not in optional)
@@ -353,7 +352,7 @@ class MLP1D(LightweightModule):
     def _all_reduce_decode(self, w2_out: ttnn.Tensor) -> ttnn.Tensor:
         """All-reduce for decode mode (sharded input)."""
         cfg = self.config
-        if cfg.is_single_device:
+        if cfg.mesh_device.get_num_devices() == 1:
             return w2_out
 
         original_shape = w2_out.shape
@@ -382,7 +381,7 @@ class MLP1D(LightweightModule):
     def _all_reduce_prefill(self, w2_out: ttnn.Tensor) -> ttnn.Tensor:
         """All-reduce for prefill mode (interleaved input)."""
         cfg = self.config
-        if cfg.is_single_device:
+        if cfg.mesh_device.get_num_devices() == 1:
             return w2_out
 
         original_shape = w2_out.shape
@@ -781,8 +780,6 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
 
     # Always computed (not user-overridable None fields)
-    to_set["is_single_device"] = num_devices == 1
-
     w1_w3_dtype = config.w1_w3_dtype
     if config.w1_w3_dtype is None:
         w1_w3_dtype = ttnn.bfloat8_b
