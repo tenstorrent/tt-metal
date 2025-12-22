@@ -57,6 +57,27 @@ from models.tt_transformers.tt.model_config import (
     TensorGroup,
 )
 
+
+def ttnn_to_torch_safe(tensor, mesh_device=None):
+    """
+    Convert ttnn tensor to torch, handling multi-device mesh (N300/T3K).
+    For replicated tensors, gets from first device to avoid doubling.
+    Works for both single-device (P150/N150) and multi-device (N300/T3K).
+    """
+    # Check if tensor is multi-device by trying to get device tensors
+    try:
+        device_tensors = ttnn.get_device_tensors(tensor)
+        if len(device_tensors) > 1:
+            # Multi-device tensor - get from first device
+            return ttnn.to_torch(device_tensors[0]).float()
+        else:
+            # Single device tensor wrapped in list
+            return ttnn.to_torch(device_tensors[0]).float()
+    except (RuntimeError, TypeError, AttributeError):
+        # Not a multi-device tensor, convert directly
+        return ttnn.to_torch(tensor).float()
+
+
 """
 configuration_prismatic.py
 
@@ -266,6 +287,21 @@ def get_LLama2OpenVLAArgs(state_dict):
             new_state_dict = map_openvla_hf_to_meta_keys(state_dict)
             return new_state_dict
 
+        def weight_cache_path(self, dtype):
+            """Use a SEPARATE cache path for OpenVLA weights to avoid conflicts with base Llama."""
+            import ttnn
+
+            # When OpenVLA weights are provided, use a different cache directory
+            if state_dict is not None:
+                cache_suffix = {
+                    ttnn.bfloat16: "tensor_cache_openvla_bf16",
+                    ttnn.bfloat8_b: "tensor_cache_openvla_bfp8",
+                }[dtype]
+            else:
+                # Fall back to default base Llama cache
+                cache_suffix = {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+            return self.model_cache_path / cache_suffix
+
     return LLama2OpenVLAArgs
 
 
@@ -288,14 +324,16 @@ class OpenVLALanguageModel(GenerationMixin):
         # ============================================================================
         def qwen_style_bf16_attention(model_args):
             """
-            Custom optimization: Full BF16 attention like Qwen2.5-7B.
-            Requires N300 (2 devices) to fit in L1 memory.
+            Custom optimization: BF16 attention only (FFN stays BFP8).
+            Fits on N300 (2 devices).
+            LM head precision controlled separately via dtype parameter.
             """
             settings = {
                 "TensorPrecision": {
                     TensorGroup.WQKV: PrecisionSetting.BF16,
                     TensorGroup.KV_CACHE: PrecisionSetting.BF16,
                     TensorGroup.WO: PrecisionSetting.BF16,
+                    # FFN stays at BFP8 to fit in memory
                 },
                 "OpFidelity": {
                     OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
@@ -309,16 +347,71 @@ class OpenVLALanguageModel(GenerationMixin):
             model_opt = ModelOptimizations(settings)
             return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
+        def bf16_lmhead_bfp8_attn(model_args):
+            """
+            TEST CONFIG: BF16 KV cache only, everything else BFP8.
+            LM head BF16 is achieved by passing dtype=ttnn.bfloat16 to create_tt_model.
+            This tests if LM head precision alone can fix instruction sensitivity.
+            """
+            settings = {
+                "TensorPrecision": {
+                    TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                    # WQKV, WO, FFN all stay BFP8 to save memory
+                },
+                "OpFidelity": {
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                },
+            }
+            model_opt = ModelOptimizations(settings)
+            return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
+
+        def full_bf16_config(model_args):
+            """
+            FULL BF16 CONFIG (like Qwen2.5-7B) - Requires T3K (8 devices) or more memory.
+            All weights in BF16: WQKV, WO, FF1, FF2, FF3, KV_CACHE, LM_HEAD.
+            This should give best precision for instruction sensitivity.
+            """
+            settings = {
+                "TensorPrecision": {
+                    TensorGroup.WQKV: PrecisionSetting.BF16,
+                    TensorGroup.WO: PrecisionSetting.BF16,
+                    TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                    TensorGroup.FF2: PrecisionSetting.BF16,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                    # LM head controlled by dtype parameter in create_tt_model
+                },
+                "OpFidelity": {
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF1_FF3_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF1_FF3_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF2_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF2_PREFILL: MathFidelitySetting.HIFI4,
+                },
+            }
+            model_opt = ModelOptimizations(settings)
+            return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
+
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
             "mesh_device": device,
             "instruct": False,
             "global_batch_size": 1,
-            # Use Qwen-style BF16 attention (requires N300)
-            # To use N150 mode, uncomment custom_kv_bf16_optimization and comment out qwen_style_bf16_attention
-            "optimizations": qwen_style_bf16_attention,  # For N300
-            # "optimizations": custom_kv_bf16_optimization,  # For N150 (has precision issues)
+            # N300: BF16 attention (WQKV, WO, KV_CACHE), BFP8 FFN - fits in memory
+            # T3K: Can use full_bf16_config for better instruction sensitivity
+            "optimizations": qwen_style_bf16_attention,  # BF16 attention only (N300)
+            # "optimizations": full_bf16_config,  # FULL BF16 for T3K (8 devices)
+            # "optimizations": bf16_lmhead_bfp8_attn,  # BF16 LM head only (test config)
             "max_seq_len": 1024,  # Vision (~512) + text gets padded to 1024
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
             "paged_attention": True,
@@ -326,6 +419,10 @@ class OpenVLALanguageModel(GenerationMixin):
         }
 
         def model_factory_fn(*args, **kwargs):
+            # N300: BFP8 LM head (default), BF16 attention via optimization
+            # For T3K with full_bf16_config: uncomment dtype override below
+            # kwargs.pop("dtype", None)
+            # return create_tt_model(*args, **kwargs, dtype=ttnn.bfloat16, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
             return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
 
         (
@@ -501,7 +598,23 @@ class OpenVLALanguageModel(GenerationMixin):
         assert not output_attentions, f"{self.__class__.__name__} does not accept output_attentions"
         assert not output_hidden_states, f"{self.__class__.__name__} does not accept output_hidden_states"
         assert return_dict, f"{self.__class__.__name__} does not accept return_dict=False"
-        seq_len = inputs_embeds.shape[2]
+
+        # FIX: Handle both 3D [B,S,D] and 4D [1,1,S,D] input shapes
+        # Always squeeze to get correct seq_len before computing positions
+        emb_shape = inputs_embeds.shape
+        if len(emb_shape) == 4 and emb_shape[1] == 1:
+            # Shape is [1, 1, S, D] - seq_len is dim 2
+            seq_len = emb_shape[2]
+        elif len(emb_shape) == 3:
+            # Shape is [B, S, D] - seq_len is dim 1, need to unsqueeze
+            seq_len = emb_shape[1]
+            inputs_embeds = ttnn.unsqueeze(inputs_embeds, dim=1)  # -> [B, 1, S, D]
+        else:
+            raise ValueError(f"Unexpected inputs_embeds shape: {emb_shape}. Expected [B,S,D] or [1,1,S,D]")
+
+        if getattr(self, "_debug_trace", False):
+            print(f"DEBUG: inputs_embeds shape={emb_shape}, computed seq_len={seq_len}")
+
         CHECKPOINTS.checkpoint("start_PREFILL")
         padding = get_padded_prefill_len(seq_len) - inputs_embeds.shape[2]
         if padding != 0:
@@ -519,6 +632,26 @@ class OpenVLALanguageModel(GenerationMixin):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(inputs_embeds.device()),
         )
+        # DEBUG: Check inputs_embeds before LLM forward
+        if getattr(self, "_debug_trace", False):
+            _mesh_device = self.generator_args_config["mesh_device"]
+            _emb_in = ttnn_to_torch_safe(inputs_embeds, _mesh_device)
+            print(f"\n=== DEBUG: LLM Forward Input ===")
+            print(
+                f"DEBUG inputs_embeds before LLM: shape={_emb_in.shape}, mean={_emb_in.mean():.6f}, std={_emb_in.std():.6f}"
+            )
+            print(f"DEBUG inputs_embeds checksum: {_emb_in.sum().item():.2f} (MUST differ per image!)")
+            # Check the ACTUAL last token position (seq_len-1), not the padding (-1)
+            actual_last_pos = seq_len - 1
+            print(
+                f"DEBUG ACTUAL last position ({actual_last_pos}): mean={_emb_in[0, 0, actual_last_pos, :].mean():.6f}, std={_emb_in[0, 0, actual_last_pos, :].std():.6f}"
+            )
+            # Also check text region checksum specifically (positions 257 to seq_len-1)
+            text_region = _emb_in[0, 0, 257:seq_len, :]
+            print(
+                f"DEBUG text region ({257} to {seq_len-1}): checksum={text_region.sum().item():.4f}, shape={text_region.shape}"
+            )
+
         tt_logits = self.model[0].forward(
             inputs_embeds,
             None,
@@ -534,18 +667,44 @@ class OpenVLALanguageModel(GenerationMixin):
         # Move tensor from device to host before processing
         tt_logits = ttnn.from_device(tt_logits)
 
+        # DEBUG: Check logits after LLM forward
+        if getattr(self, "_debug_trace", False):
+            _logits_debug = self.model[0].concat_host_output(tt_logits)
+            print(f"\n=== DEBUG: LLM Forward Output ===")
+            print(f"DEBUG raw logits shape: {_logits_debug.shape}")
+            print(f"DEBUG logits checksum: {_logits_debug.sum().item():.2f} (should differ if inputs differ)")
+            # Check action token logits specifically (31744-32063)
+            action_logits = _logits_debug[0, 0, last_token_idx % 32, 31744:32000]
+            print(
+                f"DEBUG action token logits (31744-32000): mean={action_logits.mean():.4f}, std={action_logits.std():.4f}, max={action_logits.max():.4f}"
+            )
+
         # Since we give unpadded_seq_len, only the tile containing the last token is returned
-        output_logits = self.model[0].process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+        tile_start = ((seq_len - 1) // 32) * 32
+        idx_in_tile = last_token_idx % 32
+        absolute_pos = tile_start + idx_in_tile
+
+        # DEBUG: Verify we're reading from the correct position
+        if getattr(self, "_debug_trace", False):
+            print(f"\n=== CRITICAL POSITION CHECK ===")
+            print(f"seq_len={seq_len}, last_token_idx={last_token_idx}")
+            print(f"tile_start={tile_start}, idx_in_tile={idx_in_tile}")
+            print(f"absolute_pos={absolute_pos} (MUST equal seq_len-1={seq_len-1})")
+            assert absolute_pos == seq_len - 1, f"POSITION BUG! absolute_pos={absolute_pos} != seq_len-1={seq_len-1}"
+
+        output_logits = self.model[0].process_output_prefill(tt_logits, last_token_idx=idx_in_tile)
         prefilled_token = torch.argmax(output_logits.cpu(), dim=-1).unsqueeze(0)
 
         # DEBUG: Print first token to trace if prefill is working correctly
         if getattr(self, "_debug_trace", False):
             logits_cpu = output_logits.cpu().float()
-            top5_vals, top5_toks = torch.topk(logits_cpu.flatten(), 5)
-            gap = top5_vals[0] - top5_vals[1]
-            print(
-                f"DEBUG prefill: top1={top5_toks[0].item()} ({top5_vals[0]:.4f}), top2={top5_toks[1].item()} ({top5_vals[1]:.4f}), GAP={gap:.4f}"
-            )
+            top10_vals, top10_toks = torch.topk(logits_cpu.flatten(), 10)
+            gap = top10_vals[0] - top10_vals[1]
+            print(f"\n=== TT PREFILL TOP-10 ===")
+            for i, (tok, val) in enumerate(zip(top10_toks.tolist(), top10_vals.tolist())):
+                print(f"  {i+1}. token={tok}, logit={val:.4f}")
+            print(f"TT PREFILL ARGMAX: {top10_toks[0].item()}")
+            print(f"GAP (top1-top2): {gap:.4f}")
             print(
                 f"DEBUG __call__: prefilled_token={prefilled_token}, shape={prefilled_token.shape}, dtype={prefilled_token.dtype}"
             )
@@ -564,7 +723,8 @@ class OpenVLALanguageModel(GenerationMixin):
                 # Get first layer's KV cache and compute checksum
                 kv_layer0 = self.tt_kv_cache[0][0][0]  # First layer, first part
                 if hasattr(kv_layer0, "shape"):
-                    kv_torch = ttnn.to_torch(kv_layer0).float()
+                    _mesh_device = self.generator_args_config["mesh_device"]
+                    kv_torch = ttnn_to_torch_safe(kv_layer0, _mesh_device)
                     kv_sum = kv_torch.abs().sum().item()
                     kv_mean = kv_torch.mean().item()
                     kv_std = kv_torch.std().item()
@@ -678,10 +838,14 @@ class OpenVLALanguageModel(GenerationMixin):
         # This ensures decode reads from the correct KV cache pages
         for i in range(self.num_actions):
             # DEBUG: Print what we're feeding to decode
+            if getattr(self, "_debug_trace", False) and i == 0:
+                print(f"\n=== DECODE LOOP STARTING ===")
+                print(f"DEBUG prefill_seq_len={seq_len}, starting_pos={current_pos.item()}")
+                print(f"DEBUG num_actions={self.num_actions}")
+                print(f"DEBUG page_table_user shape={page_table_user.shape}")
+                print(f"DEBUG kv_cache type={type(self.tt_kv_cache)}, len={len(self.tt_kv_cache)}")
             if getattr(self, "_debug_trace", False):
-                print(
-                    f"DEBUG decode[{i}] INPUT: out_tok={out_tok}, shape={out_tok.shape}, dtype={out_tok.dtype}, device={out_tok.device}, pos={current_pos.item()}"
-                )
+                print(f"DEBUG decode[{i}] INPUT: out_tok={out_tok.item()}, pos={current_pos.item()}")
 
             # Run decode forward
             # CRITICAL: Use self.tt_kv_cache[0] to match what prefill wrote to!
@@ -738,6 +902,9 @@ class OpenVLALanguageModel(GenerationMixin):
         # DEBUG: Print all generated tokens
         if getattr(self, "_debug_trace", False):
             print(f"DEBUG __call__: all_tokens={decode_tokens}")
+
+        # Save tokens for external access
+        self._last_generated_tokens = decode_tokens
 
         return output_toks
 
@@ -890,7 +1057,7 @@ def _upchannel_attn_weight_bias_new(qkv_weight, qkv_bias, proj_weight, proj_bias
     return qkv_weight, qkv_bias, proj_weight, proj_bias
 
 
-def _preprocess_patch_embed_new(weight, bias, device):
+def _preprocess_patch_embed_new(weight, bias, device, mesh_mapper=None):
     """Preprocess patch embedding conv weights for TTNN."""
     out_channels, in_channels, _, _ = weight.shape
     pad_value = 4 - in_channels
@@ -899,9 +1066,19 @@ def _preprocess_patch_embed_new(weight, bias, device):
     preprocessed = preprocessed.reshape(-1, out_channels)  # [H*W*C, hidden]
 
     return (
-        ttnn.from_torch(preprocessed.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
         ttnn.from_torch(
-            bias.unsqueeze(0).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            preprocessed.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
+        ),
+        ttnn.from_torch(
+            bias.unsqueeze(0).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mesh_mapper,
         ),
     )
 
@@ -913,15 +1090,15 @@ def _dinov2_patch_embeddings_new(pixel_values, weight, bias, pos_embed, cls_toke
     pixel_values = ttnn.reshape(pixel_values, (batch_size, 16, patch_size, 16, patch_size, 4))
     pixel_values = ttnn.permute(pixel_values, (0, 1, 3, 2, 4, 5))
     pixel_values = ttnn.reshape(pixel_values, (batch_size, 256, patch_size * patch_size * 4))
-    pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     patch_embeds = ttnn.linear(
-        pixel_values, weight, bias=bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+        pixel_values, weight, bias=bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
-    patch_embeds = ttnn.add(patch_embeds, pos_embed, dtype=ttnn.bfloat8_b)
+    patch_embeds = ttnn.add(patch_embeds, pos_embed, dtype=ttnn.bfloat16)
 
     cls_reg = ttnn.concat([cls_token, reg_token], dim=1)
-    cls_reg = ttnn.typecast(cls_reg, dtype=ttnn.bfloat8_b)
+    cls_reg = ttnn.typecast(cls_reg, dtype=ttnn.bfloat16)
 
     embeddings = ttnn.concat([cls_reg, patch_embeds], dim=1)
     return embeddings
@@ -934,7 +1111,7 @@ def _dinov2_attention_new(hidden_states, qkv_weight, qkv_bias, proj_weight, proj
     scale = 1.0 / (head_dim**0.5)
 
     qkv = ttnn.linear(
-        hidden_states, qkv_weight, bias=qkv_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+        hidden_states, qkv_weight, bias=qkv_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
 
     query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -942,21 +1119,19 @@ def _dinov2_attention_new(hidden_states, qkv_weight, qkv_bias, proj_weight, proj
     )
     ttnn.deallocate(qkv)
 
-    attn_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    attn_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
     attn_scores = ttnn.mul(attn_scores, scale)
     attn_probs = ttnn.softmax_in_place(attn_scores)
 
-    context = ttnn.matmul(attn_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    context = ttnn.matmul(attn_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(attn_probs)
     ttnn.deallocate(value)
 
     context = ttnn.transformer.concatenate_heads(context, memory_config=ttnn.L1_MEMORY_CONFIG)
-    output = ttnn.linear(
-        context, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
-    )
+    output = ttnn.linear(context, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(context)
     output = ttnn.mul(output, ls_scale)
 
@@ -966,10 +1141,10 @@ def _dinov2_attention_new(hidden_states, qkv_weight, qkv_bias, proj_weight, proj
 def _dinov2_mlp_new(hidden_states, fc1_weight, fc1_bias, fc2_weight, fc2_bias, ls_scale):
     """DINOv2 MLP with LayerScale."""
     output = ttnn.linear(
-        hidden_states, fc1_weight, bias=fc1_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+        hidden_states, fc1_weight, bias=fc1_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
     output = ttnn.gelu(output, fast_and_approximate_mode=True)
-    output = ttnn.linear(output, fc2_weight, bias=fc2_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    output = ttnn.linear(output, fc2_weight, bias=fc2_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     output = ttnn.mul(output, ls_scale)
     return output
 
@@ -1092,7 +1267,18 @@ class OpenVLAVisionEncoderNew:
     def __init__(self, device, state_dict):
         """Initialize with OpenVLA state dict."""
         self.device = device
+        # For multi-device (N300/T3K), use mesh_mapper to replicate weights
+        if hasattr(device, "shape") and tuple(device.shape) != (1, 1):
+            self.mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+            self.is_multi_device = True
+        else:
+            self.mesh_mapper = None
+            self.is_multi_device = False
         self._preprocess_weights(state_dict)
+
+    def _to_device(self, tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+        """Helper to load tensor to device with proper mesh_mapper for multi-device."""
+        return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=self.device, mesh_mapper=self.mesh_mapper)
 
     def _preprocess_weights(self, state_dict):
         """Preprocess all vision encoder weights for TTNN."""
@@ -1102,39 +1288,21 @@ class OpenVLAVisionEncoderNew:
         dinov2_patch_w = state_dict["vision_backbone.featurizer.patch_embed.proj.weight"]
         dinov2_patch_b = state_dict["vision_backbone.featurizer.patch_embed.proj.bias"]
         self.dinov2_patch_weight, self.dinov2_patch_bias = _preprocess_patch_embed_new(
-            dinov2_patch_w, dinov2_patch_b, self.device
+            dinov2_patch_w, dinov2_patch_b, self.device, self.mesh_mapper
         )
 
         # Position embedding [1, 256, 1024]
         pos_embed = state_dict["vision_backbone.featurizer.pos_embed"]
-        self.dinov2_pos_embed = ttnn.from_torch(
-            pos_embed.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        self.dinov2_cls_token = ttnn.from_torch(
-            state_dict["vision_backbone.featurizer.cls_token"].to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.dinov2_reg_token = ttnn.from_torch(
-            state_dict["vision_backbone.featurizer.reg_token"].to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
+        self.dinov2_pos_embed = self._to_device(pos_embed.to(torch.bfloat16))
+        self.dinov2_cls_token = self._to_device(state_dict["vision_backbone.featurizer.cls_token"].to(torch.bfloat16))
+        self.dinov2_reg_token = self._to_device(state_dict["vision_backbone.featurizer.reg_token"].to(torch.bfloat16))
 
         # Final layer norm
-        self.dinov2_final_norm_w = ttnn.from_torch(
-            state_dict["vision_backbone.featurizer.norm.weight"].unsqueeze(0).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        self.dinov2_final_norm_w = self._to_device(
+            state_dict["vision_backbone.featurizer.norm.weight"].unsqueeze(0).to(torch.bfloat16)
         )
-        self.dinov2_final_norm_b = ttnn.from_torch(
-            state_dict["vision_backbone.featurizer.norm.bias"].unsqueeze(0).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        self.dinov2_final_norm_b = self._to_device(
+            state_dict["vision_backbone.featurizer.norm.bias"].unsqueeze(0).to(torch.bfloat16)
         )
 
         # DINOv2 blocks
@@ -1145,89 +1313,29 @@ class OpenVLAVisionEncoderNew:
             qkv_b = state_dict[f"{prefix}.attn.qkv.bias"]
 
             block_params = {
-                "norm1_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm1.weight"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "norm1_weight": self._to_device(state_dict[f"{prefix}.norm1.weight"].unsqueeze(0).to(torch.bfloat16)),
+                "norm1_bias": self._to_device(state_dict[f"{prefix}.norm1.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "qkv_weight": self._to_device(qkv_w.t().contiguous().to(torch.bfloat16)),
+                "qkv_bias": self._to_device(qkv_b.unsqueeze(0).to(torch.bfloat16)),
+                "proj_weight": self._to_device(
+                    state_dict[f"{prefix}.attn.proj.weight"].t().contiguous().to(torch.bfloat16)
                 ),
-                "norm1_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm1.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "proj_bias": self._to_device(state_dict[f"{prefix}.attn.proj.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "ls1_scale": self._to_device(
+                    state_dict[f"{prefix}.ls1.scale_factor"].reshape(1, 1, -1).to(torch.bfloat16)
                 ),
-                "qkv_weight": ttnn.from_torch(
-                    qkv_w.t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "norm2_weight": self._to_device(state_dict[f"{prefix}.norm2.weight"].unsqueeze(0).to(torch.bfloat16)),
+                "norm2_bias": self._to_device(state_dict[f"{prefix}.norm2.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "fc1_weight": self._to_device(
+                    state_dict[f"{prefix}.mlp.fc1.weight"].t().contiguous().to(torch.bfloat16)
                 ),
-                "qkv_bias": ttnn.from_torch(
-                    qkv_b.unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "fc1_bias": self._to_device(state_dict[f"{prefix}.mlp.fc1.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "fc2_weight": self._to_device(
+                    state_dict[f"{prefix}.mlp.fc2.weight"].t().contiguous().to(torch.bfloat16)
                 ),
-                "proj_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.attn.proj.weight"].t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "proj_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.attn.proj.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "ls1_scale": ttnn.from_torch(
-                    state_dict[f"{prefix}.ls1.scale_factor"].reshape(1, 1, -1).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "norm2_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm2.weight"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "norm2_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm2.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc1_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc1.weight"].t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc1_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc1.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc2_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc2.weight"].t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc2_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc2.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "ls2_scale": ttnn.from_torch(
-                    state_dict[f"{prefix}.ls2.scale_factor"].reshape(1, 1, -1).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "fc2_bias": self._to_device(state_dict[f"{prefix}.mlp.fc2.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "ls2_scale": self._to_device(
+                    state_dict[f"{prefix}.ls2.scale_factor"].reshape(1, 1, -1).to(torch.bfloat16)
                 ),
             }
             self.dinov2_blocks.append(block_params)
@@ -1238,27 +1346,19 @@ class OpenVLAVisionEncoderNew:
         siglip_patch_w = state_dict["vision_backbone.fused_featurizer.patch_embed.proj.weight"]
         siglip_patch_b = state_dict["vision_backbone.fused_featurizer.patch_embed.proj.bias"]
         self.siglip_patch_weight, self.siglip_patch_bias = _preprocess_patch_embed_new(
-            siglip_patch_w, siglip_patch_b, self.device
+            siglip_patch_w, siglip_patch_b, self.device, self.mesh_mapper
         )
 
         # Position embedding [1, 256, 1152]
         siglip_pos_embed = state_dict["vision_backbone.fused_featurizer.pos_embed"]
-        self.siglip_pos_embed = ttnn.from_torch(
-            siglip_pos_embed.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        self.siglip_pos_embed = self._to_device(siglip_pos_embed.to(torch.bfloat16))
 
         # Final layer norm
-        self.siglip_final_norm_w = ttnn.from_torch(
-            state_dict["vision_backbone.fused_featurizer.norm.weight"].unsqueeze(0).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        self.siglip_final_norm_w = self._to_device(
+            state_dict["vision_backbone.fused_featurizer.norm.weight"].unsqueeze(0).to(torch.bfloat16)
         )
-        self.siglip_final_norm_b = ttnn.from_torch(
-            state_dict["vision_backbone.fused_featurizer.norm.bias"].unsqueeze(0).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        self.siglip_final_norm_b = self._to_device(
+            state_dict["vision_backbone.fused_featurizer.norm.bias"].unsqueeze(0).to(torch.bfloat16)
         )
 
         # SigLIP blocks (with head_dim padding)
@@ -1275,78 +1375,22 @@ class OpenVLAVisionEncoderNew:
             qkv_w, qkv_b, proj_w, proj_b = _upchannel_attn_weight_bias_new(qkv_w, qkv_b, proj_w, proj_b, num_heads=16)
 
             block_params = {
-                "norm1_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm1.weight"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "norm1_weight": self._to_device(state_dict[f"{prefix}.norm1.weight"].unsqueeze(0).to(torch.bfloat16)),
+                "norm1_bias": self._to_device(state_dict[f"{prefix}.norm1.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "qkv_weight": self._to_device(qkv_w.t().contiguous().to(torch.bfloat16)),
+                "qkv_bias": self._to_device(qkv_b.unsqueeze(0).to(torch.bfloat16)),
+                "proj_weight": self._to_device(proj_w.t().contiguous().to(torch.bfloat16)),
+                "proj_bias": self._to_device(proj_b.unsqueeze(0).to(torch.bfloat16)),
+                "norm2_weight": self._to_device(state_dict[f"{prefix}.norm2.weight"].unsqueeze(0).to(torch.bfloat16)),
+                "norm2_bias": self._to_device(state_dict[f"{prefix}.norm2.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "fc1_weight": self._to_device(
+                    state_dict[f"{prefix}.mlp.fc1.weight"].t().contiguous().to(torch.bfloat16)
                 ),
-                "norm1_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm1.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                "fc1_bias": self._to_device(state_dict[f"{prefix}.mlp.fc1.bias"].unsqueeze(0).to(torch.bfloat16)),
+                "fc2_weight": self._to_device(
+                    state_dict[f"{prefix}.mlp.fc2.weight"].t().contiguous().to(torch.bfloat16)
                 ),
-                "qkv_weight": ttnn.from_torch(
-                    qkv_w.t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "qkv_bias": ttnn.from_torch(
-                    qkv_b.unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "proj_weight": ttnn.from_torch(
-                    proj_w.t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "proj_bias": ttnn.from_torch(
-                    proj_b.unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "norm2_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm2.weight"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "norm2_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.norm2.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc1_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc1.weight"].t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc1_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc1.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc2_weight": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc2.weight"].t().contiguous().to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
-                "fc2_bias": ttnn.from_torch(
-                    state_dict[f"{prefix}.mlp.fc2.bias"].unsqueeze(0).to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                ),
+                "fc2_bias": self._to_device(state_dict[f"{prefix}.mlp.fc2.bias"].unsqueeze(0).to(torch.bfloat16)),
             }
             self.siglip_blocks.append(block_params)
 
@@ -1359,11 +1403,17 @@ class OpenVLAVisionEncoderNew:
         Args:
             pixel_values: tuple of (dinov2_input, siglip_input) TTNN tensors
                           Each is [B, H, W, 4] in NHWC format with 4 padded channels
+                          For multi-device: inputs should be mesh tensors (replicated)
 
         Returns:
             [batch, 256, 2176] - concatenated DINOv2 + SigLIP features
+            For multi-device: returns mesh tensor (use ttnn_to_torch_safe to extract)
         """
         dinov2_in, siglip_in = pixel_values
+
+        # NOTE: For multi-device (N300/T3K), both inputs and weights are mesh tensors
+        # (replicated via ReplicateTensorToMesh). The computation runs on all devices
+        # identically, and we extract from first device at output time using ttnn_to_torch_safe.
 
         # DINOv2 forward (23 layers - skip last to match get_intermediate_layers(n={22}))
         hidden_states = _dinov2_patch_embeddings_new(
@@ -1574,8 +1624,8 @@ class PrismaticVisionBackbone(nn.Module):
             CHECKPOINTS.checkpoint("start_DINOFORWARD")
             output = self.new_encoder(pixel_values)
             CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
-            # Debug: print stats
-            output_torch = ttnn.to_torch(output).float()
+            # Debug: print stats (use mesh_composer ONLY for multi-device N300/T3K)
+            output_torch = ttnn_to_torch_safe(output, self.ttnn_device)
             print(
                 f"DEBUG TT [NEW]: shape={output_torch.shape}, mean={output_torch.mean():.4f}, std={output_torch.std():.4f}"
             )
@@ -1611,8 +1661,8 @@ class PrismaticVisionBackbone(nn.Module):
             patches_fused = self.ttnn_fused_featurizer(img_fused)
             CHECKPOINTS.checkpoint("end_SIGLIPFORWARD")
             # Debug: print individual encoder stats
-            patches_torch = ttnn.to_torch(patches).float()
-            patches_fused_torch = ttnn.to_torch(patches_fused).float()
+            patches_torch = ttnn_to_torch_safe(patches, self.ttnn_device)
+            patches_fused_torch = ttnn_to_torch_safe(patches_fused, self.ttnn_device)
             print(
                 f"DEBUG TT DINOv2 [OLD]: shape={patches_torch.shape}, mean={patches_torch.mean():.4f}, std={patches_torch.std():.4f}"
             )
@@ -1683,8 +1733,7 @@ class TTNNPrismaticProjector:
         assert self.params is not None, "TTNNPrismaticProjector requires params for TTNN linear layers"
 
     def forward(self, img_patches):
-        # Keep bfloat8_b for projector - BF16 causes L1 overflow
-        # Projector output is close to PT (0.0024 vs 0.0019 mean) so BFP8 is acceptable
+        # Keep BFP8 for projector to fit in memory (projector PCC is already 0.99)
         projected_features = ttnn.linear(
             img_patches,
             self.params.fc1.weight,
@@ -1954,7 +2003,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
                 # DEBUG: Trace vision features
                 if getattr(self, "_debug_trace", False):
-                    _debug_vision = ttnn.to_torch(ttnn_patch_features).float()
+                    _debug_vision = ttnn_to_torch_safe(ttnn_patch_features, self.ttnn_device)
                     print(
                         f"DEBUG vision_features: shape={_debug_vision.shape}, mean={_debug_vision.mean():.6f}, std={_debug_vision.std():.6f}"
                     )
@@ -1969,7 +2018,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
                 # DEBUG: Trace projector output
                 if getattr(self, "_debug_trace", False):
-                    _debug_proj = ttnn.to_torch(projected_patch_embeddings).float()
+                    _debug_proj = ttnn_to_torch_safe(projected_patch_embeddings, self.ttnn_device)
                     print(
                         f"DEBUG projector_output: shape={_debug_proj.shape}, mean={_debug_proj.mean():.6f}, std={_debug_proj.std():.6f}"
                     )
@@ -1977,8 +2026,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 # Save vision + projector output for cross-testing with PyTorch LLM
                 if getattr(self, "_save_vision_output", None):
                     save_path = self._save_vision_output
-                    vision_torch = ttnn.to_torch(ttnn_patch_features).float().cpu()
-                    proj_torch = ttnn.to_torch(projected_patch_embeddings).float().cpu()
+                    vision_torch = ttnn_to_torch_safe(ttnn_patch_features, self.ttnn_device).cpu()
+                    proj_torch = ttnn_to_torch_safe(projected_patch_embeddings, self.ttnn_device).cpu()
                     torch.save(
                         {
                             "vision_output": vision_torch,
@@ -2011,6 +2060,20 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             # Get Input Embeddings (from Language Model Embeddings)
             if self.ttnn_device is not None:
                 CHECKPOINTS.checkpoint("start_LLMINPUTEMBEDDINGS")
+
+                # DEBUG: Check input_ids before embedding
+                if getattr(self, "_debug_trace", False):
+                    print(f"\n=== DEBUG: Text Input Processing ===")
+                    print(f"DEBUG input_ids: shape={input_ids.shape}, dtype={input_ids.dtype}")
+                    print(f"DEBUG input_ids values: {input_ids[0, :10].tolist()}... (first 10)")
+                    print(f"DEBUG input_ids range: min={input_ids.min().item()}, max={input_ids.max().item()}")
+                    # Check embedding layer
+                    emb_layer = self.get_input_embeddings()
+                    if hasattr(emb_layer, "weights"):
+                        emb_shape = emb_layer.weights.shape
+                        print(f"DEBUG embedding layer weights shape: {emb_shape}")
+                    print(f"DEBUG vocab_size from config: {self.config.text_config.vocab_size}")
+
                 # Token IDs must be uint32 and ROW_MAJOR (TTNN embedding requires UINT32 or BFLOAT16)
                 ttnn_input_ids = ttnn.from_torch(
                     input_ids.to(torch.int32),
@@ -2019,25 +2082,87 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     device=self.ttnn_device,
                 )
                 input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
+
+                # DEBUG: Check text embeddings
+                if getattr(self, "_debug_trace", False):
+                    _text_emb = ttnn_to_torch_safe(input_embeddings, self.ttnn_device)
+                    print(
+                        f"DEBUG text_embeddings: shape={_text_emb.shape}, mean={_text_emb.mean():.6f}, std={_text_emb.std():.6f}"
+                    )
+                    # Check BOS embedding (should be same for all inputs)
+                    print(
+                        f"DEBUG BOS embedding (pos 0): mean={_text_emb[0, 0, :].mean():.6f}, std={_text_emb[0, 0, :].std():.6f}"
+                    )
+                    # Check last text token embedding
+                    print(
+                        f"DEBUG last text token embedding: mean={_text_emb[0, -1, :].mean():.6f}, std={_text_emb[0, -1, :].std():.6f}"
+                    )
+
                 CHECKPOINTS.checkpoint("end_LLMINPUTEMBEDDINGS")
             else:
                 input_embeddings = self.get_input_embeddings()(input_ids)
+
+            # ============================================
+            # GUARDRAIL: Verify prompt length matches expected format
+            # ============================================
+            text_len = input_ids.shape[1]
+            expected_multimodal_len = 1 + 256 + (text_len - 1)  # BOS + vision + text_without_BOS
+            if getattr(self, "_debug_trace", False):
+                print(f"\n=== PROMPT LENGTH GUARDRAIL ===")
+                print(f"TEXT_LEN={text_len}, TEXT_TAIL={input_ids[0, -5:].tolist()}")
+                print(f"Expected multimodal_len={expected_multimodal_len}")
+                # Verify 29871 was added (required for OpenVLA training format)
+                if input_ids[0, -1].item() == 29871:
+                    print(f"✅ Empty token 29871 present at end (correct)")
+                else:
+                    print(f"⚠️  Empty token 29871 NOT at end - last token is {input_ids[0, -1].item()}")
 
             if self.ttnn_device is not None:
                 CHECKPOINTS.checkpoint("start_VISIONLLMCONCAT")
                 multimodal_embeddings = ttnn.concat(
                     [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
                 )
+
+                # GUARDRAIL: Verify multimodal length matches expected
+                actual_mm_len = multimodal_embeddings.shape[1]
+                assert actual_mm_len == expected_multimodal_len, (
+                    f"Multimodal length mismatch! Got {actual_mm_len}, expected {expected_multimodal_len}. "
+                    f"This indicates a prompt construction bug (check 29871 token handling)."
+                )
+
                 multimodal_embeddings = ttnn.unsqueeze(multimodal_embeddings, dim=0)
                 multimodal_embeddings = ttnn.to_layout(multimodal_embeddings, layout=ttnn.TILE_LAYOUT)
                 CHECKPOINTS.checkpoint("end_VISIONLLMCONCAT")
 
-                # DEBUG: Trace multimodal embeddings
+                # DEBUG: Trace multimodal embeddings structure
                 if getattr(self, "_debug_trace", False):
-                    _debug_mm = ttnn.to_torch(multimodal_embeddings).float()
+                    _debug_mm = ttnn_to_torch_safe(multimodal_embeddings, self.ttnn_device)
+                    print(f"\n=== DEBUG: Multimodal Embeddings Structure ===")
                     print(
                         f"DEBUG multimodal_embeddings: shape={_debug_mm.shape}, mean={_debug_mm.mean():.6f}, std={_debug_mm.std():.6f}"
                     )
+                    # Break down the structure: [BOS] + [256 visual] + [text tokens]
+                    seq_len = _debug_mm.shape[2]
+                    txt_portion = _debug_mm[0, 0, 257:, :]  # Text tokens after vision
+                    print(
+                        f"DEBUG  Position 0 (BOS): mean={_debug_mm[0, 0, 0, :].mean():.6f}, std={_debug_mm[0, 0, 0, :].std():.6f}"
+                    )
+                    print(
+                        f"DEBUG  Positions 1-256 (Visual): mean={_debug_mm[0, 0, 1:257, :].mean():.6f}, std={_debug_mm[0, 0, 1:257, :].std():.6f}"
+                    )
+                    if seq_len > 257:
+                        print(
+                            f"DEBUG  Positions 257+ (Text): mean={txt_portion.mean():.6f}, std={txt_portion.std():.6f}, len={txt_portion.shape[0]}"
+                        )
+                        print(
+                            f"DEBUG  Last position ({seq_len-1}): mean={_debug_mm[0, 0, -1, :].mean():.6f}, std={_debug_mm[0, 0, -1, :].std():.6f}"
+                        )
+
+                    # Store text embeddings for comparison between prompts
+                    txt_checksum = txt_portion.sum().item() if seq_len > 257 else 0.0
+                    visual_checksum = _debug_mm[0, 0, 1:257, :].sum().item()
+                    print(f"DEBUG  TEXT checksum: {txt_checksum:.2f} (MUST differ for different prompts!)")
+                    print(f"DEBUG  VISUAL checksum: {visual_checksum:.2f} (should differ per image)")
             else:
                 # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
                 multimodal_embeddings = torch.cat(
@@ -2059,8 +2184,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                         [attention_mask[:, :1], projected_patch_attention_mask, attention_mask[:, 1:]], dim=1
                     )
             CHECKPOINTS.checkpoint("start_LLMFORWARD")
-            # Propagate debug flag to language model
-            self.language_model._debug_trace = getattr(self, "_debug_trace", False)
+            # Propagate debug flag to language model (preserve if already set)
+            if not getattr(self.language_model, "_debug_trace", False):
+                self.language_model._debug_trace = getattr(self, "_debug_trace", False)
             language_model_output = self.language_model(
                 input_ids=None,
                 attention_mask=multimodal_attention_mask,
@@ -2259,6 +2385,14 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
 
         if getattr(self, "_debug_trace", False):
             print(f"DEBUG reset_kv_cache: Reset {reset_count} tensors, {error_count} errors")
+            # Verify the reset worked by checking the first KV tensor
+            try:
+                kv_first = self.language_model.tt_kv_cache[0][0][0]
+                kv_torch = ttnn_to_torch_safe(kv_first, self.ttnn_device)
+                kv_sum = kv_torch.abs().sum().item()
+                print(f"DEBUG reset_kv_cache: Verification - KV[0][0][0] sum after reset: {kv_sum:.2f} (should be ~0)")
+            except Exception as e:
+                print(f"DEBUG reset_kv_cache: Verification failed: {e}")
 
     def predict_action(
         self, input_ids: Optional[torch.LongTensor] = None, unnorm_key: Optional[str] = None, **kwargs: str
