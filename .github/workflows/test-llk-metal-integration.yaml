@@ -193,7 +193,7 @@ jobs:
             local workflow_file="$1"
             local display_name="$2"
 
-            # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
+            # Special handling for tt-metal-l2-nightly.yaml to pass C++ and other test configuration flags
             if [ "$workflow_file" = "tt-metal-l2-nightly.yaml" ]; then
               gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_cpp_tests=true \
               -f run_metal_iommu_tests=true \
