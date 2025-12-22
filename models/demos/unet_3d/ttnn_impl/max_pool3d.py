@@ -6,6 +6,12 @@ import ttnn
 
 
 def max_pool3d(x: ttnn.Tensor, kernel_size: int, stride: int, padding: int) -> ttnn.Tensor:
+    """
+    3D max pooling implemented using two 2D max pooling operations.
+    It is done by first reshaping to combine the depth and batch dimensions,
+    then performing 2D max pooling on height and width, reshaping back,
+    and finally performing 2D max pooling on depth and the combined height-width dimension.
+    """
     N, D, H, W, C = x.shape
     x = ttnn.reshape(x, (N * D, H, W, C))
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
