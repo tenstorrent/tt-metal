@@ -137,8 +137,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const auto pad_amount = std::max(
         static_cast<int>(topk::constants::min_dim_per_core) - static_cast<int>(transformed_tensor.logical_shape()[-1]),
         0);
-    const auto pad_val = largest ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max();
-    if (pad_amount > 0) {
+    const auto pad_val =
+        largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity() if (pad_amount > 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
