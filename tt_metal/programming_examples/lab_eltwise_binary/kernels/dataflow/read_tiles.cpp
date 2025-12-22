@@ -3,16 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "dataflow_api.h"
 
 void kernel_main() {
     // Read parameters from the kernel's runtime arguments.
-    uint32_t in0_base_addr = get_arg_val<uint32_t>(0);
-    uint32_t in1_base_addr = get_arg_val<uint32_t>(1);
-    uint32_t n_tiles = get_arg_val<uint32_t>(2);
+    int arg_idx = 0;
+    uint32_t in0_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t in1_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t n_tiles = get_arg_val<uint32_t>(arg_idx++);
 
     // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
+    constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
@@ -47,6 +49,9 @@ void kernel_main() {
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         uint32_t cb_in1_addr = get_write_ptr(cb_in1);
         // Read the tiles from DRAM into the circular buffers.
+        // Recall that in0_addr_gen and in1_addr_gen are address generators for the input buffers.
+        // They are used to determine the address to read the tiles from. i is the index of the tile to read.
+        // cb_in0_addr and cb_in1_addr are the circular buffer addresses to write the tiles to.
         // These are non-blocking calls, so they both proceed in parallel.
         noc_async_read_tile(i, in0_addr_gen, cb_in0_addr);
         noc_async_read_tile(i, in1_addr_gen, cb_in1_addr);

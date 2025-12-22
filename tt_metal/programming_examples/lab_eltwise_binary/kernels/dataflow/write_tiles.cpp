@@ -11,7 +11,7 @@ void kernel_main() {
 
     // The circular buffer that contains the result, which this kernel will
     // read from and then write to device memory.
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
     // buffers (which is most often the case).
