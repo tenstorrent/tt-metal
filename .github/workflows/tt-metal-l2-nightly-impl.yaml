@@ -664,9 +664,21 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly eltwise tests
+      - name: ttnn nightly eltwise tests group 1
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/eltwise -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly eltwise tests group 2
+        if: ${{ !cancelled() }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly eltwise tests group 3
+        if: ${{ !cancelled() }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly eltwise tests group 4
+        if: ${{ !cancelled() }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4  -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -825,6 +837,14 @@ jobs:
       - name: ttnn nightly data_movement tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly data_movement/ccl tests group 1
+        run: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"
+      - name: ttnn nightly data_movement/ccl tests group 2
+        if: ${{ !cancelled() }}
+        run: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 2 -m "not disable_fast_runtime_mode"
+      - name: ttnn nightly data_movement/ccl tests group 3
+        if: ${{ !cancelled() }}
+        run: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

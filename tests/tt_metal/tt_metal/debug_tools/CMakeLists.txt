@@ -18,6 +18,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_ringbuf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_stack_usage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_runtime_args_known_garbage.cpp
 )
 
 function(create_unit_test_executable)

@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/pause.h"
-
+#include "api/debug/pause.h"
 /*
  * A test for the watcher pausing feature.
 */

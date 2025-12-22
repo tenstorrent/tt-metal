@@ -77,8 +77,7 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -292,6 +291,14 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
+}
+
+void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
+    // The completion queue follows issue queue in contiguous memory
+    // get_issue_queue_limit() returns absolute device address where the issue queue ends.
+    // We subtract channel_offset (absolute device channel base) to get relative offset,
+    // then add it to cq_sysmem_start (host channel base) to get host virtual address
+    return (void*)(this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset));
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {

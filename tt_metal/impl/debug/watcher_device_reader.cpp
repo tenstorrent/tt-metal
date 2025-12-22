@@ -30,7 +30,7 @@
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -474,10 +474,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
             // Clear only the one flag that we saved, in case another one was raised on device
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
             pause_data.view().flags()[processor_index] = 0;
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
         }
     }
     fflush(f);
@@ -525,7 +525,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Should be ok if we never access past that.
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        l1_read_buf.data(), l1_read_buf.size(), {reader.device_id, virtual_coord}, mailbox_addr);
+        l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
     return Core(
         virtual_coord,
         programmable_core_type,
@@ -706,6 +706,14 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
         case dev_msgs::DebugSanitizeL1AddrOverflow:
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (read or write past the end of local memory).";
+            break;
+        case dev_msgs::DebugSanitizeEthDestL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send to core with L1 destination overflow).";
+            break;
+        case dev_msgs::DebugSanitizeEthSrcL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send with L1 source overflow).";
             break;
         default:
             error_msg = fmt::format(
@@ -1060,10 +1068,11 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
         if (usage.min_free()) {
             auto [processor_class, processor_type] =
                 hal.get_processor_class_and_type_from_index(programmable_core_type_, processor_index);
-            HalProcessorIdentifier processor = {programmable_core_type_, processor_class, processor_type};
+            HalProcessorIdentifier processor = {
+                programmable_core_type_, processor_class, static_cast<int>(processor_type)};
             auto& slot = dump_data_.highest_stack_usage[processor];
             if (usage.min_free() <= slot.stack_free) {
-                slot = {virtual_coord_, usage.min_free() - 1, usage.watcher_kernel_id()};
+                slot = {virtual_coord_, static_cast<uint16_t>(usage.min_free() - 1), usage.watcher_kernel_id()};
             }
         }
     }

@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
     compare_pcc,
@@ -253,25 +253,6 @@ def test_unary_composite_polygamma_ttnn(input_shapes, device):
     output_tensor = ttnn.polygamma(input_tensor1, k)
     golden_function = ttnn.get_golden_function(ttnn.polygamma)
     golden_tensor = golden_function(in_data1, k)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_swish_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.swish(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.swish)
-    golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

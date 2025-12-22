@@ -54,32 +54,32 @@ struct ExecuteUnaryCompositeOpWithFloats {
 
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
-        const Tensor& input_tensor,
+        const Tensor& input_a,
         std::optional<std::variant<float, int32_t>> min = std::nullopt,
         std::optional<std::variant<float, int32_t>> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<Tensor>& output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor,
+        const Tensor& a,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<Tensor>& output_tensor = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
     static Tensor invoke(
-        const Tensor& input_tensor,
+        const Tensor& a,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor,
+        const Tensor& a,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
@@ -145,9 +145,6 @@ constexpr auto lgamma = ttnn::register_operation<
 constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
-constexpr auto swish = ttnn::register_operation<
-    "ttnn::swish",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
 constexpr auto var_hw = ttnn::register_operation<
     "ttnn::var_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>();

@@ -70,7 +70,7 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
                             (dilation_hw.first * (window_hw.first - 1)) + output_pad_hw.first + 1;
         uint32_t output_w = ((input_hw.second - 1) * stride_hw.second) - get_pad_w() +
                             (dilation_hw.second * (window_hw.second - 1)) + output_pad_hw.second + 1;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "SlidingWindowConfig::get_output_shape(): {} {} {} {}",
             batch_size,
@@ -114,7 +114,7 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         output_h = input_hw.first;
         output_w = input_hw.second;
     }
-    log_debug(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
+    log_trace(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
     return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
@@ -211,7 +211,7 @@ uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (snap_to_tile ? tt::constants::TILE_HEIGHT : 1));
-    log_debug(
+    log_trace(
         tt::LogOp,
         "output_nhw: {} output_nhw_padded: {} num_cores_nhw: {}",
         output_nhw,
@@ -359,13 +359,6 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
         output_index_start = output_index_end + 1;
     }
 
-    for ([[maybe_unused]] auto& boundary : shard_boundaries) {
-        log_trace(
-            tt::LogOp,
-            "shard_boundary={}, input_size = {}",
-            boundary,
-            boundary.input_range.end - boundary.input_range.start);
-    };
     return shard_boundaries;
 }
 

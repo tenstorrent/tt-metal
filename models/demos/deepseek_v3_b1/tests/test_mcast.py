@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
                 ttnn.CoreCoord(0, 8),
                 ttnn.CoreCoord(8, 9),
             ),
-            ttnn.NOC.NOC_1,
+            ttnn.NOC.NOC_0,
         ),  # kv_a_proj input, 18 cores
         (
             1536,
@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
                 ttnn.CoreCoord(0, 0),
                 ttnn.CoreCoord(11, 7),
             ),
-            ttnn.NOC.NOC_0,
+            ttnn.NOC.NOC_1,
         ),  # q_b_proj input, 96 cores
         (
             8192,
