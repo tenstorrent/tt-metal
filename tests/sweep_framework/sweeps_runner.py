@@ -51,7 +51,7 @@ class SweepsConfig:
     skip_on_timeout: bool = False
     keep_invalid: bool = False
     summary: bool = False
-    run_contents: str = None
+    run_contents: str | None = None
     arch_name: str | None = None
     main_proc_verbose: bool = False
 
