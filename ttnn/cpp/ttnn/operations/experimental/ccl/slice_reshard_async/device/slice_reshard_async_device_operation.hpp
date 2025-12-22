@@ -5,8 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
-#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -14,6 +12,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -21,7 +20,6 @@
 
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl::slice_reshard_async {
 

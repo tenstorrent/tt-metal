@@ -150,8 +150,8 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     for (uint32_t link = 0; link < args.num_links; link++) {
         uint32_t num_sticks_to_read = 0;
         for (uint32_t direction = 0; direction < num_directions; direction++) {
-            CoreCoord core = {link * num_directions + direction, 0};
-            CoreCoord opposite_core = {link * num_directions + (1 - direction), 0};
+            CoreCoord core = {(link * num_directions) + direction, 0};
+            CoreCoord opposite_core = {(link * num_directions) + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
@@ -272,7 +272,7 @@ void SliceReshardAsyncProgramFactory::override_runtime_arguments(
         uint32_t core_idx = 0;
         for (uint32_t link = 0; link < args.num_links; link++) {
             for (uint32_t direction = 0; direction < shared_vars.num_directions; direction++) {
-                CoreCoord core = {link * shared_vars.num_directions + direction, 0};
+                CoreCoord core = {(link * shared_vars.num_directions) + direction, 0};
                 auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_ids[core_idx]);
                 auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_ids[core_idx]);
 
