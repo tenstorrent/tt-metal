@@ -44,7 +44,9 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle binary_writer_kernel_id;
+            tt::tt_metal::KernelHandle selective_tilize_kernel_id;
             std::vector<CoreCoord> cores;
+            std::vector<CoreCoord> selective_tilize_cores;
             const GlobalSemaphore init_semaphore;
             const GlobalSemaphore cross_device_semaphore;
         };
