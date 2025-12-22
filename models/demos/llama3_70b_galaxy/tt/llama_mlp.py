@@ -101,7 +101,6 @@ class TtLlamaMLP(LightweightModule):
         self.w3_interleaved = as_interleaved_tensor(
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
-        breakpoint()
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
