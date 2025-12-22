@@ -152,7 +152,10 @@ public:
     // Equality comparison operator
     bool operator==(const CablingGenerator& other) const;
 
-    // Friend function to allow build_from_directory to access private merge
+    // Utility functions for directory and file handling
+    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
+
+    // Friend function for build_from_directory to access private merge
     template <typename DeploymentArg>
     friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
 
@@ -181,6 +184,7 @@ private:
 
     // Utility functions for directory and file handling
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
+
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 
