@@ -81,10 +81,6 @@ Add one or more of these labels to your pull request to trigger the correspondin
   - If you modify both directories, runs both test suites
   - If no relevant changes detected, skips testing
 
-- **`wormhole-integration-tests`** - **Targeted testing** - Always runs Wormhole LLK unit tests using your branch changes, regardless of which files were modified
-
-- **`blackhole-integration-tests`** - **Targeted testing** - Always runs Blackhole LLK unit tests using your branch changes, regardless of which files were modified
-
 ### How It Works
 
 1. **Add a label** to your pull request (see labels above)
