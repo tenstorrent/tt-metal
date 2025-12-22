@@ -257,6 +257,23 @@ struct Empty {
 struct FromBuffer {
     template <typename BufferType>
     static Tensor invoke(
+        std::vector<BufferType>&& buffer,
+        const Shape& shape,
+        const DataType dtype,
+        MeshDevice* device,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
+        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+        TensorSpec spec(
+            shape,
+            TensorLayout(
+                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
+        return Tensor::from_vector<BufferType>(std::move(buffer), spec, device);
+    }
+
+    template <typename BufferType>
+    static Tensor invoke(
         const std::vector<BufferType>& buffer,
         const Shape& shape,
         const DataType dtype,

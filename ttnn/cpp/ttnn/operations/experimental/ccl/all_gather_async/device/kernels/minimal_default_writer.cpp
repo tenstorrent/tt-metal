@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -337,11 +337,14 @@ void kernel_main() {
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                        fabric_unicast_noc_scatter_write_with_state<
+                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                            UnicastScatterWriteUpdateMask::PayloadSize>(
                             mux_connection_handle,
                             pkt_scatter_hdr,
                             l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
+                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                            page_size * tiles_to_put_in_current_packet);
                     } else {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
@@ -359,11 +362,14 @@ void kernel_main() {
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                        fabric_unicast_noc_scatter_write_with_state<
+                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                            UnicastScatterWriteUpdateMask::PayloadSize>(
                             mux_connection_handle,
                             pkt_scatter_hdr,
                             l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
+                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                            page_size * tiles_to_put_in_current_packet);
                     } else {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
@@ -510,11 +516,14 @@ void kernel_main() {
                 }
 
                 if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                    fabric_unicast_noc_scatter_write_with_state<
+                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                        UnicastScatterWriteUpdateMask::PayloadSize>(
                         mux_connection_handle,
                         pkt_scatter_hdr,
                         l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
+                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                        page_size * tiles_to_put_in_current_packet);
                 } else {
                     fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                         mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
