@@ -4,7 +4,7 @@
 
 #include "reduce_scatter_minimal_async.hpp"
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
-
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
@@ -31,7 +31,12 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
 
     log_debug(tt::LogOp, "reduce_scatter_minimal_async: num_devices = {}", num_devices);
-
+    // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
+    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
+        log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
+        return composite_common::composite_reduce_scatter(
+            input_tensor, dim, num_links, topology, memory_config, sub_device_id, cluster_axis);
+    }
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;

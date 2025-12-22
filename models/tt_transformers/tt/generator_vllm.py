@@ -38,6 +38,20 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
+def _get_submesh_devices(mesh_device, tt_data_parallel: int):
+    """
+    Returns (submesh_devices, effective_data_parallel).
+
+    Set TT_VLLM_DISABLE_SUBMESHES=1 to force using the full mesh_device as a single replica
+    (useful for prefill TTFT tuning on TG/Galaxy).
+    """
+    disable_submeshes = os.getenv("TT_VLLM_DISABLE_SUBMESHES", "0") == "1"
+    if disable_submeshes:
+        logger.info("TT_VLLM_DISABLE_SUBMESHES=1: using full mesh device (no submeshes). Forcing tt_data_parallel=1.")
+        return [mesh_device], 1
+    return create_submeshes(mesh_device, tt_data_parallel), tt_data_parallel
+
+
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
@@ -86,7 +100,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=DecodersPrecision.performance,
 ):
-    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+    submesh_devices, tt_data_parallel = _get_submesh_devices(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -283,7 +297,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
         assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices, tt_data_parallel = _get_submesh_devices(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
@@ -585,7 +599,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
             DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
         )
 
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices, tt_data_parallel = _get_submesh_devices(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
@@ -645,7 +659,7 @@ class GptOssForCausalLM(Generator):
         assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gpt_oss.tt.common import create_tt_model
 
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices, tt_data_parallel = _get_submesh_devices(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []

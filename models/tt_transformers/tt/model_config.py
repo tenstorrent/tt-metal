@@ -503,6 +503,18 @@ class ModelArgs:
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
+
+            # When running on a TG host, some workflows create 8-device submeshes (e.g. DP>1) and reshape them
+            # to 1x8. For Qwen3, we still want to use the TG/Galaxy sharding behavior (args.is_galaxy) so
+            # downstream modules (e.g. MLP sharding dims) follow the Galaxy scheme.
+            if (os.getenv("MESH_DEVICE") == "TG" or os.getenv("ACTUAL_DEVICE") == "TG") and self.model_name.startswith(
+                "Qwen3-"
+            ):
+                if not self.is_galaxy:
+                    logger.info(
+                        f"Forcing is_galaxy=True for {self.model_name} under TG environment (submesh-compatible)."
+                    )
+                self.is_galaxy = True
         else:
             assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
 
@@ -686,14 +698,14 @@ class ModelArgs:
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
-            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+            residual_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
                 if self.is_galaxy
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
+                        self.dim // residual_grid.num_cores // 8,
                     ),
                     residual_grid,
                     ttnn.ShardStrategy.WIDTH,
@@ -844,12 +856,12 @@ class ModelArgs:
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
-            if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (32 * 32 * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
-            else:
-                lm_head_num_rows = 8
+            # if self.num_devices == 32:
+            #     lm_head_num_rows = 4
+            #     while self.dim % (32 * 32 * lm_head_num_rows) != 0:
+            #         lm_head_num_rows -= 1
+            # else:
+            lm_head_num_rows = 8
             lm_head_cores_per_row = 8
             while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
                 lm_head_num_rows -= 1
@@ -991,7 +1003,7 @@ class ModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
-                if self.is_galaxy
+                if False
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
@@ -1005,26 +1017,27 @@ class ModelArgs:
             )
 
             # glx doesn't support DRAM sharded matmuls yet
-            self.model_config["XQKV_DECODE_PROGCFG"] = (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b or self.is_90b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b or self.is_90b else 1,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    per_core_M=1,
-                    per_core_N=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim,
-                    n=self.qkv_size // self.num_devices,
-                    num_cores=attn_input_grid.num_cores,
-                )
-            )
+            self.model_config["XQKV_DECODE_PROGCFG"] = None
+            # (
+            #     ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            #         compute_with_storage_grid_size=(8, lm_head_num_rows),
+            #         in0_block_w=2 if self.is_70b or self.is_90b else 1,
+            #         out_subblock_h=1,
+            #         out_subblock_w=1,
+            #         per_core_M=1,
+            #         per_core_N=1,
+            #         fuse_batch=True,
+            #         fused_activation=None,
+            #         mcast_in0=True,
+            #     )
+            #     if self.is_galaxy
+            #     else self.dram_matmul_config(
+            #         m=self.tile_padded_batch_rows,
+            #         k=self.dim,
+            #         n=self.qkv_size // self.num_devices,
+            #         num_cores=attn_input_grid.num_cores,
+            #     )
+            # )
 
             full_grid = ttnn.CoreRangeSet(
                 {
@@ -1413,6 +1426,8 @@ class ModelArgs:
         )
 
     def is_distributed_norm(self, mode):
+        return False
+
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
@@ -1566,7 +1581,10 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        # For TG/Galaxy runs we sometimes pad vocab for sharding/perf reasons. Historically this was fixed at 128k,
+        # but models like Qwen3 have a larger vocab (e.g. 151936) and must not be truncated.
+        # Keep the old 128k minimum, but always ensure padded_vocab_size >= vocab_size and divisible by 32.
+        self.padded_vocab_size = max(128 * 1024, math.ceil(self.vocab_size / 32) * 32) if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -2558,10 +2576,25 @@ class ModelArgs:
         )
 
         if self.is_galaxy:
-            num_cores = 40 if self.dim == 8192 else (24 if self.dim == 4096 else (20 if self.dim == 3072 else 12))
+            # Galaxy/TG decode path relies on sharded all_gather outputs for the QKV and attention output reductions.
+            # The shard width must be tile-aligned (multiple of 32) and the number of shards along width must not
+            # exceed the number of cores in the shard core grid (TT_FATAL otherwise).
+            #
+            # Example (Qwen3-32B): dim=5120 -> hidden_per_device = dim/4 = 1280.
+            # If shard_w=32, num_shards=40, so we must use >=40 cores (e.g. 8x5) for these gathered tensors.
+            hidden_per_device = self.dim // 4
+            tile_w = 32
+            target_shard_w = tile_w
+            num_shards = math.ceil(hidden_per_device / target_shard_w)
+            num_cores = min(64, num_shards)  # 8x8 max on WH
+            shard_w = nearest_32(math.ceil(hidden_per_device / num_cores))
+            assert math.ceil(hidden_per_device / shard_w) <= num_cores, (
+                f"Invalid TG/Galaxy sharding for dim={self.dim}: hidden_per_device={hidden_per_device}, "
+                f"shard_w={shard_w}, num_cores={num_cores}"
+            )
 
             self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+                shape=(32 * mesh_cols, shard_w),  # mesh_cols = 4
                 core_grid=num_to_coregrid(num_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -2569,8 +2602,8 @@ class ModelArgs:
             )
 
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                shape=(32 * mesh_rows, shard_w),
+                core_grid=num_to_coregrid(num_cores),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

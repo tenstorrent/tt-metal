@@ -202,6 +202,8 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
+        if mode == "decode":
+            TG = False
         residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG

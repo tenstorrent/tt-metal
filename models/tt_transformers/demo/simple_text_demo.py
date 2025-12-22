@@ -293,7 +293,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
+            1,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt

@@ -80,6 +80,13 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
+        if args.is_galaxy:
+            w1_dims = (-1, None)
+            w2_dims = (-2, None)
+            self.w1_decode = as_sharded_tensor("w1_sharded_decode", ff1_3_dtype, dims=w1_dims)
+            self.w2_decode = as_sharded_tensor("w2_sharded_decode", ff2_dtype, dims=w2_dims)
+            self.w3_decode = as_sharded_tensor("w3_sharded_decode", ff1_3_dtype, dims=w1_dims)
+
         # Default activation is SILU
         self.activation_type = (
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
@@ -94,6 +101,15 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
+        if mode == "decode":
+            TG = False
+            self.w1 = self.w1_decode
+            self.w2 = self.w2_decode
+            self.w3 = self.w3_decode
+        else:
+            self.w1 = self.w1
+            self.w2 = self.w2
+            self.w3 = self.w3
         layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION

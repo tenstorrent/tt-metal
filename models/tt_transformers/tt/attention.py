@@ -242,6 +242,18 @@ class Attention(LightweightModule):
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
+        if self.TG:
+            self.wqkv_decode = ttnn.as_tensor(
+                qkv_cat,
+                dtype=self.wqkv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(3, None), mesh_shape=configuration.cluster_shape
+                ),
+                cache_file_name=cache_name("wqkv_sharded_2d_decode"),
+            )
 
         def norm_reshard(x, norm, mode):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -316,6 +328,21 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+        if self.TG:
+            self.wo_decode = ttnn.as_tensor(
+                pt_wo,
+                dtype=self.wo_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wo_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, None),
+                    mesh_shape=configuration.cluster_shape,
+                ),
+                cache_file_name=cache_name("wo_sharded_2d_decode"),
+            )
+
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -392,10 +419,10 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        self.TG = False
         xqkv_fused_sharded = ttnn.linear(
             x,
-            self.wqkv,
+            self.wqkv_decode,
             # bias=self.wqkv_bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
@@ -617,7 +644,7 @@ class Attention(LightweightModule):
             # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.matmul(
                 attn_output,
-                self.wo,
+                self.wo_decode,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,

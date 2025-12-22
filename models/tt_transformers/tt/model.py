@@ -65,7 +65,7 @@ class Transformer(LightweightModule):
             device=mesh_device,
             batch_size=args.max_batch_size,
             head_dim=args.head_dim,
-            max_seq_len=args.max_seq_len,
+            max_seq_len=128 * 1024,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
         )

@@ -14,12 +14,26 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
 
         if TG:
-            core_grid_ln = (
-                min(4, args.dim // 4 // 32 // 8),
-                8,
-            )  # dividing by 4 and 8 for num_cols and num_rows of mesh, and 32 for tile size
-            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # Pick a tile-aligned sharding core grid for distributed RMSNorm (decode).
+            # The shard width per core must be a multiple of 32 for TILE layout.
             hidden_size_per_device_distributed_ln = args.dim // 4
+            tile_w = 32
+            hidden_tiles = hidden_size_per_device_distributed_ln // tile_w
+            max_x, max_y = 8, 8
+
+            core_grid_ln = None
+            for x in range(max_x, 0, -1):
+                for y in range(max_y, 0, -1):
+                    num_cores = x * y
+                    if num_cores <= hidden_tiles and (hidden_tiles % num_cores == 0):
+                        core_grid_ln = (y, x)
+                        break
+                if core_grid_ln is not None:
+                    break
+            assert (
+                core_grid_ln is not None
+            ), f"Could not find tile-aligned RMSNorm core grid for hidden_size_per_device={hidden_size_per_device_distributed_ln}"
+            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
             self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(1, 1, 32, hidden_size_per_device_distributed_ln),
                 core_grid=ttnn.CoreGrid(y=core_grid_ln[0], x=core_grid_ln[1]),
@@ -47,6 +61,8 @@ class DistributedNorm(LightweightModule):
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
+        if mode == "decode":
+            self.TG = False
         if self.TG:
             if mode == "decode":
                 return tt_sharded_distributed_rmsnorm(
@@ -85,6 +101,7 @@ class DistributedNorm(LightweightModule):
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
+                cluster_axis=0,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
