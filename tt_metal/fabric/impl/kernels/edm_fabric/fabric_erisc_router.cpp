@@ -2267,7 +2267,7 @@ void
                  }
              }.template operator()<Is + 2>()),
              ...);
-        }(std::make_index_sequence<5>{});  // Indices 0-4 map to channels 2-6
+        }(std::make_index_sequence<7>{});  // Indices 0-6 map to channels 2-8
     }
 #endif
 }
@@ -2442,7 +2442,6 @@ void kernel_main() {
         }
     }
     POSTCODE(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
-
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -2509,8 +2508,8 @@ void kernel_main() {
     const size_t local_sender_channel_5_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_6_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_7_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_8_connection_semaphore_addr =
-        get_arg_val<uint32_t>(arg_idx++);  // 9th channel for Z routers
+    // 9th channel for Z routers if Z router is enabled
+    const size_t local_sender_channel_8_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
@@ -2519,8 +2518,8 @@ void kernel_main() {
     const size_t local_sender_channel_5_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_6_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_7_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_8_connection_buffer_index_id =
-        get_arg_val<uint32_t>(arg_idx++);  // 9th channel for Z routers
+    // 9th channel for Z routers if Z router is enabled
+    const size_t local_sender_channel_8_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2750,7 +2749,8 @@ void kernel_main() {
                 local_sender_channel_4_connection_semaphore_addr,
                 local_sender_channel_5_connection_semaphore_addr,
                 local_sender_channel_6_connection_semaphore_addr,
-                local_sender_channel_7_connection_semaphore_addr});
+                local_sender_channel_7_connection_semaphore_addr,
+                local_sender_channel_8_connection_semaphore_addr});
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2761,7 +2761,8 @@ void kernel_main() {
                 local_sender_channel_4_connection_info_addr,
                 local_sender_channel_5_connection_info_addr,
                 local_sender_channel_6_connection_info_addr,
-                local_sender_channel_7_connection_info_addr});
+                local_sender_channel_7_connection_info_addr,
+                local_sender_channel_8_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
@@ -2788,7 +2789,7 @@ void kernel_main() {
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
         // For 2D: 3 bits set for compact indices 0, 1, 2 (excluding router's own direction)
-        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
+        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;  // 4-bit mask
         uint32_t compact_index = 0;
         uint32_t dense_index = 0;
         while (has_downstream_edm) {
@@ -2874,7 +2875,7 @@ void kernel_main() {
     // Ensure array size is at least 1 to avoid undefined behavior
     static_assert(VC1_DOWNSTREAM_EDM_SIZE > 0, "VC1_DOWNSTREAM_EDM_SIZE must be at least 1");
     if (has_downstream_edm_vc1_buffer_connection) {
-        uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0x7;  // 3-bit mask
+        uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0xF;  // 3-bit mask
         uint32_t compact_index = 0;
         uint32_t dense_index = 0;
         while (has_downstream_edm) {
@@ -3105,10 +3106,10 @@ void kernel_main() {
             };
 
         open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0x7, 0);
+            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF, 0);
 #if defined(FABRIC_2D_VC1_ACTIVE)
         open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0x7, 1);
+            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF, 1);
 #endif
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
@@ -3142,7 +3143,7 @@ void kernel_main() {
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
         if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0x7;  // 3-bit mask
+            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;  // 3-bit mask
             uint32_t edm_index = 0;
             while (has_downstream_edm) {
                 if (has_downstream_edm & 0x1) {
@@ -3163,7 +3164,7 @@ void kernel_main() {
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
         if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-            uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0x7;  // 3-bit mask
+            uint32_t has_downstream_edm = has_downstream_edm_vc1_buffer_connection & 0xF;  // 3-bit mask
             uint32_t edm_index = 0;
             while (has_downstream_edm) {
                 if (has_downstream_edm & 0x1) {
@@ -3195,6 +3196,8 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
+    DPRINT << "checkpoint " << has_downstream_edm_vc1_buffer_connection << ":"
+           << has_downstream_edm_vc0_buffer_connection << ENDL();
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 
     //////////////////////////////

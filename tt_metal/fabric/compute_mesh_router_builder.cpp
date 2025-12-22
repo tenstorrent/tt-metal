@@ -383,8 +383,7 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
 }
 
 void ComputeMeshRouterBuilder::establish_connections_to_router(
-    ComputeMeshRouterBuilder& downstream_router,
-    const std::function<bool(ConnectionType)>& /*connection_type_filter*/) {
+    ComputeMeshRouterBuilder& downstream_router, const std::function<bool(ConnectionType)>& connection_type_filter) {
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
@@ -393,81 +392,105 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        // Skip VC0 connections FROM inter-mesh routers
-        // Inter-mesh routers only use VC1 for forwarding to mesh routers
-        if (vc == 0 && this->is_inter_mesh_) {
-            log_debug(LogMetal, "Skipping VC0 connection from inter-mesh router (inter-mesh uses VC1 only)");
-            continue;
-        }
-
-        // Skip VC1 connections TO inter-mesh routers
-        // Mesh routers don't send VC1 to Z/inter-mesh routers
-        // This reduces Z router receiver count and keeps architectures clean
-        if (vc == 1 && downstream_router.is_inter_mesh_) {
-            log_debug(
-                LogMetal, "Skipping VC1 connection to inter-mesh router (Z router doesn't receive VC1 from mesh)");
-            continue;
-        }
-
-        // Compute sender channel on downstream router based on directions and VC
-        uint32_t downstream_sender_channel =
-            get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
-
-        // Validate the channel index using downstream router's channel mapping
-        uint32_t num_sender_channels_for_vc = downstream_router.channel_mapping_.get_num_sender_channels_for_vc(vc);
-        TT_FATAL(
-            downstream_sender_channel < num_sender_channels_for_vc,
-            "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
-            downstream_sender_channel,
-            num_sender_channels_for_vc,
-            vc);
-
-        // Get downstream builder and mapping
-        auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
-        auto downstream_mapping = downstream_router.channel_mapping_.get_sender_mapping(vc, downstream_sender_channel);
-
-        // Get both absolute and VC-relative channel IDs
-        // - absolute_channel_id: flattened across all VCs (used for flat arrays)
-        // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
-        uint32_t absolute_channel_id = downstream_mapping.internal_sender_channel_id;
-        uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
-
-        // Setup producer → consumer connection
-        // Pass both indices - build_connection_to_fabric_channel needs both
-        erisc_builder_->setup_downstream_vc_connection(
-            downstream_builder, vc, vc, absolute_channel_id, vc_relative_channel_id);
-        // Record connection in registry if present
-        if (connection_registry_) {
-            RouterConnectionRecord record{
-                .source_node = local_node_,
-                .source_direction = location_.direction,
-                .source_eth_chan = location_.eth_chan,
-                .source_vc = vc,
-                .source_receiver_channel = 0,
-                .dest_node = downstream_router.local_node_,
-                .dest_direction = downstream_router.location_.direction,
-                .dest_eth_chan = downstream_router.location_.eth_chan,
-                .dest_vc = vc,
-                .dest_sender_channel = absolute_channel_id,
-                .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
-            connection_registry_->record_connection(record);
-        }
-
+        auto targets = connection_mapping_.get_downstream_targets(vc, 0);
         log_debug(
-            tt::LogTest,
-            "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} receiver_ch={} to downstream "
-            "router at x={}, y={}, Direction={}, VC{}, internal_ch={}",
+            LogMetal,
+            "Router at x={}, y={}, Channel={}, Direction={}, FabricNodeId={} :: VC{} has {} targets",
             get_noc_x(),
             get_noc_y(),
+            location_.eth_chan,
             get_eth_direction(),
             local_node_,
             vc,
-            0,
-            downstream_builder->get_noc_x(),
-            downstream_builder->get_noc_y(),
-            downstream_builder->get_direction(),
-            vc,
-            internal_channel_id);
+            targets.size());
+        for (const auto& target : targets) {
+            if (!connection_type_filter(target.type)) {
+                // Skip connection if it's not allowed by the connection_type_filter
+                log_debug(
+                    LogMetal,
+                    "Skipping VC{} connection type({}) not allowed by connection_type_filter",
+                    vc,
+                    static_cast<int>(target.type));
+                continue;
+            }
+            if (target.target_direction.has_value() &&
+                target.target_direction.value() != downstream_router.get_location().direction) {
+                // connction mapping contains connection info to all downstream directions.
+                // Proceed with connection setup only for the current downstream direction.
+                log_debug(
+                    LogMetal,
+                    "Skipping VC{} connection to direction({}), Downstream router is at direction({})",
+                    vc,
+                    target.target_direction.value(),
+                    downstream_router.get_location().direction);
+                continue;
+            }
+
+            // Compute sender channel on downstream router based on directions and VC
+            uint32_t downstream_sender_channel =
+                get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
+
+            // Validate the channel index using downstream router's channel mapping
+            uint32_t num_sender_channels_for_vc = downstream_router.channel_mapping_.get_num_sender_channels_for_vc(vc);
+            TT_FATAL(
+                downstream_sender_channel < num_sender_channels_for_vc,
+                "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
+                downstream_sender_channel,
+                num_sender_channels_for_vc,
+                vc);
+
+            // Get downstream builder and mapping
+            auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
+            auto downstream_mapping =
+                downstream_router.channel_mapping_.get_sender_mapping(vc, downstream_sender_channel);
+
+            // Get both absolute and VC-relative channel IDs
+            // - absolute_channel_id: flattened across all VCs (used for flat arrays)
+            // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
+            uint32_t absolute_channel_id = downstream_mapping.internal_sender_channel_id;
+            uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
+
+            // Setup producer → consumer connection
+            // Pass both indices - build_connection_to_fabric_channel needs both
+            erisc_builder_->setup_downstream_vc_connection(
+                downstream_builder, vc, vc, absolute_channel_id, vc_relative_channel_id);
+            // Record connection in registry if present
+            if (connection_registry_) {
+                RouterConnectionRecord record{
+                    .source_node = local_node_,
+                    .source_direction = location_.direction,
+                    .source_eth_chan = location_.eth_chan,
+                    .source_vc = vc,
+                    .source_receiver_channel = 0,
+                    .dest_node = downstream_router.local_node_,
+                    .dest_direction = downstream_router.location_.direction,
+                    .dest_eth_chan = downstream_router.location_.eth_chan,
+                    .dest_vc = vc,
+                    .dest_sender_channel = absolute_channel_id,
+                    .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
+                connection_registry_->record_connection(record);
+            }
+
+            log_debug(
+                tt::LogTest,
+                "Router at x={}, y={}, Channel={}, Direction={}, FabricNodeId={} :: Connecting VC{} receiver_ch={} to "
+                "downstream "
+                "router at x={}, y={}, Channel={}, Direction={}, VC{}, vc_relative_ch={}, absolute_ch={}",
+                get_noc_x(),
+                get_noc_y(),
+                location_.eth_chan,
+                get_eth_direction(),
+                local_node_,
+                vc,
+                0,
+                downstream_builder->get_noc_x(),
+                downstream_builder->get_noc_y(),
+                downstream_router.location_.eth_chan,
+                downstream_builder->get_direction(),
+                vc,
+                vc_relative_channel_id,
+                absolute_channel_id);
+        }
     }
 }
 

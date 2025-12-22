@@ -219,7 +219,11 @@ bool requires_forced_assignment_to_noc1() {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = is_2D_topology(topology);
-    uint32_t num_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
+    // Allocate L1 addresses for MAX sender channels (9) to support all router types
+    // Even though most routers use fewer channels, we need addresses for all possible channels
+    uint32_t num_sender_channels = is_2D_routing
+                                       ? builder_config::num_max_sender_channels
+                                       : builder_config::get_sender_channel_count(false);  // Use MAX (9) instead of 8
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -1256,6 +1260,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     }
 
     // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
+    // unpacked into sender*_worker_semaphore_ptr in the device kernel
     for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
     }
@@ -1391,8 +1396,10 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             }
         }
 
-        uint32_t num_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-        for (uint32_t i = 0; i < num_sender_channels; i++) {
+        // Initialize ALL max sender channels (up to 9 for Z routers) with their addresses
+        // This ensures that if is_sender_channel_serviced[i] is true for any channel,
+        // the address is valid (not 0)
+        for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
             sender_channels_buffer_index_semaphore_id[i] = config.sender_channels_buffer_index_semaphore_address[i];
             sender_channels_flow_control_semaphore_id[i] =
                 config.sender_channels_local_flow_control_semaphore_address[i];
