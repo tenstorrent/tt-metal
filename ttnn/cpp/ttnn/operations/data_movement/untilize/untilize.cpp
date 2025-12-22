@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize.hpp"
 
-#include "device/untilize_device_operation.hpp"
+#include "device/untilize_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -55,19 +55,21 @@ ttnn::Tensor ExecuteUntilize::invoke(
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
-        auto pf_type = ttnn::operations::data_movement::get_pf_type(
-            memory_config.has_value() ? memory_config.value().is_sharded() : input_tensor.is_sharded(), input_tensor);
-
-        return ttnn::prim::untilize(
-            input_tensor,
-            memory_config.value_or(input_tensor.memory_config()),
-            use_multicore,
-            use_pack_untilize,
-            fp32_dest_acc_en,
-            sub_core_grids,
-            enough_space_width,
-            enough_space_height,
-            pf_type);
+        return operation::run(
+            Untilize{
+                memory_config.value_or(input_tensor.memory_config()),
+                use_multicore,
+                use_pack_untilize,
+                fp32_dest_acc_en,
+                sub_core_grids,
+                enough_space_width,
+                enough_space_height,
+                ttnn::operations::data_movement::get_pf_type(
+                    memory_config.has_value() ? memory_config.value().is_sharded() : input_tensor.is_sharded(),
+                    input_tensor)},
+            {input_tensor},
+            {},
+            {})[0];
     };
 
     return build_ndiml_untilize(base_untilize)(input_tensor);
