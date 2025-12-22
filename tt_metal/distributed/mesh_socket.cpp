@@ -66,8 +66,10 @@ void MeshSocket::initialize_from_host_ranks() {
         "Invalid socket sender rank {} or receiver rank {} specified.",
         *sender_rank,
         *receiver_rank);
-    config_.sender_mesh_id = *std::get<0>(global_logical_bindings.at(sender_rank));
-    config_.receiver_mesh_id = *std::get<0>(global_logical_bindings.at(receiver_rank));
+    config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
+    config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
+
+    // TODO: Need assert here to ensure that socket connection can be fully instantiated between the ranks.
 }
 
 void MeshSocket::initialize_from_mesh_ids() {
@@ -75,8 +77,8 @@ void MeshSocket::initialize_from_mesh_ids() {
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (*std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
-            *std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value()) {
+        if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
+            std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value()) {
             if (config_.distributed_context) {
                 std::array<int, 1> socket_ranks = {*rank};
                 std::array<int, 1> translated_socket_ranks = {-1};
@@ -103,14 +105,14 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
-    if (!(*local_mesh_binding[0] == config_.sender_mesh_id.value() ||
-          *local_mesh_binding[0] == config_.receiver_mesh_id.value())) {
+    if (!(local_mesh_binding[0] == config_.sender_mesh_id.value() ||
+          local_mesh_binding[0] == config_.receiver_mesh_id.value())) {
         log_warning(
             LogMetal,
             "Creating a null socket on Mesh ID {} with sender Mesh ID {} and receiver Mesh ID {}.",
             *local_mesh_binding[0],
-            config_.sender_mesh_id.value(),
-            config_.receiver_mesh_id.value());
+            *config_.sender_mesh_id.value(),
+            *config_.receiver_mesh_id.value());
         return;
     }
     TT_FATAL(
@@ -118,7 +120,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         "{} must only be used for communication between different host ranks, not within the same rank.",
         __func__);
 
-    bool is_sender = *local_mesh_binding[0] == config_.sender_mesh_id.value();
+    bool is_sender = local_mesh_binding[0] == config_.sender_mesh_id.value();
     // Allocate config buffers on both the sender and receiver meshes (even if the current host does not open a
     // connection)
     if (is_sender) {
@@ -158,11 +160,11 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (*std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() &&
+        if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() &&
             rank_translation_table_.find(rank) != rank_translation_table_.end()) {
             sender_ranks.push_back(rank_translation_table_.at(rank));
         } else if (
-            *std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value() &&
+            std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value() &&
             rank_translation_table_.find(rank) != rank_translation_table_.end()) {
             recv_ranks.push_back(rank_translation_table_.at(rank));
         }
