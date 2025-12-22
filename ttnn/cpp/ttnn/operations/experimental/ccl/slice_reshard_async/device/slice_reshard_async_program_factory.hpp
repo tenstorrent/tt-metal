@@ -11,7 +11,7 @@
 namespace ttnn::operations::experimental::ccl::slice_reshard_async::program {
 
 struct SliceReshardAsyncSharedVariables {
-    uint32_t num_directions;
+    uint32_t num_directions = 0;
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 };

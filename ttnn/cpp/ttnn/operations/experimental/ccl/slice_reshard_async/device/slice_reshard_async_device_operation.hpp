@@ -46,7 +46,7 @@ struct SliceReshardAsyncDeviceOperation {
         uint32_t cluster_axis,
         const GlobalSemaphore& final_semaphore,
         const GlobalSemaphore& barrier_semaphore,
-        size_t num_preferred_links,
+        size_t num_links,
         const MemoryConfig& memory_config,
         ttnn::ccl::Topology topology);
 };
