@@ -238,11 +238,12 @@ void update_cur_mm_out(
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile<true>(/*dst_reg_idx*/ block_idx, cb_cur_mm_out, tile_idx + block_idx);
+            pack_tile(/*dst_reg_idx*/ block_idx, cb_cur_mm_out);
         }
         tile_regs_release();
     }
     pack_reconfig_l1_acc(false);
+    // update cb_cur_mm_out pointer
     cb_pop_front(cb_cur_mm_out, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
     cb_push_back(cb_cur_mm_out, Wt);
