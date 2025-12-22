@@ -434,9 +434,47 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
+    def process_output_prefill_logits(self, tt_out, last_token_idx):
+        """
+        Process prefill output to get logits tensor for on-device sampling.
+        Returns logits in the same format as decode (before all-gather), suitable for sampling module.
+        For non-batched prefill, returns single user logits. For batched prefill, returns list of logits.
+        """
+        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
+            batch_size = len(last_token_idx)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+        else:
+            x_split = [x]
+
+        logits_list = []
+        for i, x in enumerate(x_split):
+            if isinstance(last_token_idx, list):
+                last_token_idx_i = last_token_idx[i]
+            else:
+                last_token_idx_i = last_token_idx
+            print(f"x shape before slice: {x.shape}")
+            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            print(f"x shape after slice: {x.shape}")
+            # lm_head returns logits in sharded format (same as decode before all-gather)
+            tt_logits = self.lm_head(x, None, mode="prefill")
+            print(f"list length: {len(tt_logits)}")
+            print(f"shape after lm_head: {tt_logits[0].shape}")
+            tt_logits = tt_logits[0]
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+            print(f"shape after reshape: {tt_logits.shape}")
+            logits_list.append([tt_logits])
+
+        return logits_list
+
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor.
+        Input is ttnn device tensor of logits. Output is torch logits or tokens tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
@@ -454,9 +492,9 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-
+            print(f"x shape before lm_head: {x.shape}")
             tt_logits = self.lm_head(x, None, mode="prefill")
-
+            print(f"shape after lm_head: {tt_logits[0].shape}")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
@@ -534,7 +572,7 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
-            get_last_token=get_last_token,
+            get_last_token=get_last_token,  # ignored with mode=="prefill"
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
@@ -563,7 +601,7 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
-        capture_sampling_trace=False,
+        capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
     ):
         """
         This method will take device tensors and any other args to run forward.

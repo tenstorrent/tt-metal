@@ -86,8 +86,12 @@ class Generator:
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 
+        self.model.switch_mode("prefill")
         logger.info("Warming up prefill traces for all supported sequence lengths")
-        for supported_length in self.model.tt_ccl.support_seqlens:
+        supported_seqlens = (
+            self.model.tt_ccl.support_seqlens
+        )  # caching because running prefill can switch mode to decode
+        for supported_length in supported_seqlens:
             logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
             # Capture trace for both
             for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
@@ -132,6 +136,8 @@ class Generator:
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
@@ -149,6 +155,15 @@ class Generator:
             return_logits = True
         else:
             return_logits = False
+
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_module = self.model.sampling
+            sampling_module.reset_sampling_params(sampling_params)
+            if prompt_tokens is not None:  # Guard for warmup
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
+                sampling_module.reset_seed(sampling_params.seed)
+
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
@@ -183,6 +198,12 @@ class Generator:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
         all_users = [0] if use_batched_prefill else empty_slots
+
+        greedy_on_device = False  # TODO detect for faster path
+        nongreedy_device = not (return_logits or greedy_on_device)
+
+        # Accumulate logits for on-device sampling
+        tt_logits_accumulated = []
 
         for id, user_id in enumerate(all_users):
             logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
@@ -245,15 +266,90 @@ class Generator:
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
-            if use_batched_prefill:
-                # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
-                tt_tok_tensor = torch.stack(tt_tok, dim=0)
-                output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
-            else:
-                output_toks[id] = tt_tok
 
-            if tt_out_logits_all_users is not None and tt_out_logits_saved is not None:
-                tt_out_logits_all_users[id] = tt_out_logits_saved
+            if not nongreedy_device:
+                tt_tok = self.model.process_output_prefill(
+                    tt_tok, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+                )
+                if use_batched_prefill:
+                    # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
+                    tt_tok_tensor = torch.stack(tt_tok, dim=0)
+                    output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
+                else:
+                    output_toks[id] = tt_tok
+
+                if tt_out_logits_all_users is not None and tt_out_logits_saved is not None:
+                    tt_out_logits_all_users[id] = tt_out_logits_saved
+            else:
+                # Process prefill output to get logits (before all-gather) for on-device sampling
+                # Returns list of logits in sharded format (same as decode)
+                tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
+                if use_batched_prefill:
+                    # Batched prefill: logits list has 32 entries ordered by slot position
+                    tt_logits_accumulated.extend(tt_logits_list)
+                else:
+                    # Single user: logits list has 1 entry
+                    tt_logits_accumulated.append(tt_logits_list[0])
+
+        # On-device sampling for prefill
+        if nongreedy_device and len(tt_logits_accumulated) > 0:
+            padded_batch = 32
+
+            # lm_head output is a list [logits_tensor], extract the tensor
+            logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in tt_logits_accumulated]
+
+            if use_batched_prefill:
+                # Batched prefill: logits already have 32 entries (one per slot)
+                # Logits are ordered by slot position (slot 0's logits at index 0, etc.)
+                # sampling_params are also ordered by slot (0-31), so they match
+                tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
+            else:
+                # Non-batched prefill: we have `batch` logits, need to pad to 32
+                # Logits are in batch order (same as tokens and sampling_params)
+                if len(logits_tensors) > 1:
+                    tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
+                else:
+                    tt_logits_batch = logits_tensors[0]
+
+                # Pad to 32 users for sampling
+                num_users = len(logits_tensors)
+                if num_users < padded_batch:
+                    padding_needed = padded_batch - num_users
+                    # Create padding by replicating the last logits
+                    padding_tensors = [logits_tensors[-1]] * padding_needed
+                    tt_logits_batch = ttnn.concat([tt_logits_batch] + padding_tensors, dim=2)
+
+            print(f"tt_logits_batch shape: {tt_logits_batch.shape}")
+
+            # Sample using the sampling module
+            # Logits are in sharded format (before all-gather), same as decode
+            # sampling_params are already padded to 32 by format_sampling_params
+            self.model.switch_mode("decode")
+            tt_sampled, tt_log_probs = sampling_module.sample(
+                tt_logits_batch,
+                tt_out_tok=None,
+                enable_trace=False,  # Don't trace prefill sampling
+            )
+            if isinstance(tt_sampled, tuple):
+                print(f"tt_sampled is tuple")
+                tt_sampled = tt_sampled[0]
+            if isinstance(tt_sampled, list):
+                print(f"tt_sampled is list")
+                print(f"length: {len(tt_sampled)}")
+                tt_sampled = tt_sampled[0]
+            print(f"tt_sampled shape: {tt_sampled.shape}")
+
+            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
+
+            if use_batched_prefill:
+                # Batched prefill: sampled_tokens has 32 entries ordered by slot
+                # Extract only the slots specified by empty_slots, like greedy path does
+                sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+                output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
+            else:
+                # Non-batched prefill: first `batch` entries are our results in batch order
+                for i in range(batch):
+                    output_toks[i] = sampled_tokens[0, 0, 0, i].item()
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -283,13 +379,9 @@ class Generator:
             rot_mats=None,
             user_id=tt_user_id,
             page_table=page_table_tt,
-            get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
+            get_last_token=last_token_idx,  # (last_token_idx // 32) * 32, actually ignored
             kv_cache=kv_cache,
             batch_size=batch_size,
-        )
-
-        tt_toks = self.model.process_output_prefill(
-            tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
         )
 
         return tt_toks
@@ -329,10 +421,7 @@ class Generator:
             page_table=page_table,
             batch_size=batch_size,
         )
-        toks = self.model.process_output_prefill(
-            tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
-        )
-        return toks
+        return tt_out_trace
 
     def _capture_trace_prefill(
         self,
@@ -405,8 +494,8 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         async_read=False,
-        sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=False,
+        sampling_params: SamplingParams = None,  # None means returning logits and host sampling.
+        reset_inputs=False,  # If false, skip loading inputs, because it's next step of the batch we last had and sampled on device
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
@@ -416,7 +505,7 @@ class Generator:
     ):
         if sampling_params is None:
             return_logits = True
-            reset_inputs = True
+            reset_inputs = True  # We didn't sample on device, so we need to load inputs.
         else:
             return_logits = False
 
@@ -425,14 +514,14 @@ class Generator:
                 page_table.clone()
             )  # Make sure we reference a fresh page table, in case it has changed
         if torch.any(self.prev_page_table != page_table).item():
-            reset_inputs = True
+            reset_inputs = True  # doesn't this do what reset_batch does?
             self.prev_page_table = (
                 page_table.clone()
             )  # Make sure we reference a fresh page table, in case it has changed
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
-            reset_inputs = True
+            reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
 
         kv_cache = kv_cache[0]
         decode_kwargs = {
@@ -444,11 +533,14 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
+            # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
-            if reset_batch:
+            if reset_batch:  # TODO why is this an additional gate?
+                # TODO shouldn't reset_batch imply reset_inputs?
+                # TODO I think I need to also do this reset if we sampled in prefill
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
                 sampling_module.reset_seed(sampling_params.seed)
@@ -511,6 +603,8 @@ class Generator:
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
         )
+        # TODO this actually never calls sampling, because we're telling the model we'll do it ourselves.
+        # We also never set the sampling module up with the right parameters.
         return tt_tok
 
     def _capture_trace_text(
