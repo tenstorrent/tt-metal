@@ -387,6 +387,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        slice_tensors=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -404,6 +405,7 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            slice_tensors=slice_tensors,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -489,6 +491,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        slice_tensors=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -513,12 +516,11 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
-        if mode == "prefill" and get_last_token == -1:
-            return x
-
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        if slice_tensors is not None:
+            x = ttnn.slice(x, slice_tensors[0], slice_tensors[1], slice_dim=2, num_devices=x.shape[2] // 32)
 
         # Output norm
         x = self.norm(x, mode=mode)
