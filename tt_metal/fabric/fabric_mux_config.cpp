@@ -225,7 +225,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     }
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    fabric_endpoint_status_address_ = fabric_router_config.get_l1_layout().get(L1Block::EDM_STATUS).start_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
@@ -246,7 +246,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     // For relay mux, always use fabric router config
     fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     wait_for_fabric_endpoint_ready_ = true;
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    fabric_endpoint_status_address_ = fabric_router_config.get_l1_layout().get(L1Block::EDM_STATUS).start_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);

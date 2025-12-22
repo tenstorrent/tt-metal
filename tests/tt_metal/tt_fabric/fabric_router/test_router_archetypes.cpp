@@ -74,12 +74,12 @@ protected:
             RouterConnectionMapping conn_map,
             FabricNodeId node,
             RoutingDirection dir,
-            uint8_t eth)
-            : channel_mapping(std::move(ch_map)),
-              connection_mapping(std::move(conn_map)),
-              node_id(node),
-              direction(dir),
-              eth_chan(eth) {}
+            uint8_t eth) :
+            channel_mapping(std::move(ch_map)),
+            connection_mapping(std::move(conn_map)),
+            node_id(node),
+            direction(dir),
+            eth_chan(eth) {}
     };
 
     /**
@@ -88,21 +88,19 @@ protected:
     RouterArchetype create_mesh_router_archetype(
         Topology topology, RoutingDirection direction, bool has_z, FabricNodeId node_id, uint8_t eth_chan = 0) {
         // Channel mapping
+        auto spec = MeshChannelSpec::create_for_compute_mesh(topology);
         FabricRouterChannelMapping channel_mapping(
             topology,
+            spec,
             false,  // no tensix for now
-            RouterVariant::MESH, nullptr);
+            RouterVariant::MESH,
+            nullptr);
 
         // Connection mapping
         RouterConnectionMapping connection_mapping =
             RouterConnectionMapping::for_mesh_router(topology, direction, has_z);
 
-        return RouterArchetype(
-            std::move(channel_mapping),
-            std::move(connection_mapping),
-            node_id,
-            direction,
-            eth_chan);
+        return RouterArchetype(std::move(channel_mapping), std::move(connection_mapping), node_id, direction, eth_chan);
     }
 
     /**
@@ -114,20 +112,19 @@ protected:
         static auto intermesh_config = IntermeshVCConfig::full_mesh();
 
         // Channel mapping
+        auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
         FabricRouterChannelMapping channel_mapping(
             Topology::Mesh,
+            spec,
             false,  // no tensix
-            RouterVariant::Z_ROUTER, &intermesh_config);
+            RouterVariant::Z_ROUTER,
+            &intermesh_config);
 
         // Connection mapping
         RouterConnectionMapping connection_mapping = RouterConnectionMapping::for_z_router();
 
         return RouterArchetype(
-            std::move(channel_mapping),
-            std::move(connection_mapping),
-            node_id,
-            RoutingDirection::Z,
-            eth_chan);
+            std::move(channel_mapping), std::move(connection_mapping), node_id, RoutingDirection::Z, eth_chan);
     }
 
     /**
@@ -171,7 +168,7 @@ TEST_F(RouterArchetypesTest, CreateMeshRouterArchetype_1D_NoZ) {
         FabricNodeId(MeshId{0}, 0));
 
     // Verify channel mapping
-    EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 1);
+    EXPECT_EQ(router.channel_mapping.get_num_mapped_virtual_channels(), 1);
     EXPECT_FALSE(router.channel_mapping.is_z_router());
 
     // Verify connection mapping: receiver channel 0 has 1 target
@@ -191,7 +188,7 @@ TEST_F(RouterArchetypesTest, CreateMeshRouterArchetype_2D_WithZ) {
         FabricNodeId(MeshId{0}, 1));
 
     // Verify channel mapping
-    EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 1);
+    EXPECT_EQ(router.channel_mapping.get_num_mapped_virtual_channels(), 1);
     EXPECT_FALSE(router.channel_mapping.is_z_router());
 
     // Verify connection mapping: receiver channel 0 has 4 targets (3 INTRA_MESH + 1 MESH_TO_Z)
@@ -212,11 +209,11 @@ TEST_F(RouterArchetypesTest, CreateZRouterArchetype) {
         FabricNodeId(MeshId{0}, 100));
 
     // Verify channel mapping
-    EXPECT_EQ(router.channel_mapping.get_num_virtual_channels(), 2);
+    EXPECT_EQ(router.channel_mapping.get_num_mapped_virtual_channels(), 2);
     EXPECT_TRUE(router.channel_mapping.is_z_router());
 
     // Verify VC1 has 4 sender channels
-    EXPECT_EQ(router.channel_mapping.get_num_sender_channels_for_vc(1), 4);
+    EXPECT_EQ(router.channel_mapping.get_num_mapped_sender_channels_for_vc(1), 4);
 
     // Verify connection mapping: receiver channel 0 on VC1 has 4 Z_TO_MESH targets
     EXPECT_EQ(router.connection_mapping.get_total_sender_count(), 4);
@@ -533,7 +530,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
     // 3. Multi-target receiver capacity limits
 
     // Verify that Z router VC1 has exactly 4 sender channels (for Z_TO_MESH)
-    EXPECT_EQ(z_router.channel_mapping.get_num_sender_channels_for_vc(1), 4);
+    EXPECT_EQ(z_router.channel_mapping.get_num_mapped_sender_channels_for_vc(1), 4);
 
     // Receiver channel 0 has 4 targets mapped to specific directions (N/E/S/W)
     auto z_targets = z_router.connection_mapping.get_downstream_targets(1, 0);
@@ -844,10 +841,10 @@ TEST_F(RouterArchetypesTest, Archetype_ChannelMapping_ConnectionMapping_Consiste
         FabricNodeId(MeshId{0}, 0));
 
     // Verify receiver channel 0 has targets matching sender channel count
-    uint32_t num_vcs = mesh_router.channel_mapping.get_num_virtual_channels();
+    uint32_t num_vcs = mesh_router.channel_mapping.get_num_mapped_virtual_channels();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_senders = mesh_router.channel_mapping.get_num_sender_channels_for_vc(vc);
+        uint32_t num_senders = mesh_router.channel_mapping.get_num_mapped_sender_channels_for_vc(vc);
 
         if (num_senders > 0) {
             // Receiver channel 0 should have targets
@@ -865,7 +862,7 @@ TEST_F(RouterArchetypesTest, Archetype_ChannelMapping_ConnectionMapping_Consiste
         FabricNodeId(MeshId{0}, 100));
 
     // VC1 receiver channel 0 should have 4 targets
-    uint32_t vc1_senders = z_router.channel_mapping.get_num_sender_channels_for_vc(1);
+    uint32_t vc1_senders = z_router.channel_mapping.get_num_mapped_sender_channels_for_vc(1);
     EXPECT_EQ(vc1_senders, 4);
 
     EXPECT_TRUE(z_router.connection_mapping.has_targets(1, 0))

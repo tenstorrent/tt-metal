@@ -12,6 +12,7 @@ namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology,
+    const MeshChannelSpec& spec,
     bool downstream_is_tensix_builder,
     RouterVariant variant,
     const IntermeshVCConfig* intermesh_config) :
@@ -19,10 +20,10 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     variant_(variant),
     intermesh_vc_config_(intermesh_config) {
-    initialize_mappings();
+    initialize_mappings(spec);
 }
 
-void FabricRouterChannelMapping::initialize_mappings() {
+void FabricRouterChannelMapping::initialize_mappings(const MeshChannelSpec& /*spec*/) {
     initialize_vc0_mappings();
     initialize_vc1_mappings();
 }
@@ -145,7 +146,24 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
     return it->second;
 }
 
-uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
+std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings(
+    const MeshChannelSpec& /*spec*/) const {
+    std::vector<InternalSenderChannelMapping> result;
+
+    // Iterate through VCs in order and flatten
+    // Use the mapping's own state (not the spec's theoretical max)
+    for (uint32_t vc = 0; vc < get_num_mapped_virtual_channels(); ++vc) {
+        uint32_t num_channels = get_num_mapped_sender_channels_for_vc(vc);
+
+        for (uint32_t ch_idx = 0; ch_idx < num_channels; ++ch_idx) {
+            result.push_back(get_sender_mapping(vc, ch_idx));
+        }
+    }
+
+    return result;
+}
+
+uint32_t FabricRouterChannelMapping::get_num_mapped_virtual_channels() const {
     // Z routers always have 2 VCs: VC0 (mesh traffic) and VC1 (Z traffic)
     if (is_z_router()) {
         return 2;
@@ -159,7 +177,7 @@ uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
     return 1;  // VC0 only (single-mesh or 1D)
 }
 
-uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc) const {
+uint32_t FabricRouterChannelMapping::get_num_mapped_sender_channels_for_vc(uint32_t vc) const {
     constexpr uint32_t vc1_index = 1;
     constexpr uint32_t no_channels = 0;
 
@@ -189,22 +207,17 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
                 return count;
             }
             return no_channels;  // 1D topologies don't have VC1
-        default:
-            return no_channels;
+        default: return no_channels;
     }
 }
 
-std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings() const {
-    std::vector<InternalSenderChannelMapping> result;
-
-    // Iterate through VCs in order and flatten
-    for (uint32_t vc = 0; vc < get_num_virtual_channels(); ++vc) {
-        for (uint32_t ch_idx = 0; ch_idx < get_num_sender_channels_for_vc(vc); ++ch_idx) {
-            result.push_back(get_sender_mapping(vc, ch_idx));
-        }
+uint32_t FabricRouterChannelMapping::get_num_mapped_receiver_channels_for_vc(uint32_t vc) const {
+    // Check if we have a receiver mapping for this VC
+    LogicalReceiverChannelKey test_key{vc, 0};
+    if (receiver_channel_map_.find(test_key) != receiver_channel_map_.end()) {
+        return 1;  // One receiver channel per VC when enabled
     }
-
-    return result;
+    return 0;
 }
 
 }  // namespace tt::tt_fabric

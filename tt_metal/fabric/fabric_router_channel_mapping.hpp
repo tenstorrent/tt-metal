@@ -8,6 +8,7 @@
 #include <map>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
 
 #include <vector>
 
@@ -81,7 +82,11 @@ struct InternalReceiverChannelMapping {
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
-        Topology topology, bool has_tensix_extension, RouterVariant variant, const IntermeshVCConfig* intermesh_config);
+        Topology topology,
+        const MeshChannelSpec& spec,
+        bool has_tensix_extension,
+        RouterVariant variant,
+        const IntermeshVCConfig* intermesh_config);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -98,11 +103,35 @@ public:
      */
     Topology get_topology() const { return topology_; }
 
-    uint32_t get_num_virtual_channels() const;
+    /**
+     * Get all sender mappings (flattened across all VCs)
+     */
+    std::vector<InternalSenderChannelMapping> get_all_sender_mappings(const MeshChannelSpec& spec) const;
 
-    uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+    // ═══════════════════════════════════════════════════════════
+    // Instance State Queries - Actual initialized state of THIS router
+    // ═══════════════════════════════════════════════════════════
 
-    std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
+    /**
+     * Get the number of VCs THIS router instance actually has.
+     * - Z router: always returns 2 (VC0 + VC1 for Z traffic)
+     * - Standard mesh: returns 2 if intermesh_vc_config requires VC1, else 1
+     */
+    uint32_t get_num_mapped_virtual_channels() const;
+
+    /**
+     * Get the number of sender channels THIS router instance actually initialized for a VC.
+     * - VC0: returns topology-based count from builder_config
+     * - VC1 Z router: returns 4 (hardcoded constant)
+     * - VC1 standard mesh: dynamically counts actual entries in sender_channel_map_ (3 or 4)
+     */
+    uint32_t get_num_mapped_sender_channels_for_vc(uint32_t vc) const;
+
+    /**
+     * Get the number of receiver channels THIS router instance actually initialized for a VC.
+     * Returns 1 if a receiver mapping exists for this VC, 0 otherwise.
+     */
+    uint32_t get_num_mapped_receiver_channels_for_vc(uint32_t vc) const;
 
     /**
      * Check if this is a Z router
@@ -113,14 +142,14 @@ private:
     Topology topology_;
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
-    const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
+    const IntermeshVCConfig* intermesh_vc_config_;  // Runtime decision for VC1
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
 
-    void initialize_mappings();
+    void initialize_mappings(const MeshChannelSpec& spec);
     void initialize_vc0_mappings();
-    void initialize_vc1_mappings();
+    void initialize_vc1_mappings();  // Uses intermesh_vc_config_ member
 };
 
 }  // namespace tt::tt_fabric

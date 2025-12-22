@@ -61,7 +61,7 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
 }
 
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
-    tt::tt_fabric::Topology topology,
+    Topology topology,
     const FabricEriscDatamoverOptions& options,
     const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
     const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
@@ -96,7 +96,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
-        topology,
+        topology_,
         options,
         num_sender_buffer_slots_per_vc,
         num_remote_sender_buffer_slots_per_vc,

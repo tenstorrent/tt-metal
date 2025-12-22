@@ -49,6 +49,9 @@ target_sources(
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
         builder/fabric_remote_channels_allocator.cpp
+        builder/mesh_channel_spec.cpp
+        builder/erisc_l1_layout.cpp
+        builder/router_noc_config.cpp
         builder/static_sized_channel_connection_writer_adapter.cpp
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp

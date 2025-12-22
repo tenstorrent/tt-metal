@@ -299,39 +299,47 @@ TEST_F(ZRouterIntegrationTest, VariableMeshCount_AllConfigurations) {
 TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_VC0AndVC1) {
     // Verify Z router has 2 VCs with correct channel counts
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config
 
-    EXPECT_EQ(mapping.get_num_virtual_channels(), 2) << "Z router should have 2 VCs";
+    EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 2) << "Z router should have 2 VCs";
 
     // VC0: Standard mesh forwarding (4 channels for 2D)
-    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), builder_config::num_sender_channels_z_router_vc0);
+    EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(0), builder_config::num_sender_channels_z_router_vc0);
 
     // VC1: Z-specific traffic (4 channels for N/E/S/W)
-    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), builder_config::num_sender_channels_z_router_vc1);
+    EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), builder_config::num_sender_channels_z_router_vc1);
 }
 
 TEST_F(ZRouterIntegrationTest, ChannelMapping_MeshRouter_VC0Only) {
     // Verify standard mesh router has only VC0 when no intermesh config provided
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,  // no tensix
         RouterVariant::MESH,
         nullptr);  // no intermesh config
 
-    EXPECT_EQ(mapping.get_num_virtual_channels(), 1) << "Standard mesh router should have 1 VC (VC0 only) without intermesh";
-    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(0), builder_config::num_sender_channels_2d_mesh);
-    EXPECT_EQ(mapping.get_num_sender_channels_for_vc(1), 0) << "VC1 should not be created without intermesh config";
+    EXPECT_EQ(mapping.get_num_mapped_virtual_channels(), 1)
+        << "Standard mesh router should have 1 VC (VC0 only) without intermesh";
+    EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(0), builder_config::num_sender_channels_2d_mesh);
+    EXPECT_EQ(mapping.get_num_mapped_sender_channels_for_vc(1), 0)
+        << "VC1 should not be created without intermesh config";
 }
 
 TEST_F(ZRouterIntegrationTest, ChannelMapping_ZRouter_InternalChannels) {
     // Verify Z router VC1 maps to correct internal erisc channels (4-7)
     auto intermesh_config = IntermeshVCConfig::full_mesh();
+    auto spec = MeshChannelSpec::create_for_compute_mesh(Topology::Mesh);
     auto mapping = FabricRouterChannelMapping(
         Topology::Mesh,
+        spec,
         false,
         RouterVariant::Z_ROUTER,
         &intermesh_config);  // Z routers require intermesh config

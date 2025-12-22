@@ -5,6 +5,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -12,50 +13,12 @@
 
 namespace tt::tt_fabric {
 
-void FabricBuilderContext::compute_max_channel_counts() {
-    // Create channel mappings for all router types that exist in this fabric
-    const auto topology = fabric_context_.get_fabric_topology();
-
-    std::vector<FabricRouterChannelMapping> possible_mappings;
-
-    // Always have MESH routers
-    possible_mappings.emplace_back(
-        topology,
-        false,  // no tensix
-        RouterVariant::MESH,
-        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr);
-
-    // If Z routers exist in this fabric, add Z_ROUTER mapping
-    if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
-        possible_mappings.emplace_back(
-            topology,
-            false,  // no tensix
-            RouterVariant::Z_ROUTER,
-            &intermesh_vc_config_);
-    }
-
-    // Compute max channel counts across all router types in this fabric
-    max_sender_channels_per_vc_.fill(0);
-    max_receiver_channels_per_vc_.fill(0);
-
-    for (const auto& mapping : possible_mappings) {
-        uint32_t num_vcs = mapping.get_num_virtual_channels();
-        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-            max_sender_channels_per_vc_[vc] = std::max(
-                max_sender_channels_per_vc_[vc],
-                static_cast<std::size_t>(mapping.get_num_sender_channels_for_vc(vc)));
-            max_receiver_channels_per_vc_[vc] = std::max(
-                max_receiver_channels_per_vc_[vc],
-                static_cast<std::size_t>(1u));  // Always 1 receiver per VC
-        }
-    }
-}
-
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
-    // Compute max channel counts for this fabric instance
-    compute_max_channel_counts();
+    // Create the mesh channel spec for this fabric (single source of truth for channel structure)
+    // Spec now always represents MAX capacity - intermesh_config moved to mapping constructor
+    mesh_channel_spec_ = MeshChannelSpec::create_for_compute_mesh(fabric_context_.get_fabric_topology());
 
     // Create configs using computed max
     router_config_ = create_edm_config();
@@ -83,12 +46,22 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .direction = direction,
     };
 
+    // Extract per-VC channel counts from mesh channel spec
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {0, 0};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {0, 0};
+    for (size_t vc = 0; vc < mesh_channel_spec_.get_num_max_virtual_channels(); ++vc) {
+        sender_channels_per_vc[vc] = mesh_channel_spec_.get_num_max_sender_channels_for_vc(vc);
+        receiver_channels_per_vc[vc] = mesh_channel_spec_.get_num_max_receiver_channels_for_vc(vc);
+    }
+
+    // Use the stored mesh channel spec (single source of truth)
     return std::make_unique<FabricEriscDatamoverConfig>(
+        mesh_channel_spec_,
         fabric_context_.get_fabric_channel_buffer_size_bytes(),
         fabric_context_.get_fabric_topology(),
         edm_options,
-        max_sender_channels_per_vc_,      // Max for this fabric instance
-        max_receiver_channels_per_vc_);   // Max for this fabric instance
+        sender_channels_per_vc,
+        receiver_channels_per_vc);
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(
@@ -146,28 +119,39 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
     std::vector<size_t> addresses_to_clear = {
-        router_config_->edm_local_sync_address, router_config_->edm_local_tensix_sync_address};
+        router_config_->get_l1_layout().get(L1Block::EDM_LOCAL_SYNC).start_address,
+        router_config_->get_l1_layout().get(L1Block::EDM_LOCAL_TENSIX_SYNC).start_address};
 
     if (router_config_->sender_txq_id != router_config_->receiver_txq_id) {
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_completion_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_completion_counters_base_addr);
+        auto sender_counters = router_config_->get_l1_layout().get_sender_remote_counter_addresses();
+        auto receiver_counters = router_config_->get_l1_layout().get_receiver_remote_counter_addresses();
+        if (sender_counters.ack_counters_base_addr != 0) {
+            addresses_to_clear.push_back(sender_counters.ack_counters_base_addr);
+            addresses_to_clear.push_back(sender_counters.completion_counters_base_addr);
+        }
+        if (receiver_counters.ack_counters_base_addr != 0) {
+            addresses_to_clear.push_back(receiver_counters.ack_counters_base_addr);
+            addresses_to_clear.push_back(receiver_counters.completion_counters_base_addr);
+        }
     }
 
     return addresses_to_clear;
 }
 
 std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_sync_address_and_status() const {
-    return std::make_pair(router_config_->edm_status_address, EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
+    return std::make_pair(
+        router_config_->get_l1_layout().get(L1Block::EDM_STATUS).start_address, EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
 }
 
 std::optional<std::pair<uint32_t, EDMStatus>> FabricBuilderContext::get_fabric_router_ready_address_and_signal() const {
-    return std::make_pair(router_config_->edm_status_address, EDMStatus::READY_FOR_TRAFFIC);
+    return std::make_pair(
+        router_config_->get_l1_layout().get(L1Block::EDM_STATUS).start_address, EDMStatus::READY_FOR_TRAFFIC);
 }
 
 std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_termination_address_and_signal() const {
-    return std::make_pair(router_config_->termination_signal_address, TerminationSignal::IMMEDIATELY_TERMINATE);
+    return std::make_pair(
+        router_config_->get_l1_layout().get(L1Block::TERMINATION_SIGNAL).start_address,
+        TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
 FabricTensixDatamoverConfig& FabricBuilderContext::get_tensix_config() const {

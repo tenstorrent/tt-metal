@@ -69,11 +69,16 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
+    // Get mesh channel spec from builder context (single source of truth)
+    const auto& channel_spec = builder_context.get_mesh_channel_spec();
+
+    // Get intermesh config (needed for VC1 enablement)
+    const auto& intermesh_config = builder_context.get_intermesh_vc_config();
+
     // Create channel mapping EARLY (needed for computing injection flags)
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
-    const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
+        FabricRouterChannelMapping(topology, channel_spec, downstream_is_tensix_builder, variant, &intermesh_config);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
@@ -94,16 +99,16 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // First, compute the total number of channels across all VCs
     size_t total_router_channels = 0;
-    uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
+    uint32_t num_vcs = channel_mapping.get_num_mapped_virtual_channels();
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        total_router_channels += channel_mapping.get_num_sender_channels_for_vc(vc);
+        total_router_channels += channel_mapping.get_num_mapped_sender_channels_for_vc(vc);
     }
 
     std::vector<bool> router_injection_flags;
     router_injection_flags.reserve(total_router_channels);
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_channels_in_vc = channel_mapping.get_num_sender_channels_for_vc(vc);
+        uint32_t num_channels_in_vc = channel_mapping.get_num_mapped_sender_channels_for_vc(vc);
         auto vc_injection_flags =
             compute_sender_channel_injection_flags_for_vc(topology, eth_direction, vc, num_channels_in_vc);
 
@@ -115,7 +120,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Build reverse channel maps and compute injection flags for each builder variant
     // Get ERISC's channel count from config
-    size_t erisc_num_channels = edm_config.num_used_sender_channels;
+    size_t erisc_num_channels = edm_config.get_channel_spec().get_total_sender_channels();
     auto erisc_to_router_channel_map =
         get_variant_to_router_channel_map(channel_mapping, BuilderType::ERISC, erisc_num_channels);
     auto erisc_injection_flags =
@@ -134,7 +139,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc{};
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_receiver_channels_per_vc{};
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        actual_sender_channels_per_vc[vc] = channel_mapping.get_num_sender_channels_for_vc(vc);
+        actual_sender_channels_per_vc[vc] = channel_mapping.get_num_mapped_sender_channels_for_vc(vc);
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
@@ -329,8 +334,12 @@ std::vector<bool> ComputeMeshRouterBuilder::get_child_builder_variant_sender_cha
 
 std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_router_channel_map(
     const FabricRouterChannelMapping& channel_mapping, BuilderType builder_type, size_t variant_num_sender_channels) {
+    // Get channel spec from builder context (single source of truth)
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& channel_spec = fabric_context.get_builder_context().get_mesh_channel_spec();
+
     // Get all mappings from channel_mapping (implicitly handles VC structure)
-    auto all_mappings = channel_mapping.get_all_sender_mappings();
+    auto all_mappings = channel_mapping.get_all_sender_mappings(channel_spec);
 
     // Default to nullopt (not externally mapped)
     std::vector<std::optional<size_t>> variant_to_router_channel_map(variant_num_sender_channels);
@@ -379,9 +388,9 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
     const std::function<bool(ConnectionType)>& /*connection_type_filter*/) {
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in
-    uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
-
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    uint32_t num_vcs = channel_mapping_.get_num_mapped_virtual_channels();
+
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
@@ -453,9 +462,11 @@ void ComputeMeshRouterBuilder::configure_connection(
     peer_compute.establish_connections_to_router(*this, intra_mesh_filter);
 
     // Configure NOC VC based on link index (must be same for both routers)
-    auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
-    erisc_builder_->config.edm_noc_vc = edm_noc_vc;
-    peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+    // Start from the default NOC VC (already set in noc_config_) and offset by link index
+    auto base_noc_vc = erisc_builder_->config.get_noc_config().edm_noc_vc;
+    auto edm_noc_vc = base_noc_vc + (link_idx % FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
+    erisc_builder_->config.get_noc_config().set_edm_noc_vc(edm_noc_vc);
+    peer_compute.erisc_builder_->config.get_noc_config().set_edm_noc_vc(edm_noc_vc);
 
     // Apply core placement optimizations
     core_placement::CorePlacementContext cctx{
@@ -478,7 +489,7 @@ void ComputeMeshRouterBuilder::configure_local_connections(
     std::set<RoutingDirection> connected_targets;
 
     // Iterate through all VCs to find local connection targets
-    uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
+    uint32_t num_vcs = channel_mapping_.get_num_mapped_virtual_channels();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         // Each VC has only 1 receiver channel (index 0)
@@ -534,7 +545,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         defines["FABRIC_2D"] = "";
 
         // FABRIC_2D_VC1_ACTIVE: Set when router has VC1
-        bool vc1_active = channel_mapping_.get_num_virtual_channels() > 1;
+        bool vc1_active = channel_mapping_.get_num_mapped_virtual_channels() > 1;
         if (vc1_active) {
             defines["FABRIC_2D_VC1_ACTIVE"] = "";
         }

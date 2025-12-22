@@ -43,29 +43,29 @@ void run_default_galaxy_optimizer(
     if (enable_noc_selection_opt) {
         if (edm_builder1.get_noc_x() < edm_builder2.get_noc_x()) {
             for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
+                edm_builder1.config.get_noc_config().set_receiver_channel_forwarding_noc(i, 0);
+                edm_builder2.config.get_noc_config().set_receiver_channel_forwarding_noc(i, 1);
             }
             for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
+                edm_builder1.config.get_noc_config().set_receiver_channel_local_write_noc(i, 1);
+                edm_builder2.config.get_noc_config().set_receiver_channel_local_write_noc(i, 1);
             }
             for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
+                edm_builder1.config.get_noc_config().set_sender_channel_ack_noc(i, 1);
+                edm_builder2.config.get_noc_config().set_sender_channel_ack_noc(i, 0);
             }
         } else if (edm_builder1.get_noc_x() > edm_builder2.get_noc_x()) {
             for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
+                edm_builder1.config.get_noc_config().set_receiver_channel_forwarding_noc(i, 1);
+                edm_builder2.config.get_noc_config().set_receiver_channel_forwarding_noc(i, 0);
             }
             for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
+                edm_builder1.config.get_noc_config().set_receiver_channel_local_write_noc(i, 1);
+                edm_builder2.config.get_noc_config().set_receiver_channel_local_write_noc(i, 1);
             }
             for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
+                edm_builder1.config.get_noc_config().set_sender_channel_ack_noc(i, 0);
+                edm_builder2.config.get_noc_config().set_sender_channel_ack_noc(i, 1);
             }
         }
     }

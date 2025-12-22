@@ -26,6 +26,9 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
+#include "tt_metal/fabric/builder/mesh_channel_spec.hpp"
+#include "tt_metal/fabric/builder/erisc_l1_layout.hpp"
+#include "tt_metal/fabric/builder/router_noc_config.hpp"
 
 namespace tt::tt_fabric {
 
@@ -196,77 +199,13 @@ struct StreamRegAssignments {
 };
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
-    static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
-    static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
-    static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
-    static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC = 1;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
-    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
-
-    static constexpr std::size_t field_size = 16;
-    static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
-    static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
-
-    // Global
-    static constexpr std::size_t eth_channel_sync_size = 16;
-    std::size_t handshake_addr = 0;
-    std::size_t edm_channel_ack_addr = 0;
-    std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
-    std::size_t edm_local_sync_address = 0;
-    std::size_t edm_local_tensix_sync_address = 0;
-    std::size_t edm_status_address = 0;
-    std::size_t notify_worker_of_read_counter_update_src_address = 0;
-
-    // Performance telemetry buffer address (16B aligned)
-    std::size_t perf_telemetry_buffer_address = 0;
-
-    // Code profiling buffer address (16B aligned)
-    std::size_t code_profiling_buffer_address = 0;
 
     std::vector<FabricRiscConfig> risc_configs;
-    // ----------- Sender Channels
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_address = {};
-    // Connection info layout:
-    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
-    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
-    // 2: WorkerXY (as uint32_t)
-    // 3: Hold's EDM's rdptr for the buffer index in the channel
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_worker_conn_info_base_address = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels>
-        sender_channels_local_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels>
-        sender_channels_producer_terminate_connection_address = {};
-    // persistent mode field
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_address = {};
-    // persistent mode field
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_address =
-        {};
 
-    static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
-
-    // ----------- Receiver Channels
-    // persistent mode field
-    std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_teardown_semaphore_address = {};
-
-    // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
-    // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
-    // use use a different crediting scheme.
-    size_t to_sender_channel_remote_ack_counters_base_addr = 0;
-    size_t to_sender_channel_remote_completion_counters_base_addr = 0;
-    size_t receiver_channel_remote_ack_counters_base_addr = 0;
-    size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
@@ -278,6 +217,7 @@ struct FabricEriscDatamoverConfig {
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
+        const MeshChannelSpec& channel_spec,
         std::size_t channel_buffer_size_bytes,
         Topology topology,
         FabricEriscDatamoverOptions options,
@@ -286,31 +226,17 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
-    std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
     std::size_t num_riscv_cores = 0;
 
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {
+        0, 0};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {
+        0, 0};  // Per-VC receiver channel counts
+
     Topology topology = Topology::Linear;
-
-    // add the noc-usage and cmd_buf-usage here
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
-
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
-
-    // emd vcs
-    std::size_t edm_noc_vc = 0;
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
@@ -328,8 +254,16 @@ struct FabricEriscDatamoverConfig {
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
+    // Accessors for component members
+    const RouterNocConfig& get_noc_config() const { return noc_config_; }
+    RouterNocConfig& get_noc_config() { return noc_config_; }
+    const MeshChannelSpec& get_channel_spec() const { return channel_spec_; }
+    const EriscL1Layout& get_l1_layout() const { return l1_layout_; }
+
 private:
-    FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
+    MeshChannelSpec channel_spec_;  // Channel structure definition
+    EriscL1Layout l1_layout_;       // L1 memory layout
+    RouterNocConfig noc_config_;    // NOC/CmdBuf assignments
 };
 
 struct FabricRiscConfig {
