@@ -745,7 +745,10 @@ Tensor create_tt_tensor_from_host_data(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile,
     float pad_value,
-    bool is_device_available) {
+    bool is_device_available,
+    const ttnn::distributed::TensorToMesh* mesh_mapper,
+    std::optional<ttnn::QueueId> cq_id,
+    ttnn::distributed::MeshDevice* device) {
     auto can_exec_ops_on_device = [](DataType type) {
         switch (type) {
             case DataType::FLOAT32:
@@ -805,6 +808,16 @@ Tensor create_tt_tensor_from_host_data(
         if (exec_on_device && can_construct_on_device && pydata_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
+        } else if (mesh_mapper != nullptr) {
+            return ttnn::distributed::create_distributed_tensor(
+                host_buffer.view_as<T>(),
+                tensor_shape,
+                host_buffer.pin(),
+                tensor_layout,
+                *mesh_mapper,
+                device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
+                cq_id,
+                static_cast<T>(pad_value));
         }
 
         return Tensor::from_span(
@@ -903,7 +916,10 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         memory_config,
         optional_tile,
         pad_value.value_or(0.0f),
-        device.has_value());
+        device.has_value(),
+        mesh_mapper,
+        cq_id,
+        device.value());
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
@@ -915,18 +931,6 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         set_layout(layout);
         GraphTracker::instance().track_function_end(output);
         return output;
-    }
-
-    // Shard pydata across mesh and apply `tensor_layout` at each shard.
-    // Shapes of multi device shards will be derived automatically.
-    if (mesh_mapper != nullptr) {
-        output = ttnn::distributed::distribute_tensor(
-            output,
-            *mesh_mapper,
-            device != nullptr
-                ? std::make_optional(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>(*(device.value())))
-                : std::nullopt,
-            cq_id);
     }
 
     output = output.to_device(device.value(), std::nullopt, cq_id);
