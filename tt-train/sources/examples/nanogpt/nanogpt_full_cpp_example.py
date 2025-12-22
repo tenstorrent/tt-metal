@@ -553,30 +553,46 @@ def sample_greedy(
         # Truncate logits to valid vocabulary
         last_logits = last_logits[:, :vocab_size]
 
-        # Apply temperature
-        if temperature != 1.0:
+        # Handle NaN/Inf in logits BEFORE any operations
+        # This can happen due to numerical precision issues in bfloat16
+        if not np.all(np.isfinite(last_logits)):
+            last_logits = np.nan_to_num(last_logits, nan=0.0, posinf=1e4, neginf=-1e4)
+
+        # Apply temperature (with clipping to prevent overflow)
+        if temperature != 1.0 and temperature > 0:
+            # Clip logits to reasonable range before dividing
+            last_logits = np.clip(last_logits, -100, 100)
             last_logits = last_logits / temperature
 
         # Apply top_k filtering
         if top_k > 0:
             # Get top k values and indices
-            top_k = min(top_k, vocab_size)
-            indices_to_remove = (
-                last_logits
-                < np.partition(last_logits, -top_k, axis=-1)[:, -top_k:][:, 0:1]
-            )
-            last_logits[indices_to_remove] = -float("inf")
+            top_k_val = min(top_k, vocab_size)
+            threshold = np.partition(last_logits, -top_k_val, axis=-1)[:, -top_k_val:][
+                :, 0:1
+            ]
+            indices_to_remove = last_logits < threshold
+            last_logits[indices_to_remove] = -1e9  # Use large negative instead of -inf
 
-        # Convert to probabilities using softmax
-        logits_exp = np.exp(last_logits - np.max(last_logits, axis=-1, keepdims=True))
-        probs = logits_exp / np.sum(logits_exp, axis=-1, keepdims=True)
+        # Convert to probabilities using softmax (numerically stable)
+        max_logits = np.max(last_logits, axis=-1, keepdims=True)
+        logits_exp = np.exp(last_logits - max_logits)
+        probs = logits_exp / (np.sum(logits_exp, axis=-1, keepdims=True) + 1e-10)
+
+        # Ensure probs sum to 1 and are valid
+        probs = np.clip(probs, 0, 1)
+        probs = probs / (probs.sum(axis=-1, keepdims=True) + 1e-10)
 
         # Sample from distribution (or use argmax if temperature is very low)
         if temperature < 0.01:
             next_id = int(np.argmax(probs, axis=-1)[0])
         else:
             # Sample from categorical distribution
-            next_id = int(np.random.choice(vocab_size, p=probs[0]))
+            try:
+                next_id = int(np.random.choice(vocab_size, p=probs[0]))
+            except ValueError:
+                # Fallback to argmax if probs are invalid
+                next_id = int(np.argmax(last_logits, axis=-1)[0])
 
         # Append to running context
         running.append(next_id)
