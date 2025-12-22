@@ -282,6 +282,11 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
+    if (timeout_ms == 0) {
+        timeout_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
+                .count();
+    }
     if (is_simulator) {
         timeout_ms = 0;
     }
