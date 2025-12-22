@@ -2,30 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
-
-#include <tt_stl/reflection.hpp>
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
-
-using namespace tt::constants;
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::pool::upsample::program {
-using namespace tt;
-using sliding_window::SlidingWindowConfig;
 
 UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -37,7 +23,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const auto& scale_factor_w = operation_attributes.scale_factor_w;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Use the sliding window config passed from upsample.cpp (contains original input dimensions)
     TT_FATAL(
@@ -85,14 +71,14 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
     const auto op_trace_metadata = sliding_window::generate_op_trace_metadata_bilinear(sliding_window_config);
 
-    uint32_t next_cb_index = CBIndex::c_0;
+    uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t buffering_factor = 2;  // only apply to intermediate buffers
 
     // input data is in a sharded CB
     const uint32_t in_cb_pagesize = input_stick_nbytes;
     const uint32_t in_cb_npages = halo_shard_shape[0];
     const uint32_t in_ntiles_c =
-        static_cast<uint32_t>(std::ceil(static_cast<float>(in_channels) / constants::TILE_WIDTH));
+        static_cast<uint32_t>(std::ceil(static_cast<float>(in_channels) / tt::constants::TILE_WIDTH));
 
     auto [halo_cb_id, cb_src0] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
@@ -120,7 +106,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
     // scalar intermediate CBs
-    const uint32_t in_scalar_cb_pagesize = tile_size(input_cb_data_format);
+    const uint32_t in_scalar_cb_pagesize = tt::tile_size(input_cb_data_format);
     const uint32_t in_scalar_cb_npages = 1 * buffering_factor;
 
     const uint32_t in_scalar_cb_id1 = next_cb_index++;
@@ -229,14 +215,14 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         in_ntiles_c,
         1 * in_ntiles_c,
         4,  // Number of input rows required for tilize reduction is 4 as we are processing single output row at a time.
-        static_cast<uint32_t>(std::ceil(static_cast<float>(in_channels) / constants::TILE_WIDTH)),
+        static_cast<uint32_t>(std::ceil(static_cast<float>(in_channels) / tt::constants::TILE_WIDTH)),
         num_input_width_blocks,
         input_block_size_bytes,
     };
 
-    const auto reader_kernel = CreateKernel(
+    const auto reader_kernel = tt::tt_metal::CreateKernel(
         program, reader_kernel_fname, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-    const auto writer_kernel = CreateKernel(
+    const auto writer_kernel = tt::tt_metal::CreateKernel(
         program, writer_kernel_fname, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     TT_FATAL(fp32_dest_acc_en == false, "fp32_dest_acc_en as true not supported for upsample bilinear");
 
@@ -250,7 +236,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         .compile_args = compute_compile_time_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
 
-    const auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    const auto compute_kernel = tt::tt_metal::CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     // runtime args - start_output_idx, min_input_offset, and work count per core
     const uint32_t reader_nargs = 3;
@@ -261,15 +247,15 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     // Calculate work distribution based on output sticks
 
     const uint32_t total_output_sticks = in_batch_size * output.logical_shape()[1] * output.logical_shape()[2];
-    const uint32_t max_out_sticks_per_core = div_up(total_output_sticks, ncores_nhw);
+    const uint32_t max_out_sticks_per_core = tt::div_up(total_output_sticks, ncores_nhw);
 
     log_debug(
         LogOp, "total_output_sticks: {}, max_out_sticks_per_core: {}", total_output_sticks, max_out_sticks_per_core);
 
     uint32_t start_output_idx = 0;
 
-    const auto logical_cores = corerange_to_cores(
-        shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const auto logical_cores = tt::tt_metal::corerange_to_cores(
+        shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     uint32_t total_sticks_processed = 0;
 
@@ -284,11 +270,11 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
             reader_rt_args[0] = start_output_idx;
             reader_rt_args[1] = 0;
             reader_rt_args[2] = 0;  // No work
-            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
-            SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
 
             compute_rt_args[0] = 0;  // No work
-            SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
             continue;
         }
 
@@ -306,12 +292,12 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
         reader_rt_args[0] = start_output_idx;
         reader_rt_args[1] = min_input_offset;
         reader_rt_args[2] = out_sticks_this_core;  // NEW: actual work for this core
-        SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
-        SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
 
         // Set runtime arguments for compute kernel
         compute_rt_args[0] = out_sticks_this_core;  // Work count for this core
-        SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel, core_coord, compute_rt_args);
 
         // Next core starts where this core ends
         start_output_idx += out_sticks_this_core;
@@ -343,8 +329,8 @@ void UpsampleBilinearProgramFactory::override_runtime_arguments(
     const auto* src_buffer = input_tensor.buffer();
     const auto* dst_buffer = output_tensor.buffer();
 
-    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
 }  // namespace ttnn::operations::pool::upsample::program
