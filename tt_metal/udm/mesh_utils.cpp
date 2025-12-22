@@ -118,15 +118,15 @@ std::vector<uint32_t> factor_cores_into_dims(uint32_t num_cores, size_t num_dims
 }
 
 /**
- * @brief Calculate the number of pages for a given core in a partitioned dimension
+ * @brief Calculate the number of pages and starting offset for a given core in a partitioned dimension
  *
  * Distributes dim_size_in_pages across num_cores:
  * - Each core gets at least (dim_size_in_pages / num_cores) pages
  * - The first (dim_size_in_pages % num_cores) cores get one extra page
  *
- * @return pair<num_pages, base_pages> where:
+ * @return pair<num_pages, offset> where:
  *   - num_pages: actual pages for this core
- *   - base_pages: base page count per core (for offset calculation)
+ *   - offset: starting page offset for this core
  */
 std::pair<uint32_t, uint32_t> get_core_pages(uint32_t dim_size_in_pages, uint32_t num_cores, uint32_t core_coord) {
     // Standard distribution: floor division + remainder distribution
@@ -142,10 +142,13 @@ std::pair<uint32_t, uint32_t> get_core_pages(uint32_t dim_size_in_pages, uint32_
         num_pages = base_pages;
     }
 
-    // For offset calculation, use the size of cores that get extra pages
-    uint32_t offset_base = base_pages + 1;
+    // Calculate the actual starting offset for this core
+    // Cores 0 to (remainder-1) each get (base_pages + 1) pages
+    // Cores (remainder) onwards each get (base_pages) pages
+    // offset = core_coord * base_pages + min(core_coord, remainder)
+    uint32_t offset = core_coord * base_pages + std::min(core_coord, remainder);
 
-    return {num_pages, offset_base};
+    return {num_pages, offset};
 }
 
 /**
@@ -316,10 +319,10 @@ GcoresInfo map_tensor_to_gcores_nd(
 
                     if (partition_idx >= 0) {
                         // Partitioned dimension: compute assignment for this core
-                        auto [core_pages, base_pages] = get_core_pages(
+                        auto [core_pages, core_offset] = get_core_pages(
                             dim_sizes[partition_idx], cores_per_dim[partition_idx], core_coords[partition_idx]);
                         num_pages = core_pages;
-                        offset = core_coords[partition_idx] * base_pages;
+                        offset = core_offset;
                     } else {
                         // Non-partitioned dimension: process entire dimension
                         num_pages = mesh_tensor_shape_in_pages[d];

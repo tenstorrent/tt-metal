@@ -262,12 +262,10 @@ void run_width_reduction_interleaved_test(
     ttnn::Tensor input_tensor;
     switch (shard_strategy) {
         case ShardStrategy::WIDTH:
-            input_tensor = create_width_distributed_interleaved_bfloat16_tensor(
-                mesh_device, input_global_shape, input_local_shape);
+            input_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape);
             break;
         case ShardStrategy::BLOCK:
-            input_tensor = create_block_distributed_interleaved_bfloat16_tensor(
-                mesh_device, input_global_shape, input_local_shape);
+            input_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape);
             break;
         case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
     }
@@ -279,7 +277,8 @@ void run_width_reduction_interleaved_test(
     tt::tt_metal::Shape output_shape = input_global_shape;
     output_shape[-1] = 32;  // Reduce width to single tile
 
-    ttnn::Tensor output_tensor = create_height_distributed_interleaved_bfloat16_tensor(mesh_device, output_shape);
+    ttnn::Tensor output_tensor = create_height_distributed_interleaved_bfloat16_tensor(
+        mesh_device, output_shape, /*swap_shard_order=*/false, /*random_init=*/false);
 
     // Build tensor builders
     auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
