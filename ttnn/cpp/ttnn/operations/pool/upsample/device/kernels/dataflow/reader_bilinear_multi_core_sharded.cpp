@@ -209,8 +209,6 @@ struct BilinearIndexAdvancer {
         int32_t rel_x1 = static_cast<int32_t>(x1) - static_cast<int32_t>(halo_starting_col_offset);
         int32_t rel_x2 = static_cast<int32_t>(x2) - static_cast<int32_t>(halo_starting_col_offset);
 
-        TT_ASSERT(rel_y1 >= 0 && rel_y2 >= 0 && rel_x1 >= 0 && rel_x2 >= 0);
-
         uint32_t stick_idx_y1x1 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
                                   static_cast<uint32_t>(rel_y1) * HALO_PADDED_WIDTH + static_cast<uint32_t>(rel_x1);
         uint32_t stick_idx_y1x2 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
