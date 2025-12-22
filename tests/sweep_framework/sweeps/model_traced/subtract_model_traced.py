@@ -92,6 +92,7 @@ def run(
             output_tensor = ttnn.to_torch(output_tensor)
 
             return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+        # else: shape_a and shape_b are already set for tensor-tensor operation
     else:
         # This is sample suite - use same shape for both inputs
         if isinstance(input_shape, (tuple, list)):
@@ -101,7 +102,7 @@ def run(
             shape_a = input_shape
             shape_b = input_shape
 
-    # Tensor-tensor operation (original code)
+    # Tensor-tensor operation (original code continues here with shape_a and shape_b set)
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
