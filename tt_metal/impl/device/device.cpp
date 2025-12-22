@@ -550,8 +550,9 @@ const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
 }
 
 const std::unique_ptr<Allocator>& Device::allocator() const {
-    auto allocator{ this->allocator_impl() };
-    return allocator ? allocator->view() : allocator;
+    static std::unique_ptr<Allocator> null_allocator{};
+    auto& allocator{ this->allocator_impl() };
+    return allocator ? allocator->view() : null_allocator;
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
@@ -561,8 +562,9 @@ const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_dev
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    auto allocator{ this->allocator_impl(sub_device_id) };
-    return allocator ? allocator->view() : allocator;
+    static std::unique_ptr<Allocator> null_allocator{};
+    auto& allocator{ this->allocator_impl(sub_device_id) };
+    return allocator ? allocator->view() : null_allocator;
 }
 
 uint32_t Device::num_sub_devices() const {
