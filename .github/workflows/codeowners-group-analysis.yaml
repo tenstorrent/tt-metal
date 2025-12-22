@@ -2146,20 +2146,56 @@ jobs:
                       done
                       TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
 
-                      # Select up to 2 owners from this pending team
-                      if [ -n "$TEAM_UNAPPROVED" ]; then
-                        IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                        TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+                      # Special handling for @tenstorrent/metalium-api-owners - always include akerteszTT
+                      if [ "$team" = "@tenstorrent/metalium-api-owners" ]; then
+                        echo "Special handling for metalium-api-owners team - ensuring akerteszTT is always included"
+                        # Check if akerteszTT is in unapproved list and not already approved
+                        if echo "$TEAM_UNAPPROVED" | grep -q "akerteszTT"; then
+                          # akerteszTT is available, ensure they're selected
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS"akerteszTT","
+                          # Remove akerteszTT from unapproved list for random selection
+                          TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | tr ',' '\n' | grep -v "^akerteszTT$" | tr '\n' ',' | sed 's/,$//')
+                          echo "Added akerteszTT as required reviewer for metalium-api-owners"
+                        elif ! echo "$APPROVED_REVIEWERS" | grep -q "akerteszTT"; then
+                          # akerteszTT wasn't in the unapproved list but also hasn't approved - still add them
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS"akerteszTT","
+                          echo "Added akerteszTT as required reviewer for metalium-api-owners (not in team members but specified)"
+                        else
+                          echo "akerteszTT already approved, not adding to selection"
+                        fi
 
-                        if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                        elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                          RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
-                          RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                          while [ $RAND2 -eq $RAND1 ]; do
+                        # Select up to 2 additional owners from remaining members
+                        if [ -n "$TEAM_UNAPPROVED" ]; then
+                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+
+                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
                             RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                          done
-                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                            while [ $RAND2 -eq $RAND1 ]; do
+                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                            done
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                          fi
+                        fi
+                      else
+                        # Standard selection for other teams - select up to 2 owners
+                        if [ -n "$TEAM_UNAPPROVED" ]; then
+                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+
+                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                            RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                            while [ $RAND2 -eq $RAND1 ]; do
+                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                            done
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                          fi
                         fi
                       fi
                     fi
