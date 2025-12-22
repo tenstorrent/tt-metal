@@ -176,7 +176,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     // Initialize sockets in context0 namespace
     if (*distributed_ctx0->rank() == recv_rank_ctx0) {
         for (const auto& sender_rank : sender_node_ranks_ctx0) {
-            tt_metal::distributed::SocketConfig socket_config({socket_connection}, socket_mem_config, 0, 0);
+            tt_metal::distributed::SocketConfig socket_config(
+                {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
             socket_config.sender_rank = tt_metal::distributed::multihost::Rank{sender_rank};
             socket_config.receiver_rank = distributed_ctx0->rank();
             socket_config.distributed_context = distributed_ctx0;
@@ -185,7 +186,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     } else if (
         std::find(sender_node_ranks_ctx0.begin(), sender_node_ranks_ctx0.end(), *distributed_ctx0->rank()) !=
         sender_node_ranks_ctx0.end()) {
-        tt_metal::distributed::SocketConfig socket_config({socket_connection}, socket_mem_config, 0, 0);
+        tt_metal::distributed::SocketConfig socket_config(
+            {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
         socket_config.sender_rank = distributed_ctx0->rank();
         socket_config.receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx0};
         socket_config.distributed_context = distributed_ctx0;
@@ -196,7 +198,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
         auto distributed_ctx1 = distributed_ctx0->create_sub_context(ctx1_ranks);
         if (*distributed_ctx1->rank() == recv_rank_ctx1) {
             for (const auto& sender_rank : sender_node_ranks_ctx1) {
-                tt_metal::distributed::SocketConfig socket_config({socket_connection}, socket_mem_config, 0, 0);
+                tt_metal::distributed::SocketConfig socket_config(
+                    {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
                 socket_config.sender_rank = tt_metal::distributed::multihost::Rank{sender_rank};
                 socket_config.receiver_rank = distributed_ctx1->rank();
                 socket_config.distributed_context = distributed_ctx1;
@@ -205,7 +208,8 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
         } else if (
             std::find(sender_node_ranks_ctx1.begin(), sender_node_ranks_ctx1.end(), *distributed_ctx1->rank()) !=
             sender_node_ranks_ctx1.end()) {
-            tt_metal::distributed::SocketConfig socket_config({socket_connection}, socket_mem_config, 0, 0);
+            tt_metal::distributed::SocketConfig socket_config(
+                {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
             socket_config.sender_rank = distributed_ctx1->rank();
             socket_config.receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx1};
             socket_config.distributed_context = distributed_ctx1;
@@ -274,8 +278,8 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
 
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
-    uint32_t sender_mesh_id = 0;
-    uint32_t recv_mesh_id = 1;
+    auto sender_mesh_id = tt::tt_fabric::MeshId{0};
+    auto recv_mesh_id = tt::tt_fabric::MeshId{1};
 
     tt_metal::distributed::SocketConfig socket_config(
         {socket_connection_0,
@@ -291,7 +295,7 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
-    if (*local_mesh_binding[0] == sender_mesh_id) {
+    if (local_mesh_binding[0] == sender_mesh_id) {
         auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
         test_socket_send_recv_big_mesh(mesh_device_, send_socket, 1024, 64, 20, std::nullopt);
     } else {
