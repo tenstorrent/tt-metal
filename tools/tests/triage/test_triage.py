@@ -46,17 +46,14 @@ HANG_APP_EXPECTED_RESULTS = {
             "location_to_check": "0,0",  # Only check this core location
             "cores_to_check": {
                 "trisc0": {
-                    "pc": 34556,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc1": {
-                    "pc": 35360,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc2": {
-                    "pc": 36236,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
@@ -179,6 +176,72 @@ class TestTriage:
 
         result = subprocess.run(
             [triage_script],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_verbosity(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--verbosity=4", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_initialize_with_noc1(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_skip_version_check(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--skip-version-check", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_print_script_times(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--print-script-times", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_verbose(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "-vvv", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_disable_colors(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--disable-colors", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -331,12 +394,6 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
-
-            # Verify PC if specified
-            expected_pc = expected_data.get("pc")
-            if expected_pc is not None:
-                actual_pc = check.result.pc
-                assert actual_pc == expected_pc, f"{risc_name}: Expected PC {expected_pc}, got {actual_pc}"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")

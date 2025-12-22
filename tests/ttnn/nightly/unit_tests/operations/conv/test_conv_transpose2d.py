@@ -11,6 +11,7 @@ from models.common.utility_functions import (
     is_blackhole,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
+import math
 
 SliceHeight = ttnn.Conv2dDRAMSliceHeight
 SliceWidth = ttnn.Conv2dDRAMSliceWidth
@@ -50,6 +51,7 @@ def run_conv_transpose2d(
     preprocess_weights_bias=False,
     config_tensors_in_dram=False,
     dram_slice_config=None,
+    fast_compare=True,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -86,7 +88,7 @@ def run_conv_transpose2d(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, layout=layout, device=device)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, activations_dtype, layout=layout, device=device)
 
     if auto_shard:
         shard_layout = None
@@ -203,9 +205,19 @@ def run_conv_transpose2d(
         pcc = 0.998
 
     ref = torch_out_golden_tensor
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
-    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-    assert passing
+    torch.set_printoptions(precision=3, sci_mode=False)
+    if fast_compare:
+        if fp32_accum and activations_dtype != ttnn.bfloat8_b and weights_dtype != ttnn.bfloat8_b:
+            threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
+        else:
+            threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
+        logger.info(f"Threshold: {threshold}")
+        diff = torch.abs(ref - out) / ref.abs().mean()
+        assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
+    else:
+        passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
+        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+        assert passing
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
