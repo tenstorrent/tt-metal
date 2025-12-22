@@ -34,12 +34,12 @@ SliceReshardAsyncProgramFactory::cached_mesh_workload_t SliceReshardAsyncProgram
     const operation_attributes_t& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output_tensor);
+        auto cached_program = create_at(args, coord, tensor_args, tensor_return_value);
         mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -49,21 +49,22 @@ SliceReshardAsyncProgramFactory::cached_mesh_workload_t SliceReshardAsyncProgram
 
 SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactory::create_at(
     const operation_attributes_t& args,
-    const ttnn::MeshCoordinate& coord,
+    const ttnn::MeshCoordinate& mesh_coord,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
+    tensor_return_value_t& tensor_return_value) {
+    const ttnn::Tensor& input_tensor = tensor_args.input;
+    const ttnn::Tensor& output_tensor = tensor_return_value;
 
     tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor.device();
-    IDevice* sender_device = mesh_device ? mesh_device->get_device(coord) : input_tensor.device();
+    IDevice* sender_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor.device();
     std::vector<IDevice*> devices_to_use = {};
     const auto& mesh_view = input_tensor.device()->get_view();
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    devices_to_use =
-        (args.cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
+    devices_to_use = (args.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
+                                              : mesh_view.get_devices_on_row(mesh_coord[0]);
     uint32_t ring_size = devices_to_use.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -265,7 +266,9 @@ void SliceReshardAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& tensor_return_value) {
+    const ttnn::Tensor& output_tensor = tensor_return_value;
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
