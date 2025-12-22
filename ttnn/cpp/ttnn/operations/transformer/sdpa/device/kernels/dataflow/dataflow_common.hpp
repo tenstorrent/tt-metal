@@ -112,10 +112,10 @@ void read_chunk_with_padding(
             start_tile_id += 1;
             write_ptr += inner_ptr_stride;
 
-            // if (++barrier_count == barrier_threshold) {
-            //     noc_async_read_barrier();
-            //     barrier_count = 0;
-            // }
+            if (++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
         }
         start_tile_id += skip_src_cols;  // Skip src cols if needed
     }
@@ -650,7 +650,8 @@ struct CatAddrGenerator {
         first_seq_padded(first_seq_padded),
         second_seq_padded(second_seq_padded) {}
 
-    uint32_t maybe_read_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t dst_addr) const {
+    uint32_t maybe_read_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t dst_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
             noc_async_read_tile(tile_id, first_reader, dst_addr);
@@ -667,7 +668,8 @@ struct CatAddrGenerator {
         }
     }
 
-    uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
+    uint32_t maybe_write_tile(
+        uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t end_seq_tile, uint32_t src_addr) const {
         if (d2 < first_shape.shape[2]) {
             uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
             noc_async_write_tile(tile_id, first_reader, src_addr);
