@@ -124,20 +124,20 @@ async function run() {
         core.info(`Triggering auto-triage for workflow: ${workflowFileName}, job: ${jobName}`);
 
         try {
-          // await octokit.rest.actions.createWorkflowDispatch({
-          //   owner: github.context.repo.owner,
-          //   repo: github.context.repo.repo,
-          //   workflow_id: 'auto-triage.yml',
-          //   ref: dispatchRef,
-          //   inputs: {
-          //     workflow_name: workflowFileName,
-          //     job_name: jobName,
-          //     slack_ts: slackTs,
-          //     'send-slack-message': sendSlackMessageFlag,
-          //     slack_channel_id: slackChannelId
-          //   }
-          // });
-          core.info(`✓ Successfully mock triggered auto-triage for ${workflowFileName} / ${jobName}`);
+          await octokit.rest.actions.createWorkflowDispatch({
+            owner: github.context.repo.owner,
+            repo: github.context.repo.repo,
+            workflow_id: 'auto-triage.yml',
+            ref: dispatchRef,
+            inputs: {
+              workflow_name: workflowFileName,
+              job_name: jobName,
+              slack_ts: slackTs,
+              'send-slack-message': sendSlackMessageFlag,
+              slack_channel_id: slackChannelId
+            }
+          });
+          core.info(`✓ Successfully triggered auto-triage for ${workflowFileName} / ${jobName}`);
 
           // Add a small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));

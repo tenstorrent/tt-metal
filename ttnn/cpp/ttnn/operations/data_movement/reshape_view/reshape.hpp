@@ -40,8 +40,8 @@ struct ReshapeViewOperation {
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& logical_shape,
-        const ttnn::Shape& padded_shape,
+        const ttnn::Shape& logical_input_shape,
+        const ttnn::Shape& padded_input_shape,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<PadValue>& pad_value = std::nullopt,
         TileReshapeMapMode = TileReshapeMapMode::CACHE,
