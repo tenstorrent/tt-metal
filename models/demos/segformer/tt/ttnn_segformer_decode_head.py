@@ -88,8 +88,6 @@ class TtSegformerDecodeHead:
             )
 
             ttnn.deallocate(encoder_hidden_state)
-            encoder_hidden_state_to_concat = ttnn.reallocate(encoder_hidden_state_to_concat)
-
             all_hidden_states += (encoder_hidden_state_to_concat,)
 
             index += 1
@@ -99,11 +97,9 @@ class TtSegformerDecodeHead:
         ttnn.deallocate(all_hidden_states[1])
         ttnn.deallocate(all_hidden_states[2])
         ttnn.deallocate(all_hidden_states[3])
-        concated_tensor = ttnn.reallocate(concated_tensor)
 
         concated_tensor_tile = ttnn.to_layout(concated_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(concated_tensor)
-        concated_tensor_tile = ttnn.reallocate(concated_tensor_tile)
 
         hidden_states, __, __ = self.linear_fuse(device, concated_tensor_tile)
         logits, __, __ = self.classifier(device, hidden_states)

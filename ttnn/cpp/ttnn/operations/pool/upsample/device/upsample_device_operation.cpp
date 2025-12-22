@@ -15,6 +15,24 @@ namespace ttnn::operations::pool::upsample {
 using namespace tt;
 using namespace tt::tt_metal;
 
+static std::array<uint32_t, 4> get_input_shape(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const Tensor& input = tensor_args.input_tensor;
+
+    // For bilinear mode, input is the HALOED tensor, so we must use sliding_window_config for dimensions
+    if (args.mode == "bilinear" && args.sliding_window_config.has_value()) {
+        const sliding_window::SlidingWindowConfig& slidingWindowConfig = args.sliding_window_config.value();
+        return {
+            slidingWindowConfig.batch_size,
+            slidingWindowConfig.input_hw.first,
+            slidingWindowConfig.input_hw.second,
+            slidingWindowConfig.channels};
+    } else {
+        // For nearest mode use input tensor dimensions
+        const Shape& input_shape = input.logical_shape();
+        return {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
+    }
+}
+
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_0 = tensor_args.input_tensor;
@@ -80,8 +98,8 @@ void UpsampleOperation::validate_on_program_cache_hit(
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
-    const auto& input_shape = input.logical_shape();
+    const Tensor& input = tensor_args.input_tensor;
+    const std::array<uint32_t, 4> input_shape = get_input_shape(args, tensor_args);
 
     const uint32_t out_n = input_shape[0];
     const uint32_t out_h = input_shape[1] * args.scale_factor_h;
@@ -107,21 +125,21 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
                 input.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
             "Block sharded input should have only one CoreRange");
 
-        auto shard_spec = args.output_mem_config.shard_spec().value();
+        ShardSpec shard_spec = args.output_mem_config.shard_spec().value();
 
         if (args.mode == "bilinear") {
-            // Bilinear mode: Calculate output shard with padding (like pool2d) to handle non-exact work distribution
-            uint32_t num_cores = shard_spec.num_cores();
-            uint32_t total_output_sticks = out_n * out_h * out_w;
-            uint32_t output_sticks_padded = tt::round_up(total_output_sticks, num_cores);
-            uint32_t output_shard_height = output_sticks_padded / num_cores;
+            // Bilinear mode: Calculate output shard to handle non-exact work distribution
+            const uint32_t num_cores = shard_spec.num_cores();
+            const uint32_t total_output_sticks = out_n * out_h * out_w;
+            const uint32_t output_sticks_padded = tt::round_up(total_output_sticks, num_cores);
+            const uint32_t output_shard_height = output_sticks_padded / num_cores;
             shard_spec.shape = {output_shard_height, input.shard_spec()->shape[1]};
         } else {
             // Nearest mode: Output shard is simply input shard multiplied by scale factors
             shard_spec.shape = {
                 input.shard_spec()->shape[0] * args.scale_factor_h * args.scale_factor_w, input.shard_spec()->shape[1]};
         }
-        MemoryConfig mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        const MemoryConfig mem_config = args.output_mem_config.with_shard_spec(shard_spec);
         return TensorSpec(output_shape, TensorLayout(output_data_type, PageConfig(output_layout), mem_config));
     }
 
@@ -140,14 +158,16 @@ std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_
     const int scale_factor_w,
     const std::string& mode,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::operations::sliding_window::SlidingWindowConfig> sliding_window_config) {
     return {
         operation_attributes_t{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,
             .mode = mode,
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .sliding_window_config = sliding_window_config},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 }  // namespace ttnn::operations::pool::upsample

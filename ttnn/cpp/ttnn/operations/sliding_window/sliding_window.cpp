@@ -322,10 +322,57 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     }
     return op_trace_metadata;
 }
+std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowConfig& config) {
+    const auto output_shape = config.get_output_shape();
+
+    const uint32_t padded_input_h = config.input_hw.first + config.get_pad_h();
+    const uint32_t padded_input_w = config.input_hw.second + config.get_pad_w();
+
+    // Calculate scale factors
+    const float scale_h_inv = 1.0f / static_cast<float>(config.scale_h);
+    const float scale_w_inv = 1.0f / static_cast<float>(config.scale_w);
+
+    // Create op trace metadata for the output tensor size
+    const uint32_t output_nhw = config.batch_size * output_shape[1] * output_shape[2];
+    std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
+
+    // Nested loops for output tensor coordinates with floating point offsets
+
+    uint32_t i = 0;
+
+    for (uint32_t b = 0; b < config.batch_size; ++b) {
+        float h_offset = (0.5f * scale_h_inv) + 0.5f;
+        for (uint32_t h = 0; h < output_shape[1]; ++h) {
+            // Bilinear upsampling determines the value of an output pixel based on the output pixels coordinates
+            // The output pixel coordinates map to input pixel coordinates with the formula
+            // input_coord = (output_coord + 0.5) * scale_inv - 0.5
+            // However, since one pixel of padding is included at all sides (to avoid negative indices), the offset
+            // calculation is adjusted to: input_coord = (output_coord + 0.5) * scale_inv + 0.5 After that, the top-left
+            // input pixel is determined by flooring the input coordinates
+            float w_offset = (0.5f * scale_w_inv) + 0.5f;
+            for (uint32_t w = 0; w < output_shape[2]; ++w) {
+                // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
+                const uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));
+                const uint32_t top_left_w = static_cast<uint32_t>(std::floor(w_offset));
+
+                // Calculate flattened input index (top-left coordinate for bilinear interpolation)
+                const uint32_t input_idx =
+                    (b * padded_input_h * padded_input_w) + (top_left_h * padded_input_w) + top_left_w;
+                op_trace_metadata[i++] = input_idx;
+                w_offset += scale_w_inv;
+            }
+            h_offset += scale_h_inv;
+        }
+    }
+    return op_trace_metadata;
+}
 
 std::pair<uint32_t, uint32_t> find_minmax_trace_indices(
     const std::vector<uint32_t>& op_trace_metadata, uint32_t start_idx, uint32_t end_idx) {
-    TT_ASSERT(start_idx <= end_idx, "start_idx must be less than or equal to end_idx");
+    TT_ASSERT(
+        start_idx <= end_idx && end_idx < op_trace_metadata.size() && start_idx < op_trace_metadata.size() &&
+            start_idx >= 0,
+        "Error in find_minmax_trace_indices: invalid start or end index");
     auto [min_it, max_it] =
         std::minmax_element(op_trace_metadata.begin() + start_idx, op_trace_metadata.begin() + end_idx + 1);
     return {
@@ -418,48 +465,6 @@ std::vector<PixelMetadata> generate_tensor_metadata(
     }
 
     return tensor_metadata;
-}
-
-std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowConfig& config) {
-    auto output_shape = config.get_output_shape();
-
-    uint32_t padded_input_h = config.input_hw.first + config.get_pad_h();
-    uint32_t padded_input_w = config.input_hw.second + config.get_pad_w();
-
-    // Calculate scale factors
-    float scale_h_inv = 1.0f / static_cast<float>(config.scale_h);
-    float scale_w_inv = 1.0f / static_cast<float>(config.scale_w);
-
-    // Create op trace metadata for the output tensor size
-    uint32_t output_nhw = config.batch_size * output_shape[1] * output_shape[2];
-    std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
-
-    // Nested loops for output tensor coordinates with floating point offsets
-
-    uint32_t i = 0;
-
-    for (uint32_t b = 0; b < config.batch_size; ++b) {
-        float h_offset = (0.5f * scale_h_inv) + 0.5f;
-        for (uint32_t h = 0; h < output_shape[1]; ++h) {
-            float w_offset = (0.5f * scale_w_inv) + 0.5f;
-            for (uint32_t w = 0; w < output_shape[2]; ++w) {
-                // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
-                uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));
-                uint32_t top_left_w = static_cast<uint32_t>(std::floor(w_offset));
-
-                // Calculate flattened input index (top-left coordinate for bilinear interpolation)
-                uint32_t input_idx = (b * padded_input_h * padded_input_w) + (top_left_h * padded_input_w) + top_left_w;
-
-                op_trace_metadata[i++] = input_idx;
-                w_offset += scale_w_inv;
-            }
-            h_offset += scale_h_inv;
-        }
-    }
-    // for (uint32_t idx = 0; idx < op_trace_metadata.size(); ++idx) {
-    // log_trace(tt::LogOp, "op_trace_metadata[{}] = {}", idx, op_trace_metadata[idx]);
-    // }
-    return op_trace_metadata;
 }
 
 const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
