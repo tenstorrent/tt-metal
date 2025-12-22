@@ -124,10 +124,10 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
-    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
-    log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
-    log_debug(LogOp, "ncores: {}", ncores);
+    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
+    log_debug(tt::LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
+    log_debug(tt::LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
+    log_debug(tt::LogOp, "ncores: {}", ncores);
 
     // Kernels
     // computation needed for the bilinear kernel. Passing them as an argument.
@@ -250,7 +250,10 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const uint32_t max_out_sticks_per_core = tt::div_up(total_output_sticks, ncores_nhw);
 
     log_debug(
-        LogOp, "total_output_sticks: {}, max_out_sticks_per_core: {}", total_output_sticks, max_out_sticks_per_core);
+        tt::LogOp,
+        "total_output_sticks: {}, max_out_sticks_per_core: {}",
+        total_output_sticks,
+        max_out_sticks_per_core);
 
     uint32_t start_output_idx = 0;
 
