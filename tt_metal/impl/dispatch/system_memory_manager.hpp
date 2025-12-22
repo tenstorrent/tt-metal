@@ -43,7 +43,7 @@ public:
 
     void set_bypass_mode(bool enable, bool clear);
 
-    bool get_bypass_mode();
+    bool get_bypass_mode() const;
 
     std::vector<uint32_t>& get_bypass_data();
 

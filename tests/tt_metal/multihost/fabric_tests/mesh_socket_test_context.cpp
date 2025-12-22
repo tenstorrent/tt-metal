@@ -147,7 +147,7 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     distributed_context_->barrier();
 }
 
-void MeshSocketTestContext::setup_fabric_configuration() {
+void MeshSocketTestContext::setup_fabric_configuration() const {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 
     tt::tt_fabric::FabricConfig fabric_config;

@@ -51,7 +51,7 @@ struct CoreGrid {
     std::size_t y;
 
     CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
-    CoreCoord to_CoreCoord() { return CoreCoord(int(x), int(y)); }
+    CoreCoord to_CoreCoord() const { return CoreCoord(int(x), int(y)); }
 };
 
 using Buffer = tt::tt_metal::Buffer;

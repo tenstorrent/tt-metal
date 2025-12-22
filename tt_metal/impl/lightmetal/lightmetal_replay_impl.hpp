@@ -68,18 +68,18 @@ public:
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command) const;
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command) const;
+    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command) const;
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command) const;
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) const;
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command) const;
 
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
@@ -107,7 +107,7 @@ public:
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state
-    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args);
+    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args) const;
 
     // Workload related members --------------------
     const tt::tt_metal::flatbuffer::LightMetalBinary* parse_flatbuffer_binary();

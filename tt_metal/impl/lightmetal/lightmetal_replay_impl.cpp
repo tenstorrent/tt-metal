@@ -86,7 +86,7 @@ LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* d
 
 // Needs access to BufferMap, so part of LightMetalReplay class
 std::shared_ptr<RuntimeArgs> LightMetalReplayImpl::rt_args_from_flatbuffer(
-    const FlatbufferRuntimeArgVector flatbuffer_args) {
+    const FlatbufferRuntimeArgVector flatbuffer_args) const {
     auto runtime_args = std::make_shared<RuntimeArgs>();
 
     for (const auto& flatbuffer_arg : *flatbuffer_args) {
@@ -445,7 +445,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
     }
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) const {
     auto buffer = get_buffer_from_map(cmd->global_id());
     TT_FATAL(
         buffer,
@@ -463,7 +463,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteC
     remove_bufer_from_map(cmd->global_id());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) const {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
         buffer,
@@ -483,7 +483,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
     // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) const {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
         buffer,
@@ -547,7 +547,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) const {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(SetRuntimeArgs). program_global_id: {} kernel_global_id: {}",
@@ -570,7 +570,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) const {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(SetRuntimeArgs). program_global_id: {} kernel_global_id: {}",
@@ -626,7 +626,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 }
 
 // Verification command to compare readback of a buffer with golden from either capture or user expected values.
-void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) {
+void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) const {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(LightMetalCompare) cq_global_id: {} buffer_global_id: {} is_user_data: {}",
