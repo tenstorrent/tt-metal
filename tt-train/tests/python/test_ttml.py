@@ -161,67 +161,42 @@ def test_private_symbols_not_imported():
             ), f"Private symbol {attr} from _ttml should not be imported"
 
 
-def test_module_metadata_not_imported():
-    """Test that module metadata is not imported."""
-    # These should not be imported from _ttml
-    metadata_attrs = [
-        "__name__",
-        "__file__",
-        "__doc__",
-        "__package__",
-        "__path__",
-        "__loader__",
-        "__spec__",
-        "__cached__",
-    ]
-
-    for attr in metadata_attrs:
-        if hasattr(ttml, attr):
-            # These should be from the ttml module itself, not _ttml
-            ttml_value = getattr(ttml, attr)
-            if hasattr(ttml._ttml, attr):
-                _ttml_value = getattr(ttml._ttml, attr)
-                # They might be the same for some attributes, but the point
-                # is that we're not blindly copying them
-                pass
-
-
 def test_symbols_available_from_ttml():
     """Test that public symbols from _ttml are accessible via ttml."""
     # Check some known public symbols
-    if hasattr(ttml._ttml, "autograd"):
-        # If autograd exists in _ttml, check some of its symbols
-        _ttml_autograd = ttml._ttml.autograd
-        _ttml_autograd_attrs = [
-            attr for attr in dir(_ttml_autograd) if not attr.startswith("_")
-        ]
+    assert hasattr(ttml._ttml, "autograd")
+    # If autograd exists in _ttml, check some of its symbols
+    _ttml_autograd = ttml._ttml.autograd
+    _ttml_autograd_attrs = [
+        attr for attr in dir(_ttml_autograd) if not attr.startswith("_")
+    ]
 
-        # Some symbols should be available
-        if hasattr(ttml, "autograd"):
-            ttml_autograd = ttml.autograd
-            # At least some public symbols should be imported
-            imported_count = sum(
-                1 for attr in _ttml_autograd_attrs if hasattr(ttml_autograd, attr)
-            )
-            # We expect at least some symbols to be imported
-            # (exact count depends on implementation)
+    # Some symbols should be available
+    assert hasattr(ttml, "autograd")
+    ttml_autograd = ttml.autograd
+    # At least some public symbols should be imported
+    imported_count = sum(
+        1 for attr in _ttml_autograd_attrs if hasattr(ttml_autograd, attr)
+    )
+    # We expect at least some symbols to be imported
+    # (exact count depends on implementation)
+
+    assert imported_count > 0
 
 
 def test_submodule_structure_preserved():
     """Test that submodule structure is preserved during import."""
     # Check that if _ttml has a submodule, ttml has a corresponding one
-    if hasattr(ttml._ttml, "ops"):
-        assert hasattr(ttml, "ops"), "ttml.ops should exist if _ttml.ops exists"
-        assert inspect.ismodule(ttml.ops), "ttml.ops should be a module"
+    assert hasattr(ttml._ttml, "ops")
+    assert hasattr(ttml, "ops"), "ttml.ops should exist if _ttml.ops exists"
+    assert inspect.ismodule(ttml.ops), "ttml.ops should be a module"
 
-        # Check nested structure
-        if hasattr(ttml._ttml.ops, "binary"):
-            assert hasattr(
-                ttml.ops, "binary"
-            ), "ttml.ops.binary should exist if _ttml.ops.binary exists"
-            assert inspect.ismodule(
-                ttml.ops.binary
-            ), "ttml.ops.binary should be a module"
+    # Check nested structure
+    assert hasattr(ttml._ttml.ops, "binary")
+    assert hasattr(
+        ttml.ops, "binary"
+    ), "ttml.ops.binary should exist if _ttml.ops.binary exists"
+    assert inspect.ismodule(ttml.ops.binary), "ttml.ops.binary should be a module"
 
 
 def test_circular_dependency_prevention():
@@ -231,15 +206,15 @@ def test_circular_dependency_prevention():
     # without infinite recursion
 
     # Try to access nested modules multiple times
-    if hasattr(ttml, "ops"):
-        ops1 = ttml.ops
-        ops2 = ttml.ops
-        assert ops1 is ops2, "Same module should be returned"
+    assert hasattr(ttml, "ops")
+    ops1 = ttml.ops
+    ops2 = ttml.ops
+    assert ops1 is ops2, "Same module should be returned"
 
-        if hasattr(ttml.ops, "binary"):
-            binary1 = ttml.ops.binary
-            binary2 = ttml.ops.binary
-            assert binary1 is binary2, "Same submodule should be returned"
+    assert hasattr(ttml.ops, "binary")
+    binary1 = ttml.ops.binary
+    binary2 = ttml.ops.binary
+    assert binary1 is binary2, "Same submodule should be returned"
 
 
 def test_exceptions_imported():
@@ -267,26 +242,26 @@ def test_exceptions_imported():
 def test_all_attribute_handling():
     """Test that __all__ attributes are handled correctly."""
     # Check that modules has __all__ defined
-    if hasattr(ttml.modules, "__all__"):
-        modules_all = ttml.modules.__all__
-        assert isinstance(modules_all, (list, tuple))
+    assert hasattr(ttml.modules, "__all__")
+    modules_all = ttml.modules.__all__
+    assert isinstance(modules_all, (list, tuple))
 
-        # Check that expected items are in __all__
-        expected_items = [
-            "AbstractModuleBase",
-            "Parameter",
-            "Buffer",
-            "ModuleError",
-            "DuplicateNameError",
-            "NameNotFoundError",
-            "UninitializedModuleError",
-        ]
+    # Check that expected items are in __all__
+    expected_items = [
+        "AbstractModuleBase",
+        "Parameter",
+        "Buffer",
+        "ModuleError",
+        "DuplicateNameError",
+        "NameNotFoundError",
+        "UninitializedModuleError",
+    ]
 
-        for item in expected_items:
-            assert item in modules_all, f"{item} should be in ttml.modules.__all__"
-            assert hasattr(
-                ttml.modules, item
-            ), f"{item} should be available in ttml.modules"
+    for item in expected_items:
+        assert item in modules_all, f"{item} should be in ttml.modules.__all__"
+        assert hasattr(
+            ttml.modules, item
+        ), f"{item} should be available in ttml.modules"
 
 
 def test_backward_compatibility():
@@ -313,38 +288,25 @@ def test_readonly_attributes_handled():
     # This is tested implicitly - if there were issues, imports would fail
 
     # Try to access various attributes
-    if hasattr(ttml, "ops"):
-        ops = ttml.ops
-        # Accessing should not raise errors
-        dir(ops)  # Should not raise
-
-
-def test_import_idempotency():
-    """Test that re-importing doesn't change the module structure."""
-    # Reload the module and check structure is the same
-    import importlib
-
-    # Get current state
-    if hasattr(ttml, "ops"):
-        ops_before = ttml.ops
-        ops_attrs_before = set(dir(ops_before))
-
-    # The import should be idempotent - re-running shouldn't change things
-    # (This is tested by the fact that the module structure is consistent)
+    assert hasattr(ttml, "ops")
+    ops = ttml.ops
+    # Accessing should not raise errors
+    dir(ops)  # Should not raise
 
 
 def test_nested_submodule_symbols():
     """Test that symbols in nested submodules are accessible."""
     # Check that symbols in nested submodules are imported
-    if hasattr(ttml, "ops") and hasattr(ttml.ops, "binary"):
-        binary_ops = ttml.ops.binary
-        # Should be able to access the module
-        assert inspect.ismodule(binary_ops)
+    assert hasattr(ttml, "ops")
+    assert hasattr(ttml.ops, "binary")
+    binary_ops = ttml.ops.binary
+    # Should be able to access the module
+    assert inspect.ismodule(binary_ops)
 
-        # Check that it has some attributes (exact attributes depend on implementation)
-        binary_attrs = dir(binary_ops)
-        # Should have at least some public attributes or be an empty module
-        assert isinstance(binary_attrs, list)
+    # Check that it has some attributes (exact attributes depend on implementation)
+    binary_attrs = dir(binary_ops)
+    # Should have at least some public attributes or be an empty module
+    assert isinstance(binary_attrs, list)
 
 
 def _get_ttml_submodules():
@@ -371,29 +333,23 @@ def _get_ttml_submodules():
 def test_submodule_imported(submodule_name):
     """Parametrized test for each expected submodule."""
     # Check that _ttml has the submodule
-    if hasattr(ttml._ttml, submodule_name):
-        _ttml_submodule = getattr(ttml._ttml, submodule_name)
-        assert inspect.ismodule(
-            _ttml_submodule
-        ), f"_ttml.{submodule_name} should be a module"
+    assert hasattr(ttml._ttml, submodule_name)
+    _ttml_submodule = getattr(ttml._ttml, submodule_name)
+    assert inspect.ismodule(
+        _ttml_submodule
+    ), f"_ttml.{submodule_name} should be a module"
 
-        # Check that ttml has the corresponding submodule
-        assert hasattr(ttml, submodule_name), f"ttml.{submodule_name} should exist"
+    # Check that ttml has the corresponding submodule
+    assert hasattr(ttml, submodule_name), f"ttml.{submodule_name} should exist"
 
-        ttml_submodule = getattr(ttml, submodule_name)
-        assert inspect.ismodule(
-            ttml_submodule
-        ), f"ttml.{submodule_name} should be a module"
+    ttml_submodule = getattr(ttml, submodule_name)
+    assert inspect.ismodule(ttml_submodule), f"ttml.{submodule_name} should be a module"
 
-        # Check that some symbols are imported (if the submodule has any)
-        _ttml_attrs = [
-            attr for attr in dir(_ttml_submodule) if not attr.startswith("_")
-        ]
+    # Check that some symbols are imported (if the submodule has any)
+    _ttml_attrs = [attr for attr in dir(_ttml_submodule) if not attr.startswith("_")]
 
-        if _ttml_attrs:
-            # At least some public symbols should be available
-            imported_attrs = [
-                attr for attr in _ttml_attrs if hasattr(ttml_submodule, attr)
-            ]
-            # We don't require all symbols to be imported (some might be filtered)
-            # but the submodule should exist and be accessible
+    assert _ttml_attrs
+    # At least some public symbols should be available
+    imported_attrs = [attr for attr in _ttml_attrs if hasattr(ttml_submodule, attr)]
+    # We don't require all symbols to be imported (some might be filtered)
+    # but the submodule should exist and be accessible
