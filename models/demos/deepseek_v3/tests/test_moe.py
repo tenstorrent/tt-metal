@@ -79,7 +79,6 @@ def test_forward_pass(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
-    # Setup: Get weight_config using the helper function
     weight_config = get_test_weight_config(
         MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
     )

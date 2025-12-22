@@ -72,7 +72,6 @@ def test_forward_pass(
     # Pad input to SEQ_LEN_CHUNK_SIZE if necessary
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
-    # Setup: Get weight_config using the helper function
     weight_config = get_test_weight_config(
         LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
     )

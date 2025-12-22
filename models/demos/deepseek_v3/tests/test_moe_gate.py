@@ -47,9 +47,8 @@ def test_forward_pass(
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 
-    # Setup: Get weight_config using the helper function
     weight_config = get_test_weight_config(
-        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=True
+        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=False
     )
 
     # Generate appropriate config using utility function

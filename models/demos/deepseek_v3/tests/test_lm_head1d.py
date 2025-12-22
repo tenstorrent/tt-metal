@@ -66,7 +66,6 @@ def test_forward_pass(
     torch_input = torch.randn(1, 1, batch_size, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
 
-    # Setup: Get weight_config using the helper function
     weight_config = get_test_weight_config(
         LMHead1D, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
     )
