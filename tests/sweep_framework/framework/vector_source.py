@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Tuple
-import pathlib
 import json
+import pathlib
+from abc import ABC, abstractmethod
+
 from framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -13,14 +13,12 @@ class VectorSource(ABC):
     """Abstract base class for test vector sources"""
 
     @abstractmethod
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
         """Load test vectors based on criteria"""
         pass
 
     @abstractmethod
-    def get_available_suites(self, module_name: str) -> List[str]:
+    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites for a module"""
         pass
 
@@ -36,9 +34,7 @@ class FileVectorSource(VectorSource):
     def __init__(self, file_path: str):
         self.file_path = pathlib.Path(file_path)
 
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
         """Load test vectors from JSON file"""
         if not self.file_path.exists():
             return []
@@ -76,7 +72,7 @@ class FileVectorSource(VectorSource):
         except (json.JSONDecodeError, IOError):
             return []
 
-    def get_available_suites(self, module_name: str) -> List[str]:
+    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites from JSON file"""
         if not self.file_path.exists():
             return []
@@ -96,14 +92,14 @@ class FileVectorSource(VectorSource):
 class VectorExportSource(VectorSource):
     """Vectors export directory source"""
 
-    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+    def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
             # Default to vectors_export directory relative to this file
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
 
-    def _find_module_file(self, module_name: str) -> Optional[pathlib.Path]:
+    def _find_module_file(self, module_name: str) -> pathlib.Path | None:
         """Find the JSON file for a given module"""
         potential_files = list(self.export_dir.glob(f"{module_name}.json"))
         if potential_files:
@@ -120,9 +116,7 @@ class VectorExportSource(VectorSource):
             pass
         return None
 
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
         """Load test vectors from vectors_export directory"""
         module_file = self._find_module_file(module_name)
         if not module_file:
@@ -163,7 +157,7 @@ class VectorExportSource(VectorSource):
         except (json.JSONDecodeError, IOError):
             return []
 
-    def get_available_suites(self, module_name: str) -> List[str]:
+    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites for a module from vectors_export directory"""
         module_file = self._find_module_file(module_name)
         if not module_file:

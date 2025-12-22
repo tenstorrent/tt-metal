@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import sys
-import importlib
-import pathlib
 import datetime
-import os
 import hashlib
+import importlib
 import json
+import os
+import pathlib
 import random
+import sys
 
-from framework.permutations import *
+from framework.permutations import permutations
 from framework.serialize import serialize_structured
-from framework.statuses import VectorValidity, VectorStatus
+from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent

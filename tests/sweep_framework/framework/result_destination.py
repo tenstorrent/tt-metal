@@ -2,32 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
-from typing import Optional, Any
-import pathlib
-import json
 import datetime as dt
 import hashlib
-import os
+import json
 import math
+import os
+import pathlib
+from abc import ABC, abstractmethod
+from typing import Any
+
 from framework.database import generate_error_hash
 from framework.serialize import (
-    serialize,
-    serialize_structured,
+    convert_enum_values_to_strings,
     deserialize,
     deserialize_structured,
-    convert_enum_values_to_strings,
+    serialize,
+    serialize_structured,
 )
 from framework.sweeps_logger import sweeps_logger as logger
+from framework.upload_sftp import upload_run_sftp
+
 from infra.data_collection.pydantic_models import (
-    OpTest,
-    PerfMetric,
-    TestStatus,
     OpParam,
     OpRun,
+    OpTest,
+    PerfMetric,
     RunStatus,
+    TestStatus,
 )
-from framework.upload_sftp import upload_run_sftp
 
 # Optional numpy import for numeric handling in hot paths
 try:
@@ -37,7 +39,7 @@ except ImportError:
 
 
 # --- Metric extraction helpers (module-private) ---
-def _to_float(value: Any) -> Optional[float]:
+def _to_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
@@ -46,7 +48,7 @@ def _to_float(value: Any) -> Optional[float]:
         return None
 
 
-def _normalize_device_metric_name(key: str, suffix: Optional[str] = None) -> str:
+def _normalize_device_metric_name(key: str, suffix: str | None = None) -> str:
     base = key if key.startswith("device_") else f"device_{key}"
     return f"{base}{suffix or ''}"
 
@@ -57,12 +59,12 @@ def _add_metric(metrics: set, name: str, value: Any) -> None:
         metrics.add(PerfMetric(metric_name=name, metric_value=v))
 
 
-def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: Optional[str] = None) -> None:
+def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: str | None = None) -> None:
     for k, v in perf.items():
         _add_metric(metrics, _normalize_device_metric_name(k, suffix), v)
 
 
-def _map_status(value: Any) -> Optional[TestStatus]:
+def _map_status(value: Any) -> TestStatus | None:
     if value is None:
         return None
     try:
@@ -98,7 +100,7 @@ def _map_status(value: Any) -> Optional[TestStatus]:
         return TestStatus("error")
 
 
-def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
+def _collect_all_metrics(raw: dict[str, Any]) -> set[PerfMetric] | None:
     """Collect both e2e performance and device performance metrics into PerfMetric set"""
     metrics: set[PerfMetric] = set()
 
@@ -109,7 +111,7 @@ def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
     return metrics if metrics else None
 
 
-def _coerce_to_optional_string(value: Any) -> Optional[str]:
+def _coerce_to_optional_string(value: Any) -> str | None:
     """Convert any value to an optional string, handling common numeric types gracefully."""
     if value is None:
         return None
@@ -184,7 +186,7 @@ class ResultDestination(ABC):
     """Abstract base class for test result destinations"""
 
     @abstractmethod
-    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> str | None:
         """Initialize a new test run and return run_id if applicable"""
         pass
 
@@ -194,7 +196,7 @@ class ResultDestination(ABC):
         pass
 
     @abstractmethod
-    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+    def finalize_run(self, run_id: str | None, final_status: str) -> None:
         """Finalize the test run"""
         pass
 
@@ -207,17 +209,17 @@ class ResultDestination(ABC):
 class FileResultDestination(ResultDestination):
     """File-based result destination (JSON export)"""
 
-    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+    def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
             self.export_dir = pathlib.Path(__file__).parent.parent / "results_export"
         else:
             self.export_dir = export_dir
         # In-memory aggregation for building OpRun at finalize_run
-        self._run_metadata: Optional[dict[str, Any]] = None
+        self._run_metadata: dict[str, Any] | None = None
         self._collected_tests: list[dict[str, Any]] = []
-        self._run_id: Optional[str] = None
+        self._run_id: str | None = None
 
-    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> str | None:
         """Prepare export directory and initialize run aggregation context."""
         if not self.export_dir.exists():
             self.export_dir.mkdir(parents=True)
@@ -405,7 +407,7 @@ class FileResultDestination(ResultDestination):
         logger.info(f"Successfully exported {len(results)} results to {export_path}")
         return "success"
 
-    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+    def finalize_run(self, run_id: str | None, final_status: str) -> None:
         """Validate and write a run-level JSON conforming to OpRun schema."""
         if self._run_metadata is None:
             return
@@ -569,10 +571,10 @@ def _flatten_any_to_dotted(value: Any) -> dict[str, Any]:
 class SupersetResultDestination(FileResultDestination):
     """Superset destination: file export plus SFTP upload of oprun_*.json."""
 
-    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+    def __init__(self, export_dir: pathlib.Path | None = None):
         super().__init__(export_dir)
 
-    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+    def finalize_run(self, run_id: str | None, final_status: str) -> None:
         # First perform the standard file-based finalize to write oprun_*.json
         super().finalize_run(run_id, final_status)
 
