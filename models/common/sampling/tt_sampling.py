@@ -266,6 +266,8 @@ class TTSampling(LightweightModule):
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
                 indices_tensor=self.tt_indices_tensor,
+                sorted=True,
+                largest=True,
             )
 
             # Gather top-k values across all devices

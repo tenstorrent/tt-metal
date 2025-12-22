@@ -297,8 +297,6 @@ def test_llama_sampling_inference(
 
     print("argmax:", torch.argmax(torch_input[:, :, :, :], dim=-1))
 
-    breakpoint()
-
     # Reference output
     reference_outputs = []
     for i in range(num_samples):
