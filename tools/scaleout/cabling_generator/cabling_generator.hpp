@@ -110,9 +110,11 @@ CableLength calc_cable_length(
 class CablingGenerator {
 public:
     // Constructor with full deployment descriptor (includes physical location info)
+    // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
 
     // Constructor with just hostnames (no physical location info)
+    // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
     CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
 
     // Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)

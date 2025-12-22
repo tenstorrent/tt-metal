@@ -68,7 +68,7 @@ Generates a Factory System Descriptor (FSD) and Cabling Guide from Cabling and D
 ```
 
 **Options:**
-- `--cabling, -c`: Path to the cabling descriptor file (.textproto)
+- `--cabling, -c`: Path to the cabling descriptor file (.textproto) **or directory** containing multiple descriptor files
 - `--deployment, -d`: Path to the deployment descriptor file (.textproto)
 - `--output, -o`: Optional name suffix for output files
 - `--simple, -s`: Generate simple CSV output (hostname-based) instead of detailed location information
@@ -76,6 +76,36 @@ Generates a Factory System Descriptor (FSD) and Cabling Guide from Cabling and D
 **Outputs:**
 - `out/scaleout/factory_system_descriptor_<suffix>.textproto` - Factory System Descriptor
 - `out/scaleout/cabling_guide_<suffix>.csv` - Cabling guide
+
+#### Merging Multiple Cabling Descriptors
+
+For large systems (e.g., BH Exabox), you can organize cabling into multiple descriptor files and merge them automatically. This is useful when managing different cable batches separately:
+
+- Intrapod cables for forming big meshes
+- Cables between 4x32 meshes
+- Cables between 8x16 meshes
+- Other specialized cables
+
+**Directory-based merging:**
+```bash
+# Place multiple .textproto files in a directory
+./build/tools/scaleout/run_cabling_generator \
+    --cabling ./cabling_descriptors/ \
+    --deployment deployment.textproto \
+    --output merged_system
+```
+
+The tool will:
+1. Recursively find all `.textproto` files in the directory
+2. Validate that there are no conflicting connections (same port connected to different endpoints)
+3. Merge all graph templates and connections
+4. Warn if duplicate connections are found (and deduplicate them)
+5. Validate host count consistency across descriptors
+
+**Conflict Detection:**
+- **Error**: If endpoint A is connected to endpoint B in one descriptor but to endpoint C in another
+- **Warning**: If the same connection appears in multiple descriptors (deduplicated automatically)
+- **Warning**: If descriptors have different host counts
 
 ### generate_cluster_descriptor
 
