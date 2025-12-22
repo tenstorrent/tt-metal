@@ -343,6 +343,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             });
 
         SetRuntimeArgs(program, topk_compute_kernel_id, core, {direction_init});
+        direction_init = !direction_init;
         core_w++;
     }
     SetRuntimeArgs(
