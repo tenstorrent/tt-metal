@@ -106,7 +106,7 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox"},
+            {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
             {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
             {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-perf", "num_devices": 8, "key": "loudbox"},
             {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
@@ -119,27 +119,18 @@ jobs:
             exit 0
           fi
 
-          # Build filtered list based on individual inputs
-          selected=()
-          if [[ "${{ inputs.run_bh_quietbox }}" == "true" ]]; then
-            selected+=('{"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox"}')
-          fi
-          if [[ "${{ inputs.run_bh_deskbox }}" == "true" ]]; then
-            selected+=('{"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"}')
-          fi
-          if [[ "${{ inputs.run_bh_loudbox }}" == "true" ]]; then
-            selected+=('{"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-perf", "num_devices": 8, "key": "loudbox"}')
-          fi
-          if [[ "${{ inputs.run_bh_p300 }}" == "true" ]]; then
-            selected+=('{"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"}')
-          fi
-          if [[ "${{ inputs.run_bh_quietbox_2 }}" == "true" ]]; then
-            selected+=('{"name": "QuietBox 2 (2xP300) tests", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}')
-          fi
+          # Build list of selected keys based on inputs
+          selected_keys=()
+          [[ "${{ inputs.run_bh_llmbox }}" == "true" ]] && selected_keys+=("llmbox")
+          [[ "${{ inputs.run_bh_deskbox }}" == "true" ]] && selected_keys+=("deskbox")
+          [[ "${{ inputs.run_bh_loudbox }}" == "true" ]] && selected_keys+=("loudbox")
+          [[ "${{ inputs.run_bh_p300 }}" == "true" ]] && selected_keys+=("p300")
+          [[ "${{ inputs.run_bh_quietbox_2 }}" == "true" ]] && selected_keys+=("quietbox_2")
 
-          # Join array into JSON
-          json_array=$(printf '%s\n' "${selected[@]}" | jq -s '.')
-          echo "matrix={\"test-group\": $json_array}" >> $GITHUB_OUTPUT
+          # Filter all_systems by selected keys using jq
+          keys_json=$(printf '%s\n' "${selected_keys[@]}" | jq -R . | jq -s .)
+          filtered=$(echo "$all_systems" | jq --argjson keys "$keys_json" '[.[] | select(.key as $k | $keys | index($k))]')
+          echo "matrix={\"test-group\": $filtered}" >> $GITHUB_OUTPUT
   blackhole-multi-card-demo-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_demo_tests }}
     needs: [build-artifact, blackhole-multi-card-tests-matrix ]
