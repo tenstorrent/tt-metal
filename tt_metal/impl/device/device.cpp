@@ -544,23 +544,25 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
+    static std::unique_ptr<AllocatorImpl> null_allocator{};
     log_info(tt::LogMetal, "Warning alocator_impl is depracated program for device");
-    return nullptr;
+    return null_allocator;
 }
 
 const std::unique_ptr<Allocator>& Device::allocator() const {
     auto allocator{ this->allocator_impl() };
-    return allocator ? allocator->view() : nullptr;
+    return allocator ? allocator->view() : allocator;
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
+    static std::unique_ptr<AllocatorImpl> null_allocator{};
     log_info(tt::LogMetal, "Warning allocator_impl is deprecated for device {}", sub_device_id);
-    return nullptr;
+    return null_allocator;
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
     auto allocator{ this->allocator_impl(sub_device_id) };
-    return allocator ? allocator->view() : nullptr;
+    return allocator ? allocator->view() : allocator;
 }
 
 uint32_t Device::num_sub_devices() const {
