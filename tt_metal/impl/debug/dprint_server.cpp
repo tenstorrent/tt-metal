@@ -448,7 +448,7 @@ private:
     // out to host-side stream. Returns true if some data was read out, and false if no new
     // print data was present on the device.
     bool peek_one_risc_non_blocking(
-        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_index, bool new_data_this_iter);
+        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
 
     // Transfers data from all intermdeiate streams to output stream and flushes it.
     void transfer_all_streams_to_output(ChipId device_id);

@@ -104,8 +104,8 @@ struct RelationalBinary {
 
     // rhs - tensor combination not available on Pytorch for this op
     static Tensor invoke(
-        float rhs,
-        const ttnn::Tensor& lhs,
+        float lhs,
+        const ttnn::Tensor& rhs,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt);

@@ -142,10 +142,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
     bool transpose_a,
     bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
@@ -186,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
-    bool bcast_batch,
+    bool broadcast_batch,
     bool transpose_a,
     bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
@@ -388,10 +388,10 @@ SparseMatmul create_sparse_matmul_struct(
 matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
@@ -404,10 +404,10 @@ matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_opt
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
@@ -420,11 +420,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& matmul_signal_info);
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
 
 Tensor matmul(
     const Tensor& input_tensor_a,
@@ -472,7 +472,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 namespace reuse_mcast_1d_optimized_helpers {
 void override_program_parameters(
-    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& shared_variables,
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,

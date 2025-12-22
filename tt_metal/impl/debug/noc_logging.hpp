@@ -9,5 +9,5 @@
 
 namespace tt {
 void ClearNocData(ChipId device_id);
-void DumpNocData(const std::vector<ChipId>& device_ids);
+void DumpNocData(const std::vector<ChipId>& devices);
 }  // namespace tt

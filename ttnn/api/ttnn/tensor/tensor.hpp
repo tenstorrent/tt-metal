@@ -288,7 +288,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
-    DataType dtype,
+    DataType data_type,
     Layout layout,
     IDevice* device,
     const MemoryConfig& memory_config = MemoryConfig{},

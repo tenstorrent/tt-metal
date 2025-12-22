@@ -196,18 +196,23 @@ private:
 
     // Helper methods for validation that return their own error lists
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_mesh_topology(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_architecture_consistency(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_switch_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_express_connections(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_switch_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_graph_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_graph_topology_and_connections(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
-    static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_legacy_requirements(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     // Populates the MGD Graph from the proto file
     void populate();
