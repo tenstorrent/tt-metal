@@ -1306,11 +1306,13 @@ class MasterConfigLoader:
                         unique_memory_configs_b.append(cfg["memory_config_b"])
                         seen_mem_config_pairs.add(mem_config_pair)
 
-                # For binary operations, pass shapes as separate parameters
+                # For binary operations, pass shapes as a dict with "self" and "other" keys
                 # Convert shapes to tuples for proper serialization
+                input_shapes = [
+                    {"self": tuple(sa), "other": tuple(sb)} for sa, sb in zip(unique_shapes_a, unique_shapes_b)
+                ]
                 result = {
-                    "input_a_shape": [tuple(s) for s in unique_shapes_a],
-                    "input_b_shape": [tuple(s) for s in unique_shapes_b],
+                    "input_shape": input_shapes,
                     "input_a_dtype": list(dtypes_a),
                     "input_b_dtype": list(dtypes_b),
                     "input_a_layout": list(layouts_a),
@@ -1335,8 +1337,7 @@ class MasterConfigLoader:
             else:
                 # Return individual parameter lists to match sweep file expectations
                 # Extract each parameter type into separate lists
-                input_a_shapes = []
-                input_b_shapes = []
+                input_shapes = []
                 input_a_dtypes = []
                 input_b_dtypes = []
                 input_a_layouts = []
@@ -1349,10 +1350,9 @@ class MasterConfigLoader:
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
-                    # Pass shapes as separate parameters for binary operations
+                    # Pass shapes as a dict with "self" and "other" keys
                     # Convert to tuples for proper serialization
-                    input_a_shapes.append(tuple(cfg["shape_a"]))
-                    input_b_shapes.append(tuple(cfg["shape_b"]))
+                    input_shapes.append({"self": tuple(cfg["shape_a"]), "other": tuple(cfg["shape_b"])})
                     input_a_dtypes.append(cfg["dtype_a"])
                     input_b_dtypes.append(cfg["dtype_b"])
                     input_a_layouts.append(cfg["layout_a"])
@@ -1367,8 +1367,7 @@ class MasterConfigLoader:
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
                 param_names = [
-                    "input_a_shape",
-                    "input_b_shape",
+                    "input_shape",
                     "input_a_dtype",
                     "input_b_dtype",
                     "input_a_layout",
@@ -1382,8 +1381,7 @@ class MasterConfigLoader:
                     # "traced_config_name",
                 ]
                 param_lists = [
-                    input_a_shapes,
-                    input_b_shapes,
+                    input_shapes,
                     input_a_dtypes,
                     input_b_dtypes,
                     input_a_layouts,
