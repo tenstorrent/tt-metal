@@ -322,23 +322,16 @@ class Generator:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
-            # Temporarily disable sub_core_grids for penalty operations during prefill
-            # The sub_core_grids are configured for decode's sub-device, but we're in prefill
-            saved_op_kwargs = sampling_module.tt_penalties._op_kwargs
-            sampling_module.tt_penalties._op_kwargs = {}
-            try:
-                if prompt_tokens is not None:  # Guard for warmup
-                    sampling_module.reset_prompt_tokens(prompt_tokens)
-                    sampling_module.reset_output_state(output_tokens)
-                    sampling_module.reset_seed(sampling_params.seed)
+            if prompt_tokens is not None:  # Guard for warmup
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
+                sampling_module.reset_seed(sampling_params.seed)
 
-                tt_sampled, tt_log_probs = sampling_module.sample(
-                    tt_logits_batch,
-                    tt_out_tok=None,
-                    enable_trace=False,  # Don't trace prefill sampling
-                )
-            finally:
-                sampling_module.tt_penalties._op_kwargs = saved_op_kwargs
+            tt_sampled, tt_log_probs = sampling_module.sample(
+                tt_logits_batch,
+                tt_out_tok=None,
+                enable_trace=False,  # Don't trace prefill sampling
+            )
             if isinstance(tt_sampled, tuple):
                 print(f"tt_sampled is tuple")
                 tt_sampled = tt_sampled[0]
