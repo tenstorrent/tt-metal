@@ -177,20 +177,22 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     if (*distributed_ctx0->rank() == recv_rank_ctx0) {
         for (const auto& sender_rank : sender_node_ranks_ctx0) {
             tt_metal::distributed::SocketConfig socket_config(
-                {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
-            socket_config.sender_rank = tt_metal::distributed::multihost::Rank{sender_rank};
-            socket_config.receiver_rank = distributed_ctx0->rank();
-            socket_config.distributed_context = distributed_ctx0;
+                {socket_connection},
+                socket_mem_config,
+                tt_metal::distributed::multihost::Rank{sender_rank},
+                distributed_ctx0->rank(),
+                distributed_ctx0);
             sockets_ctx0.emplace(sender_rank, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
         }
     } else if (
         std::find(sender_node_ranks_ctx0.begin(), sender_node_ranks_ctx0.end(), *distributed_ctx0->rank()) !=
         sender_node_ranks_ctx0.end()) {
         tt_metal::distributed::SocketConfig socket_config(
-            {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
-        socket_config.sender_rank = distributed_ctx0->rank();
-        socket_config.receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx0};
-        socket_config.distributed_context = distributed_ctx0;
+            {socket_connection},
+            socket_mem_config,
+            distributed_ctx0->rank(),
+            tt_metal::distributed::multihost::Rank{recv_rank_ctx0},
+            distributed_ctx0);
         sockets_ctx0.emplace(recv_rank_ctx0, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
     }
     // Initialize sockets in context1 namespace
@@ -199,20 +201,22 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
         if (*distributed_ctx1->rank() == recv_rank_ctx1) {
             for (const auto& sender_rank : sender_node_ranks_ctx1) {
                 tt_metal::distributed::SocketConfig socket_config(
-                    {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
-                socket_config.sender_rank = tt_metal::distributed::multihost::Rank{sender_rank};
-                socket_config.receiver_rank = distributed_ctx1->rank();
-                socket_config.distributed_context = distributed_ctx1;
+                    {socket_connection},
+                    socket_mem_config,
+                    tt_metal::distributed::multihost::Rank{sender_rank},
+                    distributed_ctx1->rank(),
+                    distributed_ctx1);
                 sockets_ctx1.emplace(sender_rank, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
             }
         } else if (
             std::find(sender_node_ranks_ctx1.begin(), sender_node_ranks_ctx1.end(), *distributed_ctx1->rank()) !=
             sender_node_ranks_ctx1.end()) {
             tt_metal::distributed::SocketConfig socket_config(
-                {socket_connection}, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
-            socket_config.sender_rank = distributed_ctx1->rank();
-            socket_config.receiver_rank = tt_metal::distributed::multihost::Rank{recv_rank_ctx1};
-            socket_config.distributed_context = distributed_ctx1;
+                {socket_connection},
+                socket_mem_config,
+                distributed_ctx1->rank(),
+                tt_metal::distributed::multihost::Rank{recv_rank_ctx1},
+                distributed_ctx1);
             sockets_ctx1.emplace(recv_rank_ctx1, tt_metal::distributed::MeshSocket(mesh_device_, socket_config));
         }
     }
