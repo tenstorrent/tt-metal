@@ -160,8 +160,20 @@ def deserialize_structured(object):
                 return type.from_json(data)
             else:
                 # This is a plain data dict (e.g., input_shape for multi-input ops)
-                # Convert any lists to tuples for consistency
-                return {k: tuple(v) if isinstance(v, list) else v for k, v in object.items()}
+                # Convert any lists to tuples, and eval string representations of tuples
+                result = {}
+                for k, v in object.items():
+                    if isinstance(v, list):
+                        result[k] = tuple(v)
+                    elif isinstance(v, str):
+                        # Try to eval string representations of tuples like "(1, 1, 128, 1024)"
+                        try:
+                            result[k] = eval(v)
+                        except (SyntaxError, NameError):
+                            result[k] = v
+                    else:
+                        result[k] = v
+                return result
 
         elif isinstance(object, str):
             if "." in object:
