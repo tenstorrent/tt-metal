@@ -49,8 +49,10 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
+    MathFidelitySetting,
     ModelArgs,
     ModelOptimizations,
+    OpGroup,
     PrecisionSetting,
     TensorGroup,
 )
@@ -269,12 +271,43 @@ def get_LLama2OpenVLAArgs(state_dict):
 
 class OpenVLALanguageModel(GenerationMixin):
     def __init__(self, device, local_state_dict=None):
-        # Custom optimization: BF16 for KV_CACHE only (WQKV/WO overflow L1)
-        def custom_kv_bf16_optimization(model_args):
-            """Custom optimization: BF16 for KV cache only."""
-            base_opt = ModelOptimizations.performance(model_args.model_name)
-            base_opt.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BF16
-            return DecodersPrecision(model_args.n_layers, model_args.model_name, base_opt)
+        # ============================================================================
+        # OPTION 1: BFP8 with BF16 KV cache only (works on N150, single device)
+        # This has precision issues with action tokens but fits in L1 on single device
+        # ============================================================================
+        # def custom_kv_bf16_optimization(model_args):
+        #     """Custom optimization: BF16 for KV cache only (N150 compatible)."""
+        #     base_opt = ModelOptimizations.performance(model_args.model_name)
+        #     base_opt.tensor_dtype_settings[TensorGroup.KV_CACHE] = PrecisionSetting.BF16
+        #     return DecodersPrecision(model_args.n_layers, model_args.model_name, base_opt)
+
+        # ============================================================================
+        # OPTION 2: Full BF16 attention like Qwen2.5-7B (requires N300 / 2 devices)
+        # This is needed for action token prediction which has very small gaps
+        # between correct and incorrect tokens (0.06-0.25), while BFP8 error is ~0.5-1.5.
+        # ============================================================================
+        def qwen_style_bf16_attention(model_args):
+            """
+            Custom optimization: Full BF16 attention like Qwen2.5-7B.
+            Requires N300 (2 devices) to fit in L1 memory.
+            """
+            settings = {
+                "TensorPrecision": {
+                    TensorGroup.WQKV: PrecisionSetting.BF16,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                    TensorGroup.WO: PrecisionSetting.BF16,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                },
+            }
+            model_opt = ModelOptimizations(settings)
+            return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
@@ -282,8 +315,10 @@ class OpenVLALanguageModel(GenerationMixin):
             "mesh_device": device,
             "instruct": False,
             "global_batch_size": 1,
-            # Use custom callable: BF16 for KV cache only
-            "optimizations": custom_kv_bf16_optimization,
+            # Use Qwen-style BF16 attention (requires N300)
+            # To use N150 mode, uncomment custom_kv_bf16_optimization and comment out qwen_style_bf16_attention
+            "optimizations": qwen_style_bf16_attention,  # For N300
+            # "optimizations": custom_kv_bf16_optimization,  # For N150 (has precision issues)
             "max_seq_len": 1024,  # Vision (~512) + text gets padded to 1024
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
             "paged_attention": True,
