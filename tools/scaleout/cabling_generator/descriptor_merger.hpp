@@ -15,6 +15,8 @@ class ClusterDescriptor;
 class GraphTemplate;
 class NodeDescriptor;
 class Port;
+class ChildInstance;
+class PortConnections;
 }  // namespace tt::scaleout_tools::cabling_generator::proto
 
 namespace tt::scaleout_tools {
@@ -68,15 +70,16 @@ public:
     static cabling_generator::proto::ClusterDescriptor merge_descriptors(
         const std::vector<std::string>& descriptor_paths);
 
-    static cabling_generator::proto::ClusterDescriptor merge_descriptors(
+    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
+
+    static bool is_directory(const std::string& path);
+
+private:
+    static cabling_generator::proto::ClusterDescriptor merge_descriptors_impl(
         const std::vector<cabling_generator::proto::ClusterDescriptor>& descriptors,
         MergeValidationResult& validation_result);
 
-    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
-
     static MergeValidationResult validate_host_consistency(const std::vector<std::string>& descriptor_paths);
-
-    static bool is_directory(const std::string& path);
 
 private:
     using ConnectionMap = std::map<ConnectionEndpoint, ConnectionEndpoint>;
@@ -88,19 +91,59 @@ private:
         const std::string& source_file,
         MergeValidationResult& result);
 
-    static ConnectionMap build_connection_map(const cabling_generator::proto::ClusterDescriptor& descriptor);
+    static void normalize_torus_descriptors(
+        cabling_generator::proto::ClusterDescriptor& target,
+        const cabling_generator::proto::ClusterDescriptor& source,
+        const std::string& template_name);
 
-    static void detect_connection_conflicts(
+    static void add_torus_internal_connections(
+        cabling_generator::proto::GraphTemplate& target_template,
+        const std::string& target_desc,
+        const std::string& source_desc,
+        const std::string& child_name);
+
+    static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
+
+    static ConnectionEndpoint port_to_endpoint(
+        const cabling_generator::proto::Port& port, const std::string& graph_template_name);
+
+    static void validate_structure_identity(
         const cabling_generator::proto::ClusterDescriptor& desc1,
         const std::string& file1,
         const cabling_generator::proto::ClusterDescriptor& desc2,
         const std::string& file2,
         MergeValidationResult& result);
 
-    static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
+    static void validate_node_descriptors_identity(
+        const cabling_generator::proto::ClusterDescriptor& desc1,
+        const std::string& file1,
+        const cabling_generator::proto::ClusterDescriptor& desc2,
+        const std::string& file2,
+        MergeValidationResult& result);
 
-    static ConnectionEndpoint port_to_endpoint(
-        const cabling_generator::proto::Port& port, const std::string& graph_template_name);
+    static void validate_graph_template_children_identity(
+        const cabling_generator::proto::GraphTemplate& tmpl1,
+        const cabling_generator::proto::GraphTemplate& tmpl2,
+        const std::string& template_name,
+        const std::string& file1,
+        const std::string& file2,
+        MergeValidationResult& result);
+
+    static void validate_child_identity(
+        const cabling_generator::proto::ChildInstance& child1,
+        const cabling_generator::proto::ChildInstance& child2,
+        const std::string& template_name,
+        const std::string& file1,
+        const std::string& file2,
+        MergeValidationResult& result);
+
+    static bool is_torus_compatible(const std::string& desc1, const std::string& desc2);
+
+    static bool is_a_torus(const std::string& desc);
+    static bool has_same_torus_architecture(const std::string& desc1, const std::string& desc2);
+    static std::string extract_torus_architecture(const std::string& desc);
+
+    static bool has_torus_variant(const std::string& desc, const std::string& variant);
 };
 
 }  // namespace tt::scaleout_tools
