@@ -6,11 +6,12 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 # Test uses 3.932GB of space per device to nearly fill the dram
+@run_for_n_dev(32)
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
@@ -109,6 +110,7 @@ def test_ccl_ddr_smoke_test(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
+@run_for_n_dev(32)
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(

@@ -9,6 +9,7 @@ import ttnn
 import numpy as np
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
@@ -16,15 +17,17 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        [(1, 4), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
@@ -55,6 +58,7 @@ def test_pipeline_performance(
     height: int,
     is_ci_env: bool,
     galaxy_type: str,
+    is_fsdp: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -87,8 +91,8 @@ def test_pipeline_performance(
         cfg_parallel=None,
     )
     vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
     )
 
     # Test prompts
@@ -100,12 +104,9 @@ def test_pipeline_performance(
         """A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition""",
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
-    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
     num_inference_steps = 40
-    guidance_scale = 3.0
-    guidance_scale_2 = 4.0
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -114,28 +115,25 @@ def test_pipeline_performance(
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
-        use_cache=True,
-        boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
 
-    with torch.no_grad():
-        result = pipeline(
-            prompt=prompts[0],
-            negative_prompt=negative_prompt,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_inference_steps=2,  # Small number of steps to reduce test time.
-            guidance_scale=guidance_scale,
-            guidance_scale_2=guidance_scale_2,
-        )
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            result = pipeline(
+                prompt=prompts[0],
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=2,  # Small number of steps to reduce test time.
+            )
 
-    logger.info(f"Warmup completed in {pipeline.timing_data['total']:.2f}s")
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Check output
     if hasattr(result, "frames"):
@@ -164,7 +162,6 @@ def test_pipeline_performance(
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
-    all_timings = []
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
     for i in range(num_perf_runs):
@@ -176,24 +173,21 @@ def test_pipeline_performance(
             with torch.no_grad():
                 pipeline(
                     prompt=prompts[prompt_idx],
-                    negative_prompt=negative_prompt,
                     height=height,
                     width=width,
                     num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    guidance_scale_2=guidance_scale_2,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
 
-        # Collect timing data
-        all_timings.append(pipeline.timing_data)
-        logger.info(f"  Run {i+1} completed in {pipeline.timing_data['total']:.2f}s")
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
-    text_encoder_times = [t["text_encoder"] for t in all_timings]
-    denoising_times = [t["denoising"] for t in all_timings]
-    vae_times = [t["vae"] for t in all_timings]
-    total_times = [t["total"] for t in all_timings]
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
 
     # Report results
     print("\n" + "=" * 80)
@@ -225,49 +219,95 @@ def test_pipeline_performance(
     print_stats("Total Pipeline", total_times)
     print("-" * 80)
 
-    # Validate that we got reasonable results
-    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
-    assert all(t["total"] > 0 for t in all_timings), "All runs should have positive total time"
-
     # Validate performance
     measurements = {
-        "text_encoding_time": statistics.mean(text_encoder_times),
-        "denoising_time": statistics.mean(denoising_times),
-        "vae_decoding_time": statistics.mean(vae_times),
-        "total_time": statistics.mean(total_times),
+        "encoder": statistics.mean(text_encoder_times),
+        "denoising": statistics.mean(denoising_times),
+        "vae": statistics.mean(vae_times),
+        "total": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 14.8,
-            "denoising_time": 909,
-            "vae_decoding_time": 64.6,
-            "total_time": 990,
+            "encoder": 19.0,
+            "denoising": 800.0,
+            "vae": 9.0,
+            "total": 850.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 9.34,
-            "denoising_time": 163,
-            "vae_decoding_time": 18.2,
-            "total_time": 192,
+            "encoder": 15.0,
+            "denoising": 163.0,
+            "vae": 18.2,
+            "total": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 15.0,
+                "denoising": 260.0,
+                "vae": 8.0,
+                "total": 283.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 15.0,
+                "denoising": 440.0,
+                "vae": 8.0,
+                "total": 463.0,
+            }
+    elif tuple(mesh_device.shape) == (1, 4) and height == 480:
+        assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "text_encoding_time": 9.15,
-            "denoising_time": 502,
-            "vae_decoding_time": 39.6,
-            "total_time": 556,
+            "encoder": 17.0,
+            "denoising": 680.0,
+            "vae": 60.0,
+            "total": 760.0,
+        }
+    elif tuple(mesh_device.shape) == (1, 4) and height == 720:
+        assert is_blackhole(), "1x4 is only supported for blackhole"
+        expected_metrics = {
+            "encoder": 15.0,
+            "denoising": 3200.0,
+            "vae": 200.0,
+            "total": 3415.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
         # In CI, dump a performance report
-        profiler_model_name = f"wan_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
+        for iteration in range(num_perf_runs):
+            for step_name in ["encoder", "denoising", "vae", "run"]:
+                benchmark_data.add_measurement(
+                    profiler=benchmark_profiler,
+                    iteration=iteration,
+                    step_name=step_name,
+                    name=step_name,
+                    value=benchmark_profiler.get_duration(step_name, iteration),
+                    target=expected_metrics["total" if step_name == "run" else step_name],
+                )
+        device_name_map = {
+            (1, 4): "BH_QB",
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type="wan_traced",
-            ml_model_name=profiler_model_name,
+            run_type=device_name_map[mesh_shape],
+            ml_model_name="Wan2.2",
+            batch_size=1,
+            config_params={
+                "width": width,
+                "height": height,
+                "num_frames": num_frames,
+                "num_steps": num_inference_steps,
+                "sp_factor": sp_factor,
+                "tp_factor": tp_factor,
+                "topology": str(topology),
+                "num_links": num_links,
+                "fsdp": is_fsdp,
+            },
         )
 
     pass_perf_check = True

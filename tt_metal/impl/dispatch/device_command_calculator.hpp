@@ -115,6 +115,8 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    void add_prefetch_terminate() { this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment); }
+
     template <bool inline_data = false>
     void add_dispatch_write_paged(uint32_t page_size, uint32_t pages) {
         this->add_prefetch_relay_inline();
@@ -152,6 +154,12 @@ public:
 
     void add_prefetch_paged_to_ringbuffer() {
         this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
+    void add_prefetch_exec_buf() { this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment); }
+
+    void add_prefetch_exec_buf_end() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), this->pcie_alignment);
     }
 
     template <typename PackedSubCmd>

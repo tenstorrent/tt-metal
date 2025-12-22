@@ -12,9 +12,7 @@
 #include "hal_types.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& processor) {
     using enchantum::iostream_operators::operator<<;
@@ -33,13 +31,20 @@ bool operator==(const HalProcessorIdentifier& lhs, const HalProcessorIdentifier&
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
+Hal::Hal(
+    tt::ARCH arch,
+    bool is_base_routing_fw_enabled,
+    bool enable_2_erisc_mode,
+    uint32_t profiler_dram_bank_size_per_risc_bytes) :
+    arch_(arch) {
     switch (this->arch_) {
-        case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
+        case tt::ARCH::WORMHOLE_B0:
+            initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes);
+            break;
 
-        case tt::ARCH::QUASAR: initialize_qa(); break;
+        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes); break;
 
-        case tt::ARCH::BLACKHOLE: initialize_bh(); break;
+        case tt::ARCH::BLACKHOLE: initialize_bh(enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes); break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
@@ -195,8 +200,7 @@ uint32_t Hal::make_go_msg_u32(
     return go_msg_u32_val;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 std::size_t std::hash<tt::tt_metal::HalProcessorIdentifier>::operator()(
     const tt::tt_metal::HalProcessorIdentifier& processor) const {

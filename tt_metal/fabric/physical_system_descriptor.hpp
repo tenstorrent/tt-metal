@@ -12,11 +12,15 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/utils/semver.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
+
+namespace YAML {
+class Node;
+}
 
 namespace tt::umd {
 class Cluster;
@@ -191,6 +195,7 @@ public:
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
+    std::string get_hostname_for_rank(uint32_t rank) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
 
     // Generic Getters
@@ -213,8 +218,12 @@ public:
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
+    YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
+    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& get_pcie_devices_per_tray() const {
+        return pcie_devices_per_tray_;
+    }
 
 private:
     void run_local_discovery(bool run_live_discovery);
@@ -245,6 +254,7 @@ private:
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
     tt::umd::semver_t ethernet_firmware_version_;
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> pcie_devices_per_tray_;
 };
 
 }  // namespace tt::tt_metal

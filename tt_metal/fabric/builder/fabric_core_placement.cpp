@@ -24,46 +24,46 @@ void run_default_galaxy_optimizer(
     bool enable_noc_selection_opt = false;
     if (ctx.topology == Topology::Ring) {
         enable_noc_selection_opt =
-            (ctx.num_links > ring_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
+            (ctx.num_links > ring_noc_selection_link_threshold) && (edm_builder1.get_noc_y() != edm_builder2.get_noc_y());
     } else {
         enable_noc_selection_opt =
-            (ctx.num_links > line_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
+            (ctx.num_links > line_noc_selection_link_threshold) && (edm_builder1.get_noc_y() != edm_builder2.get_noc_y());
     }
     log_debug(
         tt::LogTest,
         "Fabric MeshId {} ChipId {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
         *(edm_builder1.local_fabric_node_id.mesh_id),
         edm_builder1.local_fabric_node_id.chip_id,
-        edm_builder1.my_noc_x,
-        edm_builder1.my_noc_y,
-        edm_builder2.my_noc_x,
-        edm_builder2.my_noc_y,
+        edm_builder1.get_noc_x(),
+        edm_builder1.get_noc_y(),
+        edm_builder2.get_noc_x(),
+        edm_builder2.get_noc_y(),
         ctx.num_links);
 
     if (enable_noc_selection_opt) {
-        if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+        if (edm_builder1.get_noc_x() < edm_builder2.get_noc_x()) {
+            for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
                 edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
                 edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
                 edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
             }
-        } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+        } else if (edm_builder1.get_noc_x() > edm_builder2.get_noc_x()) {
+            for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
             }
-            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
                 edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
                 edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
             }
@@ -85,9 +85,9 @@ void apply_core_placement_optimizations(
     // perf degradation, potentially caused by sw overhead of checking two nocs.
     if (ctx.is_galaxy) {
         if (ctx.topology == Topology::Ring) {
-            enable_core_placement_opt = (ctx.num_links > 3) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+            enable_core_placement_opt = (ctx.num_links > 3) && (edm_fwd.get_noc_y() != edm_bwd.get_noc_y());
         } else {
-            enable_core_placement_opt = (ctx.num_links > 2) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+            enable_core_placement_opt = (ctx.num_links > 2) && (edm_fwd.get_noc_y() != edm_bwd.get_noc_y());
         }
     }
 

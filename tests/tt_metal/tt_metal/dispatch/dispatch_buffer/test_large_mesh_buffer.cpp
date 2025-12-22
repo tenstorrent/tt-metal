@@ -195,14 +195,14 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
-    for (auto& coord : coord_range) {
+    for (const auto& coord : coord_range) {
         input_shards.emplace_back(coord, src_vec.data());
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
     std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
     output_shards.reserve(mesh_size);
-    for (auto& coord : coord_range) {
+    for (const auto& coord : coord_range) {
         dst_vec[coord] = std::vector<ElementType>(num_elements, 0);
         output_shards.emplace_back(coord, dst_vec[coord].data());
     }
@@ -430,14 +430,14 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
-    for (auto& coord : coord_range) {
+    for (const auto& coord : coord_range) {
         input_shards.emplace_back(coord, src_vec.data());
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
     std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
     output_shards.reserve(mesh_size);
-    for (auto& coord : coord_range) {
+    for (const auto& coord : coord_range) {
         dst_vec[coord] = std::vector<ElementType>(device_tensor_size / ElementSize, 0);
         output_shards.emplace_back(coord, dst_vec[coord].data());
     }

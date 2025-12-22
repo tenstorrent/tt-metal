@@ -13,7 +13,15 @@ add_compile_options(-Wno-unused-variable)
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+endif()
+
+############################################################################################################################
+# hwloc
+############################################################################################################################
+find_library(HWLOC_LIBRARY NAMES hwloc)
+if(NOT HWLOC_LIBRARY)
+    message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
 
 ############################################################################################################################
@@ -71,6 +79,18 @@ CPMAddPackage(
     PATCHES
         protobuf_noreturn.patch
 )
+
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # CMake 3.24 didn't yet have add_subdirectory(... SYSTEM), libprotobuf doesn't publish its interface dirs as SYSTEM
+    # and headers in it run afoul certain compiler warnings.  That all combines to failed builds.  Work around it here.
+    get_target_property(PROTOBUF_INCLUDES protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    set_target_properties(
+        libprotobuf
+        PROPERTIES
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                "${PROTOBUF_INCLUDES}"
+    )
+endif()
 
 # Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
 set_target_properties(
@@ -187,6 +207,20 @@ CPMAddPackage(
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
+# nanobind : https://github.com/wjakob/nanobind
+############################################################################################################################
+
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+)
+
+############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
@@ -298,7 +332,7 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_FLATC ON"
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
-        "FLATBUFFERS_STRICT_MODE ON"
+        "FLATBUFFERS_STRICT_MODE OFF"
 )
 
 if(flatbuffers_ADDED)

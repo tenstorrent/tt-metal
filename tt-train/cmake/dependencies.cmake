@@ -93,41 +93,6 @@ CPMAddPackage(
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
-# gersemi: off
-CPMAddPackage(
-    NAME msgpack
-    GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
-    GIT_TAG cpp-6.1.0
-    PATCH_COMMAND
-        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/msgpack.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/msgpack.patch
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "MSGPACK_BUILD_EXAMPLES OFF"
-        "MSGPACK_BUILD_TESTS OFF"
-        "MSGPACK_BUILD_DOCS OFF"
-        "MSGPACK_ENABLE_CXX ON"
-        "MSGPACK_USE_BOOST OFF"
-        "MSGPACK_BUILD_HEADER_ONLY ON"
-        "MSGPACK_ENABLE_SHARED OFF"
-        "MSGPACK_ENABLE_STATIC OFF"
-        "MSGPACK_CXX20 ON"
-        "MSGPACK_NO_BOOST ON"
-)
-
-CPMAddPackage(
-    NAME tokenizers-cpp
-    GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
-    GIT_TAG 55d53aa38dc8df7d9c8bd9ed50907e82ae83ce66
-    PATCH_COMMAND
-        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-)
-if(tokenizers-cpp_ADDED)
-    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
-endif()
-# gersemi: on
-
 ####################################################################################################################
 # spdlog
 ####################################################################################################################
@@ -169,7 +134,8 @@ find_package(
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
-    GIT_TAG v2.9.2
+    GIT_TAG
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -183,4 +149,25 @@ if(simd-everywhere_ADDED)
     add_library(simde INTERFACE)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
+endif()
+
+############################################################################################################################
+# flatbuffers : https://github.com/google/flatbuffers
+############################################################################################################################
+
+CPMAddPackage(
+    NAME flatbuffers
+    GITHUB_REPOSITORY google/flatbuffers
+    GIT_TAG v24.3.25
+    OPTIONS
+        "FLATBUFFERS_BUILD_FLATC ON"
+        "FLATBUFFERS_BUILD_TESTS OFF"
+        "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+        "FLATBUFFERS_STRICT_MODE ON"
+)
+
+if(flatbuffers_ADDED)
+    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    target_compile_options(flatc PRIVATE -Wno-restrict)
+    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
 endif()

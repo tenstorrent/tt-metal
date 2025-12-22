@@ -1,0 +1,10 @@
+{
+  "name": "trigger-auto-triage-for-regressions",
+  "version": "1.0.0",
+  "description": "Triggers auto-triage for regressed workflows",
+  "main": "index.js",
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "@actions/github": "^5.1.1"
+  }
+}

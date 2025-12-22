@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
@@ -518,6 +518,7 @@ void kernel_main() {
                                 uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                                 for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                     if (bw < num_blocks_w_dim_) {
+                                        WATCHER_RING_BUFFER_PUSH(s.get_noc_addr(id, /*offset=*/0));
                                         noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
                                     }
 
@@ -574,4 +575,5 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    noc_async_write_barrier();
 }

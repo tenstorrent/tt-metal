@@ -78,14 +78,26 @@ logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
 @contextlib.contextmanager
-def manage_config(name, value):
+def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    setattr(CONFIG, name, original_value)
-    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    try:
+        setattr(CONFIG, name, original_value)
+        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    except Exception as e:
+        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+        # afuller
+        if original_value is None:
+            try:
+                setattr(CONFIG, name, "")
+                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+            except Exception as e2:
+                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
+        else:
+            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -95,6 +107,7 @@ from ttnn._ttnn.multi_device import (
     PlacementShard,
     MeshMapperConfig,
     MeshComposerConfig,
+    TensorTopology,
     get_device_tensors,
     from_host_shards,
     combine_device_tensors,
@@ -132,7 +145,14 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManagerMode,
+    set_fabric_config,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -181,6 +201,7 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    corerange_to_cores,
     Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
@@ -207,14 +228,20 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    DataMovementProcessor,
+    NOC,
+    NOC_MODE,
+    TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
     WriterConfigDescriptor,
+    DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 
@@ -240,8 +267,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    format_input_tensor,
-    format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
@@ -250,7 +275,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
@@ -270,6 +302,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    split_work_to_cores,
     get_current_command_queue_id_for_thread,
 )
 
@@ -323,6 +356,8 @@ ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwa
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
+ttnn.Tensor.__truediv__ = lambda self, *args, **kwargs: ttnn.divide(self, *args, **kwargs)
+ttnn.Tensor.__rtruediv__ = lambda self, *args, **kwargs: ttnn.rdiv(self, *args, **kwargs)
 ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: ttnn.eq(self, *args, **kwargs)
 ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ttnn.ne(self, *args, **kwargs)
 ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: ttnn.gt(self, *args, **kwargs)
@@ -345,9 +380,9 @@ from ttnn.operations.normalization import (
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
     LayerNormDistributedDefaultProgramConfig,
-    create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
+    create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
@@ -380,11 +415,6 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
-)
-from ttnn._ttnn.operations.conv import (
-    convert_conv_weight_tensor_to_tiled_layout,
-    convert_conv_weight_tensor_to_special_padding_tiled_layout,
-    convert_conv_weight_tensor_to_grouped_layout,
 )
 
 from ttnn.operations.pool import (

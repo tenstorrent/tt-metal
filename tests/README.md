@@ -13,25 +13,17 @@ The sweep test framework runs parameterized tests across large parameter spaces 
 
 #### 1. First Generate Test Vectors
 
+**NOTE: Elasticsearch support has been removed. Vectors are now always exported to disk in JSON format.**
+
 ```bash
-# Generate vectors for all sweep modules and export to Elasticsearch
+# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
 python tests/sweep_framework/sweeps_parameter_generator.py
 
-# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --dump-file
-
-# Generate vectors for a specific module and export to Elasticsearch
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
-
 # Generate vectors for a specific module and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu --dump-file
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
 ```
 
-- **If exporting to Elasticsearch:** (requires credentials):
-  ```bash
-  export ELASTIC_USERNAME="your-elastic-username"
-  export ELASTIC_PASSWORD="your-elastic-password"
-  ```
+**Note:** The `--dump-file` flag is deprecated and no longer needed. Vectors are always dumped to disk by default.
 
 #### 2. Run Tests
 

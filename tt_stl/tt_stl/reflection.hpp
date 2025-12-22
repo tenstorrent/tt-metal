@@ -149,7 +149,10 @@ struct Attribute final {
     std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
     nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
-    template <typename Type, typename BaseType = std::decay_t<Type>>
+    template <
+        typename Type,
+        typename BaseType = std::decay_t<Type>,
+        std::enable_if_t<!std::is_same_v<BaseType, Attribute>, int> = 0>
     Attribute(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
@@ -211,6 +214,9 @@ struct Attribute final {
         implementations{other.implementations} {}
 
     Attribute& operator=(const Attribute& other) {
+        if (this == &other) {
+            return *this;
+        }
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -808,54 +814,66 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
-    auto operator()(const T& value) const {
+    auto operator()(const T& value) const -> std::optional<object_t> {
         return value;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& /*value*/) const {
-        throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
+    auto operator()(const T& /*value*/) const -> std::optional<object_t> {
+        return std::nullopt;
     }
 };
 
 template <typename T>
 struct get_first_object_of_type_t<std::optional<T>> {
     template <typename object_t>
-    auto operator()(const std::optional<T>& value) const {
+    auto operator()(const std::optional<T>& value) const -> std::optional<object_t> {
         if (value.has_value()) {
             const auto& tensor = value.value();
             return get_first_object_of_type<object_t>(tensor);
         }
+        return std::nullopt;
     }
 };
 
 template <typename T>
 struct get_first_object_of_type_t<std::vector<T>> {
     template <typename object_t>
-    auto operator()(const std::vector<T>& value) const {
-        for (auto& tensor : value) {
-            return get_first_object_of_type<object_t>(tensor);
+    auto operator()(const std::vector<T>& value) const -> std::optional<object_t> {
+        for (const auto& tensor : value) {
+            auto result = get_first_object_of_type<object_t>(tensor);
+            if (result.has_value()) {
+                return result;
+            }
         }
-        throw std::out_of_range("No such element");
+        return std::nullopt;
     }
 };
 
 template <typename T, auto N>
 struct get_first_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
-    auto operator()(const std::array<T, N>& value) const {
-        for (auto& tensor : value) {
-            return get_first_object_of_type<object_t>(tensor);
+    auto operator()(const std::array<T, N>& value) const -> std::optional<object_t> {
+        for (const auto& tensor : value) {
+            auto result = get_first_object_of_type<object_t>(tensor);
+            if (result.has_value()) {
+                return result;
+            }
         }
+        return std::nullopt;
     }
 };
 
 template <typename... Ts>
 struct get_first_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
-    auto operator()(const std::tuple<Ts...>& value) const {
-        return get_first_object_of_type<object_t>(std::get<0>(value));
+    auto operator()(const std::tuple<Ts...>& value) const -> std::optional<object_t> {
+        if constexpr (sizeof...(Ts) > 0) {
+            return get_first_object_of_type<object_t>(std::get<0>(value));
+        } else {
+            return std::nullopt;
+        }
     }
 };
 
@@ -864,31 +882,49 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
-        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return get_first_object_of_type<object_t>(object.attribute_values());
     }
 };
 
+namespace detail {
 template <typename T>
-    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+concept has_first_member = requires(const T& obj) { reflect::get<0>(obj); };
+}  // namespace detail
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>> && (not requires { std::decay_t<T>::attribute_names; })
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
+    auto operator()(const T& object) const -> std::optional<object_t> {
         return object;
     }
 
     template <typename object_t>
-        requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& object) const {
-        return get_first_object_of_type<object_t>(reflect::get<0>(object));
+        requires(not std::same_as<std::decay_t<T>, object_t>) && detail::has_first_member<T>
+    auto operator()(const T& object) const -> std::optional<object_t> {
+        std::optional<object_t> result = std::nullopt;
+        reflect::for_each(
+            [&result, &object](auto I) {
+                if (!result.has_value()) {
+                    result = get_first_object_of_type<object_t>(reflect::get<I>(object));
+                }
+            },
+            object);
+        return result;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>) && (!detail::has_first_member<T>)
+    auto operator()(const T& /*object*/) const -> std::optional<object_t> {
+        return std::nullopt;
     }
 };
 

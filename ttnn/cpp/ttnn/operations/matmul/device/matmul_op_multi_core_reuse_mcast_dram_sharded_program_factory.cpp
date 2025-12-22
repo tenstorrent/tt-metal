@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -15,16 +14,39 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt;
-using namespace tt::constants;
 
 namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
+// This type of access pattern cannot be copied.
+// Treat it as a one off patch to restore functionality that
+// was adjusted to fix one P0 causing another P0.
+// TODO: Proper fix will be implemented in Issue #32205
+tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
+    ttnn::distributed::MeshDevice* device = a.device();
+    const ttnn::distributed::MeshDeviceView& view = device->get_view();
+    if (!view.contains(coord) || !view.is_local(coord)) {
+        return device;
+    }
+    return a.device()->get_device(coord);
+}
+
+void get_max_page_size_and_num_pages(
+    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
-    page_size = (8192 / tile_size) * tile_size;
+    // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
+    uint32_t noc_max_page_size;
+    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        noc_max_page_size = 8192;
+    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+        noc_max_page_size = 16384;
+    } else {
+        TT_FATAL(false, "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported.");
+    }
+
+    page_size = (noc_max_page_size / tile_size) * tile_size;
     while (total_size % page_size != 0 && page_size >= tile_size) {
         page_size -= tile_size;
     }
@@ -126,7 +148,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     // get the dram readers
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
-    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in0_noc);
+    get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in1_noc);
 
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
@@ -223,11 +245,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     // get the max page size based on num tiles
     uint32_t in1_buffer_page_size, in1_buffer_num_pages;
-    get_max_page_size_and_num_pages(in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
+    get_max_page_size_and_num_pages(
+        device, in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
 
     uint32_t bias_buffer_page_size, bias_buffer_num_pages;
     get_max_page_size_and_num_pages(
-        in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
+        device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
 
@@ -433,7 +456,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
-        false          // get_batch_from_reader
+        false,         // get_batch_from_reader
+        false,         // in0_transpose_tile
     };
 
     // Create compute kernel
@@ -886,11 +910,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             TT_FATAL(
                 output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
             const auto& bias_tensor = optional_input_tensors.at(0);
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
             UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
@@ -912,11 +936,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 }
 }  // namespace reuse_dram_sharded_optimized_helpers
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const ttnn::MeshCoordinate& mesh_coord,
@@ -950,7 +970,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
-        auto& c = bias.value();
+        const auto& c = bias.value();
         TT_FATAL(
             c.storage_type() == StorageType::DEVICE,
             "Bias tensor must be on device, got storage type: {}",
@@ -963,7 +983,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = reuse_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1103,8 +1123,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         skip_write_back);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

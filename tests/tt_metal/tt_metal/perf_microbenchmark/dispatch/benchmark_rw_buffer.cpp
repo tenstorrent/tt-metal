@@ -24,6 +24,7 @@
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
 #include "mesh_coord.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

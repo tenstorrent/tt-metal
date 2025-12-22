@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     auto args = TensorAccessorArgs<0, 0>();

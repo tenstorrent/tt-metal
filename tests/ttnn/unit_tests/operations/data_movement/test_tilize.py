@@ -36,3 +36,15 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
     ]
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test("tilize", input_shapes, datagen_func, comparison_func, device, tilize_args)
+
+
+@pytest.mark.parametrize("shape", [(64, 128), (512, 512)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_fp32_truncation(device, shape, use_multicore):
+    torch.manual_seed(2005)
+    input_a = torch.full(shape, 1.9908e-05, dtype=torch.float32)
+    # Use the fixture-provided device directly
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert torch.allclose(input_a, output_tensor)

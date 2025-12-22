@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <fstream>
+
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
@@ -29,7 +31,7 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
-    bool initialized;
+    bool initialized{false};
     std::filesystem::path logging_path;
 
     int64_t convert_timestamp(const time_point& tp) const {

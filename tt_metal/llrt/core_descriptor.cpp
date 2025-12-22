@@ -19,14 +19,15 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
-#include "tt_backend_api_types.hpp"
+#include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 
@@ -70,7 +71,7 @@ inline std::string get_core_descriptor_file(
         // Check if fabric tensix is enabled based on fabric tensix config
         tt_fabric::FabricTensixConfig fabric_tensix_config =
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+        bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
         switch (arch) {
             default:
@@ -204,7 +205,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     std::vector<RelativeCoreCoord> dispatch_cores;
-    auto dispatch_cores_string = "dispatch_cores";
+    const auto* dispatch_cores_string = "dispatch_cores";
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }

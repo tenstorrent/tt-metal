@@ -20,6 +20,7 @@ Both input tensors must have the same number of dimensions, and for all dimensio
 - **sparse_grad (bool, optional)**: If True, the gradient computation will be sparse. Defaults to False. **Note: Currently not supported.**
 - **memory_config (MemoryConfig, optional)**: Specifies memory configuration for the output tensor. Defaults to None.
 - **optional_output_tensor (Tensor, optional)**: Preallocated tensor for the gathered values. Defaults to None.
+- **sub_core_grids (CoreRangeSet, optional)**: Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to None (uses all available cores).
 
 ### Usage
 
@@ -81,6 +82,7 @@ ttnn::Tensor gathered_tensor = ttnn::gather(
 - **Memory**: Interleaved DRAM and L1 memory supported; **sharded memory not supported**
 - **Gradient**: `sparse_grad=True` is not supported in this implementation
 - **Dimension constraints**: `input_index_tensor.size(d) <= input_tensor.size(d)` for all dimensions `d != dim`
+- **Core grids**: When `sub_core_grids` is specified, the provided cores will be used for execution; otherwise, the operation uses all available compute cores
 
 ## Strategy Selection Overview
 
@@ -154,8 +156,7 @@ This strategy assigns complete rows to individual cores, providing simple and ef
 
 ```cpp
 // Core assignment based on height (Ht)
-const uint32_t core_h_id = core_loop * total_number_of_cores +
-                          get_absolute_logical_y() * grid_size_x + get_absolute_logical_x();
+const uint32_t core_h_id = core_loop * total_number_of_cores + core_id;
 
 // Each core processes: Wt_input input tiles → Wt_index output tiles
 for (uint32_t w = 0; w < Wt_index; w++) {
@@ -190,8 +191,7 @@ This strategy distributes index tiles across multiple cores within each row, max
 
 ```cpp
 // Core assignment based on index width (Wt_index)
-const auto start_tile_id = get_absolute_logical_y() * grid_size_x + get_absolute_logical_x();
-uint32_t current_index_tile_id = start_tile_id;
+uint32_t current_index_tile_id = core_id;
 
 for (uint32_t h = 0; h < Ht; h++) {
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

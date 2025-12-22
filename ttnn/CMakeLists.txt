@@ -5,6 +5,10 @@
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>")
 
+# Suppress narrowing warnings for ttnn (being cleaned up in tt_metal first)
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 ##################################################
 # Set options
 ##################################################
@@ -19,6 +23,9 @@ endif()
 
 add_library(ttnn_core ${LIB_TYPE})
 add_library(TTNN::Core ALIAS ttnn_core)
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
@@ -76,6 +83,7 @@ target_sources(
         core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
+        core/graph/levelized_graph.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
@@ -98,6 +106,7 @@ target_sources(
         core/tensor/types.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/to_string.cpp
 )
 target_include_directories(
     ttnn_core
@@ -245,6 +254,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/integral_image/intimg_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/full_like_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op_${PY_BINDING}.cpp
@@ -310,6 +320,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/moe_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/topk_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/manual_seed/manual_seed_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/sliding_window_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_${PY_BINDING}.cpp
@@ -331,6 +343,7 @@ set(TTNN_SRC_PYBIND
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_${PY_BINDING}.cpp
@@ -342,12 +355,14 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_${PY_BINDING}.cpp
 )
 
 set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_point/point_to_point_${PY_BINDING}.cpp)
@@ -356,6 +371,7 @@ set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_broadcast/all_broadcast_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_to_root/reduce_to_root_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/broadcast/broadcast_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_${PY_BINDING}.cpp
@@ -440,7 +456,6 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
-file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
     PUBLIC
@@ -448,7 +463,69 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
-            ${api}
+            api/tools/profiler/op_profiler.hpp
+            api/ttnn/async_runtime.hpp
+            api/ttnn/cluster.hpp
+            api/ttnn/common/constants.hpp
+            api/ttnn/common/guard.hpp
+            api/ttnn/common/queue_id.hpp
+            api/ttnn/config.hpp
+            api/ttnn/core.hpp
+            api/ttnn/decorators.hpp
+            api/ttnn/device.hpp
+            api/ttnn/device_operation.hpp
+            api/ttnn/distributed/api.hpp
+            api/ttnn/distributed/bidirectional_fabric_socket.hpp
+            api/ttnn/distributed/create_socket.hpp
+            api/ttnn/distributed/distributed_configs.hpp
+            api/ttnn/distributed/distributed_pybind.hpp
+            api/ttnn/distributed/distributed_tensor.hpp
+            api/ttnn/distributed/fabric_socket.hpp
+            api/ttnn/distributed/host_ccl.hpp
+            api/ttnn/distributed/isocket.hpp
+            api/ttnn/distributed/mpi_socket.hpp
+            api/ttnn/distributed/tensor_topology.hpp
+            api/ttnn/distributed/types.hpp
+            api/ttnn/events.hpp
+            api/ttnn/global_circular_buffer.hpp
+            api/ttnn/global_semaphore.hpp
+            api/ttnn/graph/graph_argument_serializer.hpp
+            api/ttnn/graph/graph_consts.hpp
+            api/ttnn/graph/graph_operation_queries.hpp
+            api/ttnn/graph/graph_processor.hpp
+            api/ttnn/graph/graph_pybind.hpp
+            api/ttnn/graph/graph_query_op_constraints.hpp
+            api/ttnn/graph/graph_query_op_runtime.hpp
+            api/ttnn/graph/graph_trace_utils.hpp
+            api/ttnn/graph/levelized_graph.hpp
+            api/ttnn/mesh_device_operation_adapter.hpp
+            api/ttnn/mesh_device_operation_utils.hpp
+            api/ttnn/old_infra_device_operation.hpp
+            api/ttnn/operation.hpp
+            api/ttnn/operation_concepts.hpp
+            api/ttnn/reports.hpp
+            api/ttnn/run_operation.hpp
+            api/ttnn/tensor/host_buffer/functions.hpp
+            api/ttnn/tensor/layout/alignment.hpp
+            api/ttnn/tensor/layout/layout.hpp
+            api/ttnn/tensor/layout/page_config.hpp
+            api/ttnn/tensor/layout/tensor_layout.hpp
+            api/ttnn/tensor/memory_config/memory_config.hpp
+            api/ttnn/tensor/serialization.hpp
+            api/ttnn/tensor/shape/shape.hpp
+            api/ttnn/tensor/storage.hpp
+            api/ttnn/tensor/tensor.hpp
+            api/ttnn/tensor/tensor_attributes.hpp
+            api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_spec.hpp
+            api/ttnn/tensor/tensor_utils.hpp
+            api/ttnn/tensor/to_string.hpp
+            api/ttnn/tensor/types.hpp
+            api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
+            api/ttnn/tensor/xtensor/conversion_utils.hpp
+            api/ttnn/tensor/xtensor/partition.hpp
+            api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
+            api/ttnn/types.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
@@ -468,9 +545,9 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -516,7 +593,6 @@ target_link_libraries(
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
         TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::AutoFormat
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
@@ -619,15 +695,98 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
     )
 
-    target_link_libraries(
-        ttnn
-        PUBLIC
-            "$<BUILD_INTERFACE:TTNN::CPP>"
-        PRIVATE
-            pybind11::module
-            Boost::algorithm
-            TT::Metalium
-    )
+    if(EXPERIMENTAL_NANOBIND_BINDINGS)
+        # TODO: This block was removed in main. Figure out how to interop with
+        # manylinux work
+        # nanobind requires this to be invoked before nanobind is included
+        if(CMAKE_VERSION VERSION_LESS 3.18)
+            set(DEV_MODULE Development)
+        else()
+            set(DEV_MODULE Development.Module)
+        endif()
+
+        # This is what pybind11 does in its cmake under the hood, so it should be fine
+        # with the manylinux wheel.
+        set(Python3_FIND_STRATEGY LOCATION)
+        find_package(
+            Python3
+            REQUIRED
+            COMPONENTS
+                Interpreter
+                ${DEV_MODULE}
+            OPTIONAL_COMPONENTS
+                Development.SABIModule
+        )
+        message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+
+        # https://nanobind.readthedocs.io/en/latest/api_cmake.html#low-level-interface
+        # -static Perform a static library build (without this suffix, a shared build is used)
+        # -abi3   Perform a stable ABI build targeting Python v3.12+.
+        # -ft     Perform a build that opts into the Python 3.13+ free-threaded behavior.
+
+        set(NANOBIND_LIBNAME "nanobind-static-abi3")
+        nanobind_build_library(${NANOBIND_LIBNAME})
+        get_target_property(NANOBIND_INCLUDES ${NANOBIND_LIBNAME} INTERFACE_INCLUDE_DIRECTORIES)
+        set_target_properties(
+            ${NANOBIND_LIBNAME}
+            PROPERTIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                    "${NANOBIND_INCLUDES}"
+        )
+        add_library(TT::Nanobind ALIAS ${NANOBIND_LIBNAME})
+
+        # GCC warns about visibility mismatches when using nanobind with -fvisibility=default
+        # This affects code that uses nanobind types (not just nanobind headers themselves)
+        target_compile_options(${NANOBIND_LIBNAME} INTERFACE "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>")
+
+        # find_package(Python3) required for here.
+        # nanobind doesn't build otherwise.
+        # PUBLIC on the headers also required
+        target_include_directories(${NANOBIND_LIBNAME} PUBLIC ${Python3_INCLUDE_DIRS})
+
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                "$<BUILD_INTERFACE:TTNN::CPP>"
+            PRIVATE
+                TT::Nanobind
+                Boost::algorithm
+                TT::Metalium
+        )
+        # .. enable size optimizations
+        nanobind_opt_size(ttnn)
+
+        # .. enable link time optimization
+        nanobind_lto(ttnn)
+
+        # .. set the default symbol visibility to 'hidden'
+        #nanobind_set_visibility(ttnn)
+
+        # .. strip unneeded symbols and debug info from the binary (only active in release builds)
+        #nanobind_strip(ttnn)
+
+        # .. disable the stack protector
+        #nanobind_disable_stack_protector(ttnn)
+
+        # .. set the Python extension suffix
+        #nanobind_extension(ttnn)
+
+        # .. set important compilation flags
+        nanobind_compile_options(ttnn)
+
+        # .. set important linker flags
+        nanobind_link_options(ttnn)
+    else()
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                "$<BUILD_INTERFACE:TTNN::CPP>"
+            PRIVATE
+                pybind11::module
+                Boost::algorithm
+                TT::Metalium
+        )
+    endif()
     if(TT_INSTALL)
         install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
     endif()
@@ -666,11 +825,13 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
+add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
+add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
@@ -687,15 +848,14 @@ add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
-add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
-add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
+add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
@@ -703,26 +863,25 @@ add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
 add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
+add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/experimental/where)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)
 add_subdirectory(cpp/ttnn/operations/matmul)
 add_subdirectory(cpp/ttnn/operations/moreh)
+add_subdirectory(cpp/ttnn/operations/normalization)
+add_subdirectory(cpp/ttnn/operations/point_to_point)
+add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/prefetcher)
+add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/sliding_window)
 add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(cpp/ttnn/operations/uniform)
-add_subdirectory(cpp/ttnn/operations/pool)
-add_subdirectory(cpp/ttnn/operations/point_to_point)
-add_subdirectory(cpp/ttnn/operations/normalization)
-add_subdirectory(cpp/ttnn/operations/rand)
-add_subdirectory(cpp/ttnn/operations/debug)
-add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(examples)

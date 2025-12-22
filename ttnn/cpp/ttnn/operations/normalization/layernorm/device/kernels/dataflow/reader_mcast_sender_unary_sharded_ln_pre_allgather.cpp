@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 // split REDUCE across cores
@@ -161,4 +161,5 @@ void kernel_main() {
         }
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    noc_async_write_barrier();
 }

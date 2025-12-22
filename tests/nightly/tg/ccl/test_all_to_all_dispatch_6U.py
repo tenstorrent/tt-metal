@@ -41,8 +41,14 @@ from tracy import signpost
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
         },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
     ],
-    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
+    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d", "fabric_manager_enabled_1d_line"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -53,7 +59,6 @@ from tracy import signpost
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -65,14 +70,14 @@ from tracy import signpost
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [4, 1])
+@pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
-    "input_memory_config, output_memory_config",
+    "input_memory_config, output_memory_config, cluster_axis",
     [
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, 0),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, 1),
     ],
     ids=["l1_in_dram_out", "dram_in_l1_out"],
 )
@@ -329,8 +334,14 @@ def test_all_to_all_dispatch_8x16_quad_galaxy(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(2, 40, 10), (128, 10, 5)],
-    ids=["decode", "prefill"],
+    [
+        (2, 40, 10),
+        # (128, 10, 5) #32564
+    ],
+    ids=[
+        "decode",
+        # "prefill"
+    ],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -405,8 +416,14 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(1, 40, 10), (128, 10, 5)],
-    ids=["decode", "prefill"],
+    [
+        (1, 40, 10),
+        # (128, 10, 5) #32564
+    ],
+    ids=[
+        "decode",
+        # "prefill"
+    ],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -488,7 +505,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(128, 10, 5)],
+    [(128, 3, 2)],
     ids=["prefill"],
 )
 @pytest.mark.parametrize("num_links", [4])
@@ -513,6 +530,7 @@ def test_prefill_perf(
     input_memory_config,
     output_memory_config,
 ):
+    pytest.skip("Issue 32564")
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:

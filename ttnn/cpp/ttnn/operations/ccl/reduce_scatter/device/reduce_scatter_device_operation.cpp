@@ -22,7 +22,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto input_tensor = tensor_args.input_tensor;
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
-    ttnn::reduce_scatter_common_validates(
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::reduce_scatter_common_validates(
         input_tensor,
         operation_attributes.topology,
         operation_attributes.dim,
@@ -86,7 +86,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto subdevice_id = operation_attributes.subdevice_id;
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
@@ -95,6 +95,7 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.cluster_axis,
         operation_attributes.memory_config,
         subdevice_core_range_set,
+        operation_attributes.topology,
         input_tensor);
 }
 

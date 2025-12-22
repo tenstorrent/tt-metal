@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t dst_addr           = get_arg_val<uint32_t>(0);
@@ -22,6 +22,10 @@ void kernel_main() {
     uint32_t ublock_size_tiles = 1;
 
     uint32_t dram_address_block_row_beginning = dst_addr;
+
+    experimental::CircularBuffer cb(cb_id_out0);
+    experimental::Noc noc;
+
     for (uint32_t sb_m = 0; sb_m < num_sub_blocks_m; sb_m++) {
         uint32_t dram_address_block_beginning = dram_address_block_row_beginning;
         for (uint32_t sb_n = 0; sb_n < num_sub_blocks_n; sb_n++) {
@@ -29,16 +33,18 @@ void kernel_main() {
             for (uint32_t r = 0; r < inner_r; r++) {
                 uint32_t dram_address_c = dram_address_r;
                 for(uint32_t c = 0; c < inner_c; c++) {
-                    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dram_address_c);
+                    cb.wait_front(ublock_size_tiles);
 
-                    cb_wait_front(cb_id_out0, ublock_size_tiles);
-                    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+                    noc.async_write(
+                        cb,
+                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                        ublock_size_bytes,
+                        {},
+                        {.bank_id = dst_bank_id, .addr = dram_address_c});
 
-                    noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+                    noc.async_write_barrier();
 
-                    noc_async_write_barrier();
-
-                    cb_pop_front(cb_id_out0, ublock_size_tiles);
+                    cb.pop_front(ublock_size_tiles);
                     dram_address_c += ublock_size_bytes;
                 }
                 dram_address_r += stride_r;  // goto next row within sub-block

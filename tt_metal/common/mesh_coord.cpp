@@ -509,14 +509,54 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     }
     ranges_.push_back(merged);
 
+    // Merge back the ranges that were removed.
+    for (const auto& range : add_back) {
+        merge(range);
+    }
+
     // Sort the ranges to ensure deterministic order.
     std::sort(ranges_.begin(), ranges_.end(), [](const auto& a, const auto& b) {
         return (a.start_coord() != b.start_coord()) ? a.start_coord() < b.start_coord() : a.end_coord() < b.end_coord();
     });
 
-    // Merge back the ranges that were removed.
-    for (const auto& range : add_back) {
-        merge(range);
+    // Do one final check to see if all ranges can collapse into a single range.
+    if (ranges_.size() > 1) {
+        // Calculate the bounding box of all ranges
+        tt::stl::SmallVector<uint32_t> bb_start;
+        tt::stl::SmallVector<uint32_t> bb_end;
+
+        for (size_t dim = 0; dim < ranges_[0].dims(); ++dim) {
+            uint32_t min_start = ranges_[0].start_coord()[dim];
+            uint32_t max_end = ranges_[0].end_coord()[dim];
+
+            for (size_t i = 1; i < ranges_.size(); ++i) {
+                min_start = std::min(min_start, ranges_[i].start_coord()[dim]);
+                max_end = std::max(max_end, ranges_[i].end_coord()[dim]);
+            }
+
+            bb_start.push_back(min_start);
+            bb_end.push_back(max_end);
+        }
+
+        // Calculate the total size of the bounding box
+        uint64_t bounding_size = 1;
+        for (size_t dim = 0; dim < ranges_[0].dims(); ++dim) {
+            bounding_size *= (bb_end[dim] - bb_start[dim] + 1);
+        }
+
+        // Calculate the total size of all ranges combined
+        uint64_t total_size = 0;
+        for (const auto& range : ranges_) {
+            total_size += range.shape().mesh_size();
+        }
+
+        // If the bounding box size equals the total size, all ranges fit perfectly
+        // into a single rectangle with no gaps
+        if (bounding_size == total_size) {
+            MeshCoordinateRange full_range = MeshCoordinateRange(MeshCoordinate(bb_start), MeshCoordinate(bb_end));
+            ranges_.clear();
+            ranges_.push_back(full_range);
+        }
     }
 }
 

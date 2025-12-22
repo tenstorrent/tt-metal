@@ -70,7 +70,7 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
                             (dilation_hw.first * (window_hw.first - 1)) + output_pad_hw.first + 1;
         uint32_t output_w = ((input_hw.second - 1) * stride_hw.second) - get_pad_w() +
                             (dilation_hw.second * (window_hw.second - 1)) + output_pad_hw.second + 1;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "SlidingWindowConfig::get_output_shape(): {} {} {} {}",
             batch_size,
@@ -114,7 +114,7 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         output_h = input_hw.first;
         output_w = input_hw.second;
     }
-    log_debug(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
+    log_trace(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
     return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
@@ -184,11 +184,20 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
     uint32_t strided_input_height = ((input_hw.first - 1) * stride_hw.first) + 1;
     uint32_t strided_input_width = ((input_hw.second - 1) * stride_hw.second) + 1;
 
-    uint32_t input_pad_top = (full_input_shape[1] - strided_input_height) / 2;
-    uint32_t input_pad_bottom = full_input_shape[1] - strided_input_height - input_pad_top;
+    uint32_t base_pad_height = dilation_hw.first * (window_hw.first - 1);
+    uint32_t base_pad_width = dilation_hw.second * (window_hw.second - 1);
+    uint32_t input_pad_top = base_pad_height - padding[0];
+    uint32_t input_pad_bottom = base_pad_height - padding[1];
 
-    uint32_t input_pad_left = (full_input_shape[2] - strided_input_width) / 2;
-    uint32_t input_pad_right = full_input_shape[2] - strided_input_width - input_pad_left;
+    uint32_t input_pad_left = base_pad_width - padding[2];
+    uint32_t input_pad_right = base_pad_width - padding[3];
+
+    TT_FATAL(
+        full_input_shape[1] - strided_input_height == input_pad_top + input_pad_bottom + output_pad_hw.first,
+        "Calculated input padding height does not match the expected value.");
+    TT_FATAL(
+        full_input_shape[2] - strided_input_width == input_pad_left + input_pad_right + output_pad_hw.second,
+        "Calculated input padding width does not match the expected value.");
 
     return {std::pair{input_pad_top, input_pad_bottom}, std::pair{input_pad_left, input_pad_right}};
 }
@@ -202,7 +211,7 @@ uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (snap_to_tile ? tt::constants::TILE_HEIGHT : 1));
-    log_debug(
+    log_trace(
         tt::LogOp,
         "output_nhw: {} output_nhw_padded: {} num_cores_nhw: {}",
         output_nhw,
@@ -814,305 +823,97 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         number_of_blocks_per_core};
 }
 
-std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
-    const std::vector<PixelMetadata>& tensor_metadata,
-    const std::vector<ShardBoundary>& shard_boundaries,
-    bool is_block_sharded,
-    bool transpose_mcast,
-    bool remote_read,
-    bool is_in_tiled,
-    IDevice* device,
-    uint32_t num_cores_x,
-    uint32_t max_out_nsticks_per_core,
-    uint32_t in_nsticks_per_core,
-    bool in_place,
-    uint32_t in_out_shard_size_delta) {
-    auto core_id_to_noc_coords =
-        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
-        auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
-                                           : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
-    };
+void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
+    log_info(tt::LogOp, "========================================");
+    log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
+    log_info(tt::LogOp, "========================================");
+    log_info(tt::LogOp, "Total Cores: {}", config.size());
 
-    const uint16_t pad_local = 0xFFFF;
-    std::map<uint32_pair_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>> per_core_gather_data;
+    // Calculate statistics
+    uint32_t total_elements = 0;
+    uint32_t max_config_size = 0;
+    uint32_t min_config_size = config.empty() ? 0 : config[0].size();
 
-    uint32_t num_cores_nhw = shard_boundaries.size();
-
-    uint32_t core_id = 0;
-    for (auto [output_boundary, input_boundary] : shard_boundaries) {
-        auto [input_start, input_end] = input_boundary;
-        for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
-            uint32_t dst_core_id = core_id;
-            uint32_t local_idx = global_idx - input_start;
-            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
-            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
-            if (is_pad_stick) {
-                TT_ASSERT(src_local_idx == 0);
-                src_core_id = pad_local;
-            }
-            if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
-                auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
-                // src idx is 0 if it is a pad
-                if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {
-                    ++length;
-                    continue;
-                }
-            }
-            // insert new tuple
-            per_core_gather_data[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
-        }
-        ++core_id;
+    for (const auto& core_config : config) {
+        total_elements += core_config.size();
+        max_config_size = std::max(max_config_size, static_cast<uint32_t>(core_config.size()));
+        min_config_size = std::min(min_config_size, static_cast<uint32_t>(core_config.size()));
     }
 
-    // construct the config tensors
-    /**
-     * pad_config: length num_cores_nhw
-     *     each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
-     * local_config: length num_cores_nhw
-     *     each element (for core i): (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1,
-     * length1, ...]
-     * remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
-     * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
-     * length0, src_start1, dst_start1, length1, ...], ...}
-     */
-    using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
-    std::vector<std::vector<uint32_pair_t>> pad_config;
-    std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
-    std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
-    pad_config.resize(num_cores_nhw);
-    local_config.resize(num_cores_nhw);
-    remote_config.resize(num_cores_nhw);
+    log_info(tt::LogOp, "Total Elements: {}", total_elements);
+    log_info(tt::LogOp, "Max Config Size per Core: {}", max_config_size);
+    log_info(tt::LogOp, "Min Config Size per Core: {}", min_config_size);
+    log_info(tt::LogOp, "========================================");
 
-    for (const auto& [src_dst, data] : per_core_gather_data) {
-        auto [src_core_id, dst_core_id] = src_dst;
-        bool is_pad = src_core_id == pad_local;
-        bool is_local = src_core_id == dst_core_id;
-        bool is_remote = !is_local && !is_pad;
-        if (is_pad) {
-            for (auto [src_start, dst_start, length] : data) {
-                pad_config[dst_core_id].push_back({dst_start, length});
+    // Visualize each core's configuration
+    for (uint32_t core_id = 0; core_id < config.size(); ++core_id) {
+        const auto& core_config = config[core_id];
+        log_info(tt::LogOp, "");
+        log_info(tt::LogOp, "Core #{} (size: {} elements)", core_id, core_config.size());
+
+        if (core_config.empty()) {
+            log_info(tt::LogOp, "  [EMPTY]");
+            continue;
+        }
+
+        // Parse the structure: [num_segments, 0, indices...]
+        uint32_t idx = 0;
+        uint32_t block_num = 0;
+
+        while (idx < core_config.size()) {
+            // Check if we have at least 2 elements for header
+            if (idx + 1 >= core_config.size()) {
+                break;
             }
-        } else if (is_local) {
-            CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
-            local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
-            local_config[src_core_id].second = data;
-        } else if (is_remote) {
-            if (remote_read) {
-                CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
-                remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-            } else {
-                CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
-                remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+
+            uint32_t num_segments = core_config[idx];
+            // core_config[idx + 1] is alignment/padding, we skip it
+
+            // Skip if this looks like padding (all zeros)
+            if (num_segments == 0 && (idx + 2 >= core_config.size() || core_config[idx + 2] == 0)) {
+                break;
             }
+
+            log_info(tt::LogOp, "  Block {}: {} segments", block_num, num_segments);
+            idx += 2;  // Skip num_segments and alignment
+
+            // Display segments (pairs of start-end indices)
+            uint32_t segment_count = 0;
+            while (segment_count < num_segments && idx + 1 < core_config.size()) {
+                uint16_t start_idx = core_config[idx];
+                uint16_t end_idx = core_config[idx + 1];
+                uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
+
+                log_info(
+                    tt::LogOp,
+                    "    Segment {}: [{:5d} -> {:5d}] (len: {})",
+                    segment_count,
+                    start_idx,
+                    end_idx,
+                    range_size);
+
+                idx += 2;
+                segment_count++;
+            }
+
+            // If we didn't find all segments, something might be wrong
+            if (segment_count < num_segments) {
+                log_info(
+                    tt::LogOp, "    WARNING: Expected {} segments but only parsed {}", num_segments, segment_count);
+                break;
+            }
+
+            block_num++;
+        }
+
+        // Show remaining padding if any
+        if (idx < core_config.size()) {
+            uint32_t padding_count = core_config.size() - idx;
+            log_info(tt::LogOp, "  [Padding: {} elements]", padding_count);
         }
     }
 
-    // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [in_place](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // Find max length for vector which is going to be processed on each core
-        size_t max_len = 0;
-        for (const auto& data : config) {
-            max_len =
-                in_place ? std::max(max_len, 2 * data.size())
-                         : std::max(max_len, data.size());  // For split reader, each vector size is 2 * data.size() / 2
-        }
-        max_len += 2;  // account for the null plug
-
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        for (const auto& data : config) {
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            uint32_t idx1 = 0, idx2 = 0;
-            for (size_t i = 0; i < data.size(); ++i) {
-                auto [dst_start, length] = data[i];
-                if (i % 2 == 0 || in_place) {
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                } else {
-                    flat_data[1][idx2++] = dst_start;
-                    flat_data[1][idx2++] = length;
-                }
-            }
-
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
-        }
-        return flattened_config;
-    };
-
-    auto flatten_local_config =
-        [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled, in_out_shard_size_delta](
-            auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // find max length
-        size_t max_len = 0;
-        for (const auto& [_, data] : config) {
-            max_len =
-                in_place
-                    ? std::max(max_len, 3 * data.size())
-                    : std::max(
-                          max_len,
-                          3 * (data.size() / 2 + 1));  // For split reader, each vector is (3 * data.size() / 2 + 1).
-        }
-        max_len += 6;  // account for the key tuple and null plug
-
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        for (const auto& [key, data] : config) {
-            auto [nocx, nocy, len] = key;
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            flat_data[0][0] = nocx;
-            flat_data[0][1] = nocy;
-            flat_data[1][0] = nocx;
-            flat_data[1][1] = nocy;
-
-            uint32_t idx1 = 3, idx2 = 3;
-            if (!in_place) {
-                for (size_t i = 0; i < data.size(); ++i) {
-                    auto [src_start, dst_start, length] = data[i];
-                    if (i % 2 != 0) {
-                        flat_data[0][idx1++] = src_start;
-                        flat_data[0][idx1++] = dst_start;
-                        flat_data[0][idx1++] = length;
-                        flat_data[0][2] += 3;
-                    } else {
-                        flat_data[1][idx2++] = src_start;
-                        flat_data[1][idx2++] = dst_start;
-                        flat_data[1][idx2++] = length;
-                        flat_data[1][2] += 3;
-                    }
-                }
-            } else {
-                int32_t rev_i_end = data.size();
-                for (uint32_t i = 0; i < data.size();
-                     ++i) {  // normal forward direction local config in region where input / output shards don't
-                             // overlap (for in place operation)
-                    auto [src_start, dst_start, length] = data[i];
-                    if (dst_start > src_start + in_out_shard_size_delta) {
-                        rev_i_end = i;
-                        break;
-                    }
-                    flat_data[0][idx1++] = src_start;
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                    flat_data[0][2] += 3;
-                }
-                for (int32_t i = data.size() - 1; i >= rev_i_end;
-                     --i) {  // reverse direction local config in region where input / output shards overlap (for in
-                             // place operation)
-                    auto [src_start, dst_start, length] = data[i];
-                    flat_data[0][idx1++] = src_start;
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                    flat_data[0][2] += 3;
-                }
-            }
-
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
-        }
-        return flattened_config;
-    };
-
-    auto flatten_remote_config = [in_place, core_id_to_noc_coords, &device](
-                                     auto& config) -> std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> {
-        // find max length
-        size_t max_len = 0;
-        for (const auto& core_config : config) {
-            size_t curr_len = 0;
-            for (const auto& [key, subdata] : core_config) {
-                curr_len +=
-                    in_place
-                        ? 3 + (3 * subdata.size())
-                        : 3 + (3 * (subdata.size() / 2 + 1));  // For split reader, 3 for source[nocx, nocy, length] and
-                                                               // each vector is (3 * data.size() / 2 + 1).
-            }
-            max_len = std::max(max_len, curr_len);
-        }
-        max_len += 3;  // account for the null plug
-
-        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
-        for (const auto& core_config : config) {
-            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
-            uint32_t idx1 = 0, idx2 = 0;
-            uint32_t len_idx1 = 0, len_idx2 = 0;
-            uint32_t vector_id = 0;
-            int ref_size = 0;
-            for (const auto& [key, subdata] : core_config) {
-                auto [nocx, nocy, len] = key;
-                flat_data[0][idx1++] = nocx;
-                flat_data[0][idx1++] = nocy;
-                len_idx1 = idx1;
-                flat_data[0][idx1++] = 0;
-
-                flat_data[1][idx2++] = nocx;
-                flat_data[1][idx2++] = nocy;
-                len_idx2 = idx2;
-                flat_data[1][idx2++] = 0;
-                for (size_t i = 0; i < subdata.size(); ++i) {
-                    auto [src_start, dst_start, length] = subdata[i];
-                    if (vector_id || in_place) {
-                        flat_data[0][idx1++] = src_start;
-                        flat_data[0][idx1++] = dst_start;
-                        flat_data[0][idx1++] = length;
-                        flat_data[0][len_idx1] += 3;
-                        ref_size += length;
-                    } else {
-                        flat_data[1][idx2++] = src_start;
-                        flat_data[1][idx2++] = dst_start;
-                        flat_data[1][idx2++] = length;
-                        flat_data[1][len_idx2] += 3;
-                    }
-                    vector_id = (vector_id + 1) % 2;
-                }
-                idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
-                idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
-            }
-
-            flattened_config[0].emplace_back(std::move(flat_data[0]));
-            flattened_config[1].emplace_back(std::move(flat_data[1]));
-            max_ref_size = std::max(max_ref_size, ref_size);
-        }
-
-        return std::make_tuple(flattened_config, max_ref_size);
-    };
-
-    auto flattened_pad_config = flatten_pad_config(pad_config);
-    auto flattened_local_config = flatten_local_config(local_config);
-    auto [flattened_remote_config, max_ref_size] = flatten_remote_config(remote_config);
-
-    auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
-        size_t max_len = 0;
-        for (auto& core_config : config) {
-            max_len = std::max(max_len, core_config.size());
-        }
-        if (align_granularity > 1) {
-            size_t align_amount = max_len % align_granularity;
-            max_len = align_amount > 0 ? max_len + align_granularity - align_amount : max_len;
-        }
-        for (auto& core_config : config) {
-            size_t extend_amount = max_len - core_config.size();
-            if (extend_amount > 0) {
-                std::vector<uint16_t> extend_v(extend_amount, align_value);
-                core_config.insert(core_config.end(), extend_v.begin(), extend_v.end());
-            }
-        }
-    };
-
-    align_config(flattened_pad_config[0], 2);
-    align_config(flattened_pad_config[1], 2);
-    align_config(flattened_local_config[0], 2);
-    align_config(flattened_local_config[1], 2);
-    align_config(flattened_remote_config[0], 2);
-    align_config(flattened_remote_config[1], 2);
-
-    std::vector<std::vector<std::vector<uint16_t>>> config{
-        flattened_pad_config[0],
-        flattened_pad_config[1],
-        flattened_local_config[0],
-        flattened_local_config[1],
-        flattened_remote_config[0],
-        flattened_remote_config[1]};
-    return std::make_tuple(std::move(config), max_ref_size);
+    log_info(tt::LogOp, "========================================");
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
@@ -1324,7 +1125,7 @@ std::string SlidingWindowConfig::to_string() const {
            "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window
@@ -1363,7 +1164,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), padding=(({}, {}), "
         "({}, {})), output_padding = ({}, {}), "
-        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
+        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={}, is_transpose={})",
         t.batch_size,
         t.input_hw.first,
         t.input_hw.second,
@@ -1381,7 +1182,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.dilation_hw.second,
         t.num_cores_nhw,
         t.num_cores_c,
-        t.core_range_set.str());
+        t.core_range_set.str(),
+        t.is_transpose);
     return fmt::format_to(ctx.out(), "{}", str);
 }
 

@@ -1,32 +1,52 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation_types.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/decorators.hpp"
 
-namespace tt {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
-namespace tt_metal {
+struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
+    using operation_attributes_t = rotary_embedding_llama_fused_qk::operation_attributes_t;
+    using tensor_args_t = rotary_embedding_llama_fused_qk::tensor_args_t;
+    using spec_return_value_t = rotary_embedding_llama_fused_qk::spec_return_value_t;
+    using tensor_return_value_t = rotary_embedding_llama_fused_qk::tensor_return_value_t;
+    using program_factory_t = std::variant<program::RotaryEmbeddingLlamaFusedQKProgramFactory>;
+    using shared_variables_t = program::RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
 
-struct RotaryEmbeddingLlamaFusedQK {
-    const MemoryConfig q_output_mem_config;
-    const MemoryConfig k_output_mem_config;
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    const bool row_major_QK;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& q_input_tensor,
+        const Tensor& k_input_tensor,
+        const Tensor& cos_cache,
+        const Tensor& sin_cache,
+        const Tensor& trans_mat,
+        const tt::tt_metal::MemoryConfig& q_output_mem_config,
+        const tt::tt_metal::MemoryConfig& k_output_mem_config,
+        const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+        bool row_major_QK);
 };
 
-}  // namespace tt_metal
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
 
-}  // namespace tt
+namespace ttnn::prim {
+constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation<
+    "ttnn::prim::rotary_embedding_llama_fused_qk",
+    ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
+        RotaryEmbeddingLlamaFusedQKDeviceOperation>();
+}  // namespace ttnn::prim

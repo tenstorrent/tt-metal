@@ -1,4 +1,4 @@
-name: Package and release
+name: "Package and release"
 on:
   workflow_dispatch:
     inputs:
@@ -118,6 +118,7 @@ jobs:
     uses: ./.github/workflows/release-build-test-publish.yaml
     secrets: inherit
     strategy:
+      fail-fast: false
       matrix:
         version: [22.04, 24.04]
     with:
@@ -163,21 +164,60 @@ jobs:
 
 
   create-changelog:
-    needs: [create-tag]
+    needs: [create-tag, release-precheck]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get previous tag for changelog
+        id: get-previous-tag
+        run: |
+          # Fetch all tags
+          git fetch --tags --force origin
+
+          release_type="${{ needs.release-precheck.outputs.tag-type }}"
+          echo "Release type: $release_type"
+
+          if [[ "$release_type" == "dev" ]]; then
+            # For dev releases, find the second latest dev tag (v*.*.0-dev followed by date) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-dev[0-9]{8}$" | sed -n '2p' || echo "")
+          elif [[ "$release_type" == "rc" ]]; then
+            # For rc releases, find the second latest rc tag (v*.*.0-rc followed by number) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$" | sed -n '2p' || echo "")
+          else
+            # For prod releases, find the second latest stable release (v*.*.* with no suffix) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | sed -n '2p' || echo "")
+          fi
+
+          if [[ -z "$previous_tag" ]]; then
+            echo "No previous tag found for release type: $release_type"
+            echo "Using first commit as fallback"
+            previous_tag=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          echo "Previous tag: $previous_tag"
+          echo "previous-tag=$previous_tag" >> "$GITHUB_OUTPUT"
       - name: Create changelog
+        if: ${{ !inputs.dry-run }}
         id: create-changelog
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ignorePreReleases: true
+          fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
+          toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
           outputFile: CHANGELOG.txt
+      - name: Create empty changelog for dry run
+        if: ${{ inputs.dry-run }}
+        run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
       - name: Output changelog
+        if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
+        if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -185,6 +225,7 @@ jobs:
           path: CHANGELOG.txt
 
   create-release-notes:
+    if: ${{ !inputs.dry-run }}
     needs: create-changelog
     permissions: read-all
     runs-on: ubuntu-latest
@@ -214,13 +255,119 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.txt
 
+  check-existing-release:
+    needs: [create-tag, create-release-notes, build-test-publish]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    concurrency: create_upload_draft_release
+    outputs:
+      should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check release conditions and existing assets
+        id: check-release-conditions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ needs.create-tag.outputs.version }}"
+
+          # First check all the original conditions from create-and-upload-draft-release
+          echo "Checking release creation conditions..."
+
+          # Check if we should create release based on git ref
+          should_create_for_ref=false
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
+             [[ "${{ github.ref }}" == "refs/heads/stable" ]] || \
+             [[ "${{ github.ref }}" == refs/tags/v* ]] || \
+             [[ "${{ inputs.dry-run }}" == "true" ]]; then
+            should_create_for_ref=true
+            echo "✓ Git ref condition met: ${{ github.ref }}"
+          else
+            echo "✗ Git ref condition not met: ${{ github.ref }}"
+          fi
+
+          # Check if required jobs succeeded
+          create_tag_success="${{ needs.create-tag.result == 'success' }}"
+          create_notes_success="${{ needs.create-release-notes.result == 'success' }}"
+
+          echo "Job results - create-tag: ${{ needs.create-tag.result }}, create-release-notes: ${{ needs.create-release-notes.result }}, build-test-publish: ${{ needs.build-test-publish.result }}"
+
+          if [[ "$create_tag_success" != "true" ]] || [[ "$create_notes_success" != "true" ]]; then
+            echo "✗ Required jobs (create-tag, create-release-notes) did not succeed. Skipping release creation."
+            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$should_create_for_ref" != "true" ]]; then
+            echo "✗ Git ref conditions not met. Skipping release creation."
+            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Now check if release already exists with assets
+          echo "All conditions met. Checking if release $TAG_NAME already exists with assets..."
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME exists. Checking assets..."
+
+            # Get list of assets for this release
+            assets=$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | tr '\n' ' ')
+            echo "Existing assets: $assets"
+
+            # Define required assets
+            required_assets=(
+              "VERSION"
+              "CHANGELOG.txt"
+              "README.md"
+              "INSTALLING.md"
+              "MODEL_UPDATES.md"
+              "tt-metalium.tar.gz"
+            )
+
+            # Check if all required assets exist
+            all_assets_exist=true
+            for asset in "${required_assets[@]}"; do
+              if ! echo "$assets" | grep -q "$asset"; then
+                echo "Missing asset: $asset"
+                all_assets_exist=false
+              else
+                echo "Found asset: $asset"
+              fi
+            done
+
+            # Check if at least one .deb package exists
+            if echo "$assets" | grep -q '\.deb$'; then
+              echo "Found .deb package(s)"
+            else
+              echo "Missing .deb packages"
+              all_assets_exist=false
+            fi
+
+            if [ "$all_assets_exist" = "true" ]; then
+              echo "All required assets exist. Skipping release creation."
+              echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Some assets are missing. Proceeding with release creation."
+              echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Release $TAG_NAME does not exist. Proceeding with release creation."
+            echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-test-publish]
+    needs: [check-existing-release, create-tag]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: ${{ !cancelled() &&
+            needs.check-existing-release.result == 'success' &&
+            needs.check-existing-release.outputs.should-skip-release != 'true'
+        }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -279,14 +426,14 @@ jobs:
           echo ""
           echo "=== All files that would be uploaded to release ==="
           ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
-      - name: Release (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+      - name: Create draft release with assets (skipped for dry run)
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
+          draft: true
+          prerelease: false
           body_path: RELEASE_NOTES.txt
           files: |
             VERSION
@@ -297,6 +444,37 @@ jobs:
             tt-metalium.tar.gz
             debian-packages/*.deb
           fail_on_unmatched_files: true
+
+  convert-draft-to-prerelease:
+    needs: [create-and-upload-draft-release, create-tag]
+    concurrency: create_upload_draft_release
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Convert draft to prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_VERSION="${{ needs.create-tag.outputs.version }}"
+
+          # Verify the draft release exists before attempting to edit it
+          echo "Checking if release $TAG_VERSION exists..."
+          if ! gh release view "$TAG_VERSION" >/dev/null 2>&1; then
+            echo "ERROR: Release $TAG_VERSION not found"
+            echo "This could indicate a timing issue or failure in the create-and-upload-draft-release job"
+            exit 1
+          fi
+
+          # Use GitHub CLI to edit the existing release and convert it from draft to prerelease
+          # This preserves all existing assets and metadata while only changing the release status
+          echo "Converting draft release to prerelease..."
+          gh release edit "$TAG_VERSION" \
+            --draft=false \
+            --prerelease
+
+          echo "Successfully converted release $TAG_VERSION to prerelease"
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest

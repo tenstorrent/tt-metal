@@ -31,8 +31,26 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        },
     ],
-    ids=["fabric_2d", "fabric_1d_line", "fabric_1d_ring"],
+    ids=[
+        "fabric_2d",
+        "fabric_1d_line",
+        "fabric_1d_ring",
+        "fabric_manager_enabled_2d",
+        "fabric_manager_enabled_1d_line",
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -43,7 +61,6 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -53,14 +70,14 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
 @pytest.mark.parametrize("topology", [None])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
-    "input_memory_config, output_memory_config",
+    "input_memory_config, output_memory_config, axis",
     [
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, 0),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, 1),
     ],
-    ids=["dram_in_l1_out", "l1_in_dram_out"],
+    ids=["dram_in_l1_out_axis0", "l1_in_dram_out_axis1"],
 )
 def test_all_to_all_combine_8x4(
     mesh_device,

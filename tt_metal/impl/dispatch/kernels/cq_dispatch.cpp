@@ -10,10 +10,10 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
@@ -85,11 +85,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
@@ -119,6 +116,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
+constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -131,6 +129,10 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
 static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 using RelayClientType =
     CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>;
 
@@ -293,10 +295,7 @@ void process_write_host_h() {
         wlength -= length;
         while (length != 0) {
             // Get a page if needed
-            if (dispatch_cb_reader.cb_fence == data_ptr) {
-                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-            }
-            uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
+            uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
             uint32_t xfer_size = (length > available_data) ? available_data : length;
             uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
             completion_queue_reserve_back(npages);
@@ -368,7 +367,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
-    ASSERT(data_ptr <= dispatch_cb_reader.cb_fence - dispatch_cb_page_size);
+    ASSERT(dispatch_cb_page_size <= dispatch_cb_reader.available_bytes(data_ptr));
 
     // regular write, inline writes, and atomic writes use different cmd bufs, so we can init state for each
     // TODO: Add support for stateful atomics. We can preserve state once cb_acquire_pages is changed to a free running
@@ -394,6 +393,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 xfer_size = length;
                 not_end_of_cmd = false;
             }
+            length -= xfer_size;
 
             if constexpr (preamble_size > 0) {
                 uint32_t flag;
@@ -404,37 +404,22 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 ASSERT(downstream_cb_data_ptr < downstream_cb_end);
             }
             // Get a page if needed
-            if (data_ptr + xfer_size > dispatch_cb_reader.cb_fence) {
-                // Check for block completion
-                if (dispatch_cb_reader.cb_fence ==
-                    dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                    uint32_t orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
-                    // No more writes from this block. Decrement the number of writes
-                    // since they were all accounted for.
-                    // Check for dispatch_cb wrap
-                    if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                        ASSERT(dispatch_cb_reader.cb_fence == dispatch_cb_end);
-                        if (orphan_size != 0) {
-                            relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
-                                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
-                            length -= orphan_size;
-                            xfer_size -= orphan_size;
-                            downstream_cb_data_ptr += orphan_size;
-                            if (downstream_cb_data_ptr == downstream_cb_end) {
-                                downstream_cb_data_ptr = downstream_cb_base;
-                            }
-                            // All writes from this block have completed.
-                            orphan_size = 0;
+            if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
+                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                    if (orphan_size != 0) {
+                        relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
+                            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
+                        xfer_size -= orphan_size;
+                        downstream_cb_data_ptr += orphan_size;
+                        if (downstream_cb_data_ptr == downstream_cb_end) {
+                            downstream_cb_data_ptr = downstream_cb_base;
                         }
-                        dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                        data_ptr = dispatch_cb_base;
+                        if (!will_wrap) {
+                            data_ptr += orphan_size;
+                        }
                     }
-
-                    dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-                }
-
-                // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-                uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+                });
             }
 
             relay_client.write_atomic_inc_any_len<
@@ -445,7 +430,6 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 NCRISC_WR_CMD_BUF>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
-            length -= xfer_size;
             data_ptr += xfer_size;
             downstream_cb_data_ptr += xfer_size;
             if (downstream_cb_data_ptr == downstream_cb_end) {
@@ -505,12 +489,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
     }
 
     while (length != 0) {
-        // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-        if (dispatch_cb_reader.cb_fence == data_ptr) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-        }
         // Transfer size is min(remaining_length, data_available_in_cb)
-        uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
+        uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
@@ -549,14 +529,8 @@ void process_write_paged() {
     //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
 
     while (write_length != 0) {
-        // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
-        // for one buffer page
-        // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-        if (dispatch_cb_reader.cb_fence == data_ptr) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-        }
         // Transfer size is min(remaining_length, data_available_in_cb)
-        uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
+        uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t remaining_page_size = page_size - dst_addr_offset;
         uint32_t xfer_size = remaining_page_size > available_data ? available_data : remaining_page_size;
         // Cap the transfer size to the NOC packet size - use of One Packet NOC API (better performance
@@ -649,37 +623,31 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         sub_cmd_ptr++;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
         // Get a page if needed
-        if (data_ptr + xfer_size > dispatch_cb_reader.cb_fence) {
+        if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             // Check for block completion and issue orphan writes for this block
             // before proceeding to next block
             uint32_t orphan_size = 0;
-            if (dispatch_cb_reader.cb_fence ==
-                dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
                 if (orphan_size != 0) {
                     wait_for_barrier();
                     cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
                     writes++;
                     mcasts += num_dests;
-                }
-                // Handle wrapping on dispatch cb
-                if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                    dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
-                } else {
-                    data_ptr += orphan_size;
+                    if (!will_wrap) {
+                        data_ptr += orphan_size;
+                    }
                 }
                 noc_nonposted_writes_num_issued[noc_index] += writes;
                 noc_nonposted_writes_acked[noc_index] += mcasts;
                 writes = 0;
                 mcasts = 0;
-                dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-            }
+            });
 
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = dispatch_cb_reader.acquire_pages();
-
-            // This is done here so the common case doesn't have to restore the pointers
+            // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since
+            // the size of a single transfer is at most the CB page size. This write has a different destination address
+            // than the default, so we restore the destination address to the start immediately afterwards to avoid the
+            // overhead in the common case.
             if (orphan_size != 0) {
                 uint32_t remainder_xfer_size = xfer_size - orphan_size;
                 // Creating full NOC addr not needed as we are not programming the noc coords
@@ -752,7 +720,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
     bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
-        uint32_t length = sub_cmd_ptr->length;
+        // CQDispatchWritePackedLargeSubCmd always stores length - 1, so add 1 to get the actual length
+        // This avoids the need to handle the special case where 65536 bytes overflows to 0
+        uint32_t length = sub_cmd_ptr->length_minus1 + 1;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
@@ -787,23 +757,16 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-            if (data_ptr == dispatch_cb_reader.cb_fence) {
-                if (dispatch_cb_reader.cb_fence ==
-                    dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                    if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                        dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                        data_ptr = dispatch_cb_base;
-                    }
+            if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
+                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
                     // Block completion - account for all writes issued for this block before moving to next
                     noc_nonposted_writes_num_issued[noc_index] += writes;
                     mcasts += num_dests * writes;
                     writes = 0;
-                    dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-                }
-                uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+                });
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
-            uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
+            uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
             uint32_t xfer_size;
             if (length > available_data) {
                 xfer_size = available_data;
@@ -842,23 +805,13 @@ void process_write_packed_large(uint32_t* l1_cache) {
         writes = 0;
 
         // Handle padded size and potential wrap
-        if (data_ptr + pad_size > dispatch_cb_reader.cb_fence) {
-            // Check for block completion
-            if (dispatch_cb_reader.cb_fence ==
-                dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                // Check for dispatch_cb wrap
-                if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                    ASSERT(dispatch_cb_reader.cb_fence == dispatch_cb_end);
-                    uint32_t orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
-                    dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
+        if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                if (will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
                     pad_size -= orphan_size;
                 }
-                dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-            }
-
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+            });
         }
         data_ptr += pad_size;
 
@@ -1206,8 +1159,8 @@ re_run_command:
             break;
 
         default:
-            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.cb_fence << " "
-                   << dispatch_cb_base << " " << dispatch_cb_end << " " << dispatch_cb_reader.rd_block_idx << " "
+            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr)
+                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
@@ -1248,8 +1201,9 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
             break;
 
         default:
-            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.cb_fence << " "
-                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << dispatch_cb_reader.rd_block_idx << " "
+            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr)
+                   << " "
+                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
@@ -1270,6 +1224,10 @@ void kernel_main() {
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1319,22 +1277,17 @@ void kernel_main() {
             fabric_worker_buffer_index_sem,
             fabric_mux_status_address,
             my_fabric_sync_status_addr,
-            my_dev_id,
-            to_dev_id,
             to_mesh_id,
             ew_dim,
-            router_direction,
             fabric_header_rb_base,
             num_hops,
-            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #endif
     }
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
-        if (cmd_ptr == dispatch_cb_reader.cb_fence) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(cmd_ptr);
-        }
+        dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);

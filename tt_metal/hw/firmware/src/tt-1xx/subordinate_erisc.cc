@@ -6,18 +6,18 @@
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
 #include "core_config.h"
 
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 // clang-format on
 
 // Required defines
@@ -52,7 +52,9 @@ static_assert(
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MAILBOX_ADDR);
 volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = &mailboxes->subordinate_sync.dm1;
 
-uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
+// Note: This is just for the firmware
+// The kernel defines NOC_MODE and NOC_INDEX
+uint8_t noc_index = 0;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -86,6 +88,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 

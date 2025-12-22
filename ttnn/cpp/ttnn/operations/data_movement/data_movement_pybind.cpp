@@ -58,8 +58,8 @@ void py_module(py::module& module) {
     bind_fill_pad(module);
     bind_fill_rm(module);
     bind_fold_operation(module);
-    bind_non_zero_indices(module);
     clone::bind_clone_operation(module);
+    detail::bind_non_zero_indices(module);
     detail::bind_concat(module);
     detail::bind_flip(module);
     detail::bind_indexed_fill(module);
@@ -75,6 +75,7 @@ void py_module(py::module& module) {
     detail::bind_untilize(module);
     detail::bind_untilize_with_unpadding(module);
     detail::bind_scatter(module);
+    detail::bind_scatter_add(module);
     detail::bind_tosa_scatter(module);
     detail::py_bind_assign(module);
     detail::py_bind_bcast(module);

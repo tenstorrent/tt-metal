@@ -17,24 +17,23 @@
 #include <memory>
 
 #include "tt_fabric_test_context.hpp"
+#include "tt_fabric_test_constants.hpp"
 
-const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
-    TestFixture::topology_to_fabric_config_map = {
-        {{Topology::Linear, RoutingType::LowLatency}, FabricConfig::FABRIC_1D},
-        {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
-        {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
-        {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
+using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
+using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
+
+const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
+    {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
+    {Topology::Linear, FabricConfig::FABRIC_1D},
+    {Topology::Ring, FabricConfig::FABRIC_1D_RING},
+    {Topology::Mesh, FabricConfig::FABRIC_2D},
 };
 
-const std::
-    unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
-        TestFixture::torus_topology_to_fabric_config_map = {
-            {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
-            {{Topology::Torus, "X", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X},
-            {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
-            {{Topology::Torus, "Y", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y},
-            {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
-            {{Topology::Torus, "XY", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY},
+const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
+    TestFixture::torus_topology_to_fabric_config_map = {
+        {{Topology::Torus, "X"}, FabricConfig::FABRIC_2D_TORUS_X},
+        {{Topology::Torus, "Y"}, FabricConfig::FABRIC_2D_TORUS_Y},
+        {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
 };
 
 int main(int argc, char** argv) {
@@ -93,12 +92,22 @@ int main(int argc, char** argv) {
         test_context.enable_progress_monitoring(progress_config);
     }
 
-    bool benchmark_mode = std::any_of(
-        raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) { return config.benchmark_mode; });
+    bool has_bandwidth_tests = std::any_of(raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) {
+        return config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
+    });
 
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
-    if (benchmark_mode) {
+    // Initialize CSV file for bandwidth results if any of the configs have bandwidth test mode set
+    if (has_bandwidth_tests) {
         test_context.initialize_bandwidth_results_csv_file();
+    }
+
+    bool has_latency_tests = std::any_of(raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) {
+        return config.performance_test_mode == PerformanceTestMode::LATENCY;
+    });
+
+    // Initialize CSV file for latency results if any of the configs have latency test mode set
+    if (has_latency_tests) {
+        test_context.initialize_latency_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -124,12 +133,13 @@ int main(int argc, char** argv) {
     bool dump_built_tests = cmdline_parser.dump_built_tests();
     if (dump_built_tests) {
         std::filesystem::path dump_file_dir =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         if (!std::filesystem::exists(dump_file_dir)) {
             std::filesystem::create_directory(dump_file_dir);
         }
 
-        std::string dump_file = cmdline_parser.get_built_tests_dump_file_name(default_built_tests_dump_file);
+        std::string dump_file = cmdline_parser.get_built_tests_dump_file_name(DEFAULT_BUILT_TESTS_DUMP_FILE);
         std::filesystem::path dump_file_path = dump_file_dir / dump_file;
         output_stream.open(dump_file_path, std::ios::out | std::ios::trunc);
 
@@ -143,30 +153,43 @@ int main(int argc, char** argv) {
     }
 
     bool device_opened = false;
+    uint32_t tests_ran = 0;
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
-        } else if (builder.should_skip_test(test_config)) {
-            log_info(tt::LogTest, "Skipping Test Group: {} due to skip policy", test_config.name);
+        } else if (builder.should_skip_test_on_platform(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         const auto& topology = test_config.fabric_setup.topology;
-        const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.benchmark_mode) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
         log_info(
             tt::LogTest,
-            "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
+            "Opening devices with topology: {} and fabric_tensix_config: {}",
             topology,
-            routing_type,
             fabric_tensix_config);
-        test_context.open_devices(test_config.fabric_setup);
+
+        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        if (!open_devices_success) {
+            log_warning(
+                tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            continue;
+        }
+
+        // Check topology-based skip conditions after devices are opened
+        if (builder.should_skip_test_on_topology(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);
+            test_context.close_devices();
+            continue;
+        }
+        tests_ran++;
         device_opened = true;
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
@@ -175,9 +198,12 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set benchmark mode and line sync for this test group
-            test_context.set_benchmark_mode(test_config.benchmark_mode);
-            test_context.set_telemetry_enabled(test_config.benchmark_mode);
+            // Set performance test mode and line sync for this test group
+            test_context.set_performance_test_mode(test_config.performance_test_mode);
+            // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
+            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
+            // Set skip_packet_validation flag
+            test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -194,6 +220,11 @@ int main(int argc, char** argv) {
 
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
+
+                // Setup latency test mode AFTER process_traffic_config so that senders_/receivers_ maps are populated
+                if (built_test.performance_test_mode == PerformanceTestMode::LATENCY) {
+                    test_context.setup_latency_test_mode(built_test);
+                }
 
                 // Clear code profiling buffers before test execution
                 if (test_context.get_code_profiling_enabled()) {
@@ -226,11 +257,18 @@ int main(int argc, char** argv) {
                 }
 
                 test_context.validate_results();
-                log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
 
-                if (test_context.get_benchmark_mode()) {
+                // Performance profiling (bandwidth mode)
+                if (test_context.get_performance_test_mode() == PerformanceTestMode::BANDWIDTH) {
                     test_context.profile_results(built_test);
                 }
+
+                // Latency measurement (latency test mode)
+                if (test_context.get_performance_test_mode() == PerformanceTestMode::LATENCY) {
+                    test_context.collect_latency_results();
+                    test_context.report_latency_results(built_test);
+                }
+
                 if (test_context.get_telemetry_enabled()) {
                     test_context.clear_telemetry();
                 }
@@ -243,15 +281,18 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
 
-    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
-    if (benchmark_mode) {
+    // Generate summaries after all tests have run
+    if (has_bandwidth_tests) {
         test_context.generate_bandwidth_summary();
     }
+    if (has_latency_tests) {
+        test_context.generate_latency_summary();
+    }
 
-    // Setup Bandwidth CSV files for CI to upload
-    if (benchmark_mode) {
+    // Setup CSV files for CI to upload (handles both bandwidth and latency)
+    if (has_bandwidth_tests || has_latency_tests) {
         test_context.setup_ci_artifacts();
     }
 
@@ -265,6 +306,15 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
+    }
+
+    auto total_tests_count = raw_test_configs.size();
+    if (tests_ran < total_tests_count) {
+        log_warning(
+            tt::LogTest,
+            "{} out of {} test groups did not run (filtered, skipped, or unsupported)",
+            total_tests_count - tests_ran,
+            total_tests_count);
     }
 
     if (device_opened) {

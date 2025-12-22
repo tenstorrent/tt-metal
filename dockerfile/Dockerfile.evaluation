@@ -1,0 +1,51 @@
+FROM ubuntu:24.04
+
+ARG BUILD_METAL_ARGS=""
+ARG CCACHE_REMOTE_STORAGE=""
+ARG CCACHE_REMOTE_ONLY="true"
+
+RUN mkdir /tt-metal
+WORKDIR /tt-metal
+
+RUN apt update && apt install -y python3 python3-pip git
+
+# Install Python deps (skip venv)
+COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
+COPY docs/requirements-docs.txt docs/
+COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
+COPY tools/triage/requirements.txt tools/triage/
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+RUN pip3 install --upgrade setuptools
+RUN pip3 install --ignore-installed -r tt_metal/python_env/requirements-dev.txt
+
+## Install Metal dependencies
+COPY install_dependencies.sh .
+COPY tt_metal/sfpi-info.sh tt_metal/
+COPY tt_metal/sfpi-version tt_metal/
+COPY scripts/ttexalens_ref.txt scripts/
+RUN ./install_dependencies.sh --docker
+
+# Install ccache
+RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.12.2/ccache-4.12.2-linux-x86_64.tar.xz && \
+    tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
+    rm /tmp/ccache.tar.xz
+
+# Install slurmd
+RUN apt update && apt install -y slurmd && rm -rf /var/lib/apt/lists/*
+
+# Build & install Metal
+COPY . .
+
+# Configure with CPM cache shared mount
+RUN --mount=type=cache,target=/tt-metal/.cpmcache,sharing=locked,id=cpm \
+    ./build_metal.sh --install-prefix /usr $BUILD_METAL_ARGS --configure-only --cpm-use-local-packages --cpm-source-cache /tt-metal/.cpmcache
+
+RUN ./build_metal.sh --install-prefix /usr $BUILD_METAL_ARGS
+
+# Build & install Python package
+RUN pip3 install -e .
+
+# Add permissions for all users (MPI uses non-root users and some tests write here)
+RUN chmod -R 777 /usr/libexec/tt-metalium
+
+WORKDIR /root

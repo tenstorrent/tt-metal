@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -23,7 +23,6 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
 constexpr uint32_t mcast_mode = get_compile_time_arg_val(4);
 constexpr bool is_2d_fabric = get_compile_time_arg_val(5);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(6);
 
 inline void setup_connection_and_headers(
     tt::tt_fabric::WorkerToFabricEdmSender& connection,

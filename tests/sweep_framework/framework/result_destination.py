@@ -380,6 +380,23 @@ class FileResultDestination(ResultDestination):
             exception = str(raw.get("exception", None))
             error_hash = generate_error_hash(exception)
 
+            # Extract machine info if available
+            machine_info = header.get("traced_machine_info")
+            card_type_str = "n/a"
+            if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
+                # machine_info is a list of dicts, take the first one
+                first_machine = machine_info[0]
+                if isinstance(first_machine, dict):
+                    board_type = first_machine.get("board_type", "")
+                    device_series = first_machine.get("device_series", "")
+                    card_count = first_machine.get("card_count", "")
+                    # Format as "Wormhole n300 (1 card)" or similar
+                    if board_type and device_series:
+                        card_type_str = f"{board_type} {device_series}"
+                        if card_count:
+                            cards_label = "card" if card_count == 1 else "cards"
+                            card_type_str += f" ({card_count} {cards_label})"
+
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
@@ -393,7 +410,7 @@ class FileResultDestination(ResultDestination):
                 error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
-                model_name="n/a",
+                model_name=header.get("traced_source", "n/a"),
                 op_kind=_op_kind,
                 op_name=_op_name,
                 framework_op_name="sweep",
@@ -402,7 +419,7 @@ class FileResultDestination(ResultDestination):
                 op_params=None,
                 git_sha=git_hash,
                 status=mapped_status,
-                card_type="n/a",
+                card_type=card_type_str,
                 backend="n/a",
                 data_source="ttnn op test",
                 input_hash=raw.get("input_hash"),

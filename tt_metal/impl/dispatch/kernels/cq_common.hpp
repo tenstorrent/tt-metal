@@ -5,11 +5,12 @@
 #pragma once
 
 #include "core_config.h"
-#include "risc_attribs.h"
-#include "dataflow_api.h"
+#include "internal/risc_attribs.h"
+#include "api/dataflow/dataflow_api.h"
 #include "cq_helpers.hpp"
 
-#include "debug/sanitize_noc.h"
+#include "internal/debug/sanitize.h"
+#include "api/debug/assert.h"
 #include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
@@ -258,7 +259,14 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
+template <
+    uint32_t my_sem_id,
+    uint8_t noc_idx,
+    uint32_t downstream_noc_xy,
+    uint32_t downstream_sem_id,
+    uint32_t buffer_base = 0,
+    uint32_t buffer_end = 0,
+    uint32_t buffer_page_size = 0>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
@@ -298,12 +306,40 @@ public:
     }
 
     // Inform the consumer that n pages are available.
-    FORCE_INLINE void release_pages(uint32_t n) {
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0, bool round_to_page_size = false) {
+#if ASSERT_ENABLED
+        if constexpr (buffer_page_size != 0) {
+            constexpr uint32_t buffer_size = buffer_end - buffer_base;
+            if constexpr (buffer_size != 0) {
+                if (n != 0) {
+                    // In the middle of writing a command, the writer pointer may not be aligned to the page size, but
+                    // must always be past the number of pages released.
+                    uint32_t adjusted_writer_ptr =
+                        round_to_page_size ? (writer_ptr - (writer_ptr - buffer_base) % buffer_page_size) : writer_ptr;
+                    uint64_t bytes = n * buffer_page_size;
+                    uint32_t expected = watch_released_ptr_ + bytes;
+                    if (expected > buffer_end) {
+                        expected -= buffer_size;
+                    }
+                    // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
+                    // it hasn't wrapped yet.
+                    ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)));
+                    watch_released_ptr_ = expected;
+                }
+            }
+        }
+#endif
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
     uint32_t additional_count{0};
+
+#if ASSERT_ENABLED
+private:
+    // Pointer to the end of the last released page. Used for watcher assertions.
+    uint32_t watch_released_ptr_{buffer_base};
+#endif
 };
 
 // CBReader
@@ -325,33 +361,6 @@ template <
     uint32_t cb_base>
 class CBReader {
 public:
-    // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
-    // credits from upstream if we already acquired all the pages previously.
-    FORCE_INLINE uint32_t acquire_pages() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
-
-        if (local_count_ == upstream_count_) {
-            WAYPOINT("UAPW");
-            uint32_t heartbeat = 0;
-            do {
-                invalidate_l1_cache();
-                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
-            } while ((upstream_count_ = *sem_addr) == local_count_);
-            WAYPOINT("UAPD");
-        }
-
-        // Set a fence to limit how much is processed at once
-        uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> cb_log_page_size;
-        uint32_t available = upstream_count_ - local_count_;
-        uint32_t usable = (available > limit) ? limit : available;
-
-        local_count_ += usable;
-        cb_fence += usable << cb_log_page_size;
-
-        return usable;
-    }
-
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
@@ -369,40 +378,71 @@ public:
         WAYPOINT("TAPD");
     }
 
-    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
-    uint32_t cb_fence{0};
-    // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
-    uint32_t block_next_start_addr[cb_blocks]{};
-    // Current read block index within the circular buffer.
-    uint32_t rd_block_idx{0};
+    // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
+    // wrap around.
+    uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
 
 protected:
     FORCE_INLINE void init() {
         for (uint32_t i = 0; i < cb_blocks; i++) {
             uint32_t next_block = i + 1;
             uint32_t offset = next_block * cb_pages_per_block * (1 << cb_log_page_size);
-            this->block_next_start_addr[i] = cb_base + offset;
+            this->block_next_start_addr_[i] = cb_base + offset;
         }
 
-        this->cb_fence = cb_base;
-        this->rd_block_idx = 0;
+        this->cb_fence_ = cb_base;
+        this->rd_block_idx_ = 0;
     }
 
     // Advance the block to the next index, wrapping around if necessary.
     FORCE_INLINE void move_rd_to_next_block() {
         static_assert((cb_blocks & (cb_blocks - 1)) == 0);
-        rd_block_idx++;
-        rd_block_idx &= cb_blocks - 1;
+        rd_block_idx_++;
+        rd_block_idx_ &= cb_blocks - 1;
     }
+
+    // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
+    // credits from upstream if we already acquired all the pages previously.
+    FORCE_INLINE uint32_t acquire_pages() {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+
+        if (local_count_ == upstream_count_) {
+            WAYPOINT("UAPW");
+            uint32_t heartbeat = 0;
+            do {
+                invalidate_l1_cache();
+                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+            } while ((upstream_count_ = *sem_addr) == local_count_);
+            WAYPOINT("UAPD");
+        }
+
+        // Set a fence to limit how much is processed at once
+        uint32_t limit = (block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size;
+        uint32_t available = upstream_count_ - local_count_;
+        uint32_t usable = (available > limit) ? limit : available;
+
+        local_count_ += usable;
+        cb_fence_ += usable << cb_log_page_size;
+
+        return usable;
+    }
+
+    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
+    uint32_t cb_fence_{0};
+    // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
+    uint32_t block_next_start_addr_[cb_blocks]{};
+    // Current read block index within the circular buffer.
+    uint32_t rd_block_idx_{0};
 
 private:
     // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
     uint32_t upstream_count_{0};
-    // Number of pages this reader has already accounted for (consumed) into the cb_fence region.
+    // Number of pages this reader has already accounted for (consumed) into the cb_fence_ region.
     uint32_t local_count_{0};
 };
 
-// Unified reader that delegates release to a policy defined in the TU
+// Reader that releases a block of pages at a time. At most one block of pages can be available at a time.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
@@ -420,18 +460,40 @@ public:
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
     }
 
-    FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
-        release_block_pages();
-        this->move_rd_to_next_block();
+    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // writer. Updates cmd_ptr on wrap-around.
+    // noc_nonposted_writes_num_issued[noc_index] must be updated before calling this function.
+    // If this function doesn't return sufficient data, there are two options:
+    // 1. Process all the available data and then call this function again.
+    // 2. Call get_cb_page_and_release_pages to attempt to get more data.
+    FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
+        if (this->available_bytes(cmd_ptr) == 0) {
+            if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+                if (this->rd_block_idx_ == cb_blocks - 1) {
+                    cmd_ptr = cb_base;
+                    this->cb_fence_ = cb_base;
+                }
+                move_rd_to_next_block_and_release_pages();
+            }
+            this->acquire_pages();
+        }
+        return this->available_bytes(cmd_ptr);
     }
 
-    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
-    // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
-        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
-            if (this->rd_block_idx == cb_blocks - 1) {
+    // Get new CB pages. If getting new pages would require switching the the next block, this will call on_boundary to
+    // handle the orphan data that would otherwise be lost and will then release old pages to writer.
+    //
+    // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
+    // cmd_ptr is set to the base address after on_boundary is called).  noc_nonposted_writes_num_issued[noc_index] must
+    // be updated before on_boundary returns.
+    template <typename OnBoundaryFn>
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
+            on_boundary(will_wrap);
+            if (will_wrap) {
                 cmd_ptr = cb_base;
-                this->cb_fence = cb_base;
+                this->cb_fence_ = cb_base;
             }
             move_rd_to_next_block_and_release_pages();
         }
@@ -441,7 +503,7 @@ public:
     FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
         release_block_pages();
         uint32_t pages_to_release =
-            cb_pages_per_block - ((this->block_next_start_addr[this->rd_block_idx] - curr_ptr) >> cb_log_page_size);
+            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size);
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
@@ -465,6 +527,11 @@ private:
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
     }
 
+    FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
+        release_block_pages();
+        this->move_rd_to_next_block();
+    }
+
     bool released_prev_block_{false};
     // Snapshot of nonposted write requests issued at block entry; used to wait/clear before releasing credits.
     uint32_t block_noc_writes_to_clear_{0};
@@ -475,7 +542,8 @@ template <
     uint32_t cb_log_page_size,
     uint32_t cb_blocks,
     uint32_t cb_pages_per_block,
-    uint32_t cb_base>
+    uint32_t cb_base,
+    uint32_t cb_end>
 class CBReaderWithManualRelease : public CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base> {
 public:
     FORCE_INLINE void init() {
@@ -486,15 +554,42 @@ public:
     // pages to writer.
     FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
         // Strided past the data that has arrived, get the next page
-        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
-            if (this->rd_block_idx == cb_blocks - 1) {
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            if (this->rd_block_idx_ == cb_blocks - 1) {
                 cmd_ptr = cb_base;
-                this->cb_fence = cb_base;
+                this->cb_fence_ = cb_base;
             }
             this->move_rd_to_next_block();
         }
 
         return this->acquire_pages();
+    }
+
+    // Returns how much data is available. Will block until data is available.
+    FORCE_INLINE uint32_t wait_for_available_data(uint32_t& cmd_ptr) {
+        if (this->available_bytes(cmd_ptr) == 0) {
+            get_cb_page(cmd_ptr);
+        }
+        return this->available_bytes(cmd_ptr);
+    }
+
+    // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
+    FORCE_INLINE void consumed_data(uint32_t& cmd_ptr, uint32_t length) {
+        // This is ugly: get_cb_page code can wrap and this can wrap
+        // They peacefully coexist because we won't wrap there and here at once
+        if (cmd_ptr + length >= cb_end) {
+            length -= cb_end - cmd_ptr;
+            cmd_ptr = cb_base;
+            if (this->cb_fence_ == cb_end) {
+                // We hit the nail on the head, wrap the fence
+                ASSERT(length == 0);
+                this->cb_fence_ = cb_base;
+                // TODO eliminate usage of block_next_start_addr_ in this CB reader. rd_block_idx_ will point to the
+                // last block, not the first block, so the limit calculation in acquire_pages will be incorrect. We
+                // don't really use blocks for anything, here, so we should get rid of them and simplify the code.
+            }
+        }
+        cmd_ptr += length;
     }
 };
 

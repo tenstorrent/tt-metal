@@ -16,7 +16,8 @@ struct ExecuteUnary {
     static Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static ComplexTensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
@@ -27,7 +28,8 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         const Tensor& input_tensor,
         bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type>
@@ -46,7 +48,8 @@ struct ExecuteUnaryWithFloatParameter {
         const Tensor& input_tensor,
         float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type>
@@ -100,6 +103,14 @@ struct Selu {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Bitcast {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const DataType& output_dtype,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Softplus {
     static Tensor invoke(
         const Tensor& input,
@@ -134,20 +145,6 @@ struct Abs {
 };
 
 struct Eqz {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct Floor {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct Trunc {
     static Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -280,6 +277,13 @@ struct Softshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Logit {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        std::optional<float> eps = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
 struct Deg2Rad {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -327,11 +331,27 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rdiv {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float value,
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Where {
     static Tensor invoke(
         const Tensor& condition,
         const ScalarVariant& value_true,
         const ScalarVariant& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Swish {
+    static Tensor invoke(
+        const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -469,6 +489,7 @@ constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::una
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto hardmish = ttnn::register_operation<"ttnn::hardmish", ttnn::operations::unary::Hardmish>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
+constexpr auto logit = ttnn::register_operation<"ttnn::logit", ttnn::operations::unary::Logit>();
 constexpr auto elu = ttnn::register_operation<"ttnn::elu", ttnn::operations::unary::Elu>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
 constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
@@ -481,6 +502,9 @@ constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::o
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::operations::unary::Where>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
+constexpr auto bitcast = ttnn::register_operation<"ttnn::bitcast", ttnn::operations::unary::Bitcast>();
+constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", ttnn::operations::unary::Rdiv>();
+constexpr auto swish = ttnn::register_operation<"ttnn::swish", ttnn::operations::unary::Swish>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();
