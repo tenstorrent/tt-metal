@@ -202,6 +202,10 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
         (1, 8),
         (4, 8),
     ],
+    ids=[
+        "mesh_1x8",
+        "mesh_4x8",
+    ],
 )
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, test_modules, reset_seeds):
     """
