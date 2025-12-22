@@ -34,7 +34,7 @@ on:
         description: 'Run multi-card tests on Quietbox (4xP150)'
         required: false
         type: boolean
-        default: false
+        default: true
       run_bh_deskbox:
         description: 'Run multi-card tests on DeskBox (2xP150)'
         required: false
@@ -44,7 +44,7 @@ on:
         description: 'Run multi-card tests on LoudBox (8xP150)'
         required: false
         type: boolean
-        default: false
+        default: true
       run_bh_p300:
         description: 'Run multi-card tests on P300 (1xP300)'
         required: false
@@ -54,7 +54,7 @@ on:
         description: 'Run multi-card tests on QuietBox 2 (2xP300)'
         required: false
         type: boolean
-        default: false
+        default: true
   workflow_call:
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
