@@ -29,6 +29,7 @@ struct semaphore
 struct mutex
 {
     constexpr static uint32_t REG_RMW = 0; // used for atomic register read-modify-write from different threads
+    constexpr static uint32_t SFPU    = 4; // used for atomic access to SFPU since it's instructions can be issued from both TRISC1 and TRISC2
 };
 
 constexpr uint8_t PC_BUF_SEMAPHORE_BASE = 8;  // base address for semaphores in PC buffer
