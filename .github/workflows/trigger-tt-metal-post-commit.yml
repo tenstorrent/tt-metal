@@ -292,6 +292,18 @@ jobs:
             echo "l2-url=" >> $GITHUB_OUTPUT
           fi
 
+          # Parse Device Perf Models test results
+          PERF_RESULT="${{ needs.trigger-tt-metal-tests.outputs.perf-device-models-result || '' }}"
+          if [ -n "$PERF_RESULT" ]; then
+            PERF_STATUS=$(echo "$PERF_RESULT" | cut -d: -f1)
+            PERF_URL=$(echo "$PERF_RESULT" | cut -d: -f2-)
+            echo "perf-status=$PERF_STATUS" >> $GITHUB_OUTPUT
+            echo "perf-url=$PERF_URL" >> $GITHUB_OUTPUT
+          else
+            echo "perf-status=" >> $GITHUB_OUTPUT
+            echo "perf-url=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Find tt-metal workflow run
         id: find-run
         if: needs.trigger-tt-metal-tests.result == 'success'
@@ -388,6 +400,7 @@ jobs:
           RUN_WH="${{ needs.detect-changes.outputs.run-wormhole }}"
           RUN_BH="${{ needs.detect-changes.outputs.run-blackhole }}"
           [[ "$RUN_WH" == "true" || "$RUN_BH" == "true" ]] && RUN_L2="true" || RUN_L2="false"
+          [[ "$RUN_WH" == "true" || "$RUN_BH" == "true" ]] && RUN_PERF="true" || RUN_PERF="false"
           L2_RESULT=$(format_test_result "C++ post-commit" \
             "$RUN_L2" \
             "${{ steps.parse-results.outputs.l2-status }}" \
@@ -405,6 +418,16 @@ jobs:
             "${{ needs.trigger-tt-metal-tests.result }}")
           echo "blackhole-result<<EOF" >> $GITHUB_OUTPUT
           echo "$BH_RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Format Device Perf Models results (runs for both Wormhole and Blackhole changes)
+          PERF_RESULT=$(format_test_result "Device perf regressions" \
+            "$RUN_PERF" \
+            "${{ steps.parse-results.outputs.perf-status }}" \
+            "${{ steps.parse-results.outputs.perf-url }}" \
+            "${{ needs.trigger-tt-metal-tests.result }}")
+          echo "perf-device-models-result<<EOF" >> $GITHUB_OUTPUT
+          echo "$PERF_RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post comment on PR
@@ -429,6 +452,7 @@ jobs:
             ${{ steps.format-results.outputs.wormhole-result }}
             ${{ steps.format-results.outputs.l2-nightly-result }}
             ${{ steps.format-results.outputs.blackhole-result }}
+            ${{ steps.format-results.outputs.perf-device-models-result }}
 
             ## 🔗 Links
             📊 **Post-commit workflow:** [#${{ github.run_id }}](${{
