@@ -28,6 +28,11 @@ namespace tt::tt_metal::experimental::udm_tests {
 // Use the ShardStrategy enum from ttnn::operations::data_movement
 using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
 
+// Shard order controls how tensor dimensions map to mesh dimensions
+// NORMAL: tensor height on mesh dim 0, tensor width on mesh dim 1
+// SWAPPED: tensor width on mesh dim 0, tensor height on mesh dim 1
+enum class ShardOrder { NORMAL, SWAPPED };
+
 /**
  * @brief Compute ND tensor shape in pages using tensor layout
  * Supports 1D, 2D, and ND tensors

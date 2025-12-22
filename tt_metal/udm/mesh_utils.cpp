@@ -146,7 +146,7 @@ std::pair<uint32_t, uint32_t> get_core_pages(uint32_t dim_size_in_pages, uint32_
     // Cores 0 to (remainder-1) each get (base_pages + 1) pages
     // Cores (remainder) onwards each get (base_pages) pages
     // offset = core_coord * base_pages + min(core_coord, remainder)
-    uint32_t offset = core_coord * base_pages + std::min(core_coord, remainder);
+    uint32_t offset = (core_coord * base_pages) + std::min(core_coord, remainder);
 
     return {num_pages, offset};
 }

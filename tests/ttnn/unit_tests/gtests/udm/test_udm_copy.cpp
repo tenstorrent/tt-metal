@@ -14,11 +14,6 @@
 namespace tt::tt_metal::experimental::udm_tests {
 namespace {
 
-// Shard order controls how tensor dimensions map to mesh dimensions
-// NORMAL: tensor height on mesh dim 0, tensor width on mesh dim 1
-// SWAPPED: tensor width on mesh dim 0, tensor height on mesh dim 1
-enum class ShardOrder { NORMAL, SWAPPED };
-
 /**
  * @brief Create UDM program that copies tensor from input to output
  *
@@ -42,6 +37,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     const auto& mesh_tensor_shape = input_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();
     uint32_t rank = mesh_tensor_shape.rank();
     std::vector<int> partition_dims;
+    partition_dims.reserve(rank - 1);
     for (uint32_t d = 0; d < rank - 1; ++d) {
         partition_dims.push_back(static_cast<int>(d));
     }
