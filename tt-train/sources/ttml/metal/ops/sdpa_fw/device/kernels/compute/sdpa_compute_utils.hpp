@@ -226,6 +226,8 @@ void update_cur_mm_out(
     cb_wait_front(cb_exp_max_diff, onetile);
 
     pack_reconfig_data_format(cb_cur_mm_out);
+    // This function would ideally be called after other initialization functions that initialize the packer for a
+    // specific operation.
     pack_reconfig_l1_acc(true);
 
     reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
