@@ -140,13 +140,17 @@ bool verify_matrix_multiply(
 
     // Compare results with some tolerance
     constexpr float RELTOL = 0.00001;
+    bool passed = true;
     for (size_t i = 0; i < C.size(); i++) {
-        if (std::abs(C[i] - ref_C[i]) / ref_C[i] > RELTOL) {
+        float relative_error = std::abs(C[i] - ref_C[i]) / ref_C[i];
+        if (relative_error > RELTOL) {
             std::cerr << "Mismatch at index " << i << ": " << C[i] << " vs " << ref_C[i] << std::endl;
-            return false;
+            std::cerr << "Expected relative tolerance: " << RELTOL << " actual relative error: " << relative_error
+                      << std::endl;
+            passed = false;
         }
     }
-    return true;
+    return passed;
 }
 
 int main() {

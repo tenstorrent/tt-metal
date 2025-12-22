@@ -14,11 +14,11 @@ void MAIN {
 
     // We are going to read from these two circular buffers.
     // Note that indices have to be in sync with the reader kernel.
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
+    constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
     // And write to this circular buffer.
     // Note that indices have to be in sync with the writer kernel.
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;
 
     // FPU has a destination register, which is an array that can fit multiple tiles (details vary on data type).
     // For our case, FPU will add two tiles and produce a result that is a single tile.
@@ -56,6 +56,10 @@ void MAIN {
         // perform a more complex operation or to improve performance.
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
 
+        // Mark the tiles in the input circular buffers as consumed.
+        cb_pop_front(cb_in0, 1);
+        cb_pop_front(cb_in1, 1);
+
         // Release the destination register array because the computation is done.
         tile_regs_commit();
 
@@ -69,9 +73,6 @@ void MAIN {
         // Mark the tile in the output circular buffer as ready.
         cb_push_back(cb_out0, 1);
 
-        // Mark the tiles in the input circular buffers as consumed.
-        cb_pop_front(cb_in0, 1);
-        cb_pop_front(cb_in1, 1);
         // Release the destination register array because packing is done.
         tile_regs_release();
     }
