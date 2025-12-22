@@ -60,14 +60,8 @@ jobs:
           message: >
             Thank you for your contribution! 🚀
 
-
-            You can run tt-metal integration tests by adding the `blackhole-integration-tests`
-            and/or `wormhole-integration-tests` labels to this pull request.
-
-
             If you want to run metal post-commit tests, you can add the `metal-post-commit-tests`
             label to this pull request.
-
 
             📖 For more information, please refer to our
             [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide.
