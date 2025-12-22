@@ -1423,4 +1423,24 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
     }
 }
 
+Conv2dExecutionPath determine_conv2d_execution_path(
+    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    return determine_conv2d_execution_path(input_tensor.memory_config().is_l1(), slice_config);
+}
+Conv2dExecutionPath determine_conv2d_execution_path(
+    bool input_is_in_L1, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    // If slice config explicitly specifies L1_FULL, use L1 path
+    if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+        return Conv2dExecutionPath::L1;
+    }
+
+    // If no slice config and input is already on device in L1, use L1 path
+    if (!slice_config.has_value() && input_is_in_L1) {
+        return Conv2dExecutionPath::L1;
+    }
+
+    // Otherwise, use DRAM path
+    return Conv2dExecutionPath::DRAM;
+}
+
 }  // namespace ttnn::operations::conv

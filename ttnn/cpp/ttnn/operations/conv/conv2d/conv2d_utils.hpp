@@ -374,4 +374,16 @@ struct ConvDRAMParamters {
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 
+// Enum to represent the execution path for conv2d operations
+enum class Conv2dExecutionPath {
+    L1,   // Execute conv2d using L1 memory
+    DRAM  // Execute conv2d using DRAM slicing
+};
+
+// Helper function to determine which conv2d execution path to take based on
+// slice configuration and input tensor properties
+Conv2dExecutionPath determine_conv2d_execution_path(
+    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config);
+Conv2dExecutionPath determine_conv2d_execution_path(
+    bool input_is_in_L1, const std::optional<const Conv2dSliceConfig>& slice_config);
 }  // namespace ttnn::operations::conv
