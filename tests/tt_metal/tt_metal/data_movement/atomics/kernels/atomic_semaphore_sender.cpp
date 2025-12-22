@@ -4,7 +4,7 @@
 
 #define PROFILE_KERNEL 1
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Atomic semaphore operations test kernel
 void kernel_main() {
