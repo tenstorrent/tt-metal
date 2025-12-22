@@ -12,7 +12,6 @@
 #include <optional>
 #include <string>
 #include <cmath>
-#include <tuple>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -188,12 +187,31 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
-    const uint32_t max_q_chunks_per_core = (num_cores == 0) ? 0 : ((total_q_chunks + num_cores - 1) / num_cores);
-    const uint32_t q_buffer_factor = (max_q_chunks_per_core > 1) ? 2 : 1;
+    // Parallelization scheme
+    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
+    uint32_t batch_parallel_factor = std::min(B, num_cores);
+    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
+    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
 
-    log_debug(tt::LogOp, "total_q_chunks: {}", total_q_chunks);
-    log_debug(tt::LogOp, "max_q_chunks_per_core: {}", max_q_chunks_per_core);
+    TT_FATAL(
+        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
+        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
+        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
+        num_cores);
+
+    log_debug(tt::LogOp, "Parallelization scheme:");
+    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
+    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
+    log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
+
+    // Ceiling divide to allow for non-perfect divisions
+    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
+    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
+    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+
+    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+
+    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -329,13 +347,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
-    /**
-     * Create semaphores for L1-L1 sharing of KV
-     */
-    auto sender_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto receiver_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto valid_semahpore_id = CreateSemaphore(program, core_grid, VALID);
-
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -358,11 +369,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink,
-                                                      max_q_chunks_per_core,
-                                                      sender_semahpore_id,
-                                                      receiver_semahpore_id,
-                                                      valid_semahpore_id};
+                                                      (std::uint32_t)use_attention_sink};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -446,7 +453,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    // uint32_t balanced_q_parallel = 0;
+    uint32_t balanced_q_parallel =
+        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+    if (balanced_q_parallel) {
+        defines["BALANCED_Q_PARALLEL"] = "1";
+    }
+
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
     auto reader_kernels_id = CreateKernel(
@@ -616,205 +628,35 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t read_offset = 0;
     uint32_t write_offset = 0;
 
-    struct CoreHeadWork {
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
-    };
-
-    struct CoreWork {
-        CoreCoord logical_core{};
-        CoreCoord physical_core{};
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
-        std::vector<CoreHeadWork> head_work;
-    };
-
-    struct HeadSegmentRef {
-        uint32_t core_idx = 0;
-        uint32_t head_work_index = 0;
-    };
-
-    struct CoreChainInfo {
-        bool participates = false;
-        bool is_injector = false;
-        bool is_sink = false;
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
-    };
-
-    std::vector<CoreWork> core_work(num_cores);
-    std::vector<CoreChainInfo> core_chain_info(num_cores);
-    const uint32_t total_heads = B * NQH;
-    std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
-
-    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
-    uint32_t next_global_chunk = 0;
-
-    auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
-        const uint32_t head_span = q_num_chunks;
-        const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
-        const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
-        const uint32_t batch = (NQH == 0) ? 0 : (head_index / NQH);
-        const uint32_t head = (NQH == 0) ? 0 : (head_index % NQH);
-        return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
-    };
-
+    // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
 
-        auto& work = core_work.at(i);
-        work.logical_core = core;
-        work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
+        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
+        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
+        uint32_t local_batch_end = local_batch_start + batch_per_core;
+        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
+        uint32_t local_nh_end = local_nh_start + nh_per_core;
+        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
+        uint32_t local_q_end = local_q_start + q_per_core;
 
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = q_num_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+        // clamp all to max values for non-even partitioning
+        local_batch_start = std::min(local_batch_start, B);
+        local_batch_end = std::min(local_batch_end, B);
+        local_nh_start = std::min(local_nh_start, NQH);
+        local_nh_end = std::min(local_nh_end, NQH);
+        local_q_start = std::min(local_q_start, q_num_chunks);
+        local_q_end = std::min(local_q_end, q_num_chunks);
 
-            work.head_work.push_back(CoreHeadWork{
-                .batch = batch_idx,
-                .head = head_idx,
-                .q_chunk_start = q_chunk_idx,
-                .q_chunk_count = chunk_take,
-            });
-
-            if (!head_segments.empty()) {
-                uint32_t head_id = batch_idx * NQH + head_idx;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            }
-
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
-        }
-
-        next_global_chunk += chunk_count;
-    }
-
-    for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
-        auto& segments = head_segments[head_id];
-        if (segments.size() < 2) {
-            continue;
-        }
-
-        std::optional<std::size_t> chain_start_idx;
-        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const auto& work = core_work.at(seg.core_idx);
-            if (work.global_q_count == 0) {
-                continue;
-            }
-            if (work.head_work.size() == 1) {
-                chain_start_idx = idx;
-                break;
-            }
-        }
-
-        if (!chain_start_idx.has_value()) {
-            continue;
-        }
-
-        const std::size_t start = chain_start_idx.value();
-        for (std::size_t idx = start; idx < segments.size(); ++idx) {
-            const auto& seg = segments.at(idx);
-            const uint32_t core_idx = seg.core_idx;
-            const auto& head_work = core_work.at(core_idx).head_work.at(seg.head_work_index);
-            auto& chain = core_chain_info.at(core_idx);
-
-            chain.participates = true;
-            chain.batch = head_work.batch;
-            chain.head = head_work.head;
-            chain.q_chunk_start = head_work.q_chunk_start;
-            chain.q_chunk_count = head_work.q_chunk_count;
-
-            if (idx == start) {
-                chain.is_injector = true;
-            }
-            if (idx == segments.size() - 1) {
-                chain.is_sink = true;
-            }
-
-            if (idx > start) {
-                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
-                chain.prev_physical = core_work.at(prev_core_idx).physical_core;
-            }
-            if (idx + 1 < segments.size()) {
-                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
-                chain.next_physical = core_work.at(next_core_idx).physical_core;
-                const auto& next_head_work =
-                    core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
-                chain.next_core_q_chunks = next_head_work.q_chunk_count;
-            }
-        }
-    }
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const auto& work = core_work.at(i);
-        log_debug(
-            tt::LogOp,
-            "Core {} logical=({}, {}) physical=({}, {}) global_q=[{}:{}) head_segments={}",
-            i,
-            work.logical_core.x,
-            work.logical_core.y,
-            work.physical_core.x,
-            work.physical_core.y,
-            work.global_q_start,
-            work.global_q_start + work.global_q_count,
-            work.head_work.size());
-        for ([[maybe_unused]] const auto& segment : work.head_work) {
-            log_debug(
-                tt::LogOp,
-                "  head segment: batch={} head={} q_range=[{}:{})",
-                segment.batch,
-                segment.head,
-                segment.q_chunk_start,
-                segment.q_chunk_start + segment.q_chunk_count);
-        }
-        if (core_chain_info.at(i).participates) {
-            [[maybe_unused]] const auto& chain = core_chain_info.at(i);
-            log_debug(
-                tt::LogOp,
-                "  chain participation: batch={} head={} injector={} sink={} q_range=[{}:{}) prev=({}, {}) next=({}, "
-                "{}) "
-                "next_chunks={}",
-                chain.batch,
-                chain.head,
-                chain.is_injector,
-                chain.is_sink,
-                chain.q_chunk_start,
-                chain.q_chunk_start + chain.q_chunk_count,
-                chain.prev_physical.x,
-                chain.prev_physical.y,
-                chain.next_physical.x,
-                chain.next_physical.y,
-                chain.next_core_q_chunks);
-        }
-    }
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const auto& work = core_work.at(i);
-        const auto& chain = core_chain_info.at(i);
-        const auto& core = work.logical_core;
+        // log the above
+        log_debug(tt::LogOp, "core: {}", i);
+        log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
+        log_debug(tt::LogOp, "local_batch_start: {}", local_batch_start);
+        log_debug(tt::LogOp, "local_batch_end: {}", local_batch_end);
+        log_debug(tt::LogOp, "local_nh_start: {}", local_nh_start);
+        log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
+        log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
+        log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
         SetRuntimeArgs(
             program,
@@ -828,36 +670,44 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 is_chunked ? page_table.value().buffer()->address() : 0,
                 attention_sink_addr,
                 i,
-                work.global_q_start,
-                work.global_q_count,
+                local_batch_start,
+                local_batch_end,
+                local_nh_start,
+                local_nh_end,
+                local_q_start,
+                local_q_end,
                 num_phases,
                 chunked_q_chunk_offset,
-                read_offset,
-                static_cast<uint32_t>(chain.participates),
-                static_cast<uint32_t>(chain.is_injector),
-                static_cast<uint32_t>(chain.is_sink),
-                chain.batch,
-                chain.head,
-                chain.q_chunk_start,
-                chain.q_chunk_count,
-                static_cast<uint32_t>(chain.prev_physical.x),
-                static_cast<uint32_t>(chain.prev_physical.y),
-                static_cast<uint32_t>(chain.next_physical.x),
-                static_cast<uint32_t>(chain.next_physical.y),
-                chain.next_core_q_chunks,
+                read_offset  // read_offset
             });
-
         SetRuntimeArgs(
             program,
             writer_kernels_id,
             core,
-            {out_addr, i, work.global_q_start, work.global_q_count, num_phases, chunked_q_chunk_offset, write_offset});
-
+            {out_addr,
+             i,
+             local_batch_start,
+             local_batch_end,
+             local_nh_start,
+             local_nh_end,
+             local_q_start,
+             local_q_end,
+             num_phases,
+             chunked_q_chunk_offset,
+             write_offset});  // write_offset
         SetRuntimeArgs(
             program,
             compute_kernels_id,
             core,
-            {i, work.global_q_start, work.global_q_count, num_phases, chunked_q_chunk_offset});
+            {i,
+             local_batch_start,
+             local_batch_end,
+             local_nh_start,
+             local_nh_end,
+             local_q_start,
+             local_q_end,
+             num_phases,
+             chunked_q_chunk_offset});
     }
 
     return cached_program_t{
@@ -929,12 +779,12 @@ void SDPAProgramFactory::override_runtime_arguments(
         reader_args[3] = mask_addr;
         reader_args[4] = page_table_addr;
         reader_args[5] = attention_sink_addr;
-        reader_args[10] = chunked_q_chunk_offset;
+        reader_args[14] = chunked_q_chunk_offset;
 
         writer_args[0] = out_addr;
-        writer_args[5] = chunked_q_chunk_offset;
+        writer_args[9] = chunked_q_chunk_offset;
 
-        compute_args[4] = chunked_q_chunk_offset;
+        compute_args[8] = chunked_q_chunk_offset;
     }
 }
 

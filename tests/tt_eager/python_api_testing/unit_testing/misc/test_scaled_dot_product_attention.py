@@ -95,10 +95,10 @@ def run_test_sdpa_tt(
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     if use_high_precision_compute:
@@ -173,7 +173,7 @@ def run_sdpa_noncausal(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -235,211 +235,6 @@ def run_sdpa_noncausal(
         assert rmse < rmse_threshold
 
     assert out_pass
-
-
-q_chunks = [32, 64, 128, 256, 512]
-k_chunks = [64, 128, 256, 512, 1024]
-# q_chunks = [128]
-# k_chunks = [512]
-
-shapes = [
-    [1, 8, 8, 1024, 128],
-    [1, 10, 10, 2432, 128],  # Wan on 32 chips pad version 2
-    [1, 10, 10, 2560, 128],  # Wan on 32 chips pad version 1
-    [1, 10, 10, 9472, 128],  # Wan on 8 chips
-]
-shape_ids = [f"shape_{'_'.join(str(x) for x in s)}" for s in shapes]
-
-causalities = [False]
-causality_ids = [f"causal_{c}" for c in causalities]
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram_interleaved"])
-@pytest.mark.parametrize("q_chunk_size", q_chunks, ids=[f"q_{c}" for c in q_chunks])
-@pytest.mark.parametrize("k_chunk_size", k_chunks, ids=[f"k_{c}" for c in k_chunks])
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d",
-    shapes,
-    ids=shape_ids,
-)
-@pytest.mark.parametrize("causal", causalities, ids=causality_ids)
-def test_sdpa_run_benchmark(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, causal, reset_seeds
-):
-    try:
-        if causal:
-            run_test_sdpa_tt(
-                device,
-                b,
-                nh,
-                nkv,
-                s,
-                d,
-                q_chunk_size,
-                k_chunk_size,
-                dtype,
-            )
-        else:
-            run_sdpa_noncausal(
-                device,
-                b,
-                nh,
-                nkv,
-                s,
-                d,
-                q_chunk_size,
-                k_chunk_size,
-                dtype,
-                use_mask=False,
-            )
-    except:
-        print("run failed")
-
-
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-    run_device_profiler,
-)
-
-
-def post_process_ops_log(
-    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
-):
-    filename = get_latest_ops_log_filename(output_logs_subdir)
-    import pandas as pd
-
-    df = pd.read_csv(filename)
-
-    if has_signposts:
-        # there are explicit start and stop points in the model we want to measure between
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        start = markers[markers == "start"].index[0]
-        stop = markers[markers == "stop"].index[0]
-        df = df.iloc[start + 1 : stop]
-    if op_name != "":
-        df = df[df["OP CODE"] == op_name]
-
-    results = {}
-    if float_columns:
-        assert (
-            type(float_columns) == list
-        ), f"Bad columns name type, requested columns should be of type list but {type(float_columns)} was provided"
-        for col in float_columns:
-            df_filtered = df[df[col] != "-"]
-            if sum_vals:
-                results[col] = df_filtered[col].astype(float).sum()
-            else:
-                results[col] = df_filtered[col].astype(float).to_numpy()
-    if columns:
-        assert (
-            type(columns) == list
-        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
-        for col in columns:
-            df_filtered = df[df[col] != "-"]
-            results[col] = df_filtered[col]
-    else:
-        results = df
-    return results
-
-
-def test_create_perf_table():
-    subdir = "ttnn_sdpa_performance"
-    float_cols = ["DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-
-    results = []
-
-    for causal_id, causal in zip(causality_ids, causalities):
-        for shape_id, shape in zip(shape_ids, shapes):
-            print(f"Running test for {causal_id} and {shape_id}")
-            command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark -k '{causal_id} and {shape_id}'"
-
-            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-            r = post_process_ops_log(
-                subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
-            )
-
-            duration_ns = [int(x) for x in r["DEVICE KERNEL DURATION [ns]"]]
-            q_chunks = [s.split("q_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
-            k_chunks = [s.split("k_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
-
-            result = sorted(zip(duration_ns, q_chunks, k_chunks), key=lambda x: x[0])
-
-            results.append([causal, shape_id, result[0]])
-
-            # Pretty summary table
-            header = "| q_chunk | k_chunk | measured perf (ms) |"
-            sep = "|---|---:|---:|"
-            print(header)
-            print(sep)
-            for idx, (dur, q, k) in enumerate(result):
-                measured_ms = dur / 1e6
-                measured_ms_str = f"{measured_ms:.3f}"
-                print(f"| {q} | {k} | {measured_ms_str} |")
-
-    def flops_util(shape, latency_ms):
-        b, nh, nkv, s, d = shape
-        flops = 4 * b * nh * s**2 * d
-        core_flops = 2 * 8 * 16 * 16 / 2 * 64 * 1e9
-        sol_time_ms = flops / core_flops * 1e3
-        return sol_time_ms / latency_ms
-
-    def dram_util(shape, latency_ms):
-        b, nh, nkv, s, d = shape
-        bytes_read = 3 * 2 * b * nh * s * d
-        bytes_written = 2 * b * nh * s * d
-        bytes_io = bytes_read + bytes_written
-        dram_bw_Bps = 200.0 * 1e9
-        dram_util = bytes_io / (latency_ms / 1e3) / dram_bw_Bps
-        return dram_util
-
-    # Print the best measured performance for each tested shape/causal config
-    print("\n========== SDPA Performance Summary ==========")
-    print("| Causal | Shape ID | q_chunk | k_chunk | Measured Perf (ms) | FLOPS Util (%) | DRAM Util (%) |")
-    print("|--------|----------|---------|---------|--------------------|----------------|----------------|")
-    for causal, shape_id, (duration_ns, q_chunk, k_chunk) in results:
-        ms = duration_ns / 1e6
-        # Find the shape corresponding to shape_id
-        matching_shape = None
-        for sid, shape_val in zip(shape_ids, shapes):
-            if sid == shape_id:
-                matching_shape = shape_val
-                break
-        if matching_shape is None:
-            raise RuntimeError(f"Could not find shape for shape_id {shape_id}")
-        flop_pct = flops_util(matching_shape, ms) * 100
-        dram_pct = dram_util(matching_shape, ms) * 100
-        print(
-            f"| {'causal' if causal else 'noncausal'} | {shape_id} | {q_chunk} | {k_chunk} | {ms:.3f} | {flop_pct:.1f} | {dram_pct:.1f} |"
-        )
-    print("==============================================\n")
-
-
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
-@pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d",
-    ([1, 3, 3, 45056, 128],),
-)
-def test_sdpa_perf_multi_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
-    rmse_threshold = 0.007982
-    ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(
-        device,
-        b,
-        nh,
-        nkv,
-        s,
-        d,
-        q_chunk_size,
-        k_chunk_size,
-        dtype,
-        use_mask=False,
-        rmse_threshold=rmse_threshold,
-    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
