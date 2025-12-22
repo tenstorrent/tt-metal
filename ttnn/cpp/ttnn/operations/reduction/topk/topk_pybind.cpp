@@ -37,8 +37,8 @@ void bind_reduction_topk_operation(py::module& module) {
                 input_tensor (ttnn.Tensor): the input tensor.
                 k (number): the number of top elements to look for.
                 dim (number): the dimension to reduce.
-                largest (bool): whether to return the largest or the smallest elements. Defaults to `False`.
-                sorted (bool): whether to return the elements in sorted order. Defaults to `False`.
+                largest (bool): whether to return the largest or the smallest elements. Defaults to `True`.
+                sorted (bool): whether to return the elements in sorted order. Defaults to `True`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
