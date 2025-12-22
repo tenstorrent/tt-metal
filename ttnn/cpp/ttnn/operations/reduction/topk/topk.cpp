@@ -138,7 +138,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         static_cast<int>(ttnn::prim::constants::min_dim_per_core) -
             static_cast<int>(transformed_tensor.logical_shape()[-1]),
         0);
-    const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
+    const auto pad_val = largest ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         const bool pad_multicore = transformed_tensor.dtype() == DataType::BFLOAT16 &&
