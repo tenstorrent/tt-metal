@@ -127,6 +127,8 @@ tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+# nanobind
+ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT @tenstorrent/codeowner-bypass
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
@@ -319,6 +321,7 @@ models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn 
 models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/grok @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
+models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/codeowner-bypass
 models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/blackhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
