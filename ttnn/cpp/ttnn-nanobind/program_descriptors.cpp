@@ -34,7 +34,6 @@ using CoreCoord = tt::tt_metal::CoreCoord;
 
 // Helper class to enable Python syntax: rtargs[x][y] = [arg1, arg2, ...]
 // This translates to: rtargs.push_back({CoreCoord(x, y), {arg1, arg2, ...}})
-// Matches legacy API where runtime_args[i][j] is for core(i, j)
 class RuntimeArgsColProxy {
 public:
     RuntimeArgsColProxy(tt::tt_metal::KernelDescriptor::RuntimeArgs& args, size_t x) : args_(args), x_(x) {}
@@ -47,7 +46,6 @@ private:
 };
 
 // Wrapper class that provides 2D indexing syntax for RuntimeArgs
-// Follows legacy API convention: rtargs[x][y] -> CoreCoord(x, y)
 class RuntimeArgsWrapper {
 public:
     RuntimeArgsWrapper() = default;

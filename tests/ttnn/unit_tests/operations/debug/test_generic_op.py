@@ -81,7 +81,6 @@ def test_eltwise_exp(device, num_tiles):
     for core_range in core_group_1.ranges():
         for x in range(core_range.start.x, core_range.end.x + 1):
             for y in range(core_range.start.y, core_range.end.y + 1):
-                # rtargs[x][y] -> CoreCoord(x, y), matching legacy API
                 reader_rt_args[x][y] = [input_tensor.buffer_address(), work_per_core1, current_tile]
                 writer_rt_args[x][y] = [output_tensor.buffer_address(), work_per_core1, current_tile]
                 current_tile += work_per_core1
