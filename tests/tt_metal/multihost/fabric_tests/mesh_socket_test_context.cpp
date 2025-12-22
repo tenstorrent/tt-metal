@@ -200,7 +200,8 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
     tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config(
         tt::tt_metal::BufferType::L1, memory_config.fifo_size);
 
-    tt::tt_metal::distributed::SocketConfig config(connections, socket_mem_config, 0, 0);
+    tt::tt_metal::distributed::SocketConfig config(
+        connections, socket_mem_config, tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{0});
     config.sender_rank = test_socket_config.sender_rank;
     config.receiver_rank = test_socket_config.receiver_rank;
     config.distributed_context = distributed_context_;

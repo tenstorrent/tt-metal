@@ -142,8 +142,8 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         mem_config_fb,
         *socket_config.sender_rank,
         *socket_config.receiver_rank,
-        socket_config.sender_mesh_id.value(),
-        socket_config.receiver_mesh_id.value());
+        *socket_config.sender_mesh_id.value(),
+        *socket_config.receiver_mesh_id.value());
     // Build the SocketPeerDescriptor FlatBuffer (root object)
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
         builder,
@@ -174,8 +174,8 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     // Chip IDs)
     socket_peer_desc.config.socket_connection_config = from_flatbuffer(socket_config_fb->socket_connections());
     socket_peer_desc.config.socket_mem_config = from_flatbuffer(socket_config_fb->socket_mem_config());
-    socket_peer_desc.config.sender_mesh_id = socket_config_fb->sender_mesh_id();
-    socket_peer_desc.config.receiver_mesh_id = socket_config_fb->receiver_mesh_id();
+    socket_peer_desc.config.sender_mesh_id = tt::tt_fabric::MeshId{socket_config_fb->sender_mesh_id()};
+    socket_peer_desc.config.receiver_mesh_id = tt::tt_fabric::MeshId{socket_config_fb->receiver_mesh_id()};
     socket_peer_desc.config.sender_rank = multihost::Rank{static_cast<int>(socket_config_fb->sender_rank())};
     socket_peer_desc.config.receiver_rank = multihost::Rank{static_cast<int>(socket_config_fb->receiver_rank())};
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
