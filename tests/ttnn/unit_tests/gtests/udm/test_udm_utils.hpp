@@ -64,26 +64,6 @@ inline tt::tt_metal::Shape compute_tensor_shape_in_pages(
 }
 
 /**
- * @brief Create mesh mapper for width-sharded distribution
- * Shards tensor along last dimension (width) across all devices in the mesh (treated as 1D)
- */
-inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_width_sharded_mesh_mapper(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
-    int shard_dim = static_cast<int>(tensor_rank) - 1;
-    return ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device, shard_dim);
-}
-
-/**
- * @brief Create mesh composer for aggregating width-sharded tensors
- * Concatenates shards along last dimension (width)
- */
-inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_width_sharded_mesh_composer(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
-    int concat_dim = static_cast<int>(tensor_rank) - 1;
-    return ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, concat_dim);
-}
-
-/**
  * @brief Create mesh mapper for block-sharded distribution
  * Shards tensor on last 2 dimensions (height and width) across mesh rows and columns
  */
@@ -110,18 +90,52 @@ inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_block_sharded_mes
 
 /**
  * @brief Create mesh mapper for height-sharded distribution
- * Shards tensor on height dimension across mesh rows, replicates across columns.
- * For 1xN mesh: output is replicated across all devices (single mesh row).
- * For 2xN mesh: height is sharded across 2 rows, replicated across columns.
+ * Shards tensor on height dimension, replicates across the other mesh dimension.
+ * @param swap_shard_order If false (default): shard height on mesh dim 0, replicate on mesh dim 1
+ *                         If true: replicate on mesh dim 0, shard height on mesh dim 1
  */
 inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_height_sharded_mesh_mapper(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank, bool swap_shard_order = false) {
     int height_dim = static_cast<int>(tensor_rank) - 2;
 
     tt::tt_metal::distributed::MeshMapperConfig config;
-    config.placements = {
-        tt::tt_metal::distributed::MeshMapperConfig::Shard{height_dim},
-        tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+    if (swap_shard_order) {
+        // Swapped: replicate on mesh dim 0, shard height on mesh dim 1
+        config.placements = {
+            tt::tt_metal::distributed::MeshMapperConfig::Replicate{},
+            tt::tt_metal::distributed::MeshMapperConfig::Shard{height_dim}};
+    } else {
+        // Default: shard height on mesh dim 0, replicate on mesh dim 1
+        config.placements = {
+            tt::tt_metal::distributed::MeshMapperConfig::Shard{height_dim},
+            tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+    }
+
+    return ttnn::distributed::create_mesh_mapper(*mesh_device, config);
+}
+
+/**
+ * @brief Create mesh mapper for width-sharded distribution
+ * Shards tensor on width dimension, replicates across the other mesh dimension.
+ * @param swap_shard_order If false (default): replicate on mesh dim 0, shard width on mesh dim 1
+ *                         If true: shard width on mesh dim 0, replicate on mesh dim 1
+ */
+inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_width_sharded_mesh_mapper(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank, bool swap_shard_order = false) {
+    int width_dim = static_cast<int>(tensor_rank) - 1;
+
+    tt::tt_metal::distributed::MeshMapperConfig config;
+    if (swap_shard_order) {
+        // Swapped: shard width on mesh dim 0, replicate on mesh dim 1
+        config.placements = {
+            tt::tt_metal::distributed::MeshMapperConfig::Shard{width_dim},
+            tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+    } else {
+        // Default: replicate on mesh dim 0, shard width on mesh dim 1
+        config.placements = {
+            tt::tt_metal::distributed::MeshMapperConfig::Replicate{},
+            tt::tt_metal::distributed::MeshMapperConfig::Shard{width_dim}};
+    }
 
     return ttnn::distributed::create_mesh_mapper(*mesh_device, config);
 }
@@ -129,14 +143,21 @@ inline std::unique_ptr<ttnn::distributed::TensorToMesh> create_height_sharded_me
 /**
  * @brief Create mesh composer for aggregating block-sharded tensors
  * Concatenates shards from 2D mesh back to full tensor
+ * @param swap_shard_order If true, mesh dim 0 concatenates width, mesh dim 1 concatenates height
  */
 inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_block_sharded_mesh_composer(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank, bool swap_shard_order = false) {
     int height_dim = static_cast<int>(tensor_rank) - 2;
     int width_dim = static_cast<int>(tensor_rank) - 1;
 
     tt::tt_metal::distributed::MeshComposerConfig config;
-    config.dims = {height_dim, width_dim};
+    if (swap_shard_order) {
+        // Swapped: mesh dim 0 concatenates width, mesh dim 1 concatenates height
+        config.dims = {width_dim, height_dim};
+    } else {
+        // Default: mesh dim 0 concatenates height, mesh dim 1 concatenates width
+        config.dims = {height_dim, width_dim};
+    }
 
     return ttnn::distributed::create_mesh_composer(*mesh_device, config);
 }
@@ -144,48 +165,55 @@ inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_block_sharded_mes
 /**
  * @brief Create mesh composer for aggregating height-sharded tensors
  *
- * For a height-sharded distribution (Shard{height}, Replicate{}):
- * - Mesh dim 0: sharded on tensor height → concat along height_dim
- * - Mesh dim 1: replicated → concat along width_dim (produces replicated copies)
+ * For a height-sharded distribution:
+ * - swap_shard_order=false: Mesh dim 0 shards height, mesh dim 1 replicates
+ * - swap_shard_order=true: Mesh dim 0 replicates, mesh dim 1 shards height
  *
- * Output shape will be [H, W * num_replicas]. Callers should slice to get original width.
- *
- * Note: MeshComposerConfig requires unique dims, so we can't prepend a new dimension
- * for replicated data. The validation code should handle this by only comparing
- * against the first W elements per row.
+ * Output shape will include replicated copies concatenated along the non-sharded dimension.
+ * Callers should slice to get original shape.
  */
 inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_height_sharded_mesh_composer(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank, bool swap_shard_order = false) {
     int height_dim = static_cast<int>(tensor_rank) - 2;
     int width_dim = static_cast<int>(tensor_rank) - 1;
 
     tt::tt_metal::distributed::MeshComposerConfig config;
-    config.dims = {height_dim, width_dim};
+    if (swap_shard_order) {
+        // Swapped: mesh dim 0 concatenates width (replicated), mesh dim 1 concatenates height (sharded)
+        config.dims = {width_dim, height_dim};
+    } else {
+        // Default: mesh dim 0 concatenates height (sharded), mesh dim 1 concatenates width (replicated)
+        config.dims = {height_dim, width_dim};
+    }
 
     return ttnn::distributed::create_mesh_composer(*mesh_device, config);
 }
 
 /**
- * @brief Create a tensor on host with random uint16 values
+ * @brief Create mesh composer for aggregating width-sharded tensors
+ *
+ * For a width-sharded distribution:
+ * - swap_shard_order=false: Mesh dim 0 replicates, mesh dim 1 shards width
+ * - swap_shard_order=true: Mesh dim 0 shards width, mesh dim 1 replicates
+ *
+ * Output shape will include replicated copies concatenated along the non-sharded dimension.
+ * Callers should slice to get original shape.
  */
-inline ttnn::Tensor create_tensor_with_random_values(
-    const tt::tt_metal::Shape& shape, const tt::tt_metal::TensorSpec& tensor_spec) {
-    uint32_t volume = 1;
-    for (size_t i = 0; i < shape.rank(); ++i) {
-        volume *= shape[i];
+inline std::unique_ptr<ttnn::distributed::MeshToTensor> create_width_sharded_mesh_composer(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t tensor_rank, bool swap_shard_order = false) {
+    int height_dim = static_cast<int>(tensor_rank) - 2;
+    int width_dim = static_cast<int>(tensor_rank) - 1;
+
+    tt::tt_metal::distributed::MeshComposerConfig config;
+    if (swap_shard_order) {
+        // Swapped: mesh dim 0 concatenates width (sharded), mesh dim 1 concatenates height (replicated)
+        config.dims = {width_dim, height_dim};
+    } else {
+        // Default: mesh dim 0 concatenates height (replicated), mesh dim 1 concatenates width (sharded)
+        config.dims = {height_dim, width_dim};
     }
 
-    std::vector<uint16_t> src_data(volume);
-
-    // Generate random data
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint16_t> dis(0, 65535);
-    for (uint32_t i = 0; i < volume; ++i) {
-        src_data[i] = dis(gen);
-    }
-
-    return ttnn::Tensor::from_vector(src_data, tensor_spec);
+    return ttnn::distributed::create_mesh_composer(*mesh_device, config);
 }
 
 /**
@@ -211,63 +239,85 @@ inline ttnn::Tensor create_bfloat16_tensor_with_random_values(
 }
 
 /**
+ * @brief Create a bfloat16 tensor with zero values
+ */
+inline ttnn::Tensor create_bfloat16_tensor_with_zero_values(
+    const tt::tt_metal::Shape& shape, const tt::tt_metal::TensorSpec& tensor_spec) {
+    uint32_t volume = 1;
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        volume *= shape[i];
+    }
+
+    std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
+    return ttnn::Tensor::from_vector(src_data, tensor_spec);
+}
+
+/**
  * @brief Create tensor: mesh width-distributed, grid interleaved
+ * Width is sharded across mesh devices, with explicit control over which mesh dimension.
+ * @param swap_shard_order If false: replicate on mesh dim 0, shard width on mesh dim 1
+ *                         If true: shard width on mesh dim 0, replicate on mesh dim 1
+ * @param random_init If true, initialize with random values; if false, initialize with zeros
  */
 inline ttnn::Tensor create_width_distributed_interleaved_bfloat16_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape) {
+    bool swap_shard_order = false,
+    bool random_init = true) {
     tt::tt_metal::MemoryConfig mem_config(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
     tt::tt_metal::TensorSpec tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
 
-    auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, tensor_spec);
-    auto mapper = create_width_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    auto host_tensor = random_init ? create_bfloat16_tensor_with_random_values(global_shape, tensor_spec)
+                                   : create_bfloat16_tensor_with_zero_values(global_shape, tensor_spec);
+    auto mapper = create_width_sharded_mesh_mapper(mesh_device, global_shape.rank(), swap_shard_order);
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
 /**
  * @brief Create tensor: mesh block-distributed, grid interleaved
  * @param swap_shard_order If true, mesh dim 0 shards width, mesh dim 1 shards height
+ * @param random_init If true, initialize with random values; if false, initialize with zeros
  */
 inline ttnn::Tensor create_block_distributed_interleaved_bfloat16_tensor(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape,
-    bool swap_shard_order = false) {
+    bool swap_shard_order = false,
+    bool random_init = true) {
     tt::tt_metal::MemoryConfig mem_config(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
     tt::tt_metal::TensorSpec tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
 
-    auto host_tensor = create_bfloat16_tensor_with_random_values(global_shape, tensor_spec);
+    auto host_tensor = random_init ? create_bfloat16_tensor_with_random_values(global_shape, tensor_spec)
+                                   : create_bfloat16_tensor_with_zero_values(global_shape, tensor_spec);
     auto mapper = create_block_sharded_mesh_mapper(mesh_device, global_shape.rank(), swap_shard_order);
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 
 /**
  * @brief Create tensor: mesh height-distributed, grid interleaved
- * Height is sharded across mesh devices. Initialized with zeros.
+ * Height is sharded across mesh devices.
+ * @param swap_shard_order If true, shard height on mesh dim 1 instead of mesh dim 0
+ * @param random_init If true, initialize with random values; if false, initialize with zeros
  */
 inline ttnn::Tensor create_height_distributed_interleaved_bfloat16_tensor(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, const tt::tt_metal::Shape& global_shape) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::Shape& global_shape,
+    bool swap_shard_order = false,
+    bool random_init = true) {
     tt::tt_metal::MemoryConfig mem_config(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
     tt::tt_metal::TensorSpec tensor_spec(
         global_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
 
-    uint32_t volume = 1;
-    for (size_t i = 0; i < global_shape.rank(); ++i) {
-        volume *= global_shape[i];
-    }
-    std::vector<bfloat16> src_data(volume, bfloat16(0.0f));
-    auto host_tensor = ttnn::Tensor::from_vector(src_data, tensor_spec);
-
-    auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank());
+    auto host_tensor = random_init ? create_bfloat16_tensor_with_random_values(global_shape, tensor_spec)
+                                   : create_bfloat16_tensor_with_zero_values(global_shape, tensor_spec);
+    auto mapper = create_height_sharded_mesh_mapper(mesh_device, global_shape.rank(), swap_shard_order);
     return ttnn::distributed::distribute_tensor(host_tensor, *mapper, std::ref(*mesh_device));
 }
 

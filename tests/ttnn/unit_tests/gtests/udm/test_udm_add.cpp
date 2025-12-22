@@ -35,12 +35,18 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto program = tt::tt_metal::experimental::udm::CreateMeshProgram(mesh_builder);
 
     // Map buffer to gcores using UDM API
-    // Partition work on dimension 0 (rows) - each worker processes 1 row
-    int partition_dim = 0;
-    auto gcores_info = tt::tt_metal::experimental::udm::map_tensor_to_gcores(
+    // Partition work on all non-last dimensions (0, 1, ..., rank-2)
+    // Last dimension (width) is not partitioned as it's the innermost loop in the kernel
+    const auto& mesh_tensor_shape = input_a_mesh_tensor_builder.get_mesh_tensor_shape_in_pages();
+    uint32_t rank = mesh_tensor_shape.rank();
+    std::vector<int> partition_dims;
+    for (uint32_t d = 0; d < rank - 1; ++d) {
+        partition_dims.push_back(static_cast<int>(d));
+    }
+    auto gcores_info = tt::tt_metal::experimental::udm::map_tensor_to_gcores_nd(
         input_a_mesh_tensor_builder,
-        mesh_builder,  // Pass mesh_builder which contains mesh and grid dimensions
-        partition_dim  // partition_dim = 0 (rows)
+        mesh_builder,   // Pass mesh_builder which contains mesh and grid dimensions
+        partition_dims  // partition on all non-last dimensions
     );
 
     // Log gcores info for debugging
@@ -214,20 +220,14 @@ void run_udm_add_test(
 
     switch (shard_strategy) {
         case ShardStrategy::WIDTH:
-            input_a_tensor =
-                create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
-            input_b_tensor =
-                create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
-            output_tensor =
-                create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
+            input_a_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
+            input_b_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
+            output_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
             break;
         case ShardStrategy::BLOCK:
-            input_a_tensor =
-                create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
-            input_b_tensor =
-                create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
-            output_tensor =
-                create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape, local_shape);
+            input_a_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
+            input_b_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
+            output_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, global_shape);
             break;
         case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
     }
