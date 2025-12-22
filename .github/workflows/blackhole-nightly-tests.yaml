@@ -115,7 +115,9 @@ jobs:
 
           # If schedule, include all systems
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "matrix={\"test-group\": $all_systems}" >> $GITHUB_OUTPUT
+            matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
+            echo "Matrix output: $matrix_output"
+            echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -127,10 +129,13 @@ jobs:
           [[ "${{ inputs.run_bh_p300 }}" == "true" ]] && selected_keys+=("p300")
           [[ "${{ inputs.run_bh_quietbox_2 }}" == "true" ]] && selected_keys+=("quietbox_2")
 
-          # Filter all_systems by selected keys using jq
-          keys_json=$(printf '%s\n' "${selected_keys[@]}" | jq -R . | jq -s .)
-          filtered=$(echo "$all_systems" | jq --argjson keys "$keys_json" '[.[] | select(.key as $k | $keys | index($k))]')
-          echo "matrix={\"test-group\": $filtered}" >> $GITHUB_OUTPUT
+          # Filter all_systems by selected keys using jq (-c for compact single-line output)
+          keys_json=$(printf '%s\n' "${selected_keys[@]}" | jq -R . | jq -sc .)
+          echo "Selected keys: $keys_json"
+          filtered=$(echo "$all_systems" | jq -c --argjson keys "$keys_json" '[.[] | select(.key as $k | $keys | index($k))]')
+          matrix_output="{\"test-group\": $filtered}"
+          echo "Matrix output: $matrix_output"
+          echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   blackhole-multi-card-demo-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_demo_tests }}
     needs: [build-artifact, blackhole-multi-card-tests-matrix ]
