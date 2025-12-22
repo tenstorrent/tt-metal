@@ -297,7 +297,7 @@ def get_tt_cache_path():
     return get_tt_cache_path_
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def device_params(request):
     return getattr(request, "param", {})
 
@@ -371,7 +371,7 @@ def get_default_fabric_tensix_config():
     return ttnn.FabricTensixConfig.DISABLED
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def mesh_device(request, silicon_arch_name, device_params):
     """
     Pytest fixture to set up a device mesh for tests.

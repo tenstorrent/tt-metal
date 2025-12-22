@@ -25,7 +25,7 @@ def pytest_addoption(parser):
     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def mesh_device(request, device_params):
     """
     Pytest fixture to set up a device mesh for Deepseek tests.
