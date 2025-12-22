@@ -128,6 +128,7 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
         if (args.mode == "bilinear") {
             // Bilinear mode: Calculate output shard to handle non-exact work distribution
+            // Also, cannon apply same logic as in nearest since input is halo in this case
             const uint32_t num_cores = shard_spec.num_cores();
             const uint32_t total_output_sticks = out_n * out_h * out_w;
             const uint32_t output_sticks_padded = tt::round_up(total_output_sticks, num_cores);
