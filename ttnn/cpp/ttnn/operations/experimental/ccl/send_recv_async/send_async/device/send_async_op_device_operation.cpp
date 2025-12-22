@@ -46,10 +46,10 @@ SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create
 
 tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // const auto& mesh_socket = args.mesh_socket;
+    const auto& mesh_socket = args.mesh_socket;
     const auto& input_tensors = tensor_args.input_tensor;
 
-    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(input_tensors);
+    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(mesh_socket, input_tensors);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::send_async

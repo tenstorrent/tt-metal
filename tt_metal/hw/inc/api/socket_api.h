@@ -18,7 +18,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "debug/dprint.h"
 
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);
 
@@ -29,12 +28,8 @@ template <typename SocketT>
 void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr, const SocketT& socket) {
     if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader>) {
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
-            DPRINT << "Sender Set unicast route: " << socket.downstream_chip_id << "," << socket.downstream_mesh_id
-                   << ENDL();
             fabric_set_unicast_route(fabric_header_addr, socket.downstream_chip_id, socket.downstream_mesh_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            DPRINT << "Receiver Set unicast route: " << socket.upstream_chip_id << "," << socket.upstream_mesh_id
-                   << ENDL();
             fabric_set_unicast_route(fabric_header_addr, socket.upstream_chip_id, socket.upstream_mesh_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
