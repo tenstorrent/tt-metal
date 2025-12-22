@@ -439,9 +439,9 @@ std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowCon
     uint32_t i = 0;
 
     for (uint32_t b = 0; b < config.batch_size; ++b) {
-        float h_offset = 0.5f * scale_h_inv + 0.5f;
+        float h_offset = (0.5f * scale_h_inv) + 0.5f;
         for (uint32_t h = 0; h < output_shape[1]; ++h) {
-            float w_offset = 0.5f * scale_w_inv + 0.5f;
+            float w_offset = (0.5f * scale_w_inv) + 0.5f;
             for (uint32_t w = 0; w < output_shape[2]; ++w) {
                 // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
                 uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));

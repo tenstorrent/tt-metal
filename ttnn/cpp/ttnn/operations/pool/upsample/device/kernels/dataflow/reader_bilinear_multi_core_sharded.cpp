@@ -97,7 +97,7 @@ struct BilinearIndexAdvancer {
     ALWI BilinearIndexAdvancer(uint32_t start_output_idx, uint32_t min_input_offset, uint32_t l1_read_addr_) :
         l1_read_addr(l1_read_addr_) {
         batch_id = start_output_idx / (OUT_H * OUT_W);
-        int32_t in_batch_idx = start_output_idx % (OUT_H * OUT_W);
+        uint32_t in_batch_idx = start_output_idx % (OUT_H * OUT_W);
         current_output_row = in_batch_idx / OUT_W;
         current_output_col = in_batch_idx % OUT_W;
 
@@ -204,14 +204,21 @@ struct BilinearIndexAdvancer {
         // Calculate addresses in halo-padded input buffer
         int32_t batch_diff = batch_id - starting_batch_id;
 
+        int32_t rel_y1 = static_cast<int32_t>(y1) - static_cast<int32_t>(halo_starting_row_offset);
+        int32_t rel_y2 = static_cast<int32_t>(y2) - static_cast<int32_t>(halo_starting_row_offset);
+        int32_t rel_x1 = static_cast<int32_t>(x1) - static_cast<int32_t>(halo_starting_col_offset);
+        int32_t rel_x2 = static_cast<int32_t>(x2) - static_cast<int32_t>(halo_starting_col_offset);
+
+        TT_ASSERT(rel_y1 >= 0 && rel_y2 >= 0 && rel_x1 >= 0 && rel_x2 >= 0);
+
         uint32_t stick_idx_y1x1 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
-                                  (y1 - halo_starting_row_offset) * HALO_PADDED_WIDTH + (x1 - halo_starting_col_offset);
+                                  static_cast<uint32_t>(rel_y1) * HALO_PADDED_WIDTH + static_cast<uint32_t>(rel_x1);
         uint32_t stick_idx_y1x2 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
-                                  (y1 - halo_starting_row_offset) * HALO_PADDED_WIDTH + (x2 - halo_starting_col_offset);
+                                  static_cast<uint32_t>(rel_y1) * HALO_PADDED_WIDTH + static_cast<uint32_t>(rel_x2);
         uint32_t stick_idx_y2x1 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
-                                  (y2 - halo_starting_row_offset) * HALO_PADDED_WIDTH + (x1 - halo_starting_col_offset);
+                                  static_cast<uint32_t>(rel_y2) * HALO_PADDED_WIDTH + static_cast<uint32_t>(rel_x1);
         uint32_t stick_idx_y2x2 = batch_diff * (HALO_PADDED_HEIGHT * HALO_PADDED_WIDTH) +
-                                  (y2 - halo_starting_row_offset) * HALO_PADDED_WIDTH + (x2 - halo_starting_col_offset);
+                                  static_cast<uint32_t>(rel_y2) * HALO_PADDED_WIDTH + static_cast<uint32_t>(rel_x2);
 
         y1x1_addr = l1_read_addr + stick_idx_y1x1 * STICK_NBYTES;
         y1x2_addr = l1_read_addr + stick_idx_y1x2 * STICK_NBYTES;
@@ -313,7 +320,6 @@ void kernel_main() {
     // Writer starts one pixel ahead (interleaving pattern)
     if constexpr (!is_reader) {
         advancer.advance();
-        uint32_t temp_addr = get_read_ptr(halo_cb_id);
     }
 
     //
