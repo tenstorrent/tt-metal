@@ -415,6 +415,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case RSUB:
             if (dtype == DataType::INT32) {
                 return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"rsub_int32_tile_init();", "rsub_uint32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"rsub_int32_tile_init();", "rsub_uint16_tile"};
             } else {
                 return {"rsub_binary_tile_init();", "rsub_binary_tile"};
             }
