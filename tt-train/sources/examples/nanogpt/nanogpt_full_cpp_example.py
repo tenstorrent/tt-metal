@@ -354,9 +354,15 @@ def train_step(
     should_step = gradient_accumulator.should_step()
 
     if should_step:
-        # TODO: Add clip_grad_norm support if needed
-        # if use_clip_grad_norm:
-        #     ttml.core.clip_grad_norm(model.parameters(), clip_grad_norm_max_norm)
+        # Gradient clipping (matching C++: clip_grad_norm)
+        if use_clip_grad_norm:
+            # Use ttml.core.clip_grad_norm which works with model parameters directly
+            ttml.core.clip_grad_norm(
+                model.parameters(),
+                clip_grad_norm_max_norm,
+                2.0,  # p_norm_type (L2 norm)
+                False,  # error_if_nonfinite - set False to avoid errors on NaN
+            )
 
         # Optimizer step
         optimizer.step()
@@ -832,6 +838,12 @@ def main():
         help="Learning rate - overrides config",
     )
     parser.add_argument(
+        "--clip_grad_norm",
+        type=float,
+        default=None,
+        help="Enable gradient clipping with specified max norm (e.g., 1.0)",
+    )
+    parser.add_argument(
         "--sequence_length",
         type=int,
         default=None,
@@ -968,6 +980,9 @@ def main():
         training_config.num_epochs = args.num_epochs
     if args.learning_rate is not None:
         training_config.learning_rate = args.learning_rate
+    if args.clip_grad_norm is not None:
+        training_config.use_clip_grad_norm = True
+        training_config.clip_grad_norm_max_norm = args.clip_grad_norm
     if args.sequence_length is not None:
         model_config.max_sequence_length = args.sequence_length
         model_config.block_size = args.sequence_length
@@ -1196,6 +1211,10 @@ def main():
             f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}"
         )
         print(f"  - Dropout: {model_config.dropout}")
+        if training_config.use_clip_grad_norm:
+            print(
+                f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}"
+            )
         print()
 
         # Set model to training mode (matching C++: model_to_train)

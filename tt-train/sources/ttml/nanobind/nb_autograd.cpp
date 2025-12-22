@@ -79,6 +79,16 @@ void py_module(nb::module_& m) {
             "Get underlying tensor value");
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_), "Get gradient");
         py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
+        // Return gradient wrapped as TensorPtr for Python use (e.g., gradient clipping)
+        py_tensor.def(
+            "get_grad_tensor",
+            [](const Tensor& self) -> TensorPtr {
+                if (!self.is_grad_initialized()) {
+                    return nullptr;
+                }
+                return create_tensor(self.get_grad());
+            },
+            "Get gradient as a Tensor object (for Python operations like gradient clipping)");
         py_tensor.def("get_requires_grad", &Tensor::get_requires_grad, "Get gradient requirement flag");
         py_tensor.def("get_node", &Tensor::get_node, "Get node");
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
