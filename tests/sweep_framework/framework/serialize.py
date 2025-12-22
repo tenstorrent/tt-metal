@@ -45,6 +45,22 @@ def _resolve_type(type_name: str) -> type:
 _build_type_registry()
 
 
+def _is_serialized_ttnn_object(obj: dict) -> bool:
+    """Check if a dict represents a serialized ttnn object.
+
+    A valid serialized ttnn object must have:
+    - Exactly two keys: "type" and "data"
+    - "type" must be a string
+    - "type" must be a known type in the registry
+    """
+    return (
+        isinstance(obj, dict)
+        and obj.keys() == {"type", "data"}
+        and isinstance(obj.get("type"), str)
+        and obj["type"] in _TTNN_TYPE_REGISTRY
+    )
+
+
 def convert_enum_values_to_strings(data):
     """Convert enum integer values to human-readable strings"""
     if not isinstance(data, dict):
@@ -161,10 +177,11 @@ def deserialize(obj: Any) -> Any:
     """
     try:
         if isinstance(obj, dict):
-            type_class = _ttnn_type_from_name(obj["type"])
-            if type_class is None:
-                raise ValueError(f"Unknown type: {obj['type']}")
-            return type_class.from_json(obj["data"])
+            if _is_serialized_ttnn_object(obj):
+                obj_type = _resolve_type(obj["type"])
+                return obj_type.from_json(obj["data"])
+            else:
+                raise ValueError(f"Dict does not match serialized ttnn object format: {obj}")
 
         if isinstance(obj, str):
             # Try enum deserialization for dotted names
@@ -220,7 +237,7 @@ def deserialize_structured(object):
 
         # Handle dicts - check if it's a serialized ttnn object or a plain dict
         if isinstance(object, dict):
-            if "type" in object and "data" in object:
+            if _is_serialized_ttnn_object(object):
                 # This is a serialized ttnn object - use type registry instead of eval
                 obj_type = _resolve_type(object["type"])
                 data = object["data"]
