@@ -6,6 +6,12 @@ import ttnn
 
 
 def upsample3d(x: ttnn.Tensor, scale_factor: int) -> ttnn.Tensor:
+    """
+    3D upsampling implemented using two 2D upsampling operations.
+    It is done by first reshaping to combine the depth and batch dimensions,
+    then performing 2D upsampling on height and width, reshaping back,
+    and finally performing 2D upsampling on depth and the combined height-width dimension.
+    """
     N, D, H, W, C = x.shape
     x = ttnn.reshape(x, (N * D, H, W, C))
     x0 = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)

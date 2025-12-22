@@ -10,6 +10,10 @@ import ttnn
 
 
 def pad_dimension_t(x0: ttnn.Tensor) -> ttnn.Tensor:
+    """Pad the T (depth) dimension of a 5D tensor by 1 on each side.
+    THis is used to implement 'same' padding for 3D convolutions with kernel size 3.
+    This is needed since as of now, ttnn.conv3d does not support 'same' padding along T dimension.
+    """
     x_old_shape = x0.shape
     x0 = ttnn.reshape(x0, (x_old_shape[0], x_old_shape[1], x_old_shape[2] * x_old_shape[3], x_old_shape[4]))
     x1 = ttnn.to_layout(x0, ttnn.ROW_MAJOR_LAYOUT)
