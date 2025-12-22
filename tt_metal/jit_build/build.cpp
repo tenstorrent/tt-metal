@@ -2,6 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//
+// JIT Build System for Metal Kernels and Firmware
+//
+// This file implements the Just-In-Time compilation infrastructure for Metal kernels.
+// All kernels (data movement and compute) are compiled at runtime using the SFPI
+// RISC-V GCC compiler (riscv32-tt-elf-g++).
+//
+// CCache Support:
+//   When TT_METAL_CCACHE_KERNEL_SUPPORT=1 is set, all kernel compilation (both
+//   compilation and linking) uses ccache to accelerate repeated builds. This applies
+//   uniformly to all kernel types:
+//     - Data movement kernels (BRISC, NCRISC, ERISC)
+//     - Compute kernels (TRISC0, TRISC1, TRISC2) compiled with SFPI compiler
+//
+//   CCache can be configured with Redis remote storage for distributed caching across
+//   CI runners or development machines using standard ccache environment variables:
+//     - CCACHE_REMOTE_STORAGE: Redis URL (redis://user:pass@host:port)
+//     - CCACHE_REMOTE_ONLY: Use only remote cache
+//     - CCACHE_BASEDIR: Automatically set to Metal root for stable cache keys
+//
+//   Cache keys include: git hash, architecture, compiler flags, defines, source files,
+//   firmware ELF, and linker scripts. Changing any of these invalidates the cache.
+//
+//   See tt_metal/jit_build/README.md for detailed documentation.
+//
+
 #include "build.hpp"
 
 #include <algorithm>
@@ -120,6 +146,34 @@ void JitBuildEnv::init(
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
+        // Set CCACHE_BASEDIR to ensure stable cache keys across different working directories
+        // This allows ccache to normalize absolute paths in the build, making cache entries
+        // portable across different checkout locations or CI runners
+        if (std::getenv("CCACHE_BASEDIR") == nullptr) {
+            std::string basedir = this->root_;
+            // Remove trailing slash if present
+            if (!basedir.empty() && basedir.back() == '/') {
+                basedir.pop_back();
+            }
+            setenv("CCACHE_BASEDIR", basedir.c_str(), 0);  // Don't override if already set
+            log_info(tt::LogBuildKernels, "CCACHE: Set CCACHE_BASEDIR={}", basedir);
+        }
+
+        // Log ccache configuration for debugging
+        log_info(tt::LogBuildKernels, "CCACHE: Kernel compilation will use ccache");
+        if (const char* remote_storage = std::getenv("CCACHE_REMOTE_STORAGE")) {
+            log_info(tt::LogBuildKernels, "CCACHE: Remote storage configured (Redis or similar)");
+        }
+        if (const char* remote_only = std::getenv("CCACHE_REMOTE_ONLY")) {
+            log_info(tt::LogBuildKernels, "CCACHE: Remote-only mode: {}", remote_only);
+        }
+        if (const char* cache_dir = std::getenv("CCACHE_DIR")) {
+            log_info(tt::LogBuildKernels, "CCACHE: Cache directory: {}", cache_dir);
+        }
+        if (const char* basedir = std::getenv("CCACHE_BASEDIR")) {
+            log_info(tt::LogBuildKernels, "CCACHE: Base directory: {}", basedir);
+        }
+
         this->gpp_ = "ccache ";
     } else {
         this->gpp_ = "";
@@ -466,15 +520,20 @@ void JitBuildState::compile_one(
     cmd += fmt::format("-c -o {} {} ", obj, src);
     cmd += defines;
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    const bool log_compile_commands =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands();
+    const bool ccache_enabled = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
+
+    if (log_compile_commands) {
+        log_info(tt::LogBuildKernels, "    {} compile cmd: {}", ccache_enabled ? "ccache+g++" : "g++", cmd);
     }
 
     // CCACHE DEBUG: Always log the command when ccache is enabled to help debug cache misses
-    if (std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr) {
+    if (ccache_enabled) {
         log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Full compile command: {}", cmd);
         log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Working directory: {}", out_dir);
         log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Source: {} -> Object: {}", src, obj);
+        log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Compiler: {}", env_.gpp_);
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() && settings) {
@@ -551,7 +610,8 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     cmd += "-o " + elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+        const bool ccache_enabled = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
+        log_info(tt::LogBuildKernels, "    {} link cmd: {}", ccache_enabled ? "ccache+g++" : "g++", cmd);
     }
     std::string log_file = elf_name + ".log";
     fs::remove(log_file);
