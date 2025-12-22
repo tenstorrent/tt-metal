@@ -67,12 +67,17 @@ void MAIN {
     constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
     constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
     constexpr uint32_t pad_l = get_compile_time_arg_val(30);
+    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(31);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(32);
+    constexpr uint32_t kernel_h = get_compile_time_arg_val(33);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(34);
 
     constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
     constexpr uint32_t inc_dst_idx = 4;
     constexpr uint32_t index_scratch_out_dst_idx = 6;
+    constexpr uint32_t index_temp_dst_idx = 7;  // only used for large kernels
 
     constexpr uint32_t face_r_dim = FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -99,8 +104,11 @@ void MAIN {
     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
+    constexpr w_chunks = kernel_w % max_rows_for_reduction == 0 ? kernel_w / max_rows_for_reduction
+                                                                : kernel_w / max_rows_for_reduction + 1;
+    constexpr uint32_t interm_reduction_chunks = return_indices    ? w_chunks * kenrel_h
+                                                 : remaining_elems ? window_size_hw / max_sticks_for_reduction + 1
+                                                                   : window_size_hw / max_sticks_for_reduction;
 
     cb_wait_front(in_scalar_cb_id_0, 1);
 
@@ -111,13 +119,19 @@ void MAIN {
     current_idx_col = start_col;
     current_idx_row = start_row;
 
+    uint32_t sticks_per_chunk = 0;
     cb_wait_front(right_inc_cb_id, 1);
     cb_wait_front(down_left_wrap_inc_cb_id, 1);
     cb_wait_front(up_left_wrap_inc_cb_id, 1);
-    // in_idx_cb_id is populated by the reader, but this happens after the inc CBs are populated
-    // so idx_tmp is protected here, and we intend to have PACK act as the sole producer, hence
-    // why the reader cannot push_back here
-    cb_push_back(in_idx_cb_id, 1);
+    cb_wait_front(in_idx_cb_id, 1);
+    reconfig_data_format_srca(in_idx_cb_id);
+    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);  // move the initial indexes to DST where they will live
+    if (is_large_kernel) {
+        sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
+        cb_wait_front(intra_kernel_right_inc_cb_id, 1);
+        cb_wait_front(intra_kernel_down_left_wrap_inc_cb_id, 1);
+        copy_dest_values(index_dst_idx, index_temp_dst_idx);  // make a copy of the initial indexes for large kernel use
+    }
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
@@ -134,20 +148,20 @@ void MAIN {
             const bool first_c_block = c_i == 0;
 
             tile_regs_acquire();
+            uint32_t intra_kernel_h = 0;
+            uint32_t intra_kernel_w = 0;
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
+                bool first_chunk = chunk == 0;
+                bool last_chunk = chunk == interm_reduction_chunks - 1;
                 cb_wait_front(curr_in_cb_id, 1);
 
                 reconfig_data_format_srca(curr_in_cb_id);
                 copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
-                if (first_c_block) {
-                    cb_wait_front(in_idx_cb_id, 1);
-                }
-                reconfig_data_format_srca(in_idx_cb_id);
-                copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                if (last_c_block) {
-                    cb_pop_front(in_idx_cb_id, 1);
-
+                // increments happen between every chunk within a C block, and between C blocks
+                bool increment_needed = false;
+                if (last_c_block && last_chunk) {  // increment for the next kernel position
+                    increment_needed = true;
                     // update the current index column
                     if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
                         // we reached the right edge, wrap down and to the left
@@ -165,10 +179,30 @@ void MAIN {
                         current_idx_col += stride_w;
                         copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                     }
+                } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
+                    if (last_chunk) {          // reset to the initial indexes for this C block
+                        copy_dest_values(index_temp_dst_idx, index_dst_idx);
+                    } else {  // increment for the next chunk within the same C block
+                        increment_needed = true;
+                        if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
+                            intra_kernel_w += sticks_per_chunk;
+                            copy_tile(intra_kernel_right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        } else {  // move down to the next row
+                            intra_kernel_w = 0;
+                            intra_kernel_h += 1;
+                            copy_tile(intra_kernel_down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        }
+                    }
+                }
 
+                if (increment_needed) {
                     // we allow overflow here for negative values as this only occurs in padding regions
                     add_int_tile_init();
                     add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                    copy_dest_values(index_scratch_out_dst_idx, index_dst_idx);
+                    if (is_large_kernel) {
+                        copy_dest_values(index_scratch_out_dst_idx, index_temp_dst_idx);
+                    }
 
                     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                 }
@@ -197,11 +231,6 @@ void MAIN {
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);
             cb_push_back(pack_idx_tmp_cb_id, 1);
 
-            if (last_c_block) {
-                cb_reserve_back(in_idx_cb_id, 1);
-                pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
-                cb_push_back(in_idx_cb_id, 1);
-            }
             tile_regs_release();
         }
     }

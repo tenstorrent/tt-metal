@@ -423,9 +423,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t right_inc_cb_id = 32;
     uint32_t down_left_wrap_inc_cb_id = 32;
     uint32_t up_left_wrap_inc_cb_id = 32;
+    uint32_t intra_kernel_right_inc_cb_id = 32;
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
     uint16_t right_inc = 0;
     uint16_t down_left_wrap_inc = 0;
     uint16_t up_left_wrap_inc = 0;
+    uint32_t intra_kernel_right_inc = 0;
+    uint32_t intra_kernel_down_left_wrap_inc = 0;
     if (return_indices) {
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         in_idx_cb_id = next_cb_index++;
@@ -457,6 +461,57 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
         up_left_wrap_inc =
             (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
+
+        // edit incs for large kernels
+        if (params.is_large_kernel) {
+            intra_kernel_right_inc_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                intra_kernel_right_inc_cb_id,
+                program,
+                all_cores,
+                params.index_nbytes * tile_elems,
+                1,
+                params.index_format);
+            log_debug(
+                tt::LogOp,
+                "CB {} :: PS = {}, NP = {}",
+                intra_kernel_right_inc_cb_id,
+                params.index_nbytes * tile_elems,
+                1);
+            intra_kernel_down_left_wrap_inc_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                intra_kernel_down_left_wrap_inc_cb_id,
+                program,
+                all_cores,
+                params.index_nbytes * tile_elems,
+                1,
+                params.index_format);
+            log_debug(
+                tt::LogOp,
+                "CB {} :: PS = {}, NP = {}",
+                intra_kernel_down_left_wrap_inc_cb_id,
+                params.index_nbytes * tile_elems,
+                1);
+
+            // for large kernels we process row by row since inc's aren't consistent if we just process 32 stick batches
+            // this means we process multiple top left positions within the kernel for a single top left position in the
+            // tensor, so when we move the kernel to a new position in the tensor we need to subtract the difference
+            // between the first top left index in the kernel and the last one
+            uint32_t sticks_per_chunk =
+                kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
+            uint32_t w_chunks =
+                kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : kernel_w / sticks_per_chunk + 1;
+            uint32_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
+            uint32_t first_top_left_kernel_index = 0;
+            uint32_t last_top_left_kernel_index = (kernel_h - 1) * dilation_h * in_w + last_w_chunk_w_offset;
+            uint32_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
+            right_inc -= index_correction;
+            down_left_wrap_inc -= index_correction;
+            up_left_wrap_inc -= index_correction;
+
+            intra_kernel_right_inc = dilation_w * sticks_per_chunk;
+            intra_kernel_down_left_wrap_inc = dilation_h * in_w - last_w_chunk_w_offset;
+        }
     }
 
     const bool is_output_tiled = output_layout == Layout::TILE;
@@ -577,52 +632,58 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
     }
     std::vector<uint32_t> reader0_ct_args = {
-        max_out_nhw_per_core,           // 0
-        kernel_h,                       // 1
-        kernel_w,                       // 2
-        pad_w,                          // 3
-        in_nbytes_leftover,             // 4
-        in_w,                           // 5
-        in_c_per_shard_ceil,            // 6
-        params.split_reader,            // enable split reader //7
-        0,                              // split reader id //8
-        bf16_scalar,                    // 9
-        bf16_init_value,                // 10
-        in_nblocks_c,                   // 11
-        in_cb_sz,                       // 12
-        params.max_rows_for_reduction,  // 13
-        ceil_pad_w,                     // 14
-        in_cb_id_0,                     // 15
-        in_cb_id_1,                     // 16
-        raw_in_cb_id,                   // 17
-        in_reader_indices_cb_id,        // 18
-        in_scalar_cb_id_0,              // 19
-        in_scalar_cb_id_1,              // 20
-        in_idx_cb_id,                   // 21
-        pack_tmp_cb_id,                 // 22
-        pack_idx_tmp_cb_id,             // 23
-        right_inc_cb_id,                // 24
-        down_left_wrap_inc_cb_id,       // 25
-        up_left_wrap_inc_cb_id,         // 26
-        clear_value_cb_id,              // 27
-        (uint32_t)pool_type,            // 28
-        one_scalar_per_core,            // 29
-        config_cb_id,                   // 30
-        in_nbytes_c,                    // 31
-        shard_width_bytes,              // 32
-        params.multi_buffering_factor,  // 33
-        stride_w,                       // 34
-        dilation_h,                     // 35
-        dilation_w,                     // 36
-        (uint32_t)return_indices,       // 37
-        pad_t,                          // 38
-        pad_l,                          // 39
-        right_inc,                      // 40
-        down_left_wrap_inc,             // 41
-        up_left_wrap_inc,               // 42
-        (uint32_t)zero_pages,           // 43
-        out_cb_id,                      // 44
-        out_idx_cb_id};                 // 45
+        max_out_nhw_per_core,                  // 0
+        kernel_h,                              // 1
+        kernel_w,                              // 2
+        pad_w,                                 // 3
+        in_nbytes_leftover,                    // 4
+        in_w,                                  // 5
+        in_c_per_shard_ceil,                   // 6
+        params.split_reader,                   // enable split reader //7
+        0,                                     // split reader id //8
+        bf16_scalar,                           // 9
+        bf16_init_value,                       // 10
+        in_nblocks_c,                          // 11
+        in_cb_sz,                              // 12
+        params.max_rows_for_reduction,         // 13
+        ceil_pad_w,                            // 14
+        in_cb_id_0,                            // 15
+        in_cb_id_1,                            // 16
+        raw_in_cb_id,                          // 17
+        in_reader_indices_cb_id,               // 18
+        in_scalar_cb_id_0,                     // 19
+        in_scalar_cb_id_1,                     // 20
+        in_idx_cb_id,                          // 21
+        pack_tmp_cb_id,                        // 22
+        pack_idx_tmp_cb_id,                    // 23
+        right_inc_cb_id,                       // 24
+        down_left_wrap_inc_cb_id,              // 25
+        up_left_wrap_inc_cb_id,                // 26
+        clear_value_cb_id,                     // 27
+        (uint32_t)pool_type,                   // 28
+        one_scalar_per_core,                   // 29
+        config_cb_id,                          // 30
+        in_nbytes_c,                           // 31
+        shard_width_bytes,                     // 32
+        params.multi_buffering_factor,         // 33
+        stride_w,                              // 34
+        dilation_h,                            // 35
+        dilation_w,                            // 36
+        (uint32_t)return_indices,              // 37
+        pad_t,                                 // 38
+        pad_l,                                 // 39
+        right_inc,                             // 40
+        down_left_wrap_inc,                    // 41
+        up_left_wrap_inc,                      // 42
+        (uint32_t)zero_pages,                  // 43
+        out_cb_id,                             // 44
+        out_idx_cb_id,                         // 45
+        intra_kernel_right_inc,                // 46
+        intra_kernel_down_left_wrap_inc,       // 47
+        intra_kernel_right_inc_cb_id,          // 48
+        intra_kernel_down_left_wrap_inc_cb_id  // 49
+    };
+
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -650,37 +711,42 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
 
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,             // 0
-        kernel_h * kernel_w,            // 1
-        params.split_reader,            // 2
-        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
-        in_c_per_shard_ceil,            // 4
-        in_nblocks_c,                   // 5
-        params.max_rows_for_reduction,  // 6
-        in_cb_id_0,                     // 7
-        in_cb_id_1,                     // 8
-        in_scalar_cb_id_0,              // 9
-        in_scalar_cb_id_1,              // 10
-        in_idx_cb_id,                   // 11
-        pack_tmp_cb_id,                 // 12
-        pack_idx_tmp_cb_id,             // 13
-        right_inc_cb_id,                // 14
-        down_left_wrap_inc_cb_id,       // 15
-        up_left_wrap_inc_cb_id,         // 16
-        out_cb_id,                      // 17
-        out_idx_cb_id,                  // 18
-        one_scalar_per_core,            // 19
-        pre_tilize_cb_id,               // 20
-        is_output_tiled,                // 21
-        is_output_block_format,         // 22
-        (uint32_t)return_indices,       // 23
-        stride_h,                       // 24
-        stride_w,                       // 25
-        in_h_padded,                    // 26
-        in_w_padded,                    // 27
-        eff_kernel_h,                   // 28
-        eff_kernel_w,                   // 29
-        pad_l};                         // 30
+        params.in_ntiles_c,                     // 0
+        kernel_h * kernel_w,                    // 1
+        params.split_reader,                    // 2
+        0,                                      // 3 - max_out_nhw_per_core, used for grid sample but not for pool
+        in_c_per_shard_ceil,                    // 4
+        in_nblocks_c,                           // 5
+        params.max_rows_for_reduction,          // 6
+        in_cb_id_0,                             // 7
+        in_cb_id_1,                             // 8
+        in_scalar_cb_id_0,                      // 9
+        in_scalar_cb_id_1,                      // 10
+        in_idx_cb_id,                           // 11
+        pack_tmp_cb_id,                         // 12
+        pack_idx_tmp_cb_id,                     // 13
+        right_inc_cb_id,                        // 14
+        down_left_wrap_inc_cb_id,               // 15
+        up_left_wrap_inc_cb_id,                 // 16
+        out_cb_id,                              // 17
+        out_idx_cb_id,                          // 18
+        one_scalar_per_core,                    // 19
+        pre_tilize_cb_id,                       // 20
+        is_output_tiled,                        // 21
+        is_output_block_format,                 // 22
+        (uint32_t)return_indices,               // 23
+        stride_h,                               // 24
+        stride_w,                               // 25
+        in_h_padded,                            // 26
+        in_w_padded,                            // 27
+        eff_kernel_h,                           // 28
+        eff_kernel_w,                           // 29
+        pad_l,                                  // 30
+        intra_kernel_right_inc_cb_id,           // 31
+        intra_kernel_down_left_wrap_inc_cb_id,  // 32
+        kernel_h,                               // 33
+        kernel_w                                // 34
+    };
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();

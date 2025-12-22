@@ -89,13 +89,18 @@ template <
     uint32_t pad_l,
     uint32_t dilation_h,
     uint32_t dilation_w,
+    bool is_large_kernel,
     uint16_t right_inc,
     uint16_t down_left_wrap_inc,
     uint16_t up_left_wrap_inc,
+    uint16_t intra_kernel_right_inc,
+    uint16_t intra_kernel_down_left_wrap_inc,
     uint32_t in_idx_cb_id,
     uint32_t right_inc_cb_id,
     uint32_t down_left_wrap_inc_cb_id,
-    uint32_t up_left_wrap_inc_cb_id>
+    uint32_t up_left_wrap_inc_cb_id,
+    uint32_t intra_kernel_right_inc_cb_id,
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id>
 ALWI void initialize_return_indices_data() {
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
@@ -133,6 +138,7 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
 
     // initialize the index CB - TODO for c > 1 we could optimize by storing two values per write
+    cb_reserve_back(in_idx_cb_id, 1);
     volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
     uint16_t kernel_idx = 0;
     for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -146,6 +152,7 @@ ALWI void initialize_return_indices_data() {
         }
         kernel_idx += dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
     }
+    cb_push_back(in_idx_cb_id, 1);
 
     // initialize the increment CBs
     auto fill_inc = [&](uint32_t cb_id, uint16_t inc) __attribute__((always_inline)) {
@@ -170,6 +177,16 @@ ALWI void initialize_return_indices_data() {
     cb_reserve_back(up_left_wrap_inc_cb_id, 1);
     fill_inc(up_left_wrap_inc_cb_id, up_left_wrap_inc);
     cb_push_back(up_left_wrap_inc_cb_id, 1);
+
+    if (is_large_kernel) {
+        cb_reserve_back(intra_kernel_right_inc_cb_id, 1);
+        fill_inc(intra_kernel_right_inc_cb_id, intra_kernel_right_inc);
+        cb_push_back(intra_kernel_right_inc_cb_id, 1);
+
+        cb_reserve_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
+        fill_inc(intra_kernel_down_left_wrap_inc_cb_id, intra_kernel_down_left_wrap_inc);
+        cb_push_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
+    }
 }
 
 // Fill an L1 buffer with the given val
@@ -412,6 +429,10 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
+    constexpr uint32_t intra_kernel_right_inc = get_compile_time_arg_val(46);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc = get_compile_time_arg_val(47);
+    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(48);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(49);
 
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -424,9 +445,6 @@ void kernel_main() {
     constexpr uint32_t num_faces_in_input_tile = 4;
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
     constexpr bool need_to_initialize_in_cb = true;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
@@ -456,13 +474,18 @@ void kernel_main() {
             pad_l,
             dilation_h,
             dilation_w,
+            is_large_kernel,
             right_inc,
             down_left_wrap_inc,
             up_left_wrap_inc,
+            intra_kernel_right_inc,
+            intra_kernel_down_left_wrap_inc,
             in_idx_cb_id,
             right_inc_cb_id,
             down_left_wrap_inc_cb_id,
-            up_left_wrap_inc_cb_id>();
+            up_left_wrap_inc_cb_id,
+            intra_kernel_right_inc_cb_id,
+            intra_kernel_down_left_wrap_inc_cb_id>();
     }
 
     // initialize the scalar CB
