@@ -110,8 +110,8 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
     constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
 #else
-    constexpr uint32_t dst_tiles = rows;
-    constexpr uint32_t granularity = 1;
+    constexpr uint32_t dst_tiles = 1;
+    constexpr uint32_t granularity = rows;
 #endif
 
     cb_wait_front(scale_cb, 1);
