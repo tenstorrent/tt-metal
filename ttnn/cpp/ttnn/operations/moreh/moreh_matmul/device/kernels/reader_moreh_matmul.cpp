@@ -40,9 +40,8 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto other_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
-    bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
+    constexpr bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
     constexpr auto bias_args = TensorAccessorArgs<other_args.next_compile_time_args_offset() + 1>();
-    bool scalar_bias_loaded = false;
 #endif
 
     // runtime args
@@ -114,6 +113,16 @@ void kernel_main() {
     uint32_t input_step_count = (transpose_input) ? (input_stride[1]) : (input_stride[0]);
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
 
+#ifdef FUSE_BIAS
+    if (is_scalar_bias && num_output_tiles > 0) {
+        cb_reserve_back(cb_id_in4, onetile);
+        uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+        noc_async_read_tile(0, s_bias, l1_write_addr_in4);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in4, onetile);
+    }
+#endif
+
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         uint32_t output_idxes[MAX_NUM_DIMENSIONS];
         unravel_output_tidx(output_tidx, output_idxes, output_stride);
@@ -139,22 +148,13 @@ void kernel_main() {
             other_tidx += other_step_count;
         }
 #ifdef FUSE_BIAS
-        if (!is_scalar_bias) {
+        if constexpr (!is_scalar_bias) {
             uint32_t bias_tidx = output_idxes[0];
             cb_reserve_back(cb_id_in4, onetile);
             uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
             noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
             noc_async_read_barrier();
             cb_push_back(cb_id_in4, onetile);
-        } else {
-            if (!scalar_bias_loaded) {
-                cb_reserve_back(cb_id_in4, onetile);
-                uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-                noc_async_read_tile(0, s_bias, l1_write_addr_in4);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in4, onetile);
-                scalar_bias_loaded = true;
-            }
         }
 #endif
 
