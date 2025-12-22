@@ -5,7 +5,7 @@
 #include <cstdint>
 
 void kernel_main() {
-    // Read parameters from the kernel arguments
+    // Read parameters from the kernel's runtime arguments.
     uint32_t in0_base_addr = get_arg_val<uint32_t>(0);
     uint32_t in1_base_addr = get_arg_val<uint32_t>(1);
     uint32_t n_tiles = get_arg_val<uint32_t>(2);
@@ -16,34 +16,46 @@ void kernel_main() {
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
-    // buffers (Whis is most of the cases).
-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+    // buffers (which is most often the case).
+    constexpr uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
     // Create address generators for the input buffers. Address generators can determine
     // physical address based on the provided data layout and base address.
-    // Observe that here we are just constructing the address generators, but not using them yet.
-    // They are used in the loop below to read the tiles from source memory into the circular buffers.
+    // Start by extracting the tensor layout parameters from the compile-time arguments.
+    // Recall that compile-time arguments are stored as a vector of uint32_t values. TensorAccessorArgs is a clean way
+    // to extract the appropriate number of these uint32_t values and store them in an object.
     constexpr auto in0_layout_args = TensorAccessorArgs<0>();
+    // Then, construct the address generator for the input buffer.
+    // Observe that here we are just constructing the address generator object, but not using it yet.
+    // It will be used in the loop below to determine the address to read the tiles from.
     const auto in0_addr_gen = TensorAccessor(in0_layout_args, in0_base_addr, tile_size_bytes);
+    // Repeat for the second input buffer. next_compile_time_args_offset() is a clean way to
+    // determine the index of the next compile-time argument (after TensorAccessorArgs read
+    // the number of arguments it required above) without having to hard-code the index.
     constexpr auto in1_layout_args = TensorAccessorArgs<in0_layout_args.next_compile_time_args_offset()>();
+    // Finally, construct the address generator for the second input buffer.
     const auto in1_addr_gen = TensorAccessor(in1_layout_args, in1_base_addr, tile_size_bytes);
 
-    // Loop over all the tiles and read them into the circular buffers
+    // Loop over all the tiles and read them into the circular buffers.
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // First make sure there is space in the circular buffers to be written to.
+        // First make sure there is space for one tile in each of the circular buffers to be written to.
+        // Deciding how large the bufferS should be is a tradeoff.
+        // These are blocking calls.
         cb_reserve_back(cb_in0, 1);
-        cb_reserve_back(cb_in1, 1);  // Wait until we have 1 free slot. This blocks if the
-                                     // other kernels cannot consume the tiles fast enough.
-                                     // Deciding how large the buffer should be is a tradeoff.
+        cb_reserve_back(cb_in1, 1);
+
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
         uint32_t cb_in1_addr = get_write_ptr(cb_in1);
-        noc_async_read_tile(i, in0_addr_gen, cb_in0_addr);  // read the tile into the circular buffer
-        noc_async_read_tile(i, in1_addr_gen, cb_in1_addr);  // We can overlap async reads and writes
-                                                            // to reduce the data movement overhead.
-        // Wait until both reads are done before signaling the circular buffer that the tiles are ready.
+        // Read the tiles from DRAM into the circular buffers.
+        // These are non-blocking calls, so they both proceed in parallel.
+        noc_async_read_tile(i, in0_addr_gen, cb_in0_addr);
+        noc_async_read_tile(i, in1_addr_gen, cb_in1_addr);
+
+        // Wait until both reads are done before signaling the circular buffers that the tiles are ready.
         noc_async_read_barrier();
+        // Mark the tiles in circular buffers as ready.
+        // After this, any kernel (e.g. compute kernel) calling `cb_wait_front` will see this tile.
         cb_push_back(cb_in0, 1);
-        cb_push_back(cb_in1, 1);  // mark the tiles as ready. From this point forward kernels
-                                  // calling `cb_wait_front` will see this tile
+        cb_push_back(cb_in1, 1);
     }
 }

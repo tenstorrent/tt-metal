@@ -12,48 +12,67 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t n_tiles = get_compile_time_arg_val(0);
 
-    // We are going to read from these two circular buffers
+    // We are going to read from these two circular buffers.
+    // Note that indices have to be in sync with the reader kernel.
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    // and write to the output circular buffer
+    // And write to this circular buffer.
+    // Note that indices have to be in sync with the writer kernel.
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
-    // The destination register is a set of 16 tiles. Which the matrix engine (FPU) can output
-    // to. For our case, we are going perform the addition of two tiles and write the result
-    // to destination register 0.
+    // FPU has a destination register, which is an array that can fit multiple tiles (details vary on data type).
+    // For our case, FPU will add two tiles and produce a result that is a single tile.
+    // We will instruct FPU to store the result in the destination register array at index 0.
     constexpr uint32_t dst_reg = 0;
 
-    // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0
-    // to perform the computation.
+    // Initialize the FPU to perform an elementwise binary operation using circular buffers c_in0, c_in1 and c_out0.
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    // And we are going to add tiles. This function is only called if we ever need to
-    // switch operation to something else. Since we are only adding tiles, this function
-    // is only called once before the loop.
+    // Initialize FPU for elementwise add operation specifically. This function is called any time we want to switch
+    // operation to a different elementwise operation. Since we are only adding tiles, this function is called
+    // only once before the loop.
     add_tiles_init(cb_in0, cb_in1);
 
-    // Loop over all the tiles and perform the computation
+    // Loop over all the tiles and perform the computation.
+    // it's important to keep in mind that compute kernel runs on three different RISC cores.
+    // One for unpacking, one for computing, and one for packing.
+    // The compiler automatically compiles the same compute kernel code for all three cores,
+    // relieving programmer from having to write different code for each core.
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Wait until there is a tile in both input circular buffers
+        // Wait until there is a tile in each of the input circular buffers.
+        // These are blocking calls.
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
-        // Make sure there is registers we can use and hold it. The register can be being used by other
-        // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
-        // time acquire a register, we get 8 of them that we can use until released.
+
+        // Make sure destination register array is ready for FPU to write its result to.
+        // Note that this will also initialize all the tiles in the destination register array to 0.
+        // The initalization is not needed for this example, but is quite useful for matrix multiply.
         tile_regs_acquire();
-        // Add the tiles from the input circular buffers and write the result to the destination register
+
+        // Add the tiles from the input circular buffers and write the result to the destination register.
+        // 0, 0 are offsets into cb_in0 and cb_in1 to read the tiles from.
+        // Recall that dst_reg just contains index 0.
+        // Since we only waited for a single tile in each buffer above, that is all we can use.
+        // In more advanced applications we could wait for multiple tiles in each buffer and use them to
+        // perform a more complex operation or to improve performance.
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
-        // Release the held register
+
+        // Release the destination register array because the computation is done.
         tile_regs_commit();
+
+        // Make sure destination register array is ready for packer RISC core to read from.
         tile_regs_wait();
-        // Make sure there is space in the output circular buffer
+        // Make sure there is space in the output circular buffer to write result to.
         cb_reserve_back(cb_out0, 1);
-        // Copy the result from adding the tiles to the output circular buffer
+        // Copy the result of addition from destination register to the output circular buffer.
+        // Recall that dst_reg just contains index 0.
         pack_tile(dst_reg, cb_out0);
-        // Mark the output tile as ready and pop the input tiles
+        // Mark the tile in the output circular buffer as ready.
         cb_push_back(cb_out0, 1);
+
+        // Mark the tiles in the input circular buffers as consumed.
         cb_pop_front(cb_in0, 1);
         cb_pop_front(cb_in1, 1);
-        // Release the held register
+        // Release the destination register array because packing is done.
         tile_regs_release();
     }
 }
