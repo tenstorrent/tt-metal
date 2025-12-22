@@ -541,32 +541,32 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         // Blackhole: multiplied by 1.35 GHz, Wormhole: multiplied by 1.0 GHz
         // Using 64 transactions per barrier to match typical weight block sizes
         static const std::vector<BandwidthDataPoint> blackhole_data = {
-            {64, 2.056f},
-            {128, 4.091f},
-            {256, 8.222f},
-            {512, 16.372f},
-            {1024, 25.976f},
-            {2048, 27.861f},
-            {4096, 28.140f},
-            {8192, 31.090f},
-            {16384, 31.519f},
-            {32768, 45.570f},
-            {65536, 46.968f},
+            {64, 2.680f},
+            {128, 5.347f},
+            {256, 10.714f},
+            {512, 21.470f},
+            {1024, 42.643f},
+            {2048, 80.885f},
+            {4096, 81.426f},
+            {8192, 82.718f},
+            {16384, 82.910f},
+            {32768, 82.488f},
+            {65536, 82.748f},
         };
 
         static const std::vector<BandwidthDataPoint> wormhole_data = {
-            {32, 1.368f},
-            {64, 2.736f},
-            {128, 5.472f},
-            {256, 10.945f},
-            {512, 21.658f},
-            {1024, 24.591f},
-            {2048, 26.415f},
-            {4096, 27.673f},
-            {8192, 28.259f},
-            {16384, 28.486f},
-            {32768, 28.597f},
-            {65536, 28.654f},
+            {32, 0.868f},
+            {64, 1.736f},
+            {128, 3.489f},
+            {256, 6.975f},
+            {512, 13.889f},
+            {1024, 27.891f},
+            {2048, 28.411f},
+            {4096, 28.227f},
+            {8192, 28.537f},
+            {16384, 27.831f},
+            {32768, 27.758f},
+            {65536, 28.694f},
         };
 
         const std::vector<BandwidthDataPoint>* data = nullptr;
@@ -670,37 +670,37 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
             float bandwidth_gbps;
         };
 
-        // Real measured data from L1-to-L1 multicast (num_transactions = 1, Sender, whole chip)
+        // Real measured data from L1-to-L1 multicast (num_transactions = 16, Sender, whole chip)
         // Bandwidth converted from bytes/cycle to GB/s
         // Blackhole: multiplied by 1.35 GHz, Wormhole: multiplied by 1.0 GHz
-        // Using 1 transaction as convolutions issue single large multicast per weight block
+        // Using 16 transactions to better represent pipelined multicast workloads
         static const std::vector<BandwidthDataPoint> blackhole_data = {
-            {64, 0.108f},
-            {128, 0.222f},
-            {256, 0.445f},
-            {512, 0.866f},
-            {1024, 1.724f},
-            {2048, 3.405f},
-            {4096, 6.467f},
-            {8192, 12.060f},
-            {16384, 21.206f},
-            {32768, 26.037f},
-            {65536, 29.679f},
+            {64, 0.596f},
+            {128, 1.192f},
+            {256, 2.378f},
+            {512, 4.742f},
+            {1024, 9.396f},
+            {2048, 17.457f},
+            {4096, 28.302f},
+            {8192, 41.625f},
+            {16384, 55.478f},
+            {32768, 56.736f},
+            {65536, 57.043f},
         };
 
         static const std::vector<BandwidthDataPoint> wormhole_data = {
-            {32, 0.054f},
-            {64, 0.109f},
-            {128, 0.217f},
-            {256, 0.428f},
-            {512, 0.856f},
-            {1024, 1.665f},
-            {2048, 3.131f},
-            {4096, 5.713f},
-            {8192, 9.593f},
-            {16384, 11.653f},
-            {32768, 13.107f},
-            {65536, 13.950f},
+            {32, 0.345f},
+            {64, 0.691f},
+            {128, 1.383f},
+            {256, 2.766f},
+            {512, 5.319f},
+            {1024, 8.958f},
+            {2048, 13.920f},
+            {4096, 18.762f},
+            {8192, 23.211f},
+            {16384, 23.997f},
+            {32768, 24.242f},
+            {65536, 24.488f},
         };
 
         const std::vector<BandwidthDataPoint>* data = nullptr;
