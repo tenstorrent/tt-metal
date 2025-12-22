@@ -171,7 +171,7 @@ inline void tanh_init() {
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             // Accurate tanh uses sigmoid which requires reciprocal
-            _init_reciprocal_<false, false>();
+            sigmoid_init<false>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
