@@ -5,7 +5,13 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <random>
+#include <string>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -282,7 +288,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
-    DataType dtype,
+    DataType data_type,
     Layout layout,
     IDevice* device,
     const MemoryConfig& memory_config = MemoryConfig{},

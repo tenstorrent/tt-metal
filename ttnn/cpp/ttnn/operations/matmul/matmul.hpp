@@ -33,7 +33,7 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
+    struct Matmul& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {

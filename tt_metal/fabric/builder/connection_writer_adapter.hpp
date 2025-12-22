@@ -148,7 +148,8 @@ private:
         builder_config::num_max_receiver_channels>
         downstream_edm_buffer_base_addresses = {};
 
-    uint32_t downstream_edms_connected = 0;
+    // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
+    std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
