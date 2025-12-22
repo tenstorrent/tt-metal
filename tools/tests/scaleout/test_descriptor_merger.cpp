@@ -285,7 +285,9 @@ protected:
         const std::string& output_dir,
         const std::string& template_name = "",
         int num_splits = 2) {
-        EXPECT_GT(num_splits, 1) << "num_splits must be greater than 1";
+        if (num_splits < 2) {
+            throw std::runtime_error("num_splits must be at least 2");
+        }
 
         std::ifstream file(source_path);
         EXPECT_TRUE(file.is_open()) << "Failed to open " << source_path;
@@ -447,21 +449,6 @@ TEST_F(DescriptorMergerTest, SplitAndMerge5WhGalaxyYTorusSuperpod) {
     }
 }
 
-TEST_F(DescriptorMergerTest, LoadTorusDescriptor) {
-    // Test that torus node types can be loaded and processed correctly
-    // This validates that BH_GALAXY_XY_TORUS node templates work as expected
-    const std::string test_dir = create_test_dir("torus_load_test");
-
-    create_simple_descriptor(test_dir + "file1.textproto", "test_cluster", "node1", "BH_GALAXY_XY_TORUS", 0);
-
-    // Should succeed - torus node types are fully supported
-    EXPECT_NO_THROW({
-        CablingGenerator gen(test_dir + "file1.textproto", create_host_vector(1));
-        auto fsd = gen.generate_factory_system_descriptor();
-        EXPECT_EQ(fsd.hosts().size(), 1);
-    }) << "Torus descriptors should load successfully";
-}
-
 TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
     // Test that X_TORUS and Y_TORUS node types can merge into a combined XY_TORUS configuration
     // Both X and Y torus have the same Wormhole architecture and compatible topology
@@ -484,6 +471,29 @@ TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
 
     // Validate that X + Y merge produces the same result as XY torus
     EXPECT_EQ(merged_gen, xy_gen) << "X torus + Y torus should equal XY torus";
+}
+
+TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
+    // Test that BH (Blackhole) X_TORUS and Y_TORUS can merge into XY_TORUS
+    // Validates torus merging works for Blackhole architecture, not just Wormhole
+    const std::string test_dir = create_test_dir("bh_xy_torus_merge");
+
+    const std::string merge_dir = test_dir + "merge/";
+    std::filesystem::create_directories(merge_dir);
+    create_torus_descriptor(merge_dir + "x_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(merge_dir + "y_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_Y_TORUS", 0);
+
+    // Merge BH X + Y torus
+    CablingGenerator merged_gen(merge_dir, create_host_vector(1));
+
+    // Create reference BH XY torus descriptor
+    const std::string ref_dir = test_dir + "reference/";
+    std::filesystem::create_directories(ref_dir);
+    create_torus_descriptor(ref_dir + "xy_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_XY_TORUS", 0);
+    CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
+
+    // Validate that BH X + Y merge produces the same result as BH XY torus
+    EXPECT_EQ(merged_gen, xy_gen) << "BH X torus + Y torus should equal BH XY torus";
 }
 
 TEST_F(DescriptorMergerTest, RejectMismatchedNodeTypes) {
@@ -575,8 +585,15 @@ root_instance {
 )");
 
     // This should succeed - each port is used once, connections are valid
-    EXPECT_NO_THROW({ CablingGenerator gen(test_dir, create_host_vector(3)); })
-        << "Cross-descriptor connections on different ports should be allowed";
+    CablingGenerator gen(test_dir, create_host_vector(3));
+
+    // Validate that the merged result has the expected structure
+    auto fsd = gen.generate_factory_system_descriptor();
+    EXPECT_EQ(fsd.hosts().size(), 3) << "Should have 3 hosts from merged descriptors";
+
+    // Verify by loading again and checking equality (reflexive)
+    CablingGenerator gen2(test_dir, create_host_vector(3));
+    EXPECT_EQ(gen, gen2) << "Loading same directory twice should produce equal generators";
 }
 
 TEST_F(DescriptorMergerTest, RejectMergingWormholeAndBlackholeTorusTogether) {
@@ -606,24 +623,46 @@ TEST_F(DescriptorMergerTest, MergeTwoIdenticalXTorusDescriptors) {
     // (duplicate connections will be deduplicated during merge)
     const std::string test_dir = create_test_dir("two_x_torus_merge");
 
-    create_torus_descriptor(test_dir + "x_torus1.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(test_dir + "x_torus2.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    const std::string merge_dir = test_dir + "merge/";
+    std::filesystem::create_directories(merge_dir);
+    create_torus_descriptor(merge_dir + "x_torus1.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(merge_dir + "x_torus2.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
 
-    EXPECT_NO_THROW({ CablingGenerator merged_gen(test_dir, create_host_vector(1)); })
-        << "Merging two identical X torus descriptors should succeed";
+    // Merge two identical X torus descriptors
+    CablingGenerator merged_gen(merge_dir, create_host_vector(1));
+
+    // Create reference X torus descriptor
+    const std::string ref_dir = test_dir + "reference/";
+    std::filesystem::create_directories(ref_dir);
+    create_torus_descriptor(ref_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    CablingGenerator x_gen(ref_dir + "x_torus.textproto", create_host_vector(1));
+
+    // Validate that merging two identical X torus gives the same X torus (deduplication works)
+    EXPECT_EQ(merged_gen, x_gen) << "Two identical X torus should merge into single X torus";
 }
 
 TEST_F(DescriptorMergerTest, MergeXYTorusWithXTorusDescriptors) {
     // Test merging XY_TORUS with X_TORUS descriptors
     // XY_TORUS already contains X-direction connections, X_TORUS adds more
-    // Both are torus types with the same architecture (Wormhole) - should merge
+    // Both are torus types with the same architecture (Wormhole) - should merge to XY_TORUS
     const std::string test_dir = create_test_dir("xy_plus_x_torus_merge");
 
-    create_torus_descriptor(test_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
-    create_torus_descriptor(test_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    const std::string merge_dir = test_dir + "merge/";
+    std::filesystem::create_directories(merge_dir);
+    create_torus_descriptor(merge_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
+    create_torus_descriptor(merge_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
 
-    EXPECT_NO_THROW({ CablingGenerator merged_gen(test_dir, create_host_vector(1)); })
-        << "Merging XY + X torus (same architecture) should succeed";
+    // Merge XY + X torus
+    CablingGenerator merged_gen(merge_dir, create_host_vector(1));
+
+    // Create reference XY torus descriptor
+    const std::string ref_dir = test_dir + "reference/";
+    std::filesystem::create_directories(ref_dir);
+    create_torus_descriptor(ref_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
+    CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
+
+    // Validate that XY + X torus still equals XY torus (X connections already present)
+    EXPECT_EQ(merged_gen, xy_gen) << "XY torus + X torus should equal XY torus";
 }
 
 TEST_F(DescriptorMergerTest, RejectSamePortConnectedToDifferentDestinations) {
@@ -824,44 +863,10 @@ TEST_F(DescriptorMergerTest, RejectZeroSplit) {
         << "split_descriptor with num_splits=1 should throw";
 }
 
-TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
-    // Test that BH (Blackhole) X_TORUS and Y_TORUS can merge into XY_TORUS
-    // Validates torus merging works for Blackhole architecture, not just Wormhole
-    const std::string test_dir = create_test_dir("bh_xy_torus_merge");
-
-    const std::string merge_dir = test_dir + "merge/";
-    std::filesystem::create_directories(merge_dir);
-    create_torus_descriptor(merge_dir + "x_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(merge_dir + "y_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_Y_TORUS", 0);
-
-    // Merge BH X + Y torus
-    CablingGenerator merged_gen(merge_dir, create_host_vector(1));
-
-    // Create reference BH XY torus descriptor
-    const std::string ref_dir = test_dir + "reference/";
-    std::filesystem::create_directories(ref_dir);
-    create_torus_descriptor(ref_dir + "xy_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_XY_TORUS", 0);
-    CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
-
-    // Validate that BH X + Y merge produces the same result as BH XY torus
-    EXPECT_EQ(merged_gen, xy_gen) << "BH X torus + Y torus should equal BH XY torus";
-}
-
 TEST_F(DescriptorMergerTest, OperatorEqualityReflexive) {
     // Test that a CablingGenerator is equal to itself (reflexive property)
     const std::string test_dir = create_test_dir("equality_reflexive");
-    write_textproto(test_dir + "test.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)");
+    create_simple_descriptor(test_dir + "test.textproto", "test_graph", "node1", "WH_GALAXY", 0);
 
     CablingGenerator gen(test_dir + "test.textproto", create_host_vector(1));
     EXPECT_EQ(gen, gen) << "CablingGenerator should be equal to itself";
@@ -870,18 +875,7 @@ root_instance {
 TEST_F(DescriptorMergerTest, OperatorEqualitySymmetric) {
     // Test that if A == B, then B == A (symmetric property)
     const std::string test_dir = create_test_dir("equality_symmetric");
-    write_textproto(test_dir + "test.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)");
+    create_simple_descriptor(test_dir + "test.textproto", "test_graph", "node1", "WH_GALAXY", 0);
 
     CablingGenerator gen1(test_dir + "test.textproto", create_host_vector(1));
     CablingGenerator gen2(test_dir + "test.textproto", create_host_vector(1));
@@ -894,31 +888,8 @@ TEST_F(DescriptorMergerTest, OperatorInequalityDifferentNodeTypes) {
     // Test that generators with different node types are not equal
     const std::string test_dir = create_test_dir("inequality_node_types");
 
-    write_textproto(test_dir + "wh.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)");
-
-    write_textproto(test_dir + "bh.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "BH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)");
+    create_simple_descriptor(test_dir + "wh.textproto", "test_graph", "node1", "WH_GALAXY", 0);
+    create_simple_descriptor(test_dir + "bh.textproto", "test_graph", "node1", "BH_GALAXY", 0);
 
     CablingGenerator wh_gen(test_dir + "wh.textproto", create_host_vector(1));
     CablingGenerator bh_gen(test_dir + "bh.textproto", create_host_vector(1));
@@ -930,52 +901,10 @@ TEST_F(DescriptorMergerTest, OperatorInequalityDifferentConnections) {
     // Test that generators with different internal connections are not equal
     const std::string test_dir = create_test_dir("inequality_connections");
 
-    const std::string base_proto = R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-    children { key: "node2" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-  internal_connections {
-    port_type: QSFP_DD
-    connections {
-      port_a { path: "node1" tray_id: 1 port_id: 0 }
-      port_b { path: "node2" tray_id: 1 port_id: 0 }
-    }
-  }
-}
-)";
-
-    const std::string different_conn_proto = R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-    children { key: "node2" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-  internal_connections {
-    port_type: QSFP_DD
-    connections {
-      port_a { path: "node1" tray_id: 1 port_id: 1 }
-      port_b { path: "node2" tray_id: 1 port_id: 1 }
-    }
-  }
-}
-)";
-
-    write_textproto(test_dir + "conn1.textproto", base_proto);
-    write_textproto(test_dir + "conn2.textproto", different_conn_proto);
+    create_two_node_descriptor_with_connection(
+        test_dir + "conn1.textproto", "test_graph", "WH_GALAXY", "WH_GALAXY", "node2", 1, 1, 1, 1);
+    create_two_node_descriptor_with_connection(
+        test_dir + "conn2.textproto", "test_graph", "WH_GALAXY", "WH_GALAXY", "node2", 1, 2, 1, 2);
 
     CablingGenerator gen1(test_dir + "conn1.textproto", create_host_vector(2));
     CablingGenerator gen2(test_dir + "conn2.textproto", create_host_vector(2));
@@ -987,33 +916,9 @@ TEST_F(DescriptorMergerTest, OperatorInequalityDifferentHostCount) {
     // Test that generators with different number of nodes are not equal
     const std::string test_dir = create_test_dir("inequality_host_count");
 
-    write_textproto(test_dir + "one_node.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-}
-)");
-
-    write_textproto(test_dir + "two_nodes.textproto", R"(
-graph_templates {
-  key: "test_graph"
-  value {
-    children { key: "node1" value { node_type: "WH_GALAXY" } }
-    children { key: "node2" value { node_type: "WH_GALAXY" } }
-  }
-}
-root_instance {
-  template_name: "test_graph"
-  child_mappings { key: "node1" value { host_id: 0 } }
-  child_mappings { key: "node2" value { host_id: 1 } }
-}
-)");
+    create_simple_descriptor(test_dir + "one_node.textproto", "test_graph", "node1", "WH_GALAXY", 0);
+    create_two_node_descriptor_with_connection(
+        test_dir + "two_nodes.textproto", "test_graph", "WH_GALAXY", "WH_GALAXY", "node2");
 
     CablingGenerator gen1(test_dir + "one_node.textproto", create_host_vector(1));
     CablingGenerator gen2(test_dir + "two_nodes.textproto", create_host_vector(2));
@@ -1023,7 +928,7 @@ root_instance {
 
 TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     // Test that all existing cabling descriptors can be loaded successfully
-    // This validates that our test descriptors are well-formed
+    // This validates that our test descriptors are well-formed and produce consistent results
     const std::vector<std::string> descriptors = {
         "tools/tests/scaleout/cabling_descriptors/wh_galaxy_mesh.textproto",
         "tools/tests/scaleout/cabling_descriptors/bh_galaxy_mesh.textproto",
@@ -1032,12 +937,16 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     };
 
     for (const auto& desc_path : descriptors) {
-        EXPECT_NO_THROW({
-            CablingGenerator gen(desc_path, create_host_vector(1));
-            auto fsd = gen.generate_factory_system_descriptor();
-            EXPECT_GE(fsd.hosts().size(), 1) << "Descriptor should have at least one host: " << desc_path;
-        }) << "Failed to load descriptor: "
-           << desc_path;
+        // Load descriptor twice
+        CablingGenerator gen1(desc_path, create_host_vector(1));
+        CablingGenerator gen2(desc_path, create_host_vector(1));
+
+        // Verify reflexive equality
+        EXPECT_EQ(gen1, gen2) << "Loading same descriptor twice should produce equal generators: " << desc_path;
+
+        // Validate basic structure
+        auto fsd = gen1.generate_factory_system_descriptor();
+        EXPECT_GE(fsd.hosts().size(), 1) << "Descriptor should have at least one host: " << desc_path;
     }
 }
 
