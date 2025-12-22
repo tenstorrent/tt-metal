@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <dataflow_api.h>
+#include <api/dataflow/dataflow_api.h>
 
 // Maximum number of sticks to process per batch for optimal NOC utilization
 constexpr uint32_t MAX_BATCH_SIZE = 5;

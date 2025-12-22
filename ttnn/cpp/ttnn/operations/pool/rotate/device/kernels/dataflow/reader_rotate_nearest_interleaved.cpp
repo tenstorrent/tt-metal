@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include <dataflow_api.h>
+#include <api/dataflow/dataflow_api.h>
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include <ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 
