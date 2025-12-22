@@ -328,7 +328,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        for (int tile = 0; tile < 3; tile++)
+        for (uint face_num = 0; face_num < (num_faces - 1); face_num++)
         {
             // Wait and pool
             if constexpr (type == PoolType::MAX)

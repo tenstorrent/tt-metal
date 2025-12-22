@@ -73,7 +73,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
         }
         else
         {
-            constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 4 : 1;
+            const uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? num_faces : 1;
 #pragma GCC unroll 0
             for (std::uint32_t n = 0; n < outerloop; n++)
             {
