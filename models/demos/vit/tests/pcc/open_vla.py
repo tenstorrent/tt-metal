@@ -1,1 +1,0 @@
-/localdev/salnahari/testing_dir/tt-metal/models/tt_transformers/tt/multimodal/open_vla.py

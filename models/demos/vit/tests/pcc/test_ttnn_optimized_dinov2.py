@@ -7,8 +7,8 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import get_tensors_from_input_spec
 from models.demos.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
-from models.utility_functions import get_tensors_from_input_spec
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
