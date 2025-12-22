@@ -4,11 +4,9 @@
 
 #include "rmsnorm_pre_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
-
-namespace operation = tt::tt_metal::operation;
 
 namespace ttnn::operations::normalization {
 
@@ -18,6 +16,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
+    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -38,15 +37,14 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::PRE_ALL_GATHER);
     } else {
-        return operation::run(
-                   LayerNormPreAllGather{
-                       .norm_type = LayerNormDistributedType::RMSNORM,
-                       .dtype = dtype,
-                       .compute_kernel_config = kernel_config_val,
-                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                       .use_2d_core_grid = use_2d_core_grid},
-                   {input_tensor})
-            .at(0);
+        return ttnn::prim::layernorm_pre_all_gather(
+            input_tensor,
+            LayerNormDistributedType::RMSNORM,
+            dtype,
+            kernel_config_val,
+            use_2d_core_grid,
+            distributed_program_config,
+            std::nullopt);
     }
 }
 

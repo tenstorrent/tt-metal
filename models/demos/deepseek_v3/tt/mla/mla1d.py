@@ -723,7 +723,6 @@ class MLA1D(AbstractModule):
         )
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
-
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
@@ -738,14 +737,19 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        return ttnn.as_tensor(
-            torch.concatenate(caches),
-            dtype=ttnn.bfloat8_b,
+        def to_device(
+            weight,
+            device,
+            mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
+        ):
+            weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper)
+            return ttnn.to_layout(weight, dtype=dtype, layout=layout, memory_config=memory_config)
+
+        caches = torch.concatenate(caches)
+        return to_device(caches, mesh_device, ttnn.ShardTensorToMesh(mesh_device, 0))
 
     @classmethod
     def forward_decode(
@@ -958,9 +962,6 @@ class MLA1D(AbstractModule):
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
 
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        ttnn.synchronize_device(cfg["mesh_device"])
-
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
@@ -1030,8 +1031,6 @@ class MLA1D(AbstractModule):
             batch_idx=local_batch_idx,
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/33589
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         # FlashMLA
         attn_out = ttnn.transformer.flash_mla_prefill(

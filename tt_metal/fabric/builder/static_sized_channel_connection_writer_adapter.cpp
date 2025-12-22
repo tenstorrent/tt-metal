@@ -37,7 +37,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
         // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
-        this->downstream_edms_connected |= (1 << compact_index);
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
 
         // Store addresses indexed by [vc_idx][compact_index]
         // NOTE: For INTRA_MESH connections, this works fine (one connection per compact_index)
@@ -51,7 +51,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.buffer_index_semaphore_id;
     } else {
-        this->downstream_edms_connected = 1;
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) = 1;
 
         // For 1D, store at compact index 0
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
@@ -106,13 +106,12 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         if (vc_idx == 0) {
             num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
         } else {
-            // VC1: Use actual connection count (3 for XY, 4 for Z)
-            // This is safe because VC1 channels are only created when intermesh is configured
-            num_downstream_edms = downstream_edms_connected_by_vc[vc_idx].size();
+            // VC1: Use fixed count based on 2D routing (3 for XY, 4 for Z intermesh)
+            num_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
         }
 
         // Pack connection mask (bit mask indicating which slots are valid)
-        args_out.push_back(this->downstream_edms_connected);
+        args_out.push_back(this->downstream_edms_connected_by_vc_mask.at(vc_idx));
 
         // Pack buffer base addresses (one per compact index)
         for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
@@ -141,7 +140,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     } else {
         // For 1D: single downstream connection (only VC0 supported)
         TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
-        bool has_connection = this->downstream_edms_connected != 0;
+        bool has_connection = this->downstream_edms_connected_by_vc_mask.at(vc_idx) != 0;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
@@ -150,9 +149,9 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
             buffer_addr,
             this->pack_downstream_noc_x_rt_arg(vc_idx),
             this->pack_downstream_noc_y_rt_arg(vc_idx),
-            this->downstream_edm_worker_registration_addresses[vc_idx][0].value_or(0),
-            this->downstream_edm_worker_location_info_addresses[vc_idx][0].value_or(0),
-            this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][0].value_or(0),
+            static_cast<uint32_t>(this->downstream_edm_worker_registration_addresses[vc_idx][0].value_or(0)),
+            static_cast<uint32_t>(this->downstream_edm_worker_location_info_addresses[vc_idx][0].value_or(0)),
+            static_cast<uint32_t>(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][0].value_or(0)),
         };
 
         args_out.reserve(args_out.size() + rt_args.size());
@@ -173,24 +172,23 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
         // Pack full relay connection info
         // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
         auto relay_rt_args = std::initializer_list<uint32_t>{
-            1u,                                                            // has_local_tensix_relay_connection = true
-            this->relay_connection_info.buffer_base_address,               // relay_buffer_base_addr
-            this->relay_connection_info.noc_xy.x,                          // relay_noc_x
-            this->relay_connection_info.noc_xy.y,                          // relay_noc_y
-            this->relay_connection_info.worker_registration_address,       // relay_connection_handshake_addr
-            this->relay_connection_info.worker_location_info_address,      // relay_worker_location_info_addr
-            this->relay_connection_info.free_slots_stream_id,              // relay_free_slots_stream_id
-            fabric_router_config.tensix_relay_connection_buffer_index_id,  // relay_connection_buffer_index_id (queried
-                                                                           // from fabric context)
+            1u,  // has_local_tensix_relay_connection = true
+            static_cast<uint32_t>(this->relay_connection_info.buffer_base_address),  // relay_buffer_base_addr
+            static_cast<uint32_t>(this->relay_connection_info.noc_xy.x),             // relay_noc_x
+            static_cast<uint32_t>(this->relay_connection_info.noc_xy.y),             // relay_noc_y
+            static_cast<uint32_t>(
+                this->relay_connection_info.worker_registration_address),  // relay_connection_handshake_addr
+            static_cast<uint32_t>(
+                this->relay_connection_info.worker_location_info_address),            // relay_worker_location_info_addr
+            static_cast<uint32_t>(this->relay_connection_info.free_slots_stream_id),  // relay_free_slots_stream_id
+            static_cast<uint32_t>(
+                fabric_router_config.tensix_relay_connection_buffer_index_id),  // relay_connection_buffer_index_id
+                                                                                // (queried from fabric context)
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());
         std::copy(relay_rt_args.begin(), relay_rt_args.end(), std::back_inserter(args_out));
     }
-}
-
-uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected() const {
-    return this->downstream_edms_connected;
 }
 
 uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
@@ -230,15 +228,22 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     }
 }
 
-void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const {
+void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
+    std::vector<uint32_t>& ct_args_out, size_t /*num_fwd_paths*/) const {
+    // Always emit MAX_NUM_RECEIVER_CHANNELS elements (one per VC) to match device side array size
     ct_args_out.insert(
         ct_args_out.end(),
         this->downstream_sender_channels_num_buffers.begin(),
-        this->downstream_sender_channels_num_buffers.begin() + num_fwd_paths);
+        this->downstream_sender_channels_num_buffers.begin() + builder_config::num_max_receiver_channels);
 
-    for (size_t i = 0; i < num_fwd_paths; i++) {
-        if (this->downstream_edms_connected_by_vc_set.find(i) != this->downstream_edms_connected_by_vc_set.end()) {
-            TT_FATAL(this->downstream_sender_channels_num_buffers[i] != 0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
+    // Validate that all connected VCs have non-zero buffer counts
+    // downstream_sender_channels_num_buffers is indexed by VC (receiver channel), not by sender channel
+    for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
+        if (this->downstream_edms_connected_by_vc_set.find(vc_idx) != this->downstream_edms_connected_by_vc_set.end()) {
+            TT_FATAL(
+                this->downstream_sender_channels_num_buffers[vc_idx] != 0,
+                "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",
+                vc_idx);
         }
     }
 }
