@@ -12,7 +12,7 @@ namespace ttnn {
 
 tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     const Tensor& input_tensor,
-    IDevice* target_device,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,

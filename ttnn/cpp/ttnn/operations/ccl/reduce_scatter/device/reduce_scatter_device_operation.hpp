@@ -65,7 +65,7 @@ struct ReduceScatterDeviceOperation {
             const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
