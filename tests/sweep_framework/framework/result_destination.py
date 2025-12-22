@@ -10,7 +10,6 @@ import datetime as dt
 import hashlib
 import os
 import math
-from elasticsearch import Elasticsearch
 from framework.database import generate_error_hash
 from framework.serialize import (
     serialize,
@@ -203,63 +202,6 @@ class ResultDestination(ABC):
     def validate_connection(self) -> bool:
         """Validate that the destination is accessible"""
         pass
-
-
-class ElasticResultDestination(ResultDestination):
-    """Elasticsearch-based result destination"""
-
-    def __init__(self, connection_string: str, username: str, password: str):
-        self.client = Elasticsearch(connection_string, basic_auth=(username, password))
-        self.connection_string = connection_string
-
-    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
-        """No specific run initialization needed for Elasticsearch"""
-        return None
-
-    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
-        """Export results to Elasticsearch"""
-        if not results:
-            return "success"
-
-        from framework.elastic_config import RESULT_INDEX_PREFIX
-
-        sweep_name = header_info[0]["sweep_name"]
-        results_index = RESULT_INDEX_PREFIX + sweep_name
-
-        # Add git hash to results
-        curr_git_hash = run_context.get("git_hash", "unknown")
-        for result in results:
-            result["git_hash"] = curr_git_hash
-
-        for i in range(len(results)):
-            result = header_info[i].copy()
-            for elem in results[i].keys():
-                # Handle device performance fields (both old and new formats)
-                if elem in ["device_perf", "device_perf_uncached", "device_perf_cached"]:
-                    result[elem] = results[i][elem]
-                    continue
-                # Skip problematic fields that were added for PostgreSQL functionality
-                if elem in ["start_time_ts", "end_time_ts", "original_vector_data"]:
-                    continue
-                result[elem] = serialize(results[i][elem])
-            self.client.index(index=results_index, body=result)
-
-        logger.info(f"Successfully exported {len(results)} results to Elasticsearch")
-        return "success"
-
-    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
-        """No specific run finalization needed for Elasticsearch"""
-        pass
-
-    def validate_connection(self) -> bool:
-        """Validate Elasticsearch connection"""
-        try:
-            # Basic connection test - just try to get cluster info
-            self.client.info()
-            return True
-        except Exception:
-            logger.exception("Elasticsearch connection validation failed")
-            return False
 
 
 class FileResultDestination(ResultDestination):
@@ -661,19 +603,18 @@ class SupersetResultDestination(FileResultDestination):
 class ResultDestinationFactory:
     """Factory to create appropriate result destination based on configuration"""
 
+    SUPPORTED_DESTINATIONS = {"results_export", "superset"}
+
     @staticmethod
     def create_destination(result_destination: str, **kwargs) -> ResultDestination:
-        if result_destination == "elastic":
-            required_args = ["connection_string", "username", "password"]
-            for arg in required_args:
-                if arg not in kwargs:
-                    raise ValueError(f"Missing required argument '{arg}' for elastic result destination")
-            return ElasticResultDestination(**kwargs)
-        elif result_destination == "results_export":
+        if result_destination == "results_export":
             export_dir = kwargs.get("export_dir")
             return FileResultDestination(export_dir)
         elif result_destination == "superset":
             export_dir = kwargs.get("export_dir")
             return SupersetResultDestination(export_dir)
         else:
-            raise ValueError(f"Unknown result destination: {result_destination}")
+            raise ValueError(
+                f"Unknown result destination: {result_destination}. "
+                f"Supported destinations: {', '.join(sorted(ResultDestinationFactory.SUPPORTED_DESTINATIONS))}"
+            )

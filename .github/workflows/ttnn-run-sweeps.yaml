@@ -683,8 +683,6 @@ jobs:
         ARCH_NAME: ${{ matrix.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
-        ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -926,8 +924,6 @@ jobs:
         LOGURU_LEVEL: ${{ inputs.log-level }}
         TT_LOGGER_LEVEL: ${{ inputs.log-level }}
         GITHUB_ACTIONS: true
-        ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
-        ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
@@ -1057,8 +1053,6 @@ jobs:
         ARCH_NAME: ${{ matrix.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
-        ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:

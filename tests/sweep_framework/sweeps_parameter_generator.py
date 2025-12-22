@@ -339,7 +339,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
+        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
     )
     parser.add_argument(
         "--randomize",
@@ -361,11 +361,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Elasticsearch support has been removed. Vectors are always dumped to disk.
+    # Vectors are always dumped to disk in JSON format.
     if args.dump_file:
         logger.warning(
             "The --dump-file flag is deprecated and will be removed in a future version. "
-            "Elasticsearch support has been removed. Vectors are now always dumped to disk in JSON format by default. "
+            "Vectors are now always dumped to disk in JSON format by default. "
             "Please remove this flag from your scripts."
         )
 
