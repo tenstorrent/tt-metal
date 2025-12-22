@@ -106,8 +106,8 @@ target_sources(
         neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
         neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
         slice_reshard_async/slice_reshard_async.cpp
-        slice_reshard_async/device/slice_reshard_async_op.cpp
-        slice_reshard_async/device/slice_reshard_async_program.cpp
+        slice_reshard_async/device/slice_reshard_async_device_operation.cpp
+        slice_reshard_async/device/slice_reshard_async_program_factory.cpp
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
