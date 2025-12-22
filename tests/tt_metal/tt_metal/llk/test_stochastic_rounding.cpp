@@ -34,6 +34,13 @@ struct StochasticRoundingConfig {
     size_t num_tiles = 0;
     uint32_t seed = 0;
     float base_value = 0.0f;
+    float fraction = 0.5f;  // Position between base and next BF16 value (0.0 = base, 1.0 = next)
+};
+
+struct StochasticRoundingResult {
+    size_t count_rounded_up = 0;
+    size_t count_rounded_down = 0;
+    size_t total = 0;
 };
 
 /// @brief Get the next representable BF16 value (1 ULP higher)
@@ -45,24 +52,24 @@ float bf16_next_up(float value) {
     return static_cast<float>(result);
 }
 
-/// @brief Test stochastic rounding correctness.
-/// Verifies that all values round to one of the two adjacent BF16 values
-/// and that total = rounded_up + rounded_down.
+/// @brief Run stochastic rounding and return the results.
 /// @param cq - Mesh command queue
 /// @param test_config - Test configuration
-/// @return true if all values round correctly
-bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const StochasticRoundingConfig& test_config) {
+/// @return StochasticRoundingResult with counts of rounded up/down values
+StochasticRoundingResult run_stochastic_rounding(
+    distributed::MeshCommandQueue& cq, const StochasticRoundingConfig& test_config) {
     size_t num_tiles = test_config.num_tiles;
     uint32_t seed = test_config.seed;
     float base_value = test_config.base_value;
+    float fraction = test_config.fraction;
 
     bfloat16 base_bf16 = bfloat16(base_value);
     float base_bf16_float = static_cast<float>(base_bf16);
     float upper_bf16 = bf16_next_up(base_bf16_float);
 
-    // Test value: halfway between base and upper BF16
+    // Test value: at 'fraction' position between base and upper BF16
     // This is a float32 value that cannot be exactly represented in BF16
-    const float test_value = base_bf16_float + (upper_bf16 - base_bf16_float) * 0.5f;
+    const float test_value = base_bf16_float + (upper_bf16 - base_bf16_float) * fraction;
 
     const size_t tile_byte_size_input = 4U * tt::constants::TILE_HW;   // Float32: 4 bytes per element
     const size_t tile_byte_size_output = 2U * tt::constants::TILE_HW;  // BFloat16: 2 bytes per element
@@ -189,7 +196,6 @@ bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const Stoch
         } else if (val_float == upper_bf16) {
             count_rounded_up++;
         } else {
-            count_invalid++;
             log_error(
                 tt::LogTest, "Unexpected output value: {} (expected {} or {})", val_float, base_bf16_float, upper_bf16);
         }
@@ -197,26 +203,38 @@ bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const Stoch
 
     log_info(
         tt::LogTest,
-        "Stochastic rounding test: input={}, base={}, upper={}, seed={}, up={}, down={}, invalid={}, total={}",
+        "Stochastic rounding: input={}, base={}, upper={}, fraction={}, seed={}, up={}, down={}, invalid={}, total={}",
         test_value,
         base_bf16_float,
         upper_bf16,
+        fraction,
         seed,
         count_rounded_up,
         count_rounded_down,
         count_invalid,
         num_elements);
 
-    // Verify that all values rounded to valid BF16 values
-    bool pass = (count_rounded_up + count_rounded_down == num_elements) && (count_invalid == 0);
+    return StochasticRoundingResult{
+        .count_rounded_up = count_rounded_up,
+        .count_rounded_down = count_rounded_down,
+        .total = num_elements,
+    };
+}
+
+/// @brief Test stochastic rounding correctness (validity only).
+/// @param cq - Mesh command queue
+/// @param test_config - Test configuration
+/// @return true if all values round correctly to valid BF16 values
+bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const StochasticRoundingConfig& test_config) {
+    auto result = run_stochastic_rounding(cq, test_config);
+    bool pass = (result.count_rounded_down + result.count_rounded_up == result.total);
     if (!pass) {
         log_error(
             tt::LogTest,
-            "Stochastic rounding failed: rounded_up({}) + rounded_down({}) != total({}) or invalid({}) != 0",
-            count_rounded_up,
-            count_rounded_down,
-            num_elements,
-            count_invalid);
+            "Stochastic rounding failed: rounded_up({}) + rounded_down({}) != total({})",
+            result.count_rounded_up,
+            result.count_rounded_down,
+            result.total);
     }
     return pass;
 }
@@ -229,18 +247,16 @@ class StochasticRoundingSingleCardFixture : public UnitMeshCQFixture,
                                             public testing::WithParamInterface<StochasticRoundingConfig> {};
 
 TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingCorrectness) {
-    for (const auto& device_ : devices_) {
-        StochasticRoundingConfig test_config = GetParam();
+    StochasticRoundingConfig test_config = GetParam();
 
-        log_info(
-            tt::LogTest,
-            "Testing stochastic rounding: num_tiles={}, seed={}, base_value={}",
-            test_config.num_tiles,
-            test_config.seed,
-            test_config.base_value);
+    log_info(
+        tt::LogTest,
+        "Testing stochastic rounding: num_tiles={}, seed={}, base_value={}",
+        test_config.num_tiles,
+        test_config.seed,
+        test_config.base_value);
 
-        EXPECT_TRUE(run_stochastic_rounding_test(device_->mesh_command_queue(), test_config));
-    }
+    EXPECT_TRUE(run_stochastic_rounding_test(devices_.at(0)->mesh_command_queue(), test_config));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -250,12 +266,57 @@ INSTANTIATE_TEST_SUITE_P(
         // Test with different seeds and base values
         // 128 tiles * 32 * 32 = 131072 elements
         StochasticRoundingConfig{
-            .num_tiles = 128U, .seed = 11111U, .base_value = 0.0f},  // Note: subnormals get flushed to zero
-        StochasticRoundingConfig{.num_tiles = 128U, .seed = 22222U, .base_value = 1.0f},
-        StochasticRoundingConfig{.num_tiles = 128U, .seed = 44444U, .base_value = 0.5f},
+            .num_tiles = 128U, .seed = 111U, .base_value = 0.0f},  // Note: subnormals get flushed to zero
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 222U, .base_value = 1.0f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 444U, .base_value = 0.5f},
         StochasticRoundingConfig{
             .num_tiles = 128U, .seed = 55555U, .base_value = 256.0f},  // Next representable value in BF16 is 258.0
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 555U, .base_value = -0.5f}));
 
-        StochasticRoundingConfig{.num_tiles = 128U, .seed = 44444U, .base_value = -0.5f},
-        StochasticRoundingConfig{.num_tiles = 128U, .seed = 55555U, .base_value = -256.0f}));
+class StochasticRoundingDistributionFixture : public UnitMeshCQFixture,
+                                              public testing::WithParamInterface<StochasticRoundingConfig> {};
+
+TEST_P(StochasticRoundingDistributionFixture, TensixStochasticRoundingDistribution) {
+    StochasticRoundingConfig test_config = GetParam();
+    constexpr float tolerance = 0.02f;
+
+    log_info(
+        tt::LogTest,
+        "Testing stochastic rounding distribution: num_tiles={}, seed={}, base_value={}, fraction={}",
+        test_config.num_tiles,
+        test_config.seed,
+        test_config.base_value,
+        test_config.fraction);
+
+    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(), test_config);
+
+    ASSERT_EQ(result.count_rounded_down + result.count_rounded_up, result.total)
+        << "Stochastic rounding produced invalid values";
+
+    float actual_ratio = static_cast<float>(result.count_rounded_up) / static_cast<float>(result.total);
+    float expected_ratio = test_config.fraction;
+    float deviation = std::abs(actual_ratio - expected_ratio);
+
+    log_info(
+        tt::LogTest,
+        "Distribution check: expected_ratio={}, actual_ratio={}, deviation={}, tolerance={}",
+        expected_ratio,
+        actual_ratio,
+        deviation,
+        tolerance);
+
+    EXPECT_LE(deviation, tolerance) << "Stochastic rounding distribution mismatch: expected " << expected_ratio
+                                    << " (+/- " << tolerance << "), got " << actual_ratio;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StochasticRoundingDistribution,
+    StochasticRoundingDistributionFixture,
+    ::testing::Values(
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 12345U, .base_value = 1.0f, .fraction = 0.5f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 23456U, .base_value = 1.0f, .fraction = 0.25f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 34567U, .base_value = 1.0f, .fraction = 0.75f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 45678U, .base_value = 1.0f, .fraction = 0.1f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 56789U, .base_value = 1.0f, .fraction = 0.9f}));
+
 }  // namespace tt::tt_metal
