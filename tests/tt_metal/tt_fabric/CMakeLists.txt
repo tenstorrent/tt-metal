@@ -5,7 +5,6 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_channel_mapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connections.cpp
@@ -16,12 +15,15 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_builder_local_connections.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_integration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_device_detection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
+
+add_dependencies(fabric_unit_tests scaleout_generated_protos)
 
 target_link_libraries(
     fabric_unit_tests
