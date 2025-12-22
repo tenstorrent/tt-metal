@@ -37,7 +37,7 @@ private:
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& coord,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
+        tensor_return_value_t& output_tensors,
         const tt::tt_metal::GlobalSemaphore& semaphore,
         const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 };

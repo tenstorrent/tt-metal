@@ -70,7 +70,7 @@ struct Pool2D {
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
+            const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
         static void override_runtime_arguments(

@@ -89,7 +89,7 @@ struct AllToAllDispatchDeviceOperation {
             const GlobalSemaphore& cross_device_semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
