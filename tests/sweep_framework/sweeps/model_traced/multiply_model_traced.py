@@ -10,6 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -53,6 +54,31 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_device(device)
     del device
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with incompatible configurations.
+    Mixed integer and float dtypes cause numerical errors in multiply operation.
+    """
+    input_a_dtype = test_vector.get("input_a_dtype")
+    input_b_dtype = test_vector.get("input_b_dtype")
+
+    # Define integer and float dtypes
+    integer_dtypes = [ttnn.int32, ttnn.uint32, ttnn.uint16]
+    float_dtypes = [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32]
+
+    # Check if one is integer and other is float
+    a_is_int = input_a_dtype in integer_dtypes
+    b_is_int = input_b_dtype in integer_dtypes
+    a_is_float = input_a_dtype in float_dtypes
+    b_is_float = input_b_dtype in float_dtypes
+
+    # Invalidate if mixed integer and float dtypes
+    if (a_is_int and b_is_float) or (a_is_float and b_is_int):
+        return True, "Mixed integer and float dtypes are not supported for multiply operation"
+
+    return False, None
 
 
 def run(
