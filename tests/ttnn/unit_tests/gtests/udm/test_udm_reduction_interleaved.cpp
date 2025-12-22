@@ -161,25 +161,36 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
  * After aggregation with height_sharded_composer, output shape is [H, W * num_replicas].
  * We use the first replica (first W_original elements per row) for validation.
  */
-void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tensor, ShardStrategy shard_strategy) {
+void validate(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    ShardStrategy shard_strategy,
+    ShardOrder shard_order = ShardOrder::NORMAL) {
     auto* mesh_device = input_tensor.device();
+    bool swap_shard_order = (shard_order == ShardOrder::SWAPPED);
 
     // Create appropriate composer for input based on sharding strategy
     std::unique_ptr<ttnn::distributed::MeshToTensor> input_composer;
 
     switch (shard_strategy) {
         case ShardStrategy::WIDTH:
-            input_composer = create_width_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
+            input_composer =
+                create_width_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank(), swap_shard_order);
             break;
         case ShardStrategy::BLOCK:
-            input_composer = create_block_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank());
+            input_composer =
+                create_block_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank(), swap_shard_order);
             break;
-        case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
+        case ShardStrategy::HEIGHT:
+            input_composer =
+                create_height_sharded_mesh_composer(mesh_device, input_tensor.padded_shape().rank(), swap_shard_order);
+            break;
     }
 
     // Output tensor is height-distributed (Shard{height}, Replicate{})
     // Composer produces [H, W * num_replicas] - we use the first W_original elements per row
-    auto output_composer = create_height_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank());
+    auto output_composer =
+        create_height_sharded_mesh_composer(mesh_device, output_tensor.padded_shape().rank(), swap_shard_order);
 
     // Aggregate tensors
     auto input_aggregated = ttnn::distributed::aggregate_tensor(input_tensor, *input_composer);
@@ -243,7 +254,8 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 
     log_info(tt::LogTest, "PCC: {:.6f} (threshold: {:.4f})", pcc, pcc_threshold);
 
-    if (pcc < pcc_threshold) {
+    // Use !(pcc >= threshold) to also catch NaN (NaN comparisons always return false)
+    if (!(pcc >= pcc_threshold)) {
         TT_THROW("Width reduction validation failed: PCC {:.6f} below threshold {:.4f}", pcc, pcc_threshold);
     }
 
@@ -256,18 +268,25 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 void run_width_reduction_interleaved_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& input_global_shape,
-    const tt::tt_metal::Shape& input_local_shape,
-    const ShardStrategy& shard_strategy) {
+    const ShardStrategy& shard_strategy,
+    const ShardOrder& shard_order = ShardOrder::NORMAL) {
+    bool swap_shard_order = (shard_order == ShardOrder::SWAPPED);
+
     // Create input tensor - interleaved
     ttnn::Tensor input_tensor;
     switch (shard_strategy) {
         case ShardStrategy::WIDTH:
-            input_tensor = create_width_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape);
+            input_tensor =
+                create_width_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape, swap_shard_order);
             break;
         case ShardStrategy::BLOCK:
-            input_tensor = create_block_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape);
+            input_tensor =
+                create_block_distributed_interleaved_bfloat16_tensor(mesh_device, input_global_shape, swap_shard_order);
             break;
-        case ShardStrategy::HEIGHT: TT_THROW("HEIGHT sharding strategy not yet implemented"); break;
+        case ShardStrategy::HEIGHT:
+            input_tensor = create_height_distributed_interleaved_bfloat16_tensor(
+                mesh_device, input_global_shape, swap_shard_order);
+            break;
     }
 
     // Create output tensor - width reduced to 1 tile (32 elements)
@@ -278,7 +297,7 @@ void run_width_reduction_interleaved_test(
     output_shape[-1] = 32;  // Reduce width to single tile
 
     ttnn::Tensor output_tensor = create_height_distributed_interleaved_bfloat16_tensor(
-        mesh_device, output_shape, /*swap_shard_order=*/false, /*random_init=*/false);
+        mesh_device, output_shape, swap_shard_order, /*random_init=*/false);
 
     // Build tensor builders
     auto input_mesh_tensor_builder = create_tensor_builder(input_tensor);
@@ -296,7 +315,7 @@ void run_width_reduction_interleaved_test(
     run_program(input_tensor, tensor_mesh_device, program);
 
     // Validate
-    validate(input_tensor, output_tensor, shard_strategy);
+    validate(input_tensor, output_tensor, shard_strategy, shard_order);
 }
 
 }  // namespace
@@ -309,33 +328,38 @@ using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFi
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Small) {
     // Small 2D tensor: (4, 16) tiles = (128, 512) elements
-    // Width-distributed: each device gets (128, 128) = (4, 4) tiles
-    // Output: (128, 32) = (4, 1) tiles per device
+    // Width-distributed: each device gets (4, 4) tiles
+    // Output: (4, 1) tiles per device
     tt::tt_metal::Shape input_global_shape({128, 512});
-    tt::tt_metal::Shape input_local_shape({128, 128});
-
-    run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::WIDTH);
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::WIDTH);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Medium) {
     // Medium 2D tensor: (16, 32) tiles = (512, 1024) elements
-    // Width-distributed: each device gets (512, 256) = (16, 8) tiles
+    // Width-distributed: each device gets (16, 8) tiles
     tt::tt_metal::Shape input_global_shape({512, 1024});
-    tt::tt_metal::Shape input_local_shape({512, 256});
-
-    run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::WIDTH);
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::WIDTH);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Large) {
     // Large 2D tensor: (32, 64) tiles = (1024, 2048) elements
-    // Width-distributed: each device gets (1024, 512) = (32, 16) tiles
+    // Width-distributed: each device gets (32, 16) tiles
     tt::tt_metal::Shape input_global_shape({1024, 2048});
-    tt::tt_metal::Shape input_local_shape({1024, 512});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::WIDTH);
+}
 
-    run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::WIDTH);
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved3D) {
+    // 3D tensor: (2, 16, 64) tiles = (2, 512, 2048) elements
+    // Width-distributed: each device gets (2, 16, 16) tiles
+    tt::tt_metal::Shape input_global_shape({2, 512, 2048});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::WIDTH);
+}
+
+TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReductionInterleaved4D) {
+    // 4D tensor: (2, 4, 8, 64) tiles = (2, 4, 256, 2048) elements
+    // Width-distributed: each device gets (2, 4, 8, 16) tiles
+    tt::tt_metal::Shape input_global_shape({2, 4, 256, 2048});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::WIDTH);
 }
 
 // ============================================================================
@@ -346,32 +370,74 @@ using MeshDevice2x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice2x4Fabric2DUDMFi
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Small) {
     // Small 2D tensor: (8, 16) tiles = (256, 512) elements
-    // Block-distributed: each device gets (128, 128) = (4, 4) tiles
+    // Block-distributed: each device gets (4, 4) tiles
     tt::tt_metal::Shape input_global_shape({256, 512});
-    tt::tt_metal::Shape input_local_shape({128, 128});
-
-    run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::BLOCK);
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Medium) {
     // Medium 2D tensor: (32, 64) tiles = (1024, 2048) elements
-    // Block-distributed: each device gets (512, 512) = (16, 16) tiles
+    // Block-distributed: each device gets (16, 16) tiles
     tt::tt_metal::Shape input_global_shape({1024, 2048});
-    tt::tt_metal::Shape input_local_shape({512, 512});
-
-    run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::BLOCK);
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved2D_Large) {
     // Large 2D tensor: (64, 128) tiles = (2048, 4096) elements
-    // Block-distributed: each device gets (1024, 1024) = (32, 32) tiles
+    // Block-distributed: each device gets (32, 32) tiles
     tt::tt_metal::Shape input_global_shape({2048, 4096});
-    tt::tt_metal::Shape input_local_shape({1024, 1024});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK);
+}
 
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved3D) {
+    // 3D tensor: (2, 16, 32) tiles = (2, 512, 1024) elements
+    // Block-distributed: each device gets (2, 8, 8) tiles
+    tt::tt_metal::Shape input_global_shape({2, 512, 1024});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleaved4D) {
+    // 4D tensor: (2, 4, 16, 32) tiles = (2, 4, 512, 1024) elements
+    // Block-distributed: each device gets (2, 4, 8, 8) tiles
+    tt::tt_metal::Shape input_global_shape({2, 4, 512, 1024});
+    run_width_reduction_interleaved_test(mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK);
+}
+
+// ============================================================================
+// Block-Distributed Tests with Swapped Order (2x4 Mesh) - Interleaved
+// Swapped: mesh dim 0 shards width, mesh dim 1 shards height
+// ============================================================================
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleavedSwapped2D_Small) {
+    // Small 2D tensor: (16, 8) tiles = (512, 256) elements
+    // Block-distributed swapped: width across 2 mesh rows, height across 4 mesh cols
+    tt::tt_metal::Shape input_global_shape({512, 256});
     run_width_reduction_interleaved_test(
-        mesh_device_.get(), input_global_shape, input_local_shape, ShardStrategy::BLOCK);
+        mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleavedSwapped2D_Large) {
+    // Larger 2D tensor: (128, 64) tiles = (4096, 2048) elements
+    // Block-distributed swapped: width across 2 mesh rows, height across 4 mesh cols
+    tt::tt_metal::Shape input_global_shape({4096, 2048});
+    run_width_reduction_interleaved_test(
+        mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleavedSwapped3D) {
+    // 3D tensor: (2, 32, 16) tiles = (2, 1024, 512) elements
+    // Block-distributed swapped on last 2 dims
+    tt::tt_metal::Shape input_global_shape({2, 1024, 512});
+    run_width_reduction_interleaved_test(
+        mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+}
+
+TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestWidthReductionInterleavedSwapped4D) {
+    // 4D tensor: (2, 4, 32, 16) tiles = (2, 4, 1024, 512) elements
+    // Block-distributed swapped on last 2 dims
+    tt::tt_metal::Shape input_global_shape({2, 4, 1024, 512});
+    run_width_reduction_interleaved_test(
+        mesh_device_.get(), input_global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
 }
 
 }  // namespace tt::tt_metal::experimental::udm_tests

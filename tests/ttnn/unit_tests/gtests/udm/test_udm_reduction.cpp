@@ -398,7 +398,8 @@ void validate(const ttnn::Tensor& input_tensor, const ttnn::Tensor& output_tenso
 
     log_info(tt::LogTest, "PCC: {:.6f} (threshold: {:.2f})", pcc, pcc_threshold);
 
-    if (pcc < pcc_threshold) {
+    // Use !(pcc >= threshold) to also catch NaN (NaN comparisons always return false)
+    if (!(pcc >= pcc_threshold)) {
         TT_THROW("Width reduction validation failed: PCC {:.6f} below threshold {:.2f}", pcc, pcc_threshold);
     }
 
