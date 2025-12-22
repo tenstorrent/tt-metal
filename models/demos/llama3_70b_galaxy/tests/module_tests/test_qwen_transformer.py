@@ -48,7 +48,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 2048}],
+    [{"page_block_size": 32, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -70,7 +70,7 @@ def test_qwen_transformer_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 2
+    model_args.n_layers = 64
 
     state_dict = model_args.load_state_dict()
 

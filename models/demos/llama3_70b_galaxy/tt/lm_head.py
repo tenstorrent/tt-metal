@@ -76,9 +76,9 @@ class LMHead(LightweightModule):
                     device=mesh_device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=dtype,
+                    dtype=ttnn.bfloat16,
                     memory_config=memory_config_decode,
-                    cache_file_name=cache_file_name_decode,
+                    # cache_file_name=cache_file_name_decode,
                 )
             )
             self.output_weights_prefill.append(  # (2k, 16k) 128* 1024
@@ -151,7 +151,7 @@ class LMHead(LightweightModule):
                     compute_kernel_config=self.compute_kernel_config,
                     program_config=pc,
                     memory_config=self.output_memory_config,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     sub_device_id=worker_sub_device_id,
                 )
                 output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
