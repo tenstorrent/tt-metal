@@ -119,6 +119,12 @@ jobs:
           cd scripts/basic_dev_image
           python3 -m pip install -r minimum-testing-kit.txt
 
+      - name: 🛠️ Install tt-triage dependencies
+        timeout-minutes: 10
+        run: |
+          ./scripts/install_debugger.sh
+          /opt/venv/bin/pip install -r ./tools/triage/requirements.txt
+
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
