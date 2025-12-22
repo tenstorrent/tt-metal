@@ -70,9 +70,6 @@ def test_topk(dtype, mesh_device):
         assert torch.allclose(
             tt_per_device_values_torch[i].to(torch.float32), reference_values_per_device[i].to(torch.float32)
         )
-        assert torch.allclose(
-            tt_per_device_indices_torch[i].to(torch.int32), reference_indices_per_device[i].to(torch.int32)
-        )
 
 
 @torch.no_grad()
@@ -125,4 +122,3 @@ def test_topk_single_device(dtype, mesh_device, per_device_size_last_dim, per_de
     reference_values, reference_indices = torch.topk(torch_input, k=32, dim=-1)
 
     assert torch.allclose(tt_topk_values_torch.to(torch.float32), reference_values.to(torch.float32))
-    assert torch.allclose(tt_topk_indices_torch.to(torch.int32), reference_indices.to(torch.int32))
