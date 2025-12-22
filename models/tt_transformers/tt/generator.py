@@ -119,7 +119,13 @@ class Generator:
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
+        # Because sampling params is not traced jointly, we don't actually need to warm up for each combination
+        all_sampling_params = sampling_params if sampling_params is not None else [None]
+        one_sampling_param = [all_sampling_params[0]]
+
         for model_id in range(self.data_parallel):
+            # each model sees each sampling_params at least once
+            use_sampling_params = all_sampling_params
             for supported_length in sequence_lengths_to_warmup:
                 # When model_id = 0, we compile all operators for the first time
                 # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
@@ -150,16 +156,18 @@ class Generator:
                     )
                     break
 
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    page_table_warmup,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    warmup_empty_slots,
-                    enable_trace,
-                    model_id,
-                    sampling_params,
-                )
+                for param in use_sampling_params:
+                    self.prefill_forward_text(
+                        warmup_tokens,
+                        page_table_warmup,
+                        kv_cache,
+                        warmup_prompt_lens,
+                        warmup_empty_slots,
+                        enable_trace,
+                        model_id,
+                        param,
+                    )
+                use_sampling_params = one_sampling_param  # don't need to re-run all params for each supported length
 
     def _capture_trace_prefill(
         self,
