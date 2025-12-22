@@ -366,6 +366,9 @@ def process_arguments(args: ScriptArguments) -> None:
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
 
+    # Initialize console
+    init_console(args)
+
     # Setting verbosity level
     try:
         verbosity = int(args["--verbosity"])
@@ -373,9 +376,6 @@ def process_arguments(args: ScriptArguments) -> None:
     except:
         utils.WARN("Verbosity level must be an integer. Falling back to default value.")
     utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
-
-    # Initialize console
-    init_console(args)
 
 
 def parse_arguments(

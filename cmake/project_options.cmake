@@ -3,7 +3,7 @@
 #   The following options and their defaults impact what artifacts get built
 ###########################################################################################
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
-option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" OFF)
+option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" ON)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)

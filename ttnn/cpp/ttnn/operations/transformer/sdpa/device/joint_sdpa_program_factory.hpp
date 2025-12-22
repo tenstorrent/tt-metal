@@ -6,23 +6,32 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks joint_sdpa(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& joint_tensor_q,
-    const Tensor& joint_tensor_k,
-    const Tensor& joint_tensor_v,
-    const Tensor& output_tensor,
-    const Tensor& joint_output_tensor,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config);
+struct JointSDPASharedVariables {
+    uint32_t num_cores = 0;
+    tt::tt_metal::CoreCoord grid_size;
+    tt::tt_metal::KernelHandle reader_kernels_id{};
+    tt::tt_metal::KernelHandle writer_kernels_id{};
+    tt::tt_metal::KernelHandle compute_kernels_id{};
+};
 
-}  // namespace ttnn::operations::transformer::detail
+struct JointSDPAProgramFactory {
+    using shared_variables_t = JointSDPASharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensors);
+};
+
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program

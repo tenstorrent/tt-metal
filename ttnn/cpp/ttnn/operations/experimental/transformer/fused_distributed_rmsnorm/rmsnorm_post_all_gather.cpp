@@ -4,7 +4,7 @@
 
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.hpp"
+#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -23,16 +23,19 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, false, true, false);
-    return tt::tt_metal::operation::run(
-               FusedRMSNormPostAllGather{
-                   .eps = epsilon,
-                   .num_heads = num_heads,
-                   .memory_config = memory_config.value_or(input_tensor.memory_config()),
-                   .compute_kernel_config = kernel_config_val,
-                   .dtype = dtype},
-               {input_tensor, stats},
-               {weight, transformation_mat, rope_cos, rope_sin})
-        .at(0);
+
+    return ttnn::prim::fused_rmsnorm_post_all_gather(
+        input_tensor,
+        stats,
+        epsilon,
+        num_heads,
+        weight,
+        transformation_mat,
+        rope_cos,
+        rope_sin,
+        memory_config.value_or(input_tensor.memory_config()),
+        kernel_config_val,
+        dtype);
 }
 
 }  // namespace ttnn::operations::experimental::transformer
