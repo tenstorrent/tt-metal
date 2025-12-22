@@ -309,7 +309,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 
     uint32_t core_w = 0;
-    bool ascending = !args.largest;
+    bool direction_init = !args.largest;
     for (auto core : local_cores) {
         if (input_indices_tensor.has_value()) {
             SetRuntimeArgs(
@@ -342,15 +342,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
                 core_w,
             });
 
-        SetRuntimeArgs(
-            program,
-            topk_compute_kernel_id,
-            core,
-            {
-                ascending,
-            });
+        SetRuntimeArgs(program, topk_compute_kernel_id, core, {direction_init});
         core_w++;
-        ascending = !ascending;
     }
     SetRuntimeArgs(
         program,
