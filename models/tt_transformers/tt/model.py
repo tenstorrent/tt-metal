@@ -367,7 +367,6 @@ class Transformer(LightweightModule):
             # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
             if not is_log_probs:
-                print("tt_out", tt_out.shape)
                 tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
@@ -528,11 +527,4 @@ class Transformer(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         x = self.lm_head(x)
-
-        if mode == "prefill":
-            # x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            x_l1 = x
-            x = ttnn.to_memory_config(x_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            x_l1.deallocate(True)
-        print("finished one forward")
         return x

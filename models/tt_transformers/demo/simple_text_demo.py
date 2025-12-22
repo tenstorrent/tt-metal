@@ -714,7 +714,7 @@ def prepare_generator_args(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
-        "batc-32-log-probs",  # throughput with log-probs
+        "batch-32-log-probs",  # throughput with log-probs
         "long-context-64k",  # 64k context, max_seq_len=128k
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
@@ -756,7 +756,7 @@ def prepare_generator_args(
             "N150": (1, 1),
             "N300": (1, 2),
             "N150x4": (1, 4),
-            "T3K": (4, 8),
+            "T3K": (1, 8),
             "TG": (8, 4),
             "P150": (1, 1),
             "P300": (1, 2),
@@ -796,7 +796,6 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 8))
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -1022,7 +1021,7 @@ def test_demo_text(
             sampling_params["top_p"] = sampling_params["top_p"][0]
             sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
 
-        prefill_sampling_params = None  # device_sampling_params if device_sampling_params is not None else None
+        prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")
@@ -1048,7 +1047,6 @@ def test_demo_text(
             )
             if prefill_sampling_params is not None:
                 prefilled_token, prefill_log_probs = prefill_out
-                print("prefilled_token", prefilled_token.shape)
             else:
                 logits = prefill_out
                 prefilled_token = torch.argmax(logits, dim=-1)

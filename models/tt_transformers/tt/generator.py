@@ -352,7 +352,8 @@ class Generator:
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_sampling_params)
                 sampling_module.reset_seed(formatted_sampling_params.seed)
-                sampling_module.reset_prompt_tokens(prefill_ids[:, :seq_len])
+                sampling_module.reset_prompt_tokens(prefill_ids[:, :seq_len].repeat(32, 1))
+                sampling_module.reset_output_state()
                 sampling_executed = True
 
             if enable_trace_current_prompt:
@@ -384,8 +385,12 @@ class Generator:
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             if sampling_enabled:
+                x_l1 = logits
+                logits = ttnn.to_memory_config(x_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x_l1.deallocate(True)
                 out_list.append(ttnn.clone(logits))
             else:
+                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 out_list.append(logits.cpu(blocking=False))
 
         # Process the logits after all the prefill are done in data parallel mode
@@ -404,9 +409,7 @@ class Generator:
                     enable_trace=False,
                 )
                 tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
-                print("tokens_host", tokens_host.shape)
                 tokens_host = tokens_host[(last_token_idx % 32)]
-                print("tokens_host", tokens_host)
                 log_probs_host = (
                     self.model[model_id].process_output_decode(
                         tt_log_probs, B=32, S=1, is_tokens=True, is_log_probs=True
@@ -414,7 +417,6 @@ class Generator:
                     if tt_log_probs is not None
                     else None
                 )
-                print("log_probs_host", log_probs_host)
                 output_tokens[idx] = tokens_host
                 if log_probs_host is not None:
                     output_log_probs[idx] = log_probs_host

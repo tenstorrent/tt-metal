@@ -98,7 +98,7 @@ class SamplingGenerator:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens)
 
-    def reset_output_state(self, tokens):
+    def reset_output_state(self, tokens=None):
         if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens(tokens)
@@ -116,6 +116,7 @@ class SamplingGenerator:
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
         )
+        #
         self._penalties_active = not (
             self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
             and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
