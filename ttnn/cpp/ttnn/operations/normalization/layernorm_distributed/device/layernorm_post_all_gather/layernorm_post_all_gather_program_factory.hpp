@@ -22,13 +22,13 @@ struct LayerNormPostAllGatherProgramFactory {
     static cached_program_t create(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output);
 };
 
 }  // namespace ttnn::operations::normalization::layernorm_post_all_gather::program
