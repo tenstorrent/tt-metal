@@ -2153,11 +2153,15 @@ jobs:
                         FILES_UNDER_API=false
                         IFS=',' read -ra FILES_ARRAY <<< "$team_files"
                         for file in "${FILES_ARRAY[@]}"; do
-                          if [[ "$file" == tt_metal/api/* ]] || [[ "$file" == tt_metal/api/tt-metalium/* ]]; then
-                            FILES_UNDER_API=true
-                            echo "Found file under tt_metal/api/: $file"
-                            break
-                          fi
+                          # Use case statement for more robust pattern matching
+                          # Handles paths with or without leading slashes
+                          case "$file" in
+                            tt_metal/api/*|/tt_metal/api/*|./tt_metal/api/*)
+                              FILES_UNDER_API=true
+                              echo "Found file under tt_metal/api/: $file"
+                              break
+                              ;;
+                          esac
                         done
 
                         if [ "$FILES_UNDER_API" = "true" ]; then
@@ -2169,47 +2173,27 @@ jobs:
                             # Remove akerteszTT from unapproved list for random selection
                             TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | tr ',' '\n' | grep -v "^akerteszTT$" | tr '\n' ',' | sed 's/,$//')
                             echo "Added akerteszTT as required reviewer for metalium-api-owners (tt_metal/api/ files)"
-                          elif ! echo "$APPROVED_REVIEWERS" | grep -q "akerteszTT"; then
-                            # akerteszTT wasn't in the unapproved list but also hasn't approved - still add them
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS"akerteszTT","
-                            echo "Added akerteszTT as required reviewer for metalium-api-owners (tt_metal/api/ files, not in team members but specified)"
                           else
-                            echo "akerteszTT already approved, not adding to selection"
-                          fi
-
-                          # Select up to 2 additional owners from remaining members
-                          if [ -n "$TEAM_UNAPPROVED" ]; then
-                            IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                            TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
-
-                            if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                              TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                            elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                              RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
-                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                              while [ $RAND2 -eq $RAND1 ]; do
-                                RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                              done
-                              TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
-                            fi
+                            echo "akerteszTT already approved or not in team, not adding to selection"
                           fi
                         else
                           echo "metalium-api-owners team owns non-API files (e.g., programming_examples/), using standard selection"
-                          # Standard selection for non-API files owned by this team
-                          if [ -n "$TEAM_UNAPPROVED" ]; then
-                            IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                            TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+                        fi
 
-                            if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                              TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                            elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                              RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                        # Select up to 2 additional owners from remaining members (common for both API and non-API)
+                        if [ -n "$TEAM_UNAPPROVED" ]; then
+                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+
+                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                            RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                            while [ $RAND2 -eq $RAND1 ]; do
                               RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                              while [ $RAND2 -eq $RAND1 ]; do
-                                RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                              done
-                              TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
-                            fi
+                            done
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
                           fi
                         fi
                       else
