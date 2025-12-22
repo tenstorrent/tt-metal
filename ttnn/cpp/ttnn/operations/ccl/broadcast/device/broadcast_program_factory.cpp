@@ -57,9 +57,9 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
 
 BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& self_coord,
+    const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor,
+    tensor_return_value_t& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& semaphore,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -68,22 +68,18 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
     auto* mesh_device = input_tensor.device();
 
     uint32_t ring_size = operation_attributes.ring_size;
-    uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, self_coord, operation_attributes.cluster_axis);
+    uint32_t ring_index =
+        ::ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, coord, operation_attributes.cluster_axis);
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        self_coord,
-        is_first_chip,
-        is_last_chip);
+        tt::LogOp, "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}", coord, is_first_chip, is_last_chip);
 
     std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, self_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+        input_tensor, coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
     std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor, self_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
+        input_tensor, coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
@@ -154,7 +150,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    bool is_sender = self_coord == operation_attributes.sender_coord;
+    bool is_sender = coord == operation_attributes.sender_coord;
 
     // KERNEL CREATION
     // Reader
@@ -275,7 +271,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),        // tensor_address0
+            tensor_return_value.buffer()->address(),  // tensor_address0
             semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
             output_tile_id_start * num_width_shards,  // tile_id_start
             output_tile_id_end * num_width_shards,    // tile_id_end
@@ -294,7 +290,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
+        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
         if (forward_coord.has_value()) {
