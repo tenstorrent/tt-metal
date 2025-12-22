@@ -2392,6 +2392,10 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
         writeToCoreControlBuffer(device, virtual_core, temp_control_buffers[virtual_core], true);
     }
 
+    if (virtual_cores_to_process_dram_index_0.empty() && virtual_cores_to_process_dram_index_1.empty()) {
+        return;
+    }
+
     // Read DRAM buffers
     if (!virtual_cores_to_process_dram_index_0.empty()) {
         readProfilerBuffer(device, 0, true);
