@@ -88,7 +88,11 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
  */
 // clang-format on
 ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
-    PACK((llk_wait_for_free_tiles<false, false, false>(cbid, ntiles)));
+#ifndef ARCH_QUASAR
+    PACK((llk_wait_for_free_tiles<false>(cbid, ntiles)));
+#else
+    PACK((llk_wait_for_free_tiles(cbid, ntiles)));
+#endif
 }
 
 // clang-format off
@@ -121,7 +125,13 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  * | ntiles    | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
-ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) { PACK((llk_push_tiles<false, false>(cbid, ntiles))); }
+ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
+#ifndef ARCH_QUASAR
+    PACK((llk_push_tiles<false, false>(cbid, ntiles)));
+#else
+    PACK((llk_push_tiles(cbid, ntiles)));
+#endif
+}
 
 // clang-format off
 /**
