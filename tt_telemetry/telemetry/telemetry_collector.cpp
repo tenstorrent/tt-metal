@@ -538,7 +538,8 @@ static void telemetry_thread(
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
     int watchdog_timeout_seconds,
-    int failure_exposure_duration_seconds) {
+    int failure_exposure_duration_seconds,
+    bool mmio_only) {
     try {
         Watchdog watchdog(watchdog_timeout_seconds);
         TT_FATAL(
@@ -592,7 +593,8 @@ static void telemetry_thread(
                     fsd,
                     topology_translation,
                     hal,
-                    arc_telemetry_reader_by_chip_id);
+                    arc_telemetry_reader_by_chip_id,
+                    mmio_only);
                 log_info(tt::LogAlways, "Initialized metrics");
 
                 // Update TelemetryRunning metric to success state
@@ -690,7 +692,8 @@ void run_telemetry_collector(
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
     int watchdog_timeout_seconds,
-    int failure_exposure_duration_seconds) {
+    int failure_exposure_duration_seconds,
+    bool mmio_only) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
@@ -704,6 +707,7 @@ void run_telemetry_collector(
         std::cref(rtoptions),
         fsd,
         watchdog_timeout_seconds,
-        failure_exposure_duration_seconds);
+        failure_exposure_duration_seconds,
+        mmio_only);
     t.wait();
 }

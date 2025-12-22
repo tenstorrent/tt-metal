@@ -580,4 +580,5 @@ void create_ethernet_metrics(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal,
-    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id);
+    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id,
+    bool mmio_only = false);

@@ -46,7 +46,8 @@ void create_ethernet_metrics(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal,
-    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id) {
+    const std::unordered_map<tt::ChipId, std::shared_ptr<CachingARCTelemetryReader>>& arc_telemetry_reader_by_chip_id,
+    bool mmio_only) {
     log_info(tt::LogAlways, "Creating Ethernet metrics...");
 
     // Get all the Ethernet endpoints on this host that should be present in this cluster according
@@ -97,13 +98,14 @@ void create_ethernet_metrics(
             *tray_id);
         tt::ChipId chip_id = chip_id_optional.value();
 
-        // Skip remote chips to avoid device contention during fabric tests
+        // Skip remote chips when mmio_only is enabled to avoid device contention during fabric tests
         // Remote chip telemetry requires ERISC-mediated I/O which conflicts with active fabric operations
         tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
-        if (!cluster_descriptor->is_chip_mmio_capable(chip_id)) {
+        if (mmio_only && !cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             log_info(
                 tt::LogAlways,
-                "Skipping remote chip {} (tray={}, asic={}, channel={}) - telemetry disabled for remote chips",
+                "Skipping remote chip {} (tray={}, asic={}, channel={}) - telemetry disabled for remote chips "
+                "(mmio-only mode)",
                 chip_id,
                 *tray_id,
                 *asic_location,
