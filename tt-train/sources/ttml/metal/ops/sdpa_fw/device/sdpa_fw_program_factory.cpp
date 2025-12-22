@@ -60,7 +60,6 @@ constexpr uint32_t kSingleTileBuffer = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -335,13 +334,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     if (use_attn_mask) {
         defines[kUseAttnMaskDefKey] = "1";
-    }
-
-    // TODO(vmelnykov): #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
-    // Currently, this define is only used to support L1 accumulation when fp32_dest_acc_en = false.
-    // It should be removed once L1 accumulation is properly fixed for fp32_dest_acc_en = true.
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
     }
 
     SDPAForwardKernels kernels;
