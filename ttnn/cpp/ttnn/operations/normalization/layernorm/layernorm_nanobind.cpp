@@ -122,7 +122,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded (L1): Block sharded
+            - Sharded (L1): Width and Block sharded
 
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
