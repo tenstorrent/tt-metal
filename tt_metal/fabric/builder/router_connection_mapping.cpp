@@ -184,23 +184,23 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
     // VC0: Receiver channel 0 forwards to 4 downstream mesh routers (E/W/N/S)
     // Z router VC0 sender channels: 0=Worker, 1=E, 2=W, 3=N, 4=S
     // Upstream mesh routers connect to these sender channels as targets
-    std::vector<RoutingDirection> vc0_outbound_directions = {
-        RoutingDirection::E,  // Forward to EAST mesh router
-        RoutingDirection::W,  // Forward to WEST mesh router
-        RoutingDirection::N,  // Forward to NORTH mesh router
-        RoutingDirection::S   // Forward to SOUTH mesh router
-    };
+    // std::vector<RoutingDirection> vc0_outbound_directions = {
+    //     RoutingDirection::E,  // Forward to EAST mesh router
+    //     RoutingDirection::W,  // Forward to WEST mesh router
+    //     RoutingDirection::N,  // Forward to NORTH mesh router
+    //     RoutingDirection::S   // Forward to SOUTH mesh router
+    // };
 
-    for (size_t i = 0; i < vc0_outbound_directions.size(); ++i) {
-        mapping.add_target(
-            0,  // VC0
-            0,  // Receiver channel 0
-            ConnectionTarget(
-                ConnectionType::INTRA_MESH,
-                0,      // Target mesh router VC0
-                i + 1,  // Target sender channel on mesh router (1-4, skipping 0=worker)
-                vc0_outbound_directions[i]));
-    }
+    // for (size_t i = 0; i < vc0_outbound_directions.size(); ++i) {
+    //     mapping.add_target(
+    //         0,  // VC0
+    //         0,  // Receiver channel 0
+    //         ConnectionTarget(
+    //             ConnectionType::Z_TO_MESH,
+    //             0,      // Target mesh router VC0
+    //             i + 1,  // Target sender channel on mesh router (1-4, skipping 0=worker)
+    //             vc0_outbound_directions[i]));
+    // }
 
     // VC1: Receiver channel 0 forwards to 4 downstream mesh routers (E/W/N/S)
     // Z router VC1 sender channels: 0=E, 1=W, 2=N, 3=S
@@ -220,7 +220,7 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
             1,  // VC1
             0,  // Receiver channel 0
             ConnectionTarget(
-                ConnectionType::INTRA_MESH,
+                ConnectionType::Z_TO_MESH,
                 1,  // Target mesh router VC1
                 i,  // Target sender channel on mesh router (0-3, no worker)
                 vc1_outbound_directions[i]));
