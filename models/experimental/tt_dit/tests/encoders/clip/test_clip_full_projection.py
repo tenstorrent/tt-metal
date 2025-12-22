@@ -122,6 +122,14 @@ def test_clip_encoder(
         )
 
     hf_model.eval()
+
+    logger.info("=== HuggingFace CLIP Config ===")
+    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
+    logger.info(f"hidden_size: {hf_model.config.hidden_size}")
+    logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
+    logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
+    logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
+
     tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
 
     # Test prompt. Cannot use randn tensor due to specific HF eos token id

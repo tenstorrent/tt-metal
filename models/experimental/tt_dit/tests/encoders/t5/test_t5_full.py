@@ -65,7 +65,7 @@ def test_t5_encoder(
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     if dit_unit_test:
-        # Config for t5-xxl
+        # Config for t5-xxl with minimal layers
         hf_config = HF_T5Config(
             d_model=4096,
             d_ff=10240,
