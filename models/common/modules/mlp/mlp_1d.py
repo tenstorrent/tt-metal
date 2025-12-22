@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Callable, Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -76,28 +76,27 @@ class MLP1DConfig:
     mlp_activation_type: ttnn.UnaryOpType = ttnn.UnaryOpType.SILU
 
     # Optional: power-user overrides (None = compute defaults)
-    # todo)) give proper type hints for all these fields
-    w1_w3_memcfg: Any = None
-    w2_memcfg: Any = None
+    w1_w3_memcfg: ttnn.MemoryConfig | None = None
+    w2_memcfg: ttnn.MemoryConfig | None = None
 
-    decode_input_memcfg: Any = None
-    decode_w1_w3_prg_config: Any = None
-    decode_w2_prg_config: Any = None
-    decode_mlp2_input_memcfg: Any = None
-    decode_residual_memcfg: Any = None
+    decode_input_memcfg: ttnn.MemoryConfig | None = None
+    decode_w1_w3_prg_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None = None
+    decode_w2_prg_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None = None
+    decode_mlp2_input_memcfg: ttnn.MemoryConfig | None = None
+    decode_residual_memcfg: ttnn.MemoryConfig | None = None
 
-    prefill_input_memcfg: Any = None
-    prefill_w1_w3_prg_config: Any = None
-    prefill_w2_prg_config: Any = None
+    prefill_input_memcfg: ttnn.MemoryConfig | None = None
+    prefill_w1_w3_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
+    prefill_w2_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
 
     w1_w3_dtype: ttnn.DataType | None = None
     w2_dtype: ttnn.DataType | None = None
-    activation_dtype: Any = None
-    ff1_3_compute_kernel_cfg: Any = None
-    ff2_compute_kernel_cfg: Any = None
+    activation_dtype: ttnn.DataType | None = None
+    ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
 
-    linear_dtype: Any = None
-    mul_dtype: Any = None
+    linear_dtype: ttnn.DataType | None = None
+    mul_dtype: ttnn.DataType | None = None
     prefill_len_cutoff: int | None = None
     is_single_device: bool | None = None  # todo)) remove this
 
