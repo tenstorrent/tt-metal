@@ -9,8 +9,6 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -142,18 +140,12 @@ void MAIN {
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
                     /**
-<<<<<<< HEAD
                      * QK = Q_CHUNK @ K_CHUNK
                      *
                      * matmul_blocks internally waits on both inputs
                      */
 
-=======
-                     * qk_T: [Sq_chunk_t x Sk_chunk_t] with transposed tiles
-                     *  = matmul(K[Sk_chunk_t x DHt], Q[DHt x Sq_chunk_t]
-                     */
                     cb_wait_front(cb_k_in, k_chunk_tiles);
->>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                     pack_reconfig_data_format(cb_qk_im);
                     // matmul_blocks(
                     //     cb_k_in,
@@ -260,7 +252,7 @@ void MAIN {
                      * Partial reduce_sum is used to push the final row_reduction within a tile
                      * outside of the loop over K chunks.
                      */
-                    transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
+                    // transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
                     transpose_tiles_inplace(alias_cur_max, Sq_chunk_t);
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
                         alias_cur_max, alias_cur_sum);
