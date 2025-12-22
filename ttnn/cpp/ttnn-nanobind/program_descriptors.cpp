@@ -32,25 +32,27 @@ namespace ttnn::program_descriptors {
 
 using CoreCoord = tt::tt_metal::CoreCoord;
 
-// Helper class to enable Python syntax: rtargs[i][j] = [arg1, arg2, ...]
-// This translates to: rtargs.push_back({CoreCoord(i, j), {arg1, arg2, ...}})
-class RuntimeArgsRowProxy {
+// Helper class to enable Python syntax: rtargs[x][y] = [arg1, arg2, ...]
+// This translates to: rtargs.push_back({CoreCoord(x, y), {arg1, arg2, ...}})
+// Matches legacy API where runtime_args[i][j] is for core(i, j)
+class RuntimeArgsColProxy {
 public:
-    RuntimeArgsRowProxy(tt::tt_metal::KernelDescriptor::RuntimeArgs& args, size_t row) : args_(args), row_(row) {}
+    RuntimeArgsColProxy(tt::tt_metal::KernelDescriptor::RuntimeArgs& args, size_t x) : args_(args), x_(x) {}
 
-    void set_item(size_t col, const std::vector<uint32_t>& values) { args_.push_back({CoreCoord(col, row_), values}); }
+    void set_item(size_t y, const std::vector<uint32_t>& values) { args_.push_back({CoreCoord(x_, y), values}); }
 
 private:
     tt::tt_metal::KernelDescriptor::RuntimeArgs& args_;
-    size_t row_;
+    size_t x_;
 };
 
 // Wrapper class that provides 2D indexing syntax for RuntimeArgs
+// Follows legacy API convention: rtargs[x][y] -> CoreCoord(x, y)
 class RuntimeArgsWrapper {
 public:
     RuntimeArgsWrapper() = default;
 
-    RuntimeArgsRowProxy get_row(size_t row) { return RuntimeArgsRowProxy(args_, row); }
+    RuntimeArgsColProxy get_col(size_t x) { return RuntimeArgsColProxy(args_, x); }
 
     // Allow direct append with CoreCoord
     void append(const CoreCoord& coord, const std::vector<uint32_t>& values) { args_.push_back({coord, values}); }
@@ -71,37 +73,37 @@ private:
 };
 
 void py_module_types(nb::module_& mod) {
-    // Bind RuntimeArgs helper classes for Python 2D indexing syntax: rtargs[i][j] = [args]
-    nb::class_<RuntimeArgsRowProxy>(mod, "RuntimeArgsRowProxy", R"pbdoc(
-        Proxy class for setting runtime args at a specific row.
-        Used internally to enable rtargs[i][j] = [args] syntax.
+    // Bind RuntimeArgs helper classes for Python 2D indexing syntax: rtargs[x][y] = [args]
+    nb::class_<RuntimeArgsColProxy>(mod, "RuntimeArgsColProxy", R"pbdoc(
+        Proxy class for setting runtime args at a specific x-coordinate.
+        Used internally to enable rtargs[x][y] = [args] syntax.
     )pbdoc")
         .def(
             "__setitem__",
-            &RuntimeArgsRowProxy::set_item,
-            nb::arg("col"),
+            &RuntimeArgsColProxy::set_item,
+            nb::arg("y"),
             nb::arg("values"),
             R"pbdoc(
                 Set runtime args for a specific core coordinate.
 
                 Args:
-                    col: Column (x) coordinate of the core
+                    y: Y coordinate of the core
                     values: List of runtime argument values
             )pbdoc");
 
     nb::class_<RuntimeArgsWrapper>(mod, "RuntimeArgs", R"pbdoc(
         Wrapper for kernel runtime arguments that supports 2D indexing.
 
-        Enables Python syntax: rtargs[i][j] = [arg1, arg2, ...]
-        This translates to storing runtime args for core at coordinate (j, i).
+        Enables Python syntax: rtargs[x][y] = [arg1, arg2, ...]
+        This translates to storing runtime args for CoreCoord(x, y).
 
-        Note: The indexing is rtargs[row][col] where row=y and col=x of the CoreCoord.
+        Matches the legacy API convention where runtime_args[i][j] is for core(i, j).
 
         Example:
             >>> rtargs = ttnn.RuntimeArgs()
             >>> rtargs[0][0] = [1, 2, 3]  # Args for core (0, 0)
-            >>> rtargs[0][1] = [4, 5, 6]  # Args for core (1, 0)
-            >>> rtargs[1][0] = [7, 8, 9]  # Args for core (0, 1)
+            >>> rtargs[0][1] = [4, 5, 6]  # Args for core (0, 1)
+            >>> rtargs[1][0] = [7, 8, 9]  # Args for core (1, 0)
             >>> kernel_desc.runtime_args = rtargs
     )pbdoc")
         .def(nb::init<>(), R"pbdoc(
@@ -109,16 +111,16 @@ void py_module_types(nb::module_& mod) {
         )pbdoc")
         .def(
             "__getitem__",
-            &RuntimeArgsWrapper::get_row,
-            nb::arg("row"),
+            &RuntimeArgsWrapper::get_col,
+            nb::arg("x"),
             R"pbdoc(
-                Get a row proxy for setting args at a specific y-coordinate.
+                Get a column proxy for setting args at a specific x-coordinate.
 
                 Args:
-                    row: Row (y) coordinate
+                    x: X coordinate
 
                 Returns:
-                    RuntimeArgsRowProxy for setting column values
+                    RuntimeArgsColProxy for setting y values
             )pbdoc")
         .def(
             "append",
@@ -158,7 +160,10 @@ void py_module_types(nb::module_& mod) {
         .def("clear", &RuntimeArgsWrapper::clear, "Clear all runtime args")
         .def(
             "__iter__",
-            [](RuntimeArgsWrapper& self) { return nb::make_iterator(nb::type<RuntimeArgsWrapper>(), "iterator", self.get().begin(), self.get().end()); },
+            [](RuntimeArgsWrapper& self) {
+                return nb::make_iterator(
+                    nb::type<RuntimeArgsWrapper>(), "iterator", self.get().begin(), self.get().end());
+            },
             nb::keep_alive<0, 1>(),
             "Iterate over (CoreCoord, args) pairs");
     // Bind TileDescriptor first

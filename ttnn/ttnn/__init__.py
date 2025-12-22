@@ -240,7 +240,7 @@ from ttnn.types import (
     ComputeConfigDescriptor,
     KernelDescriptor,
     RuntimeArgs,
-    RuntimeArgsRowProxy,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
     cb_descriptor_from_sharded_tensor,
