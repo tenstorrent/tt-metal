@@ -34,6 +34,7 @@ jobs:
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         TT_METAL_LOGGER_LEVEL: Debug
         TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -234,6 +235,7 @@ jobs:
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
         TT_METAL_LOGGER_LEVEL: Debug
         TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -498,6 +500,7 @@ jobs:
         TT_METAL_LOGGER_TYPES: BuildKernels
         TT_METAL_SKIP_KERNELS_CACHE: 1
         TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS: 1
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
