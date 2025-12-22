@@ -61,8 +61,6 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-constexpr uint32_t cb_mm_result_holder = tt::CBIndex::c_16;  // used for holding current matmul output
-
 const uint32_t onetile = 1U;
 
 void MAIN {
