@@ -1094,7 +1094,7 @@ static uint32_t calculate_out_channels_padded(uint32_t out_channels, const Paral
 }
 
 static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -1145,14 +1145,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    bool is_dram_conv = (dram_slice_config_.has_value() &&
-                         dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) ||
-                        (!dram_slice_config_.has_value() && !input_memory_config.is_l1());
-
+    auto conv_execution_path =
+        determine_conv2d_execution_path(input_memory_config.buffer_type() == BufferType::L1, dram_slice_config_);
     // Conv1D doesn't support DRAM
-    is_dram_conv = is_dram_conv && !is_conv1d;
+    bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
-    if (is_dram_conv) {
+    if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
@@ -1210,6 +1208,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
             dram_slice_config,
             conv2d_slice_attr->name());
+        if (dram_slice_config.num_slices == 1) {
+            log_info(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
+            is_dram_conv = false;
+        }
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
@@ -1241,6 +1243,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                           kernel_size[1] - padding_n4[2];
             padding_n4[3] = 0;  // No padding on right for sliced width
         }
+        input_memory_config = conv2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
     }
 
     auto opt_conv_op_block_config = get_opt_block_config(
@@ -1307,7 +1313,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             mm_conv,
             device->compute_with_storage_grid_size(),
             input_layout,
-            BufferType::L1,
+            is_dram_conv ? BufferType::DRAM : BufferType::L1,
             parallel_config,
             conv_config.act_block_h_override);
 
@@ -1354,7 +1360,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
-        mm_conv && auto_shard,
+        mm_conv && (auto_shard || is_dram_conv),
         has_bias,
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding.value(),
