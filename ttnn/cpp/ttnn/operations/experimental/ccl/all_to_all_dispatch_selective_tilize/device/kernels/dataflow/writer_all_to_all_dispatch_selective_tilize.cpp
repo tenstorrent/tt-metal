@@ -333,6 +333,10 @@ void kernel_main() {
     constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
     constexpr uint32_t num_connections = get_named_compile_time_arg_val("num_connections");
 
+    // Synchronization with tilizer cores - wait for E-D buffer to be zeroed before sending init semaphore
+    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
+    constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
+
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -406,6 +410,13 @@ void kernel_main() {
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
+
+    // Wait for tilizer cores to finish zeroing E-D buffer before sending init semaphore
+    // This ensures remote devices don't receive init signal before their E-D buffer is ready
+    // Tilizers signal by multicast writing 1 to this semaphore, so we wait for value 1
+    uint32_t ed_ready_sem_addr = get_semaphore(ed_buffer_ready_semaphore_id);
+    noc_semaphore_wait((uint32_t*)ed_ready_sem_addr, 1);
+    noc_semaphore_set((uint32_t*)ed_ready_sem_addr, 0);  // Reset for next iteration
 
     // Send initialization semaphore to configured targets for synchronization
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);

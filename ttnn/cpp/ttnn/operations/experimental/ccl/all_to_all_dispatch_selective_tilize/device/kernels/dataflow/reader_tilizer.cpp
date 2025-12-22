@@ -8,6 +8,24 @@
 
 using namespace ttnn::operations::ccl::common;
 
+// Helper to get multicast NOC address with proper coordinate ordering for NOC 0 vs NOC 1.
+// NOC 0: start = (min_x, min_y), end = (max_x, max_y)
+// NOC 1: start = (max_x, max_y), end = (min_x, min_y) - coordinates need to be swapped
+FORCE_INLINE uint64_t get_safe_multicast_noc_addr(
+    uint32_t noc_x_start,
+    uint32_t noc_y_start,
+    uint32_t noc_x_end,
+    uint32_t noc_y_end,
+    uint32_t addr,
+    uint8_t noc = noc_index) {
+    if (noc == 0) {
+        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr, noc);
+    } else {
+        // For NOC 1, swap start and end coordinates
+        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr, noc);
+    }
+}
+
 void print_tile_rows(
     uint32_t cb_idx,
     uint32_t tile_idx,
@@ -83,6 +101,14 @@ void kernel_main() {
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
 
+    // Multicast coordinates for signaling sender cores that E-D buffer is ready
+    constexpr uint32_t sender_mcast_start_x = get_named_compile_time_arg_val("sender_mcast_start_x");
+    constexpr uint32_t sender_mcast_start_y = get_named_compile_time_arg_val("sender_mcast_start_y");
+    constexpr uint32_t sender_mcast_end_x = get_named_compile_time_arg_val("sender_mcast_end_x");
+    constexpr uint32_t sender_mcast_end_y = get_named_compile_time_arg_val("sender_mcast_end_y");
+    constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
+    constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
+
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t dispatch_index =
@@ -91,6 +117,21 @@ void kernel_main() {
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
     zero_buffer_async(ed_addr, experts * dispatch_devices * l1_alignment * sizeof(uint32_t));
     zero_buffer_barrier();
+
+    // Signal all sender cores that E-D buffer has been zeroed
+    // Set local semaphore to 1, then multicast write to all sender cores
+    uint32_t ed_ready_sem_addr = get_semaphore(ed_buffer_ready_semaphore_id);
+    volatile tt_l1_ptr uint32_t* ed_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_ready_sem_addr);
+    noc_semaphore_set(ed_ready_sem_ptr, 1);
+
+    // Use safe multicast address that handles NOC 0 vs NOC 1 coordinate ordering
+    uint64_t sender_mcast_noc_addr = get_safe_multicast_noc_addr(
+        sender_mcast_start_x, sender_mcast_start_y, sender_mcast_end_x, sender_mcast_end_y, ed_ready_sem_addr);
+
+    // Multicast write the semaphore value (1) to all sender cores
+    // Sender cores wait for value 1 to know E-D buffer is ready
+    noc_semaphore_set_multicast(ed_ready_sem_addr, sender_mcast_noc_addr, num_sender_cores);
+    noc_async_write_barrier();
 
     constexpr auto output_args = TensorAccessorArgs<0>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();

@@ -258,7 +258,33 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto full_grid = sender_core_grid.merge(selective_tilize_core_range_set);
 
+    // Create semaphores for synchronizing the tilizer and fabric kernels
+    // tilizer needs to finish zero-buffering the E-D buffer before the fabric kernels can send their init semaphores
+    auto ed_buffer_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, full_grid, INVALID);
+
     auto sender_cores = corerange_to_cores(sender_core_grid);
+    auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set);
+    uint32_t num_tilizer_cores = selective_tilize_cores.size();
+    uint32_t num_sender_cores = sender_cores.size();
+
+    // Get the bounding box of sender cores for multicast from tilizer
+    // The tilizer will multicast a semaphore increment to all sender cores after zeroing E-D buffer
+    auto sender_bbox = sender_core_grid.bounding_box();
+    CoreCoord sender_mcast_start_logical = sender_bbox.start_coord;
+    CoreCoord sender_mcast_end_logical = sender_bbox.end_coord;
+
+    // Get device for this mesh coordinate to convert logical to physical coordinates
+    auto* device = mesh_device->get_device(mesh_coordinate);
+
+    // Convert to physical NOC coordinates
+    auto sender_mcast_start_physical = device->worker_core_from_logical_core(sender_mcast_start_logical);
+    auto sender_mcast_end_physical = device->worker_core_from_logical_core(sender_mcast_end_logical);
+
+    // For NOC 0: start = (min_x, min_y), end = (max_x, max_y)
+    // For NOC 1: coordinates are swapped
+    // We'll use NOC 0 by default, but pass both orderings and let the kernel handle it
+    // Or we can determine the NOC here and swap if needed
+    // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
 
     // Create circular buffers
 
@@ -380,6 +406,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
         {"max_indices_pages_per_packet", max_indices_pages_per_packet},
         {"num_connections", num_connections},
+
+        // Multicast coordinates for tilizer to sender core synchronization
+        {"sender_mcast_start_x", (uint32_t)sender_mcast_start_physical.x},
+        {"sender_mcast_start_y", (uint32_t)sender_mcast_start_physical.y},
+        {"sender_mcast_end_x", (uint32_t)sender_mcast_end_physical.x},
+        {"sender_mcast_end_y", (uint32_t)sender_mcast_end_physical.y},
+        {"num_tilizer_cores", num_tilizer_cores},
+        {"num_sender_cores", num_sender_cores},
+        {"ed_buffer_ready_semaphore_id", ed_buffer_ready_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -508,7 +543,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         metadata_tensor.buffer()->address(),
         output_scores_tensor.buffer()->address(),
     };
-    auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set);
     for (const auto& core : selective_tilize_cores) {
         tt::tt_metal::SetRuntimeArgs(program, selective_tilize_kernel_id, core, selective_tilize_runtime_args);
     }
