@@ -339,6 +339,7 @@ models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorren
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/SSD512 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/smolvla @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/retinanet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
