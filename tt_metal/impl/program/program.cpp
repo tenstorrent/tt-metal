@@ -198,15 +198,19 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
 }  // namespace detail
 
+namespace experimental {
+
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+
+}  // namespace experimental
+
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
-    finalized_(false),
+
     cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    id(program_counter++),
-    runtime_id(0),
-    local_circular_buffer_allocation_needed_(false) {
+    id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -235,10 +239,12 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
-    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        const auto& semaphore_descriptor = descriptor.semaphores[i];
+    for (const auto& semaphore_descriptor : descriptor.semaphores) {
         internal_->add_semaphore(
-            semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
+            semaphore_descriptor.core_ranges,
+            semaphore_descriptor.id,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
     }
 
     for (const auto& kernel_descriptor : descriptor.kernels) {
@@ -936,9 +942,31 @@ void detail::ProgramImpl::init_semaphores(
     }
 }
 
+void detail::ProgramImpl::validate_semaphore_id(
+    const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const {
+    TT_FATAL(semaphore_id < NUM_SEMAPHORES, "Semaphore id {} exceeds max value {}", semaphore_id, NUM_SEMAPHORES - 1);
+
+    for (const auto& core_range : crs.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing_semaphores = semaphores_on_core(logical_core, core_type);
+                for (const auto& semaphore : existing_semaphores) {
+                    TT_FATAL(
+                        semaphore.get().id() != semaphore_id,
+                        "Semaphore id {} already in use on core {}",
+                        semaphore_id,
+                        logical_core.str());
+                }
+            }
+        }
+    }
+}
+
 void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
+    validate_semaphore_id(crs, semaphore_id, core_type);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
@@ -1252,10 +1280,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
+                        const auto& sub_device_cores =
+                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{i});
+                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
                             num_intersections += intersection.num_cores();
                         }
                     }

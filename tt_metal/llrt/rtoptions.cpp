@@ -170,6 +170,11 @@ enum class EnvVarID {
     TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
 
     // ========================================
+    // LLK ASSERTIONS
+    // ========================================
+    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
@@ -232,14 +237,7 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() :
-    system_kernel_dir("/usr/share/tenstorrent/kernels/"),
-    profiler_enabled(false),
-    profile_dispatch_cores(false),
-    profiler_sync_enabled(false),
-    profiler_mid_run_dump(false),
-    profiler_trace_profiler(false),
-    profiler_buffer_usage_enabled(false) {
+RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -1179,6 +1177,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (disabled)
         // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
         case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
+
+        // TT_METAL_LLK_ASSERTS
+        // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
 
         // ========================================
         // DEVICE MANAGER

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define HAL_BUILD tt::tt_metal::quasar::tensix
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::tensix;
 
 #include <cstdint>
@@ -92,7 +92,42 @@ HalCoreInfoType create_tensix_mem_map() {
         // DM
         {
             {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
              .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},

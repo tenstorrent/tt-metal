@@ -2,42 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "joint_sdpa_program_factory.hpp"
-#include "joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.hpp"
 
 #include <optional>
 #include <string>
 #include <cmath>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks joint_sdpa(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& joint_tensor_q,
-    const Tensor& joint_tensor_k,
-    const Tensor& joint_tensor_v,
-    const Tensor& output_tensor,
-    const Tensor& joint_output_tensor,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config) {
+JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     /*
     Q: B x NH x N x DH
     K: B x NH x N x DH
@@ -47,6 +32,18 @@ operation::ProgramWithCallbacks joint_sdpa(
     K_joint: B x NH x L x DH
     V_joint: B x NH x L x DH
     */
+
+    const Tensor& input_tensor_q = tensor_args.input_q;
+    const Tensor& input_tensor_k = tensor_args.input_k;
+    const Tensor& input_tensor_v = tensor_args.input_v;
+    const Tensor& joint_tensor_q = tensor_args.joint_q;
+    const Tensor& joint_tensor_k = tensor_args.joint_k;
+    const Tensor& joint_tensor_v = tensor_args.joint_v;
+    const Tensor& output_tensor = output_tensors.output;
+    const Tensor& joint_output_tensor = output_tensors.joint_output;
+
+    std::size_t q_chunk_size = args.get_q_chunk_size();
+    std::size_t k_chunk_size = args.get_k_chunk_size();
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
@@ -139,13 +136,13 @@ operation::ProgramWithCallbacks joint_sdpa(
     IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
-    CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+    CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                          : device->compute_with_storage_grid_size();
     bool exp_approx_mode =
-        program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
+        args.program_config.has_value()
+            ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -285,6 +282,14 @@ operation::ProgramWithCallbacks joint_sdpa(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -294,6 +299,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -303,7 +310,7 @@ operation::ProgramWithCallbacks joint_sdpa(
         float f;
         uint32_t u;
     } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    scale_union.f = args.scale;
 
     // log scale
     log_debug(tt::LogOp, "scale: {}", scale_union.f);
@@ -399,6 +406,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -607,58 +616,60 @@ operation::ProgramWithCallbacks joint_sdpa(
             {local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end});
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            // Get addresses for regular tensors
-            auto* q_buffer = input_tensors.at(0).buffer();
-            auto* k_buffer = input_tensors.at(1).buffer();
-            auto* v_buffer = input_tensors.at(2).buffer();
-            auto* joint_q_buffer = input_tensors.at(3).buffer();
-            auto* joint_k_buffer = input_tensors.at(4).buffer();
-            auto* joint_v_buffer = input_tensors.at(5).buffer();
-
-            // Get addresses for output tensors
-            auto* out_buffer = output_tensors.at(0).buffer();
-            auto* joint_out_buffer = output_tensors.at(1).buffer();
-
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t joint_q_addr = joint_q_buffer->address();
-            uint32_t joint_k_addr = joint_k_buffer->address();
-            uint32_t joint_v_addr = joint_v_buffer->address();
-            uint32_t out_addr = out_buffer->address();
-            uint32_t joint_out_addr = joint_out_buffer->address();
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-
-                // Update reader args
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-                reader_args[3] = joint_q_addr;
-                reader_args[4] = joint_k_addr;
-                reader_args[5] = joint_v_addr;
-
-                // Update writer args
-                writer_args[0] = out_addr;
-                writer_args[1] = joint_out_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program), {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id}};
 }
 
-}  // namespace ttnn::operations::transformer::detail
+void JointSDPAProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+
+    // Get addresses for regular tensors
+    auto* q_buffer = tensor_args.input_q.buffer();
+    auto* k_buffer = tensor_args.input_k.buffer();
+    auto* v_buffer = tensor_args.input_v.buffer();
+    auto* joint_q_buffer = tensor_args.joint_q.buffer();
+    auto* joint_k_buffer = tensor_args.joint_k.buffer();
+    auto* joint_v_buffer = tensor_args.joint_v.buffer();
+
+    // Get addresses for output tensors
+    auto* out_buffer = output_tensors.output.buffer();
+    auto* joint_out_buffer = output_tensors.joint_output.buffer();
+
+    uint32_t q_addr = q_buffer->address();
+    uint32_t k_addr = k_buffer->address();
+    uint32_t v_addr = v_buffer->address();
+    uint32_t joint_q_addr = joint_q_buffer->address();
+    uint32_t joint_k_addr = joint_k_buffer->address();
+    uint32_t joint_v_addr = joint_v_buffer->address();
+    uint32_t out_addr = out_buffer->address();
+    uint32_t joint_out_addr = joint_out_buffer->address();
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+
+    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
+        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+
+        // Update reader args
+        reader_args[0] = q_addr;
+        reader_args[1] = k_addr;
+        reader_args[2] = v_addr;
+        reader_args[3] = joint_q_addr;
+        reader_args[4] = joint_k_addr;
+        reader_args[5] = joint_v_addr;
+
+        // Update writer args
+        writer_args[0] = out_addr;
+        writer_args[1] = joint_out_addr;
+    }
+}
+
+}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program

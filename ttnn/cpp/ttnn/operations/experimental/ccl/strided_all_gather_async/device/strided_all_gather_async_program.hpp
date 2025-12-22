@@ -33,7 +33,7 @@ struct StridedAllGatherAsyncProgramFactory {
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output_tensor);
 
     static shared_variables_t strided_all_gather_async_minimal_default_helper(
         tt::tt_metal::Program& program,
@@ -51,7 +51,7 @@ struct StridedAllGatherAsyncProgramFactory {
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
         std::optional<uint32_t> tiles_per_chunk,
-        std::optional<uint32_t> num_workers_per_link,
+        std::optional<uint32_t> num_workers_per_direction_opt,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
@@ -69,7 +69,7 @@ struct StridedAllGatherAsyncProgramFactory {
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(0);

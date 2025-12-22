@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include <hostdevcommon/common_values.hpp>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc_overlay_parameters.h"
-#include "ethernet/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
+#include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
@@ -260,6 +260,9 @@ bool fabric_set_unicast_route(
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
+    } else if (ns_hops > 0) {
+        packet_header->routing_fields.branch_east_offset = turn_point;
+        packet_header->routing_fields.branch_west_offset = turn_point;
     } else if (ns_hops == 0 && ew_hops > 0) {
         // East/West only routing: branch offset is set at position 1 (start_hop + 1)
         if (ew_direction) {
