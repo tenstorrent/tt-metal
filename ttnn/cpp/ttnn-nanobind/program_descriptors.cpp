@@ -52,14 +52,11 @@ public:
 
     RuntimeArgsColProxy get_col(size_t x) { return RuntimeArgsColProxy(args_, x); }
 
-    // Allow direct append with CoreCoord
     void append(const CoreCoord& coord, const std::vector<uint32_t>& values) { args_.push_back({coord, values}); }
 
-    // Get the underlying vector for passing to KernelDescriptor
     tt::tt_metal::KernelDescriptor::RuntimeArgs& get() { return args_; }
     const tt::tt_metal::KernelDescriptor::RuntimeArgs& get() const { return args_; }
 
-    // Allow iteration and inspection
     size_t size() const { return args_.size(); }
 
     std::pair<CoreCoord, std::vector<uint32_t>>& at(size_t idx) { return args_.at(idx); }
@@ -523,7 +520,7 @@ void py_module_types(nb::module_& mod) {
             [](tt::tt_metal::KernelDescriptor& self) -> tt::tt_metal::KernelDescriptor::RuntimeArgs& {
                 return self.runtime_args;
             },
-            [](tt::tt_metal::KernelDescriptor& self, nb::object value) {
+            [](tt::tt_metal::KernelDescriptor& self, const nb::object& value) {
                 // Accept either RuntimeArgsWrapper or the raw RuntimeArgs type
                 if (nb::isinstance<RuntimeArgsWrapper>(value)) {
                     self.runtime_args = nb::cast<RuntimeArgsWrapper&>(value).get();
