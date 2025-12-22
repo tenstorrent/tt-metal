@@ -26,7 +26,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include <mutex>
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>

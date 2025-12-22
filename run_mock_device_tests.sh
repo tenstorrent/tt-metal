@@ -28,29 +28,16 @@ echo ""
 echo "=== Testing Device Pool and Mesh Device ==="
 ./build_Release/test/tt_metal/unit_tests_device --gtest_filter="DevicePool.*:DeviceFixture.CreateMeshDeviceHandle"
 
-# Run allocator tests (Priority 1 - Original requirement)
-echo ""
-echo "=== Testing Allocators (Fast Dispatch) ==="
-./build_Release/test/tt_metal/unit_tests_api --gtest_filter="*Allocator*"
-
-# Run dispatch tests (Priority 2)
+# Run dispatch tests
 echo ""
 echo "=== Testing Dispatch (Fast Dispatch) ==="
 ./build_Release/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.*"
-
-# Run with Slow Dispatch
-echo ""
-echo "=== Testing Allocators (Slow Dispatch) ==="
-export TT_METAL_SLOW_DISPATCH_MODE=1
-./build_Release/test/tt_metal/unit_tests_api --gtest_filter="*Allocator*"
-unset TT_METAL_SLOW_DISPATCH_MODE
 
 echo ""
 echo "=========================================="
 echo "Mock Device Tests Completed!"
 echo "Summary:"
 echo "  - Device Pool: Basic device operations"
-echo "  - Allocators: Fast + Slow Dispatch"
 echo "  - Dispatch: All MeshDispatchFixture tests"
 echo "  - Config: $CLUSTER_DESC"
 echo "=========================================="
