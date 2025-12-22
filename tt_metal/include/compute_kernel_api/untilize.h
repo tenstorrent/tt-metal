@@ -100,6 +100,12 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void untilize_uninit(uint32_t icb) { UNPACK((llk_unpack_untilize_uninit(icb))); }
+ALWI void untilize_uninit(uint32_t icb) {
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_untilize_uninit(icb)));
+#else
+    UNPACK((llk_unpack_untilize_uninit()));
+#endif
+}
 
 }  // namespace ckernel

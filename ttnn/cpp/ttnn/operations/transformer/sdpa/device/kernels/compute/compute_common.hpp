@@ -104,7 +104,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
         }
-        reduce_block_max_row_uninit();
+        reduce_block_max_row_uninit(in0_cb);
 
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
