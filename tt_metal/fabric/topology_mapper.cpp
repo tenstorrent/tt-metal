@@ -1367,12 +1367,21 @@ namespace {
 std::uint32_t get_num_connections_per_direction(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     // Check the number of connections per direction for each asic
     std::uint32_t num_connections_per_direction = 1;  // Default to 1 connection per direction
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
         auto neighbors = psd.get_asic_neighbors(asic_id);
         for (const auto& neighbor : neighbors) {
             auto connections = psd.get_eth_connections(asic_id, neighbor);
             std::uint32_t num_local_connections = 0;
             for (const auto& connection : connections) {
+                if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                    (connection.src_chan == 8 || connection.src_chan == 9)) {
+                    // Skip internally connected Z links, since these are not to be used by any single node
+                    // Fabric Topologies.
+                    // TODO: Ridvan - need a better way of handling internally connected Z links.
+                    // Relying on ports 8 and 9 is not sustainable
+                    continue;
+                }
                 if (connection.is_local) {
                     num_local_connections++;
                 }
