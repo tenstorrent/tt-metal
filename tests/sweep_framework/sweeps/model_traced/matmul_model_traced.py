@@ -26,8 +26,7 @@ model_traced_params = loader.get_suite_parameters("matmul", all_cases=False)
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_a_shape": [(1, 1, 32, 32)],  # First matrix shape
-        "input_b_shape": [(1, 1, 32, 32)],  # Second matrix shape
+        "input_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -45,8 +44,7 @@ if model_traced_params:
 
 
 def run(
-    input_a_shape,
-    input_b_shape,
+    input_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -60,13 +58,27 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Handle both sample suite (tuple) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+        # This is model_traced suite - dict with 'self' and 'other' keys
+        shape_a = input_shape["self"]
+        shape_b = input_shape["other"]
+    else:
+        # This is sample suite - use same shape for both inputs
+        if isinstance(input_shape, (tuple, list)):
+            shape_a = tuple(input_shape)
+            shape_b = tuple(input_shape)
+        else:
+            shape_a = input_shape
+            shape_b = input_shape
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_a_shape)
+    )(shape_a)
 
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_b_shape)
+    )(shape_b)
 
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
