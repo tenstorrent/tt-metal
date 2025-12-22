@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.rmsnorm import create_norm_for_model
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -94,69 +94,83 @@ class TransformerBlock(LightweightModule):
                 model_config=self.model_config,
             )
 
+        is_allam_7b = args.model_name == "ALLaM-7B-Instruct-preview" or args.base_model_name == "ALLaM-7B"
+
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            create_norm_for_model(
+                model_name=args.model_name,
+                base_model_name=getattr(args, "base_model_name", None),
                 device=mesh_device,
                 dim=args.dim,
-                eps=args.norm_eps,
                 state_dict=state_dict,
+                weight_key="attention_norm",
+                layer_num=layer_num,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="attention_norm",
-                is_distributed=self.args.is_distributed_norm,
+                eps=args.norm_eps,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                is_distributed=self.args.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            force_interleaved_norm=is_allam_7b,
         )
         self.ff_norm = DistributedNorm(
-            RMSNorm(
+            create_norm_for_model(
+                model_name=args.model_name,
+                base_model_name=getattr(args, "base_model_name", None),
                 device=mesh_device,
                 dim=args.dim,
-                eps=args.norm_eps,
                 state_dict=state_dict,
+                weight_key="ffn_norm",
+                layer_num=layer_num,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
+                eps=args.norm_eps,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                is_distributed=self.args.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            force_interleaved_norm=is_allam_7b,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
-                RMSNorm(
+                create_norm_for_model(
+                    model_name=args.model_name,
+                    base_model_name=getattr(args, "base_model_name", None),
                     device=mesh_device,
                     dim=args.dim,
-                    eps=args.norm_eps,
                     state_dict=state_dict,
-                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    weight_key="pre_feedforward_layernorm",
+                    layer_num=layer_num,
                     state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
-                    weight_key="pre_feedforward_layernorm",
+                    eps=args.norm_eps,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
+                force_interleaved_norm=is_allam_7b,
             )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
@@ -164,25 +178,29 @@ class TransformerBlock(LightweightModule):
 
         if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
             self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
-                RMSNorm(
+                create_norm_for_model(
+                    model_name=args.model_name,
+                    base_model_name=getattr(args, "base_model_name", None),
                     device=mesh_device,
                     dim=args.dim,
-                    eps=args.norm_eps,
-                    add_unit_offset=self.args.rms_norm_add_unit_offset,
                     state_dict=state_dict,
+                    weight_key="post_feedforward_layernorm",
+                    layer_num=layer_num,
                     state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
-                    weight_key="post_feedforward_layernorm",
+                    eps=args.norm_eps,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
+                force_interleaved_norm=is_allam_7b,
             )
         else:
             # If post_feedforward_layernorm is not in state_dict, we do not use it
