@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from PIL import Image
@@ -17,6 +16,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -51,7 +52,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -219,12 +220,6 @@ def run_demo_inference(
                 logger.info(f"Image saved to output/output{len(out_images) + start_from}_tt_img2img.png")
 
     return out_images
-
-
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
