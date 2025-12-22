@@ -83,7 +83,7 @@ class NanoGPT(AbstractModuleBase):
 
         # Language model head (output projection)
         # Note: Weight tying with token embeddings will be handled in forward
-        lm_head_shape = (1, 1, config.vocab_size, config.n_embd)
+        # LM head shape would be (1, 1, config.vocab_size, config.n_embd)
         # We'll use the same weight as wte for weight tying
         self.lm_head_weight = self.wte.weight
 
