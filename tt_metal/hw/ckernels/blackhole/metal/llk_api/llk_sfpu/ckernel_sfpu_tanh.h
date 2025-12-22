@@ -49,17 +49,14 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
         // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
         sfpi::vFloat two_x = 2.f * val;
 
-        // Call accurate sigmoid kernel
+        // Perform sigmoid manually as 1/(1+exp(-x))
+        // (TODO: https://github.com/tenstorrent/tt-metal/pull/34862#discussion_r2639909601)
         sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
 
         // Compute 2*sigmoid(2x) - 1
         result = 2.f * sig - sfpi::vConst1;
     }
     v_endif;
-
-    if constexpr (!is_fp32_acc_to_dest_mode) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
 
     return result;
 }
@@ -89,10 +86,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
 
     result = sfpi::setsgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
 
-    if constexpr (!is_fp32_acc_to_dest_mode) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
-
     return result;
 }
 
@@ -121,10 +114,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     sfpi::vec_min_max(result, threshold_value);
 
     result = sfpi::setsgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
-
-    if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-    }
 
     return result;
 }
@@ -161,6 +150,7 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
             }
 
             sfpi::dst_reg[0] = result;
