@@ -115,11 +115,17 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(shape_b)
 
-    torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+    # Handle tensor-scalar operations
+    if shape_b is None and scalar is not None:
+        # Tensor-scalar operation: use scalar value directly
+        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar)
+    else:
+        # Tensor-tensor operation: create second tensor
+        torch_input_tensor_b = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        )(shape_b)
+        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -136,26 +142,36 @@ def run(
         from_torch_kwargs["memory_config"] = input_a_memory_config
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_b_dtype,
-        "layout": input_b_layout,
-    }
+    # Handle tensor-scalar vs tensor-tensor operations
+    if shape_b is None and scalar is not None:
+        # Tensor-scalar operation: pass scalar directly to ttnn.multiply
+        start_time = start_measuring_time()
+        output_tensor = ttnn.multiply(input_tensor_a, scalar, memory_config=output_memory_config)
+        output_tensor = ttnn.to_torch(output_tensor)
+        e2e_perf = stop_measuring_time(start_time)
+    else:
+        # Tensor-tensor operation: create second tensor
+        # Check if storage_type is HOST - if so, don't pass device to from_torch
+        is_host = storage_type and "HOST" in str(storage_type)
 
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_b_memory_config
+        # Build from_torch arguments based on storage_type
+        from_torch_kwargs = {
+            "dtype": input_b_dtype,
+            "layout": input_b_layout,
+        }
 
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+        # Only add device and memory_config if not HOST storage
+        if not is_host:
+            from_torch_kwargs["device"] = device
+            from_torch_kwargs["memory_config"] = input_b_memory_config
 
-    start_time = start_measuring_time()
-    output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+
+        start_time = start_measuring_time()
+        output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+        output_tensor = ttnn.to_torch(output_tensor)
+        e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
