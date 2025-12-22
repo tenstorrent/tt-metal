@@ -144,12 +144,8 @@ void py_module(nb::module_& m) {
             "linear_op",
             [](const autograd::TensorPtr& tensor,
                const autograd::TensorPtr& weight,
-               nb::object bias_obj) -> autograd::TensorPtr {
-                autograd::TensorPtr bias = nullptr;
-                if (!bias_obj.is_none()) {
-                    bias = nb::cast<autograd::TensorPtr>(bias_obj);
-                }
-                return ttml::ops::linear_op(tensor, weight, bias);
+               std::optional<const autograd::TensorPtr> bias) -> autograd::TensorPtr {
+                return ttml::ops::linear_op(tensor, weight, bias.value_or(nullptr));
             },
             nb::arg("tensor"),
             nb::arg("weight"),
