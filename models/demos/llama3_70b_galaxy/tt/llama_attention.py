@@ -591,7 +591,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv_interleaved,
-            dtype=self.ccl_dtype if self.TG and batch_size == 1 else ttnn.bfloat16,
+            dtype=ttnn.bfloat16,  # self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
@@ -613,6 +613,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(xqkv)
 

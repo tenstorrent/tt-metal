@@ -576,11 +576,15 @@ class TT_CCL:
                 }
             )
             for key, shape in buffers_dict.items():
+                if key == "QKV":
+                    dtype = ttnn.bfloat16
+                else:
+                    dtype = ttnn.bfloat8_b
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{seqlen}"),
@@ -590,7 +594,7 @@ class TT_CCL:
                     torch.zeros(shape[1]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{seqlen}"),
@@ -638,7 +642,7 @@ class TT_CCL:
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16 if key in ["LAYERNORM", "QKV"] else ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
