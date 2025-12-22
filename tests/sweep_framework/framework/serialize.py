@@ -32,7 +32,8 @@ def _build_type_registry() -> None:
             t = getattr(ttnn._ttnn.tensor, type_name)
             _TTNN_TYPE_REGISTRY[f"ttnn._ttnn.tensor.{type_name}"] = t
         except AttributeError:
-            pass
+            # Some ttnn builds may not expose these optional types on ttnn._ttnn.tensor; skip them.
+            logger.debug(f"Optional ttnn._ttnn.tensor type '{type_name}' not available")
 
 
 def _resolve_type(type_name: str) -> type:
