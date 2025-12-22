@@ -89,6 +89,7 @@ ALWI void mm_init(
     uint32_t out_cb_id,
     const uint32_t transpose = 0,
     uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
@@ -100,6 +101,17 @@ ALWI void mm_init(
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+#else
+    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY, false /*EN_DI*/, false /*EN_X2*/>()));
+    MATH((
+        llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE, false /*int32 dest*/>(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<p_pacr::PACK0>(out_cb_id)));
+    PACK((llk_pack_init<p_pacr::PACK0>(out_cb_id)));
+#endif
 }
 
 // clang-format off
@@ -123,7 +135,11 @@ ALWI void mm_init(
 ALWI void matmul_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
+#else
+    MATH((llk_math_matmul(idst)));
+#endif
 }
 
 // clang-format off
