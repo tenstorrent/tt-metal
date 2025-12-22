@@ -72,7 +72,7 @@ jobs:
           - name: FD2
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_fd2_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_fd2_tests.sh
-            auto-triage: false
+            auto-triage: true
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{

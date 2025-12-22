@@ -105,6 +105,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: 🐍 Install minimum set of packages
         timeout-minutes: 10
