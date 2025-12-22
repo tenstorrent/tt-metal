@@ -30,25 +30,39 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::stochastic_rounding {
 
-/// @brief Test stochastic rounding by verifying statistical properties.
-/// For a value between two BF16 representable values, stochastic rounding should
-/// probabilistically round up or down such that the expected value equals the true value.
-/// @param cq - Mesh command queue
-/// @param num_tiles - Number of tiles to process
-/// @param fractional_position - Position between two BF16 values (0.0 to 1.0)
-///                              e.g., 0.25 means 25% of the way from lower to upper BF16 value
-/// @param tolerance - Allowed deviation from expected proportion (for statistical test)
-/// @return true if the observed rounding distribution is within tolerance of expected
-bool run_stochastic_rounding_statistical_test(
-    distributed::MeshCommandQueue& cq, size_t num_tiles, float fractional_position, float tolerance = 0.05f) {
-    // BF16 has 7 mantissa bits, so epsilon at 1.0 is 2^-7
-    constexpr float bf16_epsilon_at_one = 1.0f / 128.0f;  // 0.0078125
-    constexpr float base_value = 1.0f;
-    // First value after 1.0 representable in bf16
-    const float upper_bf16 = base_value + bf16_epsilon_at_one;
+struct StochasticRoundingConfig {
+    size_t num_tiles = 0;
+    uint32_t seed = 0;
+    float base_value = 0.0f;
+};
 
-    // float32 representing value between base_value and upper_bf16
-    const float test_value = base_value + fractional_position * bf16_epsilon_at_one;
+/// @brief Get the next representable BF16 value (1 ULP higher)
+float bf16_next_up(float value) {
+    bfloat16 bf = bfloat16(value);
+    uint16_t bits = std::bit_cast<uint16_t>(bf);
+    bits += 1;
+    bfloat16 result = std::bit_cast<bfloat16>(bits);
+    return static_cast<float>(result);
+}
+
+/// @brief Test stochastic rounding correctness.
+/// Verifies that all values round to one of the two adjacent BF16 values
+/// and that total = rounded_up + rounded_down.
+/// @param cq - Mesh command queue
+/// @param test_config - Test configuration
+/// @return true if all values round correctly
+bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const StochasticRoundingConfig& test_config) {
+    size_t num_tiles = test_config.num_tiles;
+    uint32_t seed = test_config.seed;
+    float base_value = test_config.base_value;
+
+    bfloat16 base_bf16 = bfloat16(base_value);
+    float base_bf16_float = static_cast<float>(base_bf16);
+    float upper_bf16 = bf16_next_up(base_bf16_float);
+
+    // Test value: halfway between base and upper BF16
+    // This is a float32 value that cannot be exactly represented in BF16
+    const float test_value = base_bf16_float + (upper_bf16 - base_bf16_float) * 0.5f;
 
     const size_t tile_byte_size_input = 4U * tt::constants::TILE_HW;   // Float32: 4 bytes per element
     const size_t tile_byte_size_output = 2U * tt::constants::TILE_HW;  // BFloat16: 2 bytes per element
@@ -85,7 +99,7 @@ bool run_stochastic_rounding_statistical_test(
 
     std::vector<uint32_t> compute_kernel_args = {
         static_cast<uint32_t>(num_tiles),  // per_core_block_cnt
-        1U                                 // per_core_block_dim
+        seed                               // seed for PRNG
     };
 
     std::vector<uint32_t> reader_rt_args = {
@@ -130,7 +144,6 @@ bool run_stochastic_rounding_statistical_test(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     std::map<std::string, std::string> sfpu_defines = {
-        {"SFPU_OP_CHAIN_0", "stochastic_round_tile(0);"},
         {"SFPU_OP_ROUND_FAMILY_INCLUDE", "1"},
     };
 
@@ -140,7 +153,7 @@ bool run_stochastic_rounding_statistical_test(
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/stochastic_rounding_sfpu.cpp",
         cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = true,
@@ -167,89 +180,82 @@ bool run_stochastic_rounding_statistical_test(
 
     size_t count_rounded_up = 0;
     size_t count_rounded_down = 0;
+    size_t count_invalid = 0;
 
     for (const auto& val : output) {
         float val_float = static_cast<float>(val);
-        if (val_float == base_value) {
+        if (val_float == base_bf16_float) {
             count_rounded_down++;
         } else if (val_float == upper_bf16) {
             count_rounded_up++;
         } else {
-            // Unexpected value - test should fail
+            count_invalid++;
             log_error(
-                tt::LogTest, "Unexpected output value: {} (expected {} or {})", val_float, base_value, upper_bf16);
-            return false;
+                tt::LogTest, "Unexpected output value: {} (expected {} or {})", val_float, base_bf16_float, upper_bf16);
         }
     }
 
-    float observed_proportion_up = static_cast<float>(count_rounded_up) / static_cast<float>(num_elements);
-    float expected_proportion_up = fractional_position;
-
     log_info(
         tt::LogTest,
-        "Stochastic rounding test: input={}, expected_up={:.2f}%, observed_up={:.2f}% (up={}, down={}, total={})",
+        "Stochastic rounding test: input={}, base={}, upper={}, seed={}, up={}, down={}, invalid={}, total={}",
         test_value,
-        expected_proportion_up * 100.0f,
-        observed_proportion_up * 100.0f,
+        base_bf16_float,
+        upper_bf16,
+        seed,
         count_rounded_up,
         count_rounded_down,
+        count_invalid,
         num_elements);
 
-    // Check if observed proportion is within tolerance of expected
-    bool pass = std::abs(observed_proportion_up - expected_proportion_up) <= tolerance;
+    // Verify that all values rounded to valid BF16 values
+    bool pass = (count_rounded_up + count_rounded_down == num_elements) && (count_invalid == 0);
     if (!pass) {
         log_error(
             tt::LogTest,
-            "Stochastic rounding distribution outside tolerance: expected={:.2f}%, observed={:.2f}%, tolerance={:.2f}%",
-            expected_proportion_up * 100.0f,
-            observed_proportion_up * 100.0f,
-            tolerance * 100.0f);
+            "Stochastic rounding failed: rounded_up({}) + rounded_down({}) != total({}) or invalid({}) != 0",
+            count_rounded_up,
+            count_rounded_down,
+            num_elements,
+            count_invalid);
     }
     return pass;
 }
 
 }  // namespace unit_tests::compute::stochastic_rounding
 
-class StochasticRoundingSingleCardFixture : public UnitMeshCQFixture,
-                                            public testing::WithParamInterface<std::tuple<size_t, float>> {};
+using namespace unit_tests::compute::stochastic_rounding;
 
-TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingStatistical) {
+class StochasticRoundingSingleCardFixture : public UnitMeshCQFixture,
+                                            public testing::WithParamInterface<StochasticRoundingConfig> {};
+
+TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingCorrectness) {
     for (const auto& device_ : devices_) {
-        size_t num_tiles = std::get<0>(GetParam());
-        float fractional_position = std::get<1>(GetParam());
+        StochasticRoundingConfig test_config = GetParam();
 
         log_info(
             tt::LogTest,
-            "Testing stochastic rounding: num_tiles={}, fractional_position={:.2f}",
-            num_tiles,
-            fractional_position);
+            "Testing stochastic rounding: num_tiles={}, seed={}, base_value={}",
+            test_config.num_tiles,
+            test_config.seed,
+            test_config.base_value);
 
-        // Worst case scenario (fractional_position=0.5) 3σ ≈ 272 elements i.e. ±0.829%
-        // The tolerance is much higher because of PRNG and hardware stochastic rounding bugs:
-        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
-        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
-        float tolerance = 0.05f;
-
-        EXPECT_TRUE(unit_tests::compute::stochastic_rounding::run_stochastic_rounding_statistical_test(
-            device_->mesh_command_queue(), num_tiles, fractional_position, tolerance));
+        EXPECT_TRUE(run_stochastic_rounding_test(device_->mesh_command_queue(), test_config));
     }
 }
 
-// Note: Despite testing stochastic rounding, the results are deterministic, because
-// the generic eltwise_sfpu compute kernel doesn't call init_prng_seed(),
-// leaving it zero-initialized for every run
 INSTANTIATE_TEST_SUITE_P(
     StochasticRoundingCompute,
     StochasticRoundingSingleCardFixture,
     ::testing::Values(
-        // Test different fractional positions with enough tiles for statistical significance
-        // 32 tiles * 32 * 32 = 32768 elements, giving good statistical power
-        std::make_tuple(32U, 0.25f),  // 25% should round up
-        std::make_tuple(32U, 0.50f),  // 50% should round up
-        std::make_tuple(32U, 0.75f),  // 75% should round up
-        // Edge cases
-        std::make_tuple(32U, 0.10f),  // 10% should round up
-        std::make_tuple(32U, 0.90f)   // 90% should round up
-        ));
+        // Test with different seeds and base values
+        // 128 tiles * 32 * 32 = 131072 elements
+        StochasticRoundingConfig{
+            .num_tiles = 128U, .seed = 11111U, .base_value = 0.0f},  // Note: subnormals get flushed to zero
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 22222U, .base_value = 1.0f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 44444U, .base_value = 0.5f},
+        StochasticRoundingConfig{
+            .num_tiles = 128U, .seed = 55555U, .base_value = 256.0f},  // Next representable value in BF16 is 258.0
 
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 44444U, .base_value = -0.5f},
+        StochasticRoundingConfig{.num_tiles = 128U, .seed = 55555U, .base_value = -256.0f}));
 }  // namespace tt::tt_metal
