@@ -15,16 +15,18 @@ Design principles:
 - Cache-first: skip torch entirely if TTNN cache exists
 """
 
-from dataclasses import dataclass, field
+import hashlib
+import pathlib
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Optional
 
-from loguru import logger  # todo)) logger dependency should be inserted by the user instead!
+from loguru import logger
 
 import ttnn
 
 
-# todo)) clean up the code to make the interface tighter -- not so much None
+# todo)) maybe useful to support a mechanism that can be used to disable the cache for every LazyWeight instance
 # todo)) needs unit tests to provide coverage
 @dataclass
 class LazyWeight:
@@ -35,62 +37,61 @@ class LazyWeight:
     - A tensor directly (duck-typed, typically torch.Tensor)
     - A callable that returns a tensor (for truly lazy loading)
 
+    All fields except source are optional at construction time and can be
+    provided later. get_weight() will check
+
     Example usage:
-        # With mesh_mapper (multi-device)
+        # Fully specified at construction
         weight = LazyWeight(
             source=torch_tensor,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            device=mesh_device,
             dtype=ttnn.bfloat16,
         )
+        ttnn_tensor = weight.get_weight()
 
-        # With single device (mesh_mapper=None)
-        weight = LazyWeight(
-            source=torch_tensor,
-            device=single_device,
-            dtype=ttnn.bfloat16,
-        )
+        # Minimal construction, provide defaults at materialize time
+        weight = LazyWeight(source=torch_tensor)
+        ttnn_tensor = weight.get_weight(device=mesh_device, dtype=ttnn.bfloat16)
 
-        # Callable (fully lazy)
+        # Partial specification - override defaults selectively
+        weight = LazyWeight(source=torch_tensor, dtype=ttnn.bfloat4_b)
+        ttnn_tensor = weight.get_weight(device=mesh_device, dtype=ttnn.bfloat16)  # uses bfloat4_b
+
+        # Using convenience class methods
+        weight = LazyWeight.sharded_1d(source=tensor, device=mesh_device, dtype=ttnn.bfloat16, dim=3)
+        weight = LazyWeight.replicated(source=tensor, device=mesh_device, dtype=ttnn.bfloat16)
+
+        # Callable source (fully lazy)
         weight = LazyWeight(
             source=lambda: load_checkpoint()["weight"],
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            cache_dir=Path("/tmp/cache"),
             weight_name="my_weight",
         )
-
-        # Access triggers conversion (or cache load)
-        ttnn_tensor = weight.get_weight()
+        ttnn_tensor = weight.get_weight(device=mesh_device, dtype=ttnn.bfloat16, cache_dir=Path("/tmp/cache"))
     """
 
     # Source: duck-typed tensor OR callable that returns one
     # String annotation documents intent without importing torch
-    source: Union["torch.Tensor", Callable[[], "torch.Tensor"]]
+    # todo)) use something like LazyStateDict for the source
+    source: "torch.Tensor"
 
-    # TTNN conversion parameters (explicit, not hidden in closure)
-    dtype: ttnn.DataType
+    # All other fields are optional at construction time.
+    cache_dir_weight_name: Optional[tuple[Path, str]] = None  # do not cache if None
+    pad_value: Optional[float] = 0.0
+    dtype: Optional[ttnn.DataType] = ttnn.bfloat16
+    # Lazy fields that can be materialize at get_weight time;
+    # Still named as public fields to allow users to override at construction time (be proactive if you want).
+    device: Optional[ttnn.MeshDevice] = None
+    mesh_mapper_config: Optional[ttnn.MeshMapperConfig] = None
+    memory_config: Optional[ttnn.MemoryConfig] = None
+    layout: Optional[ttnn.Layout] = None
 
-    # Device placement - device is always required, mesh_mapper is optional for multi-device
-    device: ttnn.Device = None  # Required
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None  # For multi-device sharding
-
-    layout: Optional[ttnn.Layout] = None  # None → TILE_LAYOUT
-    memory_config: Optional[ttnn.MemoryConfig] = None  # None → DRAM_MEMORY_CONFIG
-    pad_value: float = 0.0
-
-    # Cache configuration
-    cache_dir: Optional[Path] = None
-    weight_name: str = "weight"
-
-    # Private - stores the converted tensor
+    # Private fields
     _value: Optional[ttnn.Tensor] = field(default=None, repr=False)
 
     def __post_init__(self):
-        """Validate that device is provided."""
-        if self.device is None:
-            raise ValueError("device must be provided")
+        assert self.source.shape is not None and len(self.source.shape) > 0, "source must have a shape"
 
-    def get_weight(self) -> ttnn.Tensor:
+    def get_device_weight(self) -> ttnn.Tensor:
         """
         Get the TTNN tensor, converting from source if needed.
 
@@ -98,48 +99,82 @@ class LazyWeight:
         1. Check cache → load if exists
         2. Otherwise: resolve source → convert → cache
 
-        Subsequent calls return the cached tensor.
+        Subsequent calls return the cached tensor (defaults ignored after first call).
         """
+        # todo)) is there a better way to enforce immutability of all fields after construction? and self._value after first call?
         if self._value is not None:
             return self._value
 
+        cache_dir, weight_name = None, None
+        if self.cache_dir_weight_name is not None:
+            cache_dir, weight_name = self.cache_dir_weight_name
+
+        # Validate required fields
+        if self.device is None:
+            raise ValueError("device must be provided (either on LazyWeight or in defaults)")
+        if self.layout is None:
+            raise ValueError("layout must be provided (either on LazyWeight or in defaults)")
+        if self.memory_config is None:
+            raise ValueError("memory_config must be provided (either on LazyWeight or in defaults)")
+
         # Try loading from cache first (skip torch entirely if possible)
-        cache_path = self._get_cache_path()
-        if cache_path and cache_path.exists():
-            logger.info(f"Loading tensor from cache: {cache_path}")
-            self._value = ttnn.load_tensor(str(cache_path), device=self.device)
+        cache_file_name = self._get_cache_fill_path(
+            cache_dir=cache_dir,
+            weight_name=weight_name,
+        )
+        if cache_file_name and cache_file_name.exists():
+            logger.info(f"Loading tensor from cache: {cache_file_name}")
+            self._value = ttnn.load_tensor(str(cache_file_name), device=self.device)
             return self._value
 
         # Resolve source (call if callable, otherwise use directly)
-        logger.info(f"Converting tensor '{self.weight_name}' to TTNN")
-        tensor = self.source() if callable(self.source) else self.source
+        tensor = self.source
 
-        # Get effective layout and memory_config
-        effective_layout = self.layout if self.layout is not None else ttnn.TILE_LAYOUT
-        effective_memory_config = self.memory_config if self.memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        # Get mesh mapper (created from config)
+        if self.mesh_mapper_config is not None:
+            mesh_mapper = ttnn.create_mesh_mapper(self.device, self.mesh_mapper_config)
+        else:
+            # None config means replicate
+            mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
+        is_replicated = self.mesh_mapper_config is None
 
-        # Use ttnn.as_tensor - handles device placement and caching automatically
-        self._value = ttnn.as_tensor(
-            tensor,
-            dtype=self.dtype,
-            layout=effective_layout,
+        # Convert to TTNN and cache
+        self._value = _from_torch_and_dump(
+            tensor=tensor,
             device=self.device,
-            mesh_mapper=self.mesh_mapper,
-            memory_config=effective_memory_config,
-            cache_file_name=cache_path,  # cache_path=None skips caching
+            dtype=self.dtype,
+            layout=self.layout,
+            memory_config=self.memory_config,
+            mesh_mapper=mesh_mapper,
+            is_replicated=is_replicated,
+            cache_file_name=cache_file_name,
         )
 
         return self._value
 
-    def _get_cache_path(self) -> Optional[Path]:
+    # todo)) refactor into a base class for Lazy and Transparent Pattern (LaTr)
+    def is_resolved(self) -> bool:
+        """Check if all required fields for weight materialization are set.
+
+        Excludes: _value (private), cache_dir_weight_name (optional caching)
+        """
+        required_fields = ("source", "pad_value", "dtype", "device", "mesh_mapper_config", "memory_config", "layout")
+        return all(getattr(self, field) is not None for field in required_fields)
+
+    def _get_cache_fill_path(
+        self,
+        cache_dir: Optional[Path],
+        weight_name: Optional[str],
+    ) -> Optional[Path]:
         """Generate the cache file path based on configuration fingerprint."""
-        if self.cache_dir is None:
+        if cache_dir is None or weight_name is None:
             return None
         fingerprint = self._get_fingerprint()
-        # todo)) this value seems to be just 1?
-        return self.cache_dir / f"{self.weight_name}_{fingerprint}.tensorbin"
+        return cache_dir / f"{weight_name}_{fingerprint}.tensorbin"
 
-    def _get_fingerprint(self) -> str:
+    def _get_fingerprint(
+        self,
+    ) -> str:
         """
         Generate a unique fingerprint from the conversion configuration.
 
@@ -147,25 +182,24 @@ class LazyWeight:
         """
         parts = []
 
+        # source
+
         # dtype
         parts.append(f"dtype_{self.dtype.name}")
 
         # layout
-        effective_layout = self.layout if self.layout is not None else ttnn.TILE_LAYOUT
-        parts.append(f"layout_{effective_layout.name}")
+        parts.append(f"layout_{self.layout.name}")
 
         # memory_config (use hash if non-default)
-        if self.memory_config is not None:
-            parts.append(f"mem_{hash(self.memory_config)}")
+        if self.memory_config is not None and self.memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            parts.append(f"memcfg_{hash(self.memory_config)}")
 
-        # mesh_mapper or device fingerprint
-        if self.mesh_mapper is not None:
-            parts.append(self._get_mapper_fingerprint())
-        elif self.device is not None:
-            # Single device mode - use device id
-            # todo)) using device.id() is not good enough; what if we want to load the same weight on multiple devices each of which is the same except for id? --> data parallelism
-            device_id = self.device.id() if hasattr(self.device, "id") else "single"
-            parts.append(f"device_{device_id}")
+        # mesh_mapper_config fingerprint
+        parts.append(self._get_mesh_mapper_fingerprint())
+
+        # device fingerprint
+        device_id = self.device.id() if hasattr(self.device, "id") else "single"
+        parts.append(f"device_{device_id}")
 
         # pad_value (only if non-default)
         if self.pad_value != 0.0:
@@ -173,39 +207,79 @@ class LazyWeight:
 
         return "_".join(parts)
 
-    def _get_mapper_fingerprint(self) -> str:
+    def _get_mesh_mapper_fingerprint(self) -> str:
         """
-        Generate a fingerprint for the mesh_mapper based on its semantic type.
+        Generate a fingerprint for the mesh_mapper_config.
 
-        Since mesh_mapper doesn't have __hash__, we fingerprint by:
-        - Type name
-        - Key attributes (dim, dims, mesh_shape) if available
+        Uses the config's __repr__ for deterministic hashing since
+        MeshMapperConfig exposes a proper string representation via pybind.
         """
-        mapper = self.mesh_mapper
-        mapper_type = type(mapper).__name__
+        if self.mesh_mapper_config is None:
+            return "replicated"
 
-        # Try to get more specific info based on mapper type
-        if hasattr(mapper, "dim"):
-            # ShardTensorToMesh has .dim
-            return f"{mapper_type}_dim{mapper.dim}"
-        if hasattr(mapper, "dims") and hasattr(mapper, "mesh_shape"):
-            # ShardTensor2dMesh has .dims and .mesh_shape
-            return f"{mapper_type}_dims{mapper.dims}_shape{mapper.mesh_shape}"
+        # Use repr of config for deterministic fingerprint
+        config_repr = repr(self.mesh_mapper_config)
+        # Hash to keep fingerprint short but unique
+        config_hash = hashlib.md5(config_repr.encode()).hexdigest()[:12]
+        return f"mapper_{config_hash}"
 
-        # todo)) use better fallback
-        # Fallback: just use type name (e.g., ReplicateTensorToMesh)
-        return mapper_type
 
-    def is_cached(self) -> bool:
-        """Check if this weight has a valid cache file."""
-        cache_path = self._get_cache_path()
-        return cache_path is not None and cache_path.exists()
+def _from_torch_and_dump(
+    tensor: "torch.Tensor",
+    device: Optional[ttnn.MeshDevice],
+    dtype: Optional[ttnn.DataType],
+    layout: Optional[ttnn.Layout],
+    memory_config: Optional[ttnn.MemoryConfig],
+    mesh_mapper: Optional[ttnn.CppTensorToMesh],
+    is_replicated: bool,
+    cache_file_name: Optional[str],
+):
+    """
+    Convert a torch tensor to TTNN format and optionally cache it.
 
-    def clear_cache(self) -> bool:
-        """Remove the cache file if it exists. Returns True if file was removed."""
-        cache_path = self._get_cache_path()
-        if cache_path and cache_path.exists():
-            cache_path.unlink()
-            logger.info(f"Removed cache file: {cache_path}")
-            return True
-        return False
+    Args:
+        tensor: Source torch tensor
+        device: Target MeshDevice
+        dtype: Target data type
+        layout: Target layout
+        memory_config: Target memory config
+        mesh_mapper: The mesh mapper to use for distribution
+        is_replicated: If True, cache the unsharded tensor for portability
+        cache_file_name: Path to cache file, or None to skip caching
+    """
+    local_mesh_mapper = None if is_replicated else mesh_mapper
+    if cache_file_name is None:
+        return ttnn.from_torch(
+            tensor,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=local_mesh_mapper,
+            memory_config=memory_config,
+            device=device,
+        )
+
+    tensor = ttnn.from_torch(
+        tensor,
+        dtype=dtype,
+        layout=layout,
+        # For fully replicated tensors, cache unsharded tensor so it can be loaded on any device.
+        mesh_mapper=local_mesh_mapper,
+        memory_config=memory_config,
+        device=None,
+    )
+    assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
+
+    assert cache_file_name is not None, "cache_file_name must be provided for caching"
+    logger.debug(f"Generating cache for {cache_file_name}")
+    pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(cache_file_name), tensor)
+
+    if device is not None:
+        tensor = tensor.to(device, memory_config)
+    return tensor
+
+
+def resolve_lazy_weight(weight: LazyWeight, **kwargs) -> LazyWeight:
+    """Resolve the None fields of `weight` with the given kwargs; do not override non-None fields"""
+    to_set = {k: v for k, v in kwargs.items() if getattr(weight, k, None) is None}
+    return replace(weight, **to_set)

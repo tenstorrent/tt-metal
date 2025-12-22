@@ -10,200 +10,233 @@ This test suite verifies:
 3. MLP1D correctly rejects TG/Galaxy devices
 """
 
+import math
+from functools import lru_cache
+from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.common.utility_functions import comp_allclose, comp_pcc
+
+# ============================================================================
+# Weight Caching - Avoid expensive torch.randn_like() per test
+# ============================================================================
+
+_CACHED_MLP_WEIGHTS: dict[str, dict[str, torch.Tensor]] = {}
+
+
+def _get_or_init_mlp_weights(model_name: str, reference_mlp) -> None:
+    """Initialize MLP weights once per model, cache and reuse across tests.
+
+    torch.randn_like() is very slow for large models (18s for 70B).
+    This caches the random weights and reuses them across tests.
+    """
+    if model_name not in _CACHED_MLP_WEIGHTS:
+        logger.info(f"[CACHE] Initializing weights for {model_name} (first time)")
+        _CACHED_MLP_WEIGHTS[model_name] = {}
+        with torch.no_grad():
+            for name, param in reference_mlp.named_parameters():
+                _CACHED_MLP_WEIGHTS[model_name][name] = torch.randn_like(param)
+    else:
+        logger.info(f"[CACHE] Reusing cached weights for {model_name}")
+
+    # Load cached weights into model
+    with torch.no_grad():
+        for name, param in reference_mlp.named_parameters():
+            param.copy_(_CACHED_MLP_WEIGHTS[model_name][name])
+
 
 # ============================================================================
 # Unit Tests - No device required
 # ============================================================================
+# Note: These tests only test the MLP1DConfig dataclass creation.
+# The _resolve_mlp1d_config function is tested via integration tests
+# (test_mlp_1d_vs_reference) since it requires real LazyWeight instances.
 
 
 def test_mlp_1d_config_creation():
-    """Test that MLP1DConfig can be created with expected values and nested configs."""
-    from dataclasses import dataclass
+    """Test that MLP1DConfig dataclass can be created with explicit values."""
+    from unittest.mock import MagicMock
 
-    from models.common.modules.mlp.mlp_1d import (
-        MeshContext,
-        MLP1DConfig,
-        MLP1DDecodeConfigs,
-        MLP1DOptimizationConfig,
-        MLP1DPrefillConfigs,
-    )
+    from models.common.modules.mlp.mlp_1d import MLP1DConfig
 
-    # Create a mock MeshContext for testing (no real device needed)
-    @dataclass
-    class MockMeshContext(MeshContext):
-        """Mock MeshContext for unit tests without real devices."""
+    mock_mesh_device = MagicMock()
+    mock_tt_ccl = MagicMock()
+    mock_w1 = MagicMock()
+    mock_w2 = MagicMock()
+    mock_w3 = MagicMock()
 
-        mesh_device: object = None
-        tt_ccl: object = None
-        _num_devices: int = 8
-        _cluster_shape: list = None
-
-        def __post_init__(self):
-            if self._cluster_shape is None:
-                self._cluster_shape = [1, self._num_devices]
-
-        def num_devices(self) -> int:
-            return self._num_devices
-
-        def cluster_shape(self) -> list:
-            return self._cluster_shape
-
-    mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
-
+    # Create config with explicit values
     config = MLP1DConfig(
+        w1=mock_w1,
+        w2=mock_w2,
+        w3=mock_w3,
+        mesh_device=mock_mesh_device,
+        tt_ccl=mock_tt_ccl,
         dim=4096,
         hidden_dim=14336,
-        mesh_ctx=mock_ctx,
+        max_batch_size=64,
+        topology=ttnn.Topology.Ring,
     )
 
+    # Verify explicit values are preserved
+    assert config.w1 is mock_w1
+    assert config.w2 is mock_w2
+    assert config.w3 is mock_w3
+    assert config.mesh_device is mock_mesh_device
+    assert config.tt_ccl is mock_tt_ccl
     assert config.dim == 4096
     assert config.hidden_dim == 14336
-    assert config.cluster_shape == [1, 8]
-    assert config.num_devices == 8
-
-    # Nested configs should be auto-created via cached_property with parent reference
-    assert isinstance(config.decode_config, MLP1DDecodeConfigs)
-    assert isinstance(config.prefill_config, MLP1DPrefillConfigs)
-    assert isinstance(config.optimization_config, MLP1DOptimizationConfig)
-
-    # Each sub-config should have a reference back to the parent
-    assert config.decode_config.cfg is config
-    assert config.prefill_config.cfg is config
-    assert config.optimization_config.cfg is config
-
-    # Sub-configs should have callable methods
-    assert callable(config.decode_config.w1_w3_prg_config)
-    assert callable(config.prefill_config.w1_w3_prg_config)
-    assert callable(config.optimization_config.ff1_3_dtype)
+    assert config.max_batch_size == 64
+    assert config.topology == ttnn.Topology.Ring
 
 
-def test_mlp_1d_config_rejects_2d_mesh():
-    """Test that MLP1DConfig raises assertion error for 2D mesh."""
-    from dataclasses import dataclass
+def test_mlp_1d_config_defaults():
+    """Test that MLP1DConfig has sensible defaults."""
+    from unittest.mock import MagicMock
 
-    from models.common.modules.mlp.mlp_1d import MeshContext, MLP1DConfig
+    from models.common.modules.mlp.mlp_1d import MLP1DConfig
 
-    @dataclass
-    class MockMeshContext2D(MeshContext):
-        """Mock 2D MeshContext for testing rejection."""
+    # Minimal creation - only required fields
+    config = MLP1DConfig(w1=MagicMock(), w2=MagicMock(), w3=MagicMock())
 
-        mesh_device: object = None
-        tt_ccl: object = None
-        _num_devices: int = 32
-        _cluster_shape: list = None
+    # Check defaults
+    assert config.max_batch_size == 32
+    assert config.mlp_activation_type == ttnn.UnaryOpType.SILU
+    assert config.num_reduce_scatter_links == 1
+    assert config.tile_size == 32
 
-        def __post_init__(self):
-            if self._cluster_shape is None:
-                self._cluster_shape = [4, 8]  # 2D mesh - should be rejected
+    # Optional fields default to None
+    assert config.mesh_device is None
+    assert config.tt_ccl is None
+    assert config.dim is None
+    assert config.hidden_dim is None
 
-        def num_devices(self) -> int:
-            return self._num_devices
 
-        def cluster_shape(self) -> list:
-            return self._cluster_shape
+def test_mlp_1d_config_power_user_overrides():
+    """Test that MLP1DConfig accepts power-user overrides for program configs."""
+    from unittest.mock import MagicMock
 
-    mock_ctx = MockMeshContext2D(_num_devices=32, _cluster_shape=[4, 8])
+    from models.common.modules.mlp.mlp_1d import MLP1DConfig
 
-    with pytest.raises(AssertionError, match="MLPNonTG only supports 1D meshes"):
-        MLP1DConfig(
-            dim=8192,
-            hidden_dim=28672,
-            mesh_ctx=mock_ctx,
+    mock_prg_config = MagicMock()
+    mock_mem_config = MagicMock()
+
+    config = MLP1DConfig(
+        w1=MagicMock(),
+        w2=MagicMock(),
+        w3=MagicMock(),
+        decode_w1_w3_prg_config=mock_prg_config,
+        decode_w2_prg_config=mock_prg_config,
+        decode_mlp2_input_memcfg=mock_mem_config,
+        decode_residual_memcfg=mock_mem_config,
+        activation_dtype=ttnn.bfloat16,
+    )
+
+    # User-provided overrides should be preserved
+    assert config.decode_w1_w3_prg_config is mock_prg_config
+    assert config.decode_w2_prg_config is mock_prg_config
+    assert config.decode_mlp2_input_memcfg is mock_mem_config
+    assert config.decode_residual_memcfg is mock_mem_config
+    assert config.activation_dtype == ttnn.bfloat16
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 8)],
+    ids=["1x8"],
+    indirect=True,
+)
+def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
+    """
+    Show how to override prefill_w2_prg_config with the MLP1DConfig API.
+
+    Use MLP1D.from_config() for any customization beyond the simple 3-weight API.
+    """
+    from models.common.modules.mlp.mlp_1d import _find_prefill_grid
+
+    # Use Llama 8B config
+    hf_model_name = "meta-llama/Llama-3.1-8B-Instruct"
+    hf_config = AutoConfig.from_pretrained(hf_model_name)
+    seq_len = 128
+    batch_size = 1
+
+    # Load HF model for reference weights
+    hf_config.num_hidden_layers = 1
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)
+    reference_mlp = hf_model.model.layers[0].mlp
+
+    # Generate random weights directly for this test
+    with torch.no_grad():
+        for param in reference_mlp.parameters():
+            param.copy_(torch.randn_like(param))
+
+    # Prepare weights
+    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()
+    w2_torch = reference_mlp.down_proj.weight.T.contiguous()
+    w3_torch = reference_mlp.up_proj.weight.T.contiguous()
+
+    # Create LazyWeights (no disk cache)
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    lazy_w1 = LazyWeight(source=w1_torch, dtype=ttnn.bfloat4_b)
+    lazy_w2 = LazyWeight(source=w2_torch, dtype=ttnn.bfloat8_b)
+    lazy_w3 = LazyWeight(source=w3_torch, dtype=ttnn.bfloat4_b)
+
+    # Step 1: Create MLP1D with default config
+    tt_model = MLP1D.from_config(MLP1DConfig(w1=lazy_w1, w2=lazy_w2, w3=lazy_w3))
+
+    # Step 2: Define custom prefill w2 config using resolved values from tt_model.config
+    cfg = tt_model.config
+    dim = cfg.dim
+    hidden_dim = cfg.hidden_dim
+    tile_size = cfg.tile_size
+    prefill_len_cutoff = cfg.prefill_len_cutoff
+
+    @lru_cache
+    def custom_prefill_w2_prg_config(seq_len: int):
+        n_w2 = dim
+        dram_shard_grid_width = 8
+        prefill_rows = 8
+        grid_size = _find_prefill_grid(prefill_rows, hidden_dim // tile_size)
+        return _matmul_config(
+            m=min(seq_len, prefill_len_cutoff),
+            k=hidden_dim,
+            n=n_w2,
+            grid_size=grid_size,
+            per_core_n=math.ceil(n_w2 / (tile_size * dram_shard_grid_width)),
         )
 
+    # Step 3: Override the prefill config on the existing model
+    tt_model.config.prefill_w2_prg_config = custom_prefill_w2_prg_config
 
-def test_mlp_1d_configs_methods():
-    """Test that MLP1DDecodeConfigs and MLP1DPrefillConfigs methods work."""
-    from dataclasses import dataclass
+    # Verify the override was applied
+    assert tt_model.config.prefill_w2_prg_config is custom_prefill_w2_prg_config
 
-    from models.common.modules.mlp.mlp_1d import MeshContext, MLP1DConfig
+    # Run prefill forward
+    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
+    tt_input = LazyWeight(source=torch_input, dtype=ttnn.bfloat8_b)
+    tt_output = tt_model.forward(tt_input, mode="prefill")
+    tt_output_torch = to_torch_auto_compose(tt_output)
+    ttnn.SetDefaultDevice(None)
 
-    @dataclass
-    class MockMeshContext(MeshContext):
-        mesh_device: object = None
-        tt_ccl: object = None
-        _num_devices: int = 8
-        _cluster_shape: list = None
+    # Verify output shape matches input shape (MLP is dim -> dim)
+    assert tt_output_torch.shape == torch_input.shape, f"Expected {torch_input.shape}, got {tt_output_torch.shape}"
 
-        def __post_init__(self):
-            if self._cluster_shape is None:
-                self._cluster_shape = [1, self._num_devices]
-
-        def num_devices(self) -> int:
-            return self._num_devices
-
-        def cluster_shape(self) -> list:
-            return self._cluster_shape
-
-    mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
-
-    config = MLP1DConfig(
-        dim=4096,
-        hidden_dim=14336,
-        mesh_ctx=mock_ctx,
-    )
-
-    # Decode should have decode-specific methods
-    assert callable(config.decode_config.w1_w3_prg_config)
-    assert callable(config.decode_config.w2_prg_config)
-    assert callable(config.decode_config.sharded_mlp2_input_memcfg)
-    assert callable(config.decode_config.decode_residual_memcfg)
-
-    # Prefill should have prefill-specific methods (that take seq_len)
-    assert callable(config.prefill_config.w1_w3_prg_config)
-    assert callable(config.prefill_config.w2_prg_config)
-
-    # Neither should have TG-specific methods
-    assert not hasattr(config.decode_config, "ff1_3_tg_progcfg")
-    assert not hasattr(config.prefill_config, "ff1_3_tg_progcfg")
-
-    # Test that methods can be called and return values
-    decode_w1_w3 = config.decode_config.w1_w3_prg_config()
-    assert decode_w1_w3 is not None
-
-    prefill_w1_w3 = config.prefill_config.w1_w3_prg_config(seq_len=512)
-    assert prefill_w1_w3 is not None
-
-
-def test_mlp_1d_optimization_config():
-    """Test MLP1DOptimizationConfig default values."""
-    from dataclasses import dataclass
-
-    from models.common.modules.mlp.mlp_1d import MeshContext, MLP1DConfig
-
-    @dataclass
-    class MockMeshContext(MeshContext):
-        mesh_device: object = None
-        tt_ccl: object = None
-
-        def num_devices(self) -> int:
-            return 8
-
-        def cluster_shape(self) -> list:
-            return [1, 8]
-
-    mock_ctx = MockMeshContext()
-
-    config = MLP1DConfig(
-        dim=4096,
-        hidden_dim=14336,
-        mesh_ctx=mock_ctx,
-    )
-
-    opt = config.optimization_config
-    assert opt.ff1_3_dtype() == ttnn.bfloat8_b
-    assert opt.ff2_dtype() == ttnn.bfloat8_b
-    assert opt.activation_dtype() is None
-    assert opt.li_ff1_3_compute_kernel_cfg() is not None
-    assert opt.li_ff2_compute_kernel_cfg() is not None
+    # Verify numerical correctness against reference
+    with torch.no_grad():
+        reference_output = reference_mlp(torch_input)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, 0.98)
+    assert passing, f"MLP1D with custom prefill config failed PCC: {pcc_message}"
+    logger.info(f"test_mlp_1d_config_prefill_override: PASSED - {pcc_message}")
 
 
 # Pulled from deduped perf sweep of existing model tests in CI
@@ -257,144 +290,86 @@ def _list_test_cases() -> list[pytest.param]:
     # fmt: on
 
 
-# todo)) python profile and see what are other bottlenecks in testing run time
-# - random tensor can be shared across tests if they are the same shape --> reuse ttnn cache file
-# - group mesh device is really good
+# [INFO] generate random tensor for every test case is too expensive; cache weights and reuse them across test cases
+# [INFO] separate out ttnn_mesh_device parameter allows for sharing the same mesh device across test cases
 @pytest.mark.parametrize(
-    "ttnn_mesh_device,batch_size,seq_len,mode,w1_dtype,w2_dtype,w3_dtype,hf_model_name,pcc",
+    "ttnn_mesh_device",
+    [(1, 1), (1, 2), (1, 8)],
+    ids=["1x1", "1x2", "1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape,batch_size,seq_len,mode,w1_dtype,w2_dtype,w3_dtype,hf_model_name,pcc",
     _list_test_cases(),
-    indirect=["ttnn_mesh_device"],
 )
 def test_mlp_1d_vs_reference(
-    ttnn_mesh_device: ttnn.MeshDevice, batch_size, seq_len, mode, w1_dtype, w2_dtype, w3_dtype, hf_model_name, pcc
+    ttnn_mesh_device: ttnn.MeshDevice,
+    mesh_shape,
+    batch_size,
+    seq_len,
+    mode,
+    w1_dtype,
+    w2_dtype,
+    w3_dtype,
+    hf_model_name,
+    pcc,
 ):
     """
     Test MLP1D constructed via direct APIs (MLP1DConfig) matches HF reference MLP.
 
     Configs pulled from perf sweep CSVs (b{batch_size}-DP-{dp}_{model}).
     """
-    import math
-    from functools import cached_property
 
-    from transformers import AutoConfig, AutoModelForCausalLM
-    from transformers.modeling_utils import no_init_weights
-
-    from models.common.modules.lazy_weight import LazyWeight
-    from models.common.modules.mlp.mlp_1d import MLP1D, MeshContext, MLP1DConfig, MLP1DPrefillConfigs, _matmul_config
-    from models.tt_transformers.tt.ccl import TT_CCL
-
+    # get reference model; generate and load deterministic, random weights into the reference model
     seed = 1234
     torch.manual_seed(seed)
 
     # HF model (default small) for reference; skip global init to only seed MLP.
     config = AutoConfig.from_pretrained(hf_model_name)
     config.num_hidden_layers = 1
+
     with no_init_weights():
         hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
     first_layer = hf_model.model.layers[0]
     reference_mlp = first_layer.mlp
 
-    # Initialize only the MLP submodule deterministically.
-    with torch.no_grad():
-        for param in reference_mlp.parameters():
-            param.copy_(torch.randn_like(param))
+    # Initialize only the MLP submodule deterministically (cached for speed).
+    _get_or_init_mlp_weights(hf_model_name, reference_mlp)
 
-    dim = config.hidden_size
-    hidden_dim = config.intermediate_size
-    cluster_shape = list(ttnn_mesh_device.shape)
-
-    # Deterministic random weights + input (match test_mlp_2d_vs_reference pattern).
-    # TT expects weights in (input_dim, output_dim) layout.
+    # Build MLP1D TT model and load the same weights in
+    # TT expects weights in TTNN layout (in_features, out_features) - transpose from PyTorch layout
+    # todo)) transpose could be part of the MLP1D config! --> use dim and hidden_dim to figure out!
     w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
     w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
     w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
-    torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+    dim = config.hidden_size
+    torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
-    tt_ccl = TT_CCL(ttnn_mesh_device)
-    mesh_ctx = MeshContext(mesh_device=ttnn_mesh_device, tt_ccl=tt_ccl)
+    # Create LazyWeights
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    cache_dir = Path("model_cache/mlp_1d")
+    lazy_w1 = LazyWeight(source=w1_torch, dtype=w1_dtype, cache_dir_weight_name=(cache_dir, "w1"))
+    lazy_w2 = LazyWeight(source=w2_torch, dtype=w2_dtype, cache_dir_weight_name=(cache_dir, "w2"))
+    lazy_w3 = LazyWeight(source=w3_torch, dtype=w3_dtype, cache_dir_weight_name=(cache_dir, "w3"))
 
-    class TestMLP1DConfig(MLP1DConfig):
-        @cached_property
-        def prefill_config(self) -> MLP1DPrefillConfigs:
-            # NOTE: For multi-device runs, W2 consumes the per-device activation shard
-            # (hidden_dim // num_devices). The default MLP1D prefill config uses K=hidden_dim.
-            class _Prefill(MLP1DPrefillConfigs):
-                def w2_prg_config(inner_self, seq_len: int):
-                    n_w2 = inner_self.cfg.dim
-                    dram_shard_grid_width = 8
-                    return _matmul_config(
-                        m=min(seq_len, inner_self.cfg.prefill_len_cutoff),
-                        k=inner_self.cfg.hidden_dim // inner_self.cfg.num_devices,
-                        n=n_w2,
-                        grid_size=inner_self._mlp2_grid(seq_len),
-                        per_core_n=math.ceil(n_w2 / (inner_self.cfg.tile_size * dram_shard_grid_width)),
-                    )
+    # Use from_config for power-user path (custom settings)
+    tt_model = MLP1D(lazy_w1, lazy_w2, lazy_w3)
 
-            return _Prefill(self)
-
-        @cached_property
-        def lazy_w1(self) -> LazyWeight:
-            return LazyWeight(
-                source=w1_torch,
-                dtype=w1_dtype,
-                device=ttnn_mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-1),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self.w1_w3_mem_config(),
-            )
-
-        @cached_property
-        def lazy_w2(self) -> LazyWeight:
-            return LazyWeight(
-                source=w2_torch,
-                dtype=w2_dtype,
-                device=ttnn_mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-2),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self.w2_mem_config(),
-            )
-
-        @cached_property
-        def lazy_w3(self) -> LazyWeight:
-            return LazyWeight(
-                source=w3_torch,
-                dtype=w3_dtype,
-                device=ttnn_mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_mesh_device, dim=-1),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self.w1_w3_mem_config(),
-            )
-
-    mlp_config = TestMLP1DConfig(
-        dim=dim,
-        hidden_dim=hidden_dim,
-        mesh_ctx=mesh_ctx,
-        max_batch_size=batch_size,
+    # Run TT model with the same input -- torch_input -- converted to ttnn tensor lazily on the fly
+    # [INFO] we use LazyWeight on input for the benefit of faster testing (cached input); in production, the input is already a ttnn tensor.
+    tt_input = LazyWeight(
+        source=torch_input,
+        dtype=ttnn.bfloat8_b,
+        # cache_dir_weight_name=(cache_dir, "input"), # todo)) needs better fingerprinting for input tensor
     )
+    tt_output = tt_model.forward(tt_input, mode)
+    tt_output_torch = to_torch_auto_compose(tt_output)
+    ttnn.SetDefaultDevice(None)
 
-    tt_model = MLP1D(mlp_config)
-
+    # Now both models are ready to go
+    # Run reference model
     with torch.no_grad():
         reference_output = reference_mlp(torch_input)
-
-    input_mem_config = (
-        mlp_config.decode_config.mlp_input_memcfg()
-        if mode == "decode"
-        else mlp_config.prefill_config.mlp_input_memcfg()
-    )
-
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=ttnn_mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=cluster_shape),
-        dtype=ttnn.bfloat8_b,
-        memory_config=input_mem_config,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    tt_output = tt_model.forward(tt_input, mode)
-
-    tt_output_torch = to_torch_auto_compose(tt_output)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

@@ -1,12 +1,42 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 
 import ttnn
 
 
-@pytest.fixture(scope="session")
+def pytest_collection_modifyitems(config, items):
+    """Deselect tests where ttnn_mesh_device fixture doesn't match mesh_shape param.
+
+    This enables tests to use cross-product parametrization (all meshes × all cases)
+    while only running the valid combinations, without noisy skip messages.
+    """
+    selected = []
+    deselected = []
+
+    for item in items:
+        if not hasattr(item, "callspec"):
+            selected.append(item)
+            continue
+
+        params = item.callspec.params
+        fixture_mesh = params.get("ttnn_mesh_device")
+        required_mesh = params.get("mesh_shape")
+
+        # Keep test if no mesh_shape param or if meshes match
+        if required_mesh is None or fixture_mesh == required_mesh:
+            selected.append(item)
+        else:
+            deselected.append(item)
+
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+
+
+@pytest.fixture(scope="module")
 def ttnn_mesh_device(request):
     """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
     if not hasattr(request, "param"):
