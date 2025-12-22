@@ -284,7 +284,7 @@ private:
         std::vector<GoldenCsvEntry>::iterator golden_it,
         const std::vector<GoldenCsvEntry>::iterator& golden_end);
     std::ofstream init_diff_csv_file(
-        std::filesystem::path& csv_path, const std::string& header, const std::string& csv_type);
+        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type);
     std::string get_golden_csv_filename();
     void compare_summary_results_with_golden();
 

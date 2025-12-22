@@ -158,8 +158,12 @@ Result conv_transpose2d_L1(
         auto_shard);
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
+    // Pad out_channels to be divisible by (num_cores_channels * TILE_WIDTH) to ensure
+    // channels can be evenly distributed across cores (consistent with regular conv2d)
+    uint32_t out_channels_padded = tt::round_up(
+        out_channels, get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, batch_size * dims.output_height * dims.output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape({1, 1, batch_size * dims.output_height * dims.output_width, out_channels_padded}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
 
@@ -197,6 +201,20 @@ Result conv_transpose2d_L1(
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {
         // prepare weights in desired layout and move to device
+        // For grouped conv_transpose2d (groups > 1), we need to:
+        // 1. Apply grouped layout conversion BEFORE the transpose to expand the weight tensor
+        // 2. Then apply the standard transpose transformation
+        // 3. Use groups=1 for the rest of the pipeline since grouping is already handled
+        ttnn::Tensor weight_for_transform = weight_tensor;
+        uint32_t groups_for_prep = groups;
+        if (groups > 1) {
+            // Convert [in_channels, out_channels/groups, H, W] -> [in_channels, out_channels, H, W]
+            weight_for_transform = conv2d::convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
+                weight_tensor, groups, weight_tensor.dtype());
+            // After grouped conversion, we use groups=1 since the grouping is already embedded in the weights
+            groups_for_prep = 1;
+        }
+
         Conv2dWeightsBiasPrepConfig params(
             input_channels_alignment,
             conv_config.weights_dtype,
@@ -204,13 +222,18 @@ Result conv_transpose2d_L1(
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
             output_parallel_config,
-            groups,
+            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
             mm_conv && auto_shard,
-            bias_tensor.has_value());
+            out_channels,  // explicit out_channels for grouped convolutions
+            bias_tensor.has_value(),
+            false,                                      // enable_kernel_stride_folding
+            false,                                      // full_inner_dim
+            false,                                      // enable_activation_reuse
+            ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-            transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);
+            transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel), bias_tensor, params, device);
     }
     Tensor output;
     if (mm_conv) {

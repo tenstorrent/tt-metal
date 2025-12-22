@@ -177,14 +177,12 @@ Result conv2d_L1(
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
         mm_conv && auto_shard,
+        out_channels,
         bias_tensor.has_value(),
-        true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
-        kernel_size,
-        orig_stride,
-        padding_n4);
+        orig_stride);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
