@@ -302,9 +302,54 @@ def device_params(request):
     return getattr(request, "param", {})
 
 
+@pytest.fixture(scope="module")
+def _device_module_impl(request):
+    """
+    Internal module-scoped device fixture.
+    Do not use directly - use `device` fixture with @pytest.mark.use_module_device marker.
+
+    Usage in test files:
+        # Module scope, no special params:
+        pytestmark = pytest.mark.use_module_device
+
+        # Module scope WITH device_params:
+        pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
+
+        def test_something(device):  # Just use 'device' as normal
+            ...
+    """
+    import ttnn
+
+    device_id = request.config.getoption("device_id")
+
+    # Get device_params from marker: @pytest.mark.use_module_device({"param": value})
+    marker = request.node.get_closest_marker("use_module_device")
+    device_params = marker.args[0] if marker and marker.args else {}
+
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
+    updated_device_params = get_updated_device_params(device_params)
+    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    ttnn.SetDefaultDevice(device)
+
+    yield device
+
+    ttnn.SetDefaultDevice(None)
+    ttnn.close_device(device)
+
+
 @pytest.fixture(scope="function")
 def device(request, device_params):
     import ttnn
+
+    # Check if file/test wants module-scoped device
+    if request.node.get_closest_marker("use_module_device"):
+        yield request.getfixturevalue("_device_module_impl")
+        return
 
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
