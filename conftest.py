@@ -334,6 +334,7 @@ def _device_module_impl(request):
 
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
     ttnn.SetDefaultDevice(device)
 
     yield device
