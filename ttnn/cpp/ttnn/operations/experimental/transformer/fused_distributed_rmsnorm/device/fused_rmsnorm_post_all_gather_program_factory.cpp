@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fused_rmsnorm_post_all_gather_program_factory.hpp"
+
 #include <optional>
 #include <string>
 #include <variant>
 
-#include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
@@ -17,7 +18,7 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -37,29 +38,34 @@ inline uint16_t bfloat16(float float_num) {
     // store lower 16 as 16-bit uint
     return (uint16_t)uint32_data;
 }
+
 inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
     // first -> lower 16
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-// computes layernorm(a)*gamma + beta
-tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi_core(
-    const Tensor& input_tensor,
-    const Tensor& stats_tensor,
-    Tensor& output_tensor,
-    const std::optional<const Tensor>& weight_tensor,
-    const std::optional<const Tensor>& transformation_mat,
-    const std::optional<const Tensor>& rope_cos,
-    const std::optional<const Tensor>& rope_sin,
-    float eps,
-    uint32_t num_heads,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGatherProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& stats_tensor = tensor_args.stats_tensor;
+    const auto& weight_tensor = tensor_args.weight;
+    const auto& transformation_mat = tensor_args.transformation_mat;
+    const auto& rope_cos = tensor_args.rope_cos;
+    const auto& rope_sin = tensor_args.rope_sin;
+
+    const float eps = operation_attributes.eps;
+    const uint32_t num_heads = operation_attributes.num_heads;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     Program program = tt::tt_metal::CreateProgram();
 
@@ -393,52 +399,58 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
     }
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id = reader_kernels_id, writer_kernel_id = writer_kernels_id, cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& stats_tensor = input_tensors.at(1);
-            const auto& weight_tensor = optional_input_tensors.at(0);
-            const auto& transformation_mat_tensor = optional_input_tensors.at(1);
-            const auto& rope_cos_tensor = optional_input_tensors.at(2);
-            const auto& rope_sin_tensor = optional_input_tensors.at(3);
 
-            const auto input_addr = input_tensor.buffer()->address();
-            const auto stats_addr = stats_tensor.buffer()->address();
-            const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().buffer()->address() : 0;
-            const auto transformation_mat_addr =
-                transformation_mat_tensor.has_value() ? transformation_mat_tensor.value().buffer()->address() : 0;
-            const auto rope_cos_addr = rope_cos_tensor.has_value() ? rope_cos_tensor.value().buffer()->address() : 0;
-            const auto rope_sin_addr = rope_sin_tensor.has_value() ? rope_sin_tensor.value().buffer()->address() : 0;
-            const auto& output_tensor = output_tensors.at(0);
-            const auto output_addr = output_tensor.buffer()->address();
-
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-
-            for (const auto& core : cores) {
-                {
-                    auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-                    reader_args[0] = input_addr;
-                    reader_args[1] = stats_addr;
-                    reader_args[2] = weight_addr;
-                    reader_args[3] = transformation_mat_addr;
-                    reader_args[4] = rope_cos_addr;
-                    reader_args[5] = rope_sin_addr;
-                }
-
-                {
-                    auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-                    writer_args[0] = output_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = cores}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+void FusedRMSNormPostAllGatherProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+    const auto& cores = shared_vars.cores;
+    const auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    const auto& writer_kernel_id = shared_vars.writer_kernel_id;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& stats_tensor = tensor_args.stats_tensor;
+    const auto& weight_tensor = tensor_args.weight;
+    const auto& transformation_mat_tensor = tensor_args.transformation_mat;
+    const auto& rope_cos_tensor = tensor_args.rope_cos;
+    const auto& rope_sin_tensor = tensor_args.rope_sin;
+
+    const auto input_addr = input_tensor.buffer()->address();
+    const auto stats_addr = stats_tensor.buffer()->address();
+    const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().buffer()->address() : 0;
+    const auto transformation_mat_addr =
+        transformation_mat_tensor.has_value() ? transformation_mat_tensor.value().buffer()->address() : 0;
+    const auto rope_cos_addr = rope_cos_tensor.has_value() ? rope_cos_tensor.value().buffer()->address() : 0;
+    const auto rope_sin_addr = rope_sin_tensor.has_value() ? rope_sin_tensor.value().buffer()->address() : 0;
+    const auto output_addr = output_tensor.buffer()->address();
+
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+    for (const auto& core : cores) {
+        {
+            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
+            reader_args[0] = input_addr;
+            reader_args[1] = stats_addr;
+            reader_args[2] = weight_addr;
+            reader_args[3] = transformation_mat_addr;
+            reader_args[4] = rope_cos_addr;
+            reader_args[5] = rope_sin_addr;
+        }
+
+        {
+            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
+            writer_args[0] = output_addr;
+        }
+    }
+}
+
+}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program

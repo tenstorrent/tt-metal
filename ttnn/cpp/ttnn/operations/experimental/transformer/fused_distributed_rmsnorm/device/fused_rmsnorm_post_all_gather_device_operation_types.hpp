@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
+namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
+
+struct operation_attributes_t {
+    float eps;
+    uint32_t num_heads;
+    tt::tt_metal::MemoryConfig memory_config;
+    ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<tt::tt_metal::DataType> dtype;
+};
+
+struct tensor_args_t {
+    Tensor input_tensor;
+    Tensor stats_tensor;
+    std::optional<Tensor> weight;
+    std::optional<Tensor> transformation_mat;
+    std::optional<Tensor> rope_cos;
+    std::optional<Tensor> rope_sin;
+};
+
+using tensor_return_value_t = Tensor;
+
+using spec_return_value_t = TensorSpec;
+
+}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
