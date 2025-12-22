@@ -8,8 +8,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/small_vector.hpp>
 
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::tensor_impl;
+
 void test_ttnn_add() {
-    using namespace tt::tt_metal;
     if (tt::tt_metal::GetNumAvailableDevices() == 0) {
         fmt::print("No devices found\n");
         return;
@@ -21,16 +23,15 @@ void test_ttnn_add() {
     auto a = ttnn::arange(32, DataType::BFLOAT16, *device);
     auto b = ttnn::arange(32, DataType::BFLOAT16, *device);
 
-    a.print();
-    b.print();
+    std::cout << "tensor a: " << to_string(a) << std::endl;
+    std::cout << "tensor b: " << to_string(b) << std::endl;
 
     auto c = ttnn::add(a, b);
-    c.print();
+    std::cout << "tensor c: " << to_string(c) << std::endl;
 }
 
 void test_ttnn() {
     // no device is required for this test
-    using namespace tt::tt_metal;
     std::vector<float> data(32 * 32);
     for (int i = 0; i < 32 * 32; i++) {
         data[i] = float(i);
@@ -38,9 +39,9 @@ void test_ttnn() {
     auto tensor1 = Tensor::from_vector(
         data,
         TensorSpec(Shape{32, 32}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
-    tensor1.print();
+    std::cout << "tensor1: " << to_string(tensor1) << std::endl;
     auto tensor2 = tensor1.to_layout(Layout::TILE);
-    tensor2.print();
+    std::cout << "tensor2: " << to_string(tensor2) << std::endl;
 }
 
 void test_tt_stl() {
@@ -54,14 +55,14 @@ void test_tt_stl() {
 }
 
 int main() {
-    char* env_var = std::getenv("TT_METAL_HOME");
+    char* env_var = std::getenv("TT_METAL_RUNTIME_ROOT");
     if (env_var == nullptr) {
         fmt::print(
-            "WARNING: Please set the environment variable TT_METAL_HOME to "
+            "WARNING: Please set the environment variable TT_METAL_RUNTIME_ROOT to "
             "the path of the Metalium installation.\n");
     }
 
-    fmt::print("TT_METAL_HOME: {}\n", env_var);
+    fmt::print("TT_METAL_RUNTIME_ROOT: {}\n", env_var);
     test_tt_stl();
     test_ttnn();
     test_ttnn_add();

@@ -178,4 +178,4 @@ class TTNNConan(ConanFile):
             tt_metal_home = str(self.package_folder) + "/bin/tt-metalium/"
 
         self.cpp_info.defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
-        self.runenv_info.define("TT_METAL_HOME", tt_metal_home)
+        self.runenv_info.define("TT_METAL_RUNTIME_ROOT", tt_metal_home)
