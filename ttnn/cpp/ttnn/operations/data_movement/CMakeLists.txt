@@ -238,8 +238,14 @@ target_sources(
         transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp
-        untilize/device/untilize_op.cpp
-        untilize/device/untilize_program_factory.cpp
+        untilize/device/untilize_device_operation.cpp
+        untilize/device/untilize_device_operation_types.cpp
+        untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.cpp
+        untilize/device/factories/untilize_single_core_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_block_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_program_factory.cpp
         untilize/untilize.cpp
         untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
         untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
