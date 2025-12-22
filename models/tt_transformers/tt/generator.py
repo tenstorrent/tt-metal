@@ -90,6 +90,7 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self.slice_tensors = self._create_slice_tensors()
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
@@ -100,6 +101,21 @@ class Generator:
     model_capabilities = {
         "supports_prefix_caching": True,
     }
+
+    def _create_slice_tensors(self):
+        slice_tensors = []
+        for i in range(self.data_parallel):
+            slice_start_tensor = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=self.model_args[i].mesh_device)
+            slice_end_tensor = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=self.model_args[i].mesh_device)
+            slice_tensors.append((slice_start_tensor, slice_end_tensor))
+        return slice_tensors
+
+    def prepare_slice_tensors(self, last_token_idx, embed_shape, model_id):
+        start_slice_tensor = ttnn.from_torch(torch.tensor([0, 0, last_token_idx, 0]))
+        end_slice_tensor = ttnn.from_torch(torch.tensor([0, 0, last_token_idx + 32, embed_shape]))
+        host_tensors = [start_slice_tensor, end_slice_tensor]
+        device_tensors = [self.slice_tensors[model_id][0], self.slice_tensors[model_id][1]]
+        copy_host_to_device(host_tensors, device_tensors, mesh_device=self.model_args[model_id].mesh_device)
 
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
@@ -118,6 +134,7 @@ class Generator:
         enable_trace,
         sampling_params=None,
     ):
+        return
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -171,6 +188,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        last_token_idx=None,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
@@ -179,6 +197,7 @@ class Generator:
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
@@ -187,10 +206,12 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            slice_tensors=self.slice_tensors[model_id],
         )
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
@@ -200,6 +221,7 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            slice_tensors=self.slice_tensors[model_id],
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Prefill Trace")
@@ -224,6 +246,7 @@ class Generator:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                last_token_idx=last_token_idx,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -236,6 +259,7 @@ class Generator:
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            last_token_idx=last_token_idx,
         )
 
         return tt_out_trace
@@ -249,6 +273,7 @@ class Generator:
         user_id=0,
         page_table=None,
         model_id=-1,
+        last_token_idx=None,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
@@ -256,6 +281,8 @@ class Generator:
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
         )
+
+        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
 
         ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
 
@@ -368,11 +395,6 @@ class Generator:
                     num_cached_tokens=num_cached_tokens,
                     **local_kwargs,
                 )
-            if enable_trace_current_prompt:
-                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-                # We need to do this here, because we can't do this part in forward() if we have trace enabled
-                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
