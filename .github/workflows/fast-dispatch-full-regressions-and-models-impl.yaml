@@ -57,6 +57,7 @@ jobs:
             {"model":"swin_s"},
             {"model":"swin_v2"},
             {"model":"mobilenetv2"},
+            {"model":"mobilenetv3"},
             {"model":"segformer"},
             {"model":"vgg_unet"},
             {"model":"vanilla_unet"},
