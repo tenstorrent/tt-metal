@@ -787,7 +787,7 @@ Tensor create_tt_tensor_from_host_data(
             tensor_shape.rank() <= 4 &&
             // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
             !memory_config.is_sharded() &&
-            // on-device tiling operation expects 32x32 row. In some cases (`test_tiny_tiles_bfloat` test for example)
+            // on-device tiling operation expects 32x32. In some cases (`test_tiny_tiles_bfloat` test for example)
             // the tile size is provided explicitly and does not match x32 pattern.
             (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
              ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
@@ -809,6 +809,10 @@ Tensor create_tt_tensor_from_host_data(
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         } else if (mesh_mapper != nullptr) {
+            // sharded tensor must be created using factory function to avoid validation errors in the
+            // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails
+            // with `Number of shards along height 32 must not exceed number of cores 16` if the
+            // spec is constructed directly.
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -820,10 +824,12 @@ Tensor create_tt_tensor_from_host_data(
                 static_cast<T>(pad_value));
         }
 
+        TensorSpec tensor_spec(
+            tensor_shape, TensorLayout(dst_dtype, PageConfig(host_construct_layout, optional_tile), memory_config));
+
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
-            TensorSpec(
-                tensor_shape, TensorLayout(dst_dtype, PageConfig(host_construct_layout, optional_tile), memory_config)),
+            tensor_spec,
             nullptr,
             std::nullopt,
             static_cast<T>(pad_value));
@@ -842,7 +848,7 @@ Tensor create_tt_tensor_from_host_data(
     }
 }
 
-DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype) {
+DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, bool is_sharded) {
     auto is_torch_dtype_matches_ttnn = [](ttnn::PyDType type) {
         switch (type) {
             case ttnn::PyDType::UINT64:
@@ -868,11 +874,21 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype) 
         }
     };
 
+    const DataType mapped_dst_type =
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
+
+    auto get_type_tile = [](DataType dtype) {
+        return tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(dtype));
+    };
+
+    if (is_sharded && get_type_tile(dst_dtype) != get_type_tile(to_ttnn_dtype(src_dtype))) {
+        // Sharded typecast does not support conversion between tensors with types of different tile size:
+        // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
+        return mapped_dst_type;
+    }
+
     if (!is_torch_dtype_matches_ttnn(src_dtype)) {
-        if ((dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B)) {
-            return DataType::FLOAT32;
-        }
-        return dst_dtype;
+        return mapped_dst_type;
     }
 
     return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
@@ -905,7 +921,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         mesh_mapper,
         pad_value);
 
-    auto host_dtype = compute_host_dtype(src_dtype, dst_dtype);
+    auto host_dtype = compute_host_dtype(src_dtype, dst_dtype, memory_config.is_sharded());
     auto host_buffer = get_host_data(host_dtype);
     Tensor output = create_tt_tensor_from_host_data(
         host_buffer,
@@ -919,7 +935,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         device.has_value(),
         mesh_mapper,
         cq_id,
-        device.value());
+        device.value_or(nullptr));
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

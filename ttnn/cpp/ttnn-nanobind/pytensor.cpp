@@ -490,7 +490,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::object& py_tensor, DataTyp
             case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(ptr, numel, cont_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(ptr, numel, cont_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(ptr, numel, cont_tensor);
-            default: TT_THROW("Unsupported target DataType!");
+            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
         }
     };
 
@@ -502,7 +502,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::object& py_tensor, DataTyp
             case DataType::UINT8: return "uint8";
             case DataType::UINT16: return "int16";
             case DataType::INT32: return "int32";
-            default: TT_THROW("Unsupported target DataType!");
+            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
         }
     };
 
