@@ -8,8 +8,8 @@ This kernel is expected to be executed on only one core (RISCV_1).
 */
 
 #include <cstdint>
-#include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     auto args_dst = TensorAccessorArgs<0, 0>();

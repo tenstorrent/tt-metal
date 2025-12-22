@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 // #include "risc_common.h"
-#include "risc_attribs.h"
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/risc_attribs.h"
+#include "internal/debug/watcher_common.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
 

@@ -31,6 +31,7 @@ target_sources(
             layernorm/layernorm.hpp
             layernorm/device/layernorm_types.hpp
             layernorm_distributed/device/layernorm_distributed_types.hpp
+            layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
@@ -62,8 +63,9 @@ target_sources(
         layernorm_distributed/device/layernorm_post_all_gather/layernorm_post_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_post_all_gather/layernorm_post_all_gather_program_factory.cpp
         layernorm_distributed/device/layernorm_post_all_gather/layernorm_post_all_gather_2d_program_factory.cpp
-        layernorm_distributed/device/layernorm_post_all_gather/layernorm_pre_all_gather_op_multi_core.cpp
-        layernorm_distributed/device/layernorm_pre_all_gather_op.cpp
+        layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp
+        layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp
+        layernorm_distributed/device/layernorm_pre_all_gather_2d_program_factory.cpp
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
