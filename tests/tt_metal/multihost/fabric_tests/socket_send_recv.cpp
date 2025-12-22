@@ -167,14 +167,11 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::unordered_map<uint32_t, tt_metal::distributed::MeshSocket> sockets_ctx0;
     std::unordered_map<uint32_t, tt_metal::distributed::MeshSocket> sockets_ctx1;
 
-    auto socket_connection = tt_metal::distributed::SocketConnection{
-        .sender_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)},
-        .receiver_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)}};
+    auto socket_connection = tt_metal::distributed::SocketConnection(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
 
-    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig{
-        .socket_storage_type = tt_metal::BufferType::L1,
-        .fifo_size = 1024,
-    };
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
     // Initialize sockets in context0 namespace
     if (*distributed_ctx0->rank() == recv_rank_ctx0) {
@@ -222,14 +219,11 @@ TEST_F(MeshDeviceExaboxFixture, CustomContextValidation) {
     using namespace tt_metal::distributed::multihost;
     std::vector<int> handshake_ranks = {0, 2};
     auto parent_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    auto socket_connection = tt_metal::distributed::SocketConnection{
-        .sender_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)},
-        .receiver_core = {MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)}};
+    auto socket_connection = tt_metal::distributed::SocketConnection(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
 
-    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig{
-        .socket_storage_type = tt_metal::BufferType::L1,
-        .fifo_size = 1024,
-    };
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
     if (parent_context->rank() == Rank{0}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
@@ -254,34 +248,31 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
     auto sender_logical_coord_1 = CoreCoord(1, 1);
     auto recv_logical_coord_1 = CoreCoord(1, 1);
 
-    tt_metal::distributed::SocketConnection socket_connection_0 = {
-        .sender_core = {MeshCoordinate(0, 0), sender_logical_coord_0},
-        .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord_0}};
+    tt_metal::distributed::SocketConnection socket_connection_0(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), sender_logical_coord_0),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord_0));
 
-    tt_metal::distributed::SocketConnection socket_connection_1 = {
-        .sender_core = {MeshCoordinate(3, 3), sender_logical_coord_1},
-        .receiver_core = {MeshCoordinate(3, 3), recv_logical_coord_1}};
+    tt_metal::distributed::SocketConnection socket_connection_1(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), sender_logical_coord_1),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), recv_logical_coord_1));
 
-    tt_metal::distributed::SocketConnection socket_connection_2 = {
-        .sender_core = {MeshCoordinate(3, 1), sender_logical_coord_0},
-        .receiver_core = {MeshCoordinate(3, 1), recv_logical_coord_0}};
+    tt_metal::distributed::SocketConnection socket_connection_2(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 1), sender_logical_coord_0),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 1), recv_logical_coord_0));
 
-    tt_metal::distributed::SocketConnection socket_connection_3 = {
-        .sender_core = {MeshCoordinate(1, 3), sender_logical_coord_1},
-        .receiver_core = {MeshCoordinate(1, 3), recv_logical_coord_1}};
+    tt_metal::distributed::SocketConnection socket_connection_3(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(1, 3), sender_logical_coord_1),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(1, 3), recv_logical_coord_1));
 
-    tt_metal::distributed::SocketConnection socket_connection_4 = {
-        .sender_core = {MeshCoordinate(0, 1), sender_logical_coord_1},
-        .receiver_core = {MeshCoordinate(2, 3), recv_logical_coord_0}};
+    tt_metal::distributed::SocketConnection socket_connection_4(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 1), sender_logical_coord_1),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(2, 3), recv_logical_coord_0));
 
-    tt_metal::distributed::SocketConnection socket_connection_5 = {
-        .sender_core = {MeshCoordinate(2, 3), sender_logical_coord_0},
-        .receiver_core = {MeshCoordinate(0, 1), recv_logical_coord_1}};
+    tt_metal::distributed::SocketConnection socket_connection_5(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(2, 3), sender_logical_coord_0),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 1), recv_logical_coord_1));
 
-    tt_metal::distributed::SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = tt_metal::BufferType::L1,
-        .fifo_size = 1024,
-    };
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
     uint32_t sender_mesh_id = 0;
     uint32_t recv_mesh_id = 1;

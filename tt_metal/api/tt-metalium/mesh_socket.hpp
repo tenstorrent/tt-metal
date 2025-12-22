@@ -17,9 +17,17 @@ struct MeshCoreCoord {
     MeshCoordinate device_coord = MeshCoordinate(0);
     CoreCoord core_coord = CoreCoord(0, 0);
 
+    // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
+    MeshCoreCoord() {}
+    MeshCoreCoord(MeshCoordinate device_coord, CoreCoord core_coord) :
+        device_coord(device_coord), core_coord(core_coord) {}
+
     bool operator==(const MeshCoreCoord& other) const {
         return device_coord == other.device_coord && core_coord == other.core_coord;
     }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("device_coord", "core_coord");
+    auto attribute_values() const { return std::forward_as_tuple(device_coord, core_coord); }
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.
@@ -29,9 +37,17 @@ struct SocketConnection {
     MeshCoreCoord sender_core = {};
     MeshCoreCoord receiver_core = {};
 
+    // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
+    SocketConnection() {}
+    SocketConnection(MeshCoreCoord sender_core, MeshCoreCoord receiver_core) :
+        sender_core(sender_core), receiver_core(receiver_core) {}
+
     bool operator==(const SocketConnection& other) const {
         return sender_core == other.sender_core && receiver_core == other.receiver_core;
     }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("sender_core", "receiver_core");
+    auto attribute_values() const { return std::forward_as_tuple(sender_core, receiver_core); }
 };
 
 // Specifies how memory is allocated for this socket.
@@ -44,6 +60,24 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
+
+    // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
+    SocketMemoryConfig() {}
+    SocketMemoryConfig(
+        BufferType socket_storage_type,
+        uint32_t fifo_size,
+        std::optional<SubDeviceId> sender_sub_device = std::nullopt,
+        std::optional<SubDeviceId> receiver_sub_device = std::nullopt) :
+        socket_storage_type(socket_storage_type),
+        fifo_size(fifo_size),
+        sender_sub_device(sender_sub_device),
+        receiver_sub_device(receiver_sub_device) {}
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device");
+    auto attribute_values() const {
+        return std::forward_as_tuple(socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device);
+    }
 };
 
 // A socket config fully specifies the following:
@@ -60,6 +94,7 @@ struct SocketConfig {
     multihost::Rank sender_rank{0};
     multihost::Rank receiver_rank{0};
     std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
+    SocketConfig() = default;
     SocketConfig(
         const std::vector<SocketConnection>& socket_connection_config,
         const SocketMemoryConfig& socket_mem_config,
@@ -73,7 +108,6 @@ struct SocketConfig {
         sender_rank(0),
         receiver_rank(0),
         distributed_context(distributed_context) {}
-    SocketConfig() = default;
     SocketConfig(
         const std::vector<SocketConnection>& socket_connection_config,
         const SocketMemoryConfig& socket_mem_config,
@@ -96,6 +130,18 @@ struct SocketConfig {
         sender_rank(sender_rank),
         receiver_rank(receiver_rank),
         distributed_context(distributed_context) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "socket_connection_config",
+        "socket_mem_config",
+        "sender_mesh_id",
+        "receiver_mesh_id",
+        "sender_rank",
+        "receiver_rank");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            socket_connection_config, socket_mem_config, sender_mesh_id, receiver_mesh_id, sender_rank, receiver_rank);
+    }
 };
 
 enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };

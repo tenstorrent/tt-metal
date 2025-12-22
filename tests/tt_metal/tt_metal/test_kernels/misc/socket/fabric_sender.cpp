@@ -52,10 +52,8 @@ void kernel_main() {
     fabric_connection.open();
 
     // Create Socket Interface
-    DPRINT << "Create sender socket" << ENDL();
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
-    DPRINT << "Socket Page size: " << page_size << ENDL();
 
     uint32_t data_addr = local_l1_buffer_addr;
 
@@ -63,15 +61,10 @@ void kernel_main() {
 
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
-    DPRINT << "Outstanding data size: " << outstanding_data_size << ENDL();
     while (outstanding_data_size) {
-        DPRINT << "Reserve pages for sender socket" << ENDL();
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Reserve pages for sender socket done" << ENDL();
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-            DPRINT << "Downstream encoding: " << downstream_enc.downstream_noc_x << ","
-                   << downstream_enc.downstream_noc_y << ENDL();
             uint64_t receiver_noc_coord_addr =
                 get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
             fabric_write_any_len(
@@ -84,15 +77,11 @@ void kernel_main() {
         }
         data_addr += page_size;
         outstanding_data_size -= page_size;
-        DPRINT << "Push pages to sender socket" << ENDL();
         socket_push_pages(sender_socket, 1);
 
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
-        DPRINT << "Notify receiver done" << ENDL();
     }
-    DPRINT << "Socket barrier" << ENDL();
     socket_barrier(sender_socket);
-    DPRINT << "Socket barrier done" << ENDL();
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
     update_socket_config(sender_socket);
     fabric_connection.close();
