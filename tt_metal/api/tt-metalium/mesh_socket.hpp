@@ -139,6 +139,8 @@ private:
         config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
+    void initialize_from_host_ranks();
+    void initialize_from_mesh_ids();
     void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;

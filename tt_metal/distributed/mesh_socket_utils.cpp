@@ -457,7 +457,7 @@ void forward_descriptor_to_peer(
         if (*std::get<0>(mesh_id_and_host_rank) == my_mesh_id &&
             rank_translation_table.find(rank) != rank_translation_table.end()) {
             my_ranks.push_back(rank_translation_table.at(rank));
-            if (*std::get<1>(mesh_id_and_host_rank) == 0) {
+            if (*std::get<1>(mesh_id_and_host_rank) == 0) {  // TODO: Shouldn't derive controller rank from host rank 0.
                 controller_rank = rank_translation_table.at(rank);
             }
         } else if (

@@ -38,50 +38,66 @@ void point_to_point_barrier(
 
 }  // namespace
 
-MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
-    auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+void MeshSocket::initialize_from_host_ranks() {
+    multihost::Rank sender_rank = config_.sender_rank;
+    multihost::Rank receiver_rank = config_.receiver_rank;
     if (config_.distributed_context) {
-        // The user passed in a custom distributed context. Translate the ranks here to the default/global context.
-        std::cout << "Using custom distributed context" << std::endl;
-        std::array<int, 2> socket_ranks = {*config_.sender_rank, *config_.receiver_rank};
+        std::array<int, 2> socket_ranks = {*sender_rank, *receiver_rank};
         std::array<int, 2> translated_socket_ranks = {-1, -1};
         config_.distributed_context->translate_ranks_to_other_ctx(
             socket_ranks, DistributedContext::get_current_world(), translated_socket_ranks);
-        std::cout << "Translated socket ranks: " << translated_socket_ranks[0] << " and " << translated_socket_ranks[1]
+        std::cout << "Translated sender rank: " << *sender_rank << " to " << translated_socket_ranks[0] << std::endl;
+        std::cout << "Translated receiver rank: " << *receiver_rank << " to " << translated_socket_ranks[1]
                   << std::endl;
-        auto sender_rank = Rank{translated_socket_ranks[0]};
-        auto recv_rank = Rank{translated_socket_ranks[1]};
-        rank_translation_table_[Rank{translated_socket_ranks[0]}] = config_.sender_rank;
-        rank_translation_table_[Rank{translated_socket_ranks[1]}] = config_.receiver_rank;
-        if (!config_.sender_mesh_id.has_value()) {
-            TT_FATAL(
-                global_logical_bindings.find(sender_rank) != global_logical_bindings.end(),
-                "Invalid socket sender rank {} specified.",
-                *sender_rank);
-            TT_FATAL(
-                global_logical_bindings.find(recv_rank) != global_logical_bindings.end(),
-                "Invalid socket receiver rank {} specified.",
-                *recv_rank);
-            config_.sender_mesh_id = *std::get<0>(global_logical_bindings.at(sender_rank));
-            config_.receiver_mesh_id = *std::get<0>(global_logical_bindings.at(recv_rank));
-        }
+        sender_rank = Rank{translated_socket_ranks[0]};
+        receiver_rank = Rank{translated_socket_ranks[1]};
+        rank_translation_table_[sender_rank] = config_.sender_rank;
+        rank_translation_table_[receiver_rank] = config_.receiver_rank;
+
     } else {
         rank_translation_table_[config_.sender_rank] = config_.sender_rank;
         rank_translation_table_[config_.receiver_rank] = config_.receiver_rank;
-        if (!config_.sender_mesh_id.has_value()) {
-            TT_FATAL(
-                global_logical_bindings.find(config_.sender_rank) != global_logical_bindings.end(),
-                "Invalid socket sender rank {} specified.",
-                *config_.sender_rank);
-            TT_FATAL(
-                global_logical_bindings.find(config_.receiver_rank) != global_logical_bindings.end(),
-                "Invalid socket receiver rank {} specified.",
-                *config_.receiver_rank);
-            config_.sender_mesh_id = *std::get<0>(global_logical_bindings.at(config_.sender_rank));
-            config_.receiver_mesh_id = *std::get<0>(global_logical_bindings.at(config_.receiver_rank));
+    }
+    const auto& global_logical_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    TT_FATAL(
+        global_logical_bindings.find(sender_rank) != global_logical_bindings.end() &&
+            global_logical_bindings.find(receiver_rank) != global_logical_bindings.end(),
+        "Invalid socket sender rank {} or receiver rank {} specified.",
+        *sender_rank,
+        *receiver_rank);
+    config_.sender_mesh_id = *std::get<0>(global_logical_bindings.at(sender_rank));
+    config_.receiver_mesh_id = *std::get<0>(global_logical_bindings.at(receiver_rank));
+}
+
+void MeshSocket::initialize_from_mesh_ids() {
+    const auto& global_logical_bindings =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+
+    for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
+        if (*std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
+            *std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value()) {
+            if (config_.distributed_context) {
+                std::array<int, 1> socket_ranks = {*rank};
+                std::array<int, 1> translated_socket_ranks = {-1};
+                config_.distributed_context->translate_ranks_to_other_ctx(
+                    socket_ranks, DistributedContext::get_current_world(), translated_socket_ranks);
+                rank_translation_table_[Rank{translated_socket_ranks[0]}] = rank;
+
+            } else {
+                rank_translation_table_[rank] = rank;
+            }
         }
+    }
+}
+
+MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
+    auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
+    if (config_.sender_mesh_id.has_value()) {
+        TT_FATAL(config.receiver_mesh_id.has_value(), "Sender mesh id and receiver mesh id must be set.");
+        this->initialize_from_mesh_ids();
+    } else {
+        this->initialize_from_host_ranks();
     }
 
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
