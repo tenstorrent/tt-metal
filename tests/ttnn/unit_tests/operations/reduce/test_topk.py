@@ -266,3 +266,42 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+    ids=[
+        "BFLOAT16_B",
+    ],
+)
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
+    ((1, 1, 159 * 159, 1, 2, 50),),  # passed
+)
+@pytest.mark.parametrize(
+    "sorted",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "largest",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [
+        None,
+    ],
+)
+def test_topk_nms(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
+    if dim == 0 or dim == 1:
+        # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
+        # input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32
+        # this is because, transpose.cpp always typecasts bf8 to bf16
+        # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
+        pytest.skip()
+    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
