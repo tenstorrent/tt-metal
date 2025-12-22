@@ -180,6 +180,72 @@ class TestTriage:
         )
         assert len(result.stderr) == 0
 
+    def test_triage_verbosity(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--verbosity=4", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_initialize_with_noc1(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_skip_version_check(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--skip-version-check", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_print_script_times(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--print-script-times", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_verbose(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "-vvv", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_disable_colors(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--disable-colors", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
     # Tests below test individual triage scripts
 
     def test_check_arc(self):
