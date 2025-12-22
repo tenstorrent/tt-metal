@@ -1048,13 +1048,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
-                mm_in0_sender_args.push_back(core.x);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_end);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args.push_back(core.x == 1 ? 0 : 1);
+                mm_in0_sender_args.push_back(0);
+                mm_in0_sender_args.push_back(0);
+                mm_in0_sender_args.push_back(1);
+                mm_in0_sender_args.push_back(0);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args.push_back(0);
             }
             if (in1_idx < num_blocks_x) {
                 tt_metal::SetRuntimeArgs(
