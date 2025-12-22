@@ -5,59 +5,54 @@
 # standard
 import argparse
 import builtins
-from contextlib import contextmanager
-from dataclasses import dataclass
 import datetime as dt
 import importlib
-from multiprocessing import Process
 import os
-from pathlib import Path
 import subprocess
 import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
+from multiprocessing import Process
+from pathlib import Path
 from queue import Empty
-from typing import Optional
 
 # third party
 import enlighten
+import framework.tt_smi_util as tt_smi_util
 from faster_fifo import Queue
 
 # tt
 from framework.device_fixtures import default_device
-from framework.elastic_config import *
-from framework.statuses import VectorValidity, TestStatus
-import framework.tt_smi_util as tt_smi_util
-from framework.sweeps_logger import sweeps_logger as logger
-from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from sweep_utils.perf_utils import run_with_cache_comparison, run_single
+from framework.statuses import TestStatus, VectorValidity
+from framework.sweeps_logger import sweeps_logger as logger
+from framework.vector_source import VectorSourceFactory
+from sweep_utils.perf_utils import run_single, run_with_cache_comparison
 
 
 @dataclass
 class SweepsConfig:
     """Configuration object for sweeps runner"""
 
-    module_name: Optional[str] = None
-    suite_name: Optional[str] = None
-    vector_source: str = "elastic"
-    file_path: Optional[str] = None
-    vector_id: Optional[str] = None
-    result_destination: str = "elastic"
+    module_name: str | None = None
+    suite_name: str | None = None
+    vector_source: str = "vectors_export"
+    file_path: str | None = None
+    vector_id: str | None = None
+    result_destination: str = "results_export"
     watcher: bool = False
     measure_perf: bool = False
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
     dry_run: bool = False
-    sweeps_tag: Optional[str] = None
-    skip_modules: Optional[str] = None
+    sweeps_tag: str | None = None
+    skip_modules: str | None = None
     skip_on_timeout: bool = False
     keep_invalid: bool = False
-    elastic_connection_string: Optional[str] = None
-    elastic_username: Optional[str] = None
-    elastic_password: Optional[str] = None
     summary: bool = False
-    run_contents: str = None
-    arch_name: Optional[str] = None
+    run_contents: str | None = None
+    arch_name: str | None = None
     main_proc_verbose: bool = False
 
 
@@ -83,21 +78,6 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
     )
-
-    if args.vector_source == "elastic" or args.result_dest == "elastic":
-        from framework.elastic_config import get_elastic_url
-
-        elastic_connection_string = get_elastic_url("corp")
-
-        # Acquire once
-        elastic_username = os.getenv("ELASTIC_USERNAME")
-        elastic_password = os.getenv("ELASTIC_PASSWORD")
-        if not elastic_username or not elastic_password:
-            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
-            exit(1)
-        config.elastic_connection_string = elastic_connection_string
-        config.elastic_username = elastic_username
-        config.elastic_password = elastic_password
 
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
@@ -126,8 +106,8 @@ def validate_arguments(args, parser):
         ),
         # File path constraints
         (
-            args.file_path and args.vector_source in ["elastic", "vectors_export"],
-            "File path should not be specified when test vector source is 'elastic' or 'vectors_export'.",
+            args.file_path and args.vector_source == "vectors_export",
+            "File path should not be specified when test vector source is 'vectors_export'.",
         ),
     ]
 
@@ -136,15 +116,6 @@ def validate_arguments(args, parser):
         if condition:
             parser.print_help()
             logger.error(error_message)
-            exit(1)
-
-    # Environment variable validation for elastic database
-    if args.vector_source == "elastic" or args.result_dest == "elastic":
-        elastic_username = os.getenv("ELASTIC_USERNAME")
-        elastic_password = os.getenv("ELASTIC_PASSWORD")
-
-        if not elastic_username or not elastic_password:
-            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in the environment variables.")
             exit(1)
 
     # Validate that skip modules is only used when running all modules
@@ -271,7 +242,7 @@ def get_initiated_by():
         return get_username()
 
 
-def get_github_pipeline_id() -> Optional[int]:
+def get_github_pipeline_id() -> int | None:
     """Get a CI pipeline identifier suitable for joining CICD metadata tables.
 
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
@@ -553,28 +524,16 @@ def run_sweeps(
 
     # Set up vector source based on config
     source_kwargs = {}
-    if config.vector_source == "elastic":
-        source_kwargs = {
-            "connection_string": config.elastic_connection_string,
-            "username": config.elastic_username,
-            "password": config.elastic_password,
-            "tag": config.sweeps_tag,
-        }
-    elif config.vector_source == "file":
+    if config.vector_source == "file":
         source_kwargs = {
             "file_path": config.file_path,
         }
+    # vectors_export uses default kwargs
     vector_source = VectorSourceFactory.create_source(config.vector_source, **source_kwargs)
 
     # Set up result destination based on config
     result_kwargs = {}
-    if config.result_destination == "elastic":
-        result_kwargs = {
-            "connection_string": config.elastic_connection_string,
-            "username": config.elastic_username,
-            "password": config.elastic_password,
-        }
-
+    # results_export and superset use default kwargs
     result_dest = ResultDestinationFactory.create_destination(config.result_destination, **result_kwargs)
 
     # Initialize run metadata and run record
@@ -824,8 +783,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vector-source",
         required=True,
-        choices=["elastic", "file", "vectors_export"],
-        help="Test vector source. Available presets are ['elastic', 'file', 'vectors_export']",
+        choices=["file", "vectors_export"],
+        help="Test vector source. Available presets are ['file', 'vectors_export']",
     )
 
     parser.add_argument("--file-path", required=False, help="Read and execute test vectors from a specified file path.")
@@ -837,8 +796,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "results_export", "superset"],
-        help="Specify test result destination. Available presets are ['elastic', 'results_export', 'superset']",
+        choices=["results_export", "superset"],
+        help="Specify test result destination. Available presets are ['results_export', 'superset']",
     )
 
     parser.add_argument(

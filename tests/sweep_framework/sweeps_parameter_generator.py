@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import sys
-import importlib
-import pathlib
 import datetime
-import os
 import hashlib
+import importlib
 import json
+import os
+import pathlib
 import random
+import sys
 
-from framework.permutations import *
+from framework.permutations import permutations
 from framework.serialize import serialize_structured
-from framework.statuses import VectorValidity, VectorStatus
+from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -339,7 +339,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
+        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
     )
     parser.add_argument(
         "--randomize",
@@ -361,11 +361,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Elasticsearch support has been removed. Vectors are always dumped to disk.
+    # Vectors are always dumped to disk in JSON format.
     if args.dump_file:
         logger.warning(
             "The --dump-file flag is deprecated and will be removed in a future version. "
-            "Elasticsearch support has been removed. Vectors are now always dumped to disk in JSON format by default. "
+            "Vectors are now always dumped to disk in JSON format by default. "
             "Please remove this flag from your scripts."
         )
 
