@@ -118,34 +118,49 @@ VERBOSITY_VALUE: Verbosity = Verbosity.INFO
 
 def ERROR(s, **kwargs):
     if Verbosity.supports(Verbosity.ERROR):
-        from triage import console
+        try:
+            from triage import console
 
-        console.print(f"[error]{s}[/]", **kwargs)
+            console.print(f"[error]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"ERROR: {s}", **kwargs)
 
 
 def WARN(s, **kwargs):
     if Verbosity.supports(Verbosity.WARN):
-        from triage import console
+        try:
+            from triage import console
 
-        console.print(f"[warning]{s}[/]", **kwargs)
+            console.print(f"[warning]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"WARNING: {s}", **kwargs)
 
 
 def DEBUG(s, **kwargs):
     if Verbosity.supports(Verbosity.DEBUG):
-        from triage import console
+        try:
+            from triage import console
 
-        console.print(f"[debug]{s}[/]", **kwargs)
+            console.print(f"[debug]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"DEBUG: {s}", **kwargs)
 
 
 def INFO(s, **kwargs):
     if Verbosity.supports(Verbosity.INFO):
-        from triage import console
+        try:
+            from triage import console
 
-        console.print(f"[info]{s}[/]", **kwargs)
+            console.print(f"[info]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"INFO: {s}", **kwargs)
 
 
 def VERBOSE(s, **kwargs):
     if Verbosity.supports(Verbosity.VERBOSE):
-        from triage import console
+        try:
+            from triage import console
 
-        console.print(f"[verbose]{s}[/]", **kwargs)
+            console.print(f"[verbose]{s}[/]", **kwargs)
+        except ImportError:
+            print(f"VERBOSE: {s}", **kwargs)
