@@ -38,16 +38,12 @@ void test_send_recv_async_(
     std::vector<distributed::SocketConnection> socket_connections;
     socket_connections.reserve(mesh_shape.mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
-        socket_connections.push_back({
-            .sender_core = {coord, sender_logical_coord},
-            .receiver_core = {coord, recv_logical_coord},
-        });
+        socket_connections.push_back(distributed::SocketConnection(
+            distributed::MeshCoreCoord(coord, sender_logical_coord),
+            distributed::MeshCoreCoord(coord, recv_logical_coord)));
     }
 
-    distributed::SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = socket_buffer_type,
-        .fifo_size = socket_fifo_size,
-    };
+    distributed::SocketMemoryConfig socket_mem_config(socket_buffer_type, socket_fifo_size);
 
     distributed::SocketConfig socket_config(socket_connections, socket_mem_config);
     auto [forward_send_socket, forward_recv_socket] =

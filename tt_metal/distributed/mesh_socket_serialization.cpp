@@ -93,9 +93,8 @@ SocketConnection from_flatbuffer(const distributed::flatbuffer::SocketConnection
         fb_socket_connection->receiver_core(),
         "Internal Error: Receiver core is not present in the socket connection during deserialization");
 
-    return SocketConnection{
-        .sender_core = from_flatbuffer(fb_socket_connection->sender_core()),
-        .receiver_core = from_flatbuffer(fb_socket_connection->receiver_core())};
+    return SocketConnection(
+        from_flatbuffer(fb_socket_connection->sender_core()), from_flatbuffer(fb_socket_connection->receiver_core()));
 }
 
 std::vector<SocketConnection> from_flatbuffer(

@@ -532,14 +532,11 @@ void test_multi_mesh_single_conn_bwd(
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
 
-    SocketConnection socket_connection = {
-        .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
-        .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord}};
+    SocketConnection socket_connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), sender_logical_coord),
+        MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord));
 
-    SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = tt_metal::BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
+    SocketMemoryConfig socket_mem_config(tt_metal::BufferType::L1, socket_fifo_size);
 
     constexpr uint32_t sender_rank = 1;
     constexpr uint32_t num_iterations = 50;
@@ -588,13 +585,10 @@ void test_multi_mesh_single_conn_fwd(
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
 
-    SocketConnection socket_connection = {
-        .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
-        .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord}};
-    SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = tt_metal::BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
+    SocketConnection socket_connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), sender_logical_coord),
+        MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord));
+    SocketMemoryConfig socket_mem_config(tt_metal::BufferType::L1, socket_fifo_size);
 
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 50;
@@ -644,13 +638,10 @@ void test_multi_mesh_multi_conn_fwd(
 
     for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
         socket_connections.push_back(
-            {.sender_core = {coord, sender_logical_core}, .receiver_core = {coord, recv_logical_core}});
+            SocketConnection(MeshCoreCoord(coord, sender_logical_core), MeshCoreCoord(coord, recv_logical_core)));
     }
 
-    SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
+    SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
@@ -700,13 +691,10 @@ void test_multi_mesh_multi_conn_bidirectional(
 
     for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
         socket_connections.push_back(
-            {.sender_core = {coord, sender_logical_core}, .receiver_core = {coord, recv_logical_core}});
+            SocketConnection(MeshCoreCoord(coord, sender_logical_core), MeshCoreCoord(coord, recv_logical_core)));
     }
 
-    SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
+    SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
     constexpr uint32_t aggregator_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
