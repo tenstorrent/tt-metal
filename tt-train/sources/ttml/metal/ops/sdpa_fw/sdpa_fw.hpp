@@ -15,8 +15,7 @@ struct SDPAForwardOperation {
         const ttnn::Tensor& value,
         const std::optional<ttnn::Tensor>& mask,  // attention mask
         const float dropout_probability = 0.0F,   // default value
-        const bool return_intermediates = false,
-        const bool fp32_dest_acc_en = true);
+        const bool return_intermediates = false);
 };
 
 }  // namespace ttml::metal::ops::sdpa_fw
