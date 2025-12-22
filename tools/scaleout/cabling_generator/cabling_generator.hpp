@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <filesystem>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -19,41 +19,10 @@
 
 namespace tt::scaleout_tools::cabling_generator::proto {
 class ClusterDescriptor;
-class GraphTemplate;
-class ChildInstance;
 }  // namespace tt::scaleout_tools::cabling_generator::proto
-
-namespace tt::scaleout_tools {
-enum class NodeType;
-
-struct MergeValidationResult {
-    bool success = true;
-    std::vector<std::string> warnings;
-    std::vector<std::string> errors;
-
-    void add_warning(const std::string& msg) { warnings.push_back(msg); }
-
-    void add_error(const std::string& msg) {
-        errors.push_back(msg);
-        success = false;
-    }
-
-    void merge(const MergeValidationResult& other) {
-        success = success && other.success;
-        warnings.insert(warnings.end(), other.warnings.begin(), other.warnings.end());
-        errors.insert(errors.end(), other.errors.begin(), other.errors.end());
-    }
-
-    std::string format_messages() const;
-};
-}  // namespace tt::scaleout_tools
 
 namespace tt::scaleout_tools::fsd::proto {
     class FactorySystemDescriptor;
-}
-
-namespace tt::scaleout_tools::cabling_generator::proto {
-class ClusterDescriptor;
 }
 
 namespace tt::scaleout_tools::deployment::proto {
@@ -116,19 +85,25 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn);
 using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChannelEndpoint>;
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
 
+// Port connection types (graph-level connections between nodes)
+using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
+using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
+
 struct Node {
     std::string motherboard;
     std::map<TrayId, Board> boards;
     HostId host_id{0};
+
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using PortEndpoint = std::pair<TrayId, PortId>;
     using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
     std::unordered_map<PortType, std::vector<PortConnection>> inter_board_connections;
 };
 
-// Port connection types
-using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
-using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
+// Normalize a node-level connection pair so the smaller endpoint is always first (for consistent comparison)
+inline Node::PortConnection normalize_node_connection(const Node::PortConnection& conn) {
+    return (conn.first < conn.second) ? conn : Node::PortConnection(conn.second, conn.first);
+}
 
 // Resolved graph instance with concrete nodes (tree structure)
 struct ResolvedGraphInstance {
@@ -174,13 +149,12 @@ public:
 
     CablingGenerator() = default;
 
-    // Merge another CablingGenerator into this one
-    // Validates host_id uniqueness and merges all structures
-    // source_file is optional, used for error messages
-    void merge(const CablingGenerator& other, const std::string& source_file = "");
-
     // Equality comparison operator
     bool operator==(const CablingGenerator& other) const;
+
+    // Friend function to allow build_from_directory to access private merge
+    template <typename DeploymentArg>
+    friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
 
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
@@ -195,26 +169,18 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
-    // Utility functions for directory and file handling
-    static bool is_directory(const std::string& path);
-    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
-
-    // Validation functions for descriptor merging
-    static MergeValidationResult validate_host_consistency(const std::vector<std::string>& descriptor_paths);
-    static void validate_structure_identity(
-        const cabling_generator::proto::ClusterDescriptor& desc1,
-        const std::string& file1,
-        const cabling_generator::proto::ClusterDescriptor& desc2,
-        const std::string& file2,
-        MergeValidationResult& result);
-
 private:
-    // Common initialization logic for all constructors
-    void initialize_cluster(
-        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
-            std::nullopt);
+    // Merge another descriptor file into this CablingGenerator
+    // Creates CablingGenerator internally and merges it
+    // existing_sources: accumulated list of previously merged files (for error messages)
+    // new_file_path: path to the new file being merged in (for error messages)
+    // deployment_arg: either deployment descriptor path or vector of Host objects
+    template <typename DeploymentArg>
+    void merge(
+        const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources);
 
+    // Utility functions for directory and file handling
+    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 
@@ -246,31 +212,7 @@ private:
         const std::vector<PortType>& port_types,
         std::vector<PortConnection>& conn_list) const;
 
-private:
-    // Helper functions for validation
-    static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
-    static void validate_node_descriptors_identity(
-        const cabling_generator::proto::ClusterDescriptor& desc1,
-        const std::string& file1,
-        const cabling_generator::proto::ClusterDescriptor& desc2,
-        const std::string& file2,
-        MergeValidationResult& result);
-    static void validate_graph_template_children_identity(
-        const cabling_generator::proto::GraphTemplate& tmpl1,
-        const cabling_generator::proto::GraphTemplate& tmpl2,
-        const std::string& template_name,
-        const std::string& file1,
-        const std::string& file2,
-        MergeValidationResult& result);
-    static void validate_child_identity(
-        const cabling_generator::proto::ChildInstance& child1,
-        const cabling_generator::proto::ChildInstance& child2,
-        const std::string& template_name,
-        const std::string& file1,
-        const std::string& file2,
-        MergeValidationResult& result);
-
-    // Caches for optimization
+    // Member variables
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     // Tree structure for resolved graph instances
@@ -280,13 +222,6 @@ private:
     // Guaranteed to be sorted
     std::vector<LogicalChannelConnection> chip_connections_;
     std::vector<Host> deployment_hosts_;
-
-    // Helper to add a connection and update lookup structures
-    void add_port_connection(
-        PortType port_type,
-        const PortConnection& conn,
-        std::map<PortEndpoint, PortEndpoint>& endpoint_to_dest,
-        std::set<std::pair<PortEndpoint, PortEndpoint>>& connection_pairs);
 };
 
 }  // namespace tt::scaleout_tools

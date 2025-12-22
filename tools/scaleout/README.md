@@ -96,11 +96,13 @@ For large systems (e.g., BH Exabox), you can organize cabling into multiple desc
 ```
 
 The tool will:
-1. Recursively find all `.textproto` files in the directory
-2. Validate that there are no conflicting connections (same port connected to different endpoints)
-3. Merge all graph templates and connections
-4. Warn if duplicate connections are found (and deduplicate them)
-5. Validate host count consistency across descriptors
+1. Find all `.textproto` files in the specified directory (sorted alphabetically)
+2. Merge all graph templates and connections
+   - Validates structural compatibility (same node types, board configurations)
+   - Allows cross-descriptor connections on different ports for fully-connected graphs
+   - Supports torus-compatible merging (X + Y → XY torus)
+3. Deduplicate any duplicate connections
+4. Validate that no single descriptor defines a port multiple times
 
 **Conflict Detection:**
 - **Error**: If endpoint A is connected to endpoint B in one descriptor but to endpoint C in another

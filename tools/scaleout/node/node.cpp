@@ -51,16 +51,11 @@ get_port_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescripto
 
 }  // anonymous namespace
 
-// Base class for all node types
-class NodeBase {
-public:
-    virtual ~NodeBase() = default;
-    virtual Topology get_topology() const { return Topology::MESH; }
-    virtual tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const = 0;
-};
-
 // N300 Node class
 class N300T3KNode : public NodeBase {
+public:
+    Architecture get_architecture() const override { return Architecture::WORMHOLE; }
+
 protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         const std::string& motherboard, const bool default_cabling = false) {
@@ -119,6 +114,9 @@ public:
 };
 
 class WHGalaxyNode : public NodeBase {
+public:
+    Architecture get_architecture() const override { return Architecture::WORMHOLE; }
+
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
@@ -232,6 +230,8 @@ public:
 
 class P150LBNode : public NodeBase {
 public:
+    Architecture get_architecture() const override { return Architecture::BLACKHOLE; }
+
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("H13DSG-O-CPU");
@@ -244,6 +244,9 @@ public:
 
 // P150 QB AE Node class
 class P150QBAENode : public NodeBase {
+public:
+    Architecture get_architecture() const override { return Architecture::BLACKHOLE; }
+
 protected:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_impl(
         const bool default_cabling = false) {
@@ -282,6 +285,8 @@ public:
 // P300 QB GE Node class
 class P300QBGENode : public NodeBase {
 public:
+    Architecture get_architecture() const override { return Architecture::BLACKHOLE; }
+
     tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() const override {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("B850M-C");
@@ -298,6 +303,9 @@ public:
 };
 
 class BHGalaxyNode : public NodeBase {
+public:
+    Architecture get_architecture() const override { return Architecture::BLACKHOLE; }
+
 private:
     // Add X-torus QSFP connections
     static void add_x_torus_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor* node) {
@@ -408,8 +416,7 @@ public:
     Topology get_topology() const override { return Topology::XY_TORUS; }
 };
 
-// Helper function to create a node instance from NodeType
-static std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
+std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
     switch (node_type) {
         case NodeType::N300_LB: return std::make_unique<N300LBNode>();
         case NodeType::N300_LB_DEFAULT: return std::make_unique<N300LBDefaultNode>();
@@ -427,7 +434,7 @@ static std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
         case NodeType::BH_GALAXY_X_TORUS: return std::make_unique<BHGalaxyXTorusNode>();
         case NodeType::BH_GALAXY_Y_TORUS: return std::make_unique<BHGalaxyYTorusNode>();
         case NodeType::BH_GALAXY_XY_TORUS: return std::make_unique<BHGalaxyXYTorusNode>();
-        default: return nullptr;
+        default: throw std::runtime_error("Unknown node type: " + std::to_string(static_cast<int>(node_type)));
     }
 }
 
@@ -443,37 +450,12 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
 // Helper function to get topology for a NodeType (uses virtual function from node instances)
 Topology get_node_type_topology(NodeType node_type) {
     auto node = create_node_instance(node_type);
-    if (!node) {
-        return Topology::MESH;  // Unknown node types default to MESH
-    }
     return node->get_topology();
 }
 
-// Check if a node type is a torus topology
-bool is_a_torus(NodeType node_type) {
+bool is_torus(NodeType node_type) {
     Topology topology = get_node_type_topology(node_type);
     return topology == Topology::X_TORUS || topology == Topology::Y_TORUS || topology == Topology::XY_TORUS;
-}
-
-// Check if two node types have the same base architecture (WH vs BH)
-bool has_same_torus_architecture(NodeType type1, NodeType type2) {
-    const std::string name1 = std::string(enchantum::to_string(type1));
-    const std::string name2 = std::string(enchantum::to_string(type2));
-    return (name1.starts_with("WH_GALAXY") && name2.starts_with("WH_GALAXY")) ||
-           (name1.starts_with("BH_GALAXY") && name2.starts_with("BH_GALAXY"));
-}
-
-// Check if two torus node types are compatible for merging
-bool is_torus_compatible(NodeType type1, NodeType type2) {
-    Topology topo1 = get_node_type_topology(type1);
-    Topology topo2 = get_node_type_topology(type2);
-
-    // Both must be torus topologies
-    if (topo1 == Topology::MESH || topo2 == Topology::MESH) {
-        return false;
-    }
-
-    return has_same_torus_architecture(type1, type2);
 }
 
 }  // namespace tt::scaleout_tools
