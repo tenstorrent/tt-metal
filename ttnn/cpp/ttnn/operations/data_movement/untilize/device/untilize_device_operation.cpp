@@ -207,7 +207,7 @@ UntilizeDeviceOperation::tensor_return_value_t UntilizeDeviceOperation::create_o
 tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
     operation::Hash hash = operation::hash_operation<UntilizeDeviceOperation>(
@@ -215,7 +215,7 @@ tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
-        input_shape.volume(),
+        input_shape,  // Use full shape instead of just volume to avoid hash collisions
         operation_attributes.use_multicore,
         operation_attributes.use_pack_untilize,
         operation_attributes.fp32_dest_acc_en,
