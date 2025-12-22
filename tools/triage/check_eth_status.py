@@ -102,7 +102,7 @@ class EthCore(ABC):
             log_check_location(self.location, port_status_str != "Down", "port is down")
 
         # if the port is unused the rest of these checks are not relevant
-        if output.port_status in ("Unused", "Unknown", "Undefined"):
+        if output.port_status in ("Unused", "Unknown", "Undefined", None):
             return output
 
         # RETRAIN COUNT
