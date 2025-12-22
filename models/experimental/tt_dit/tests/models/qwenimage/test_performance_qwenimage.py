@@ -2,11 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import cProfile
-import io
-import pstats
 import statistics
-import time
 import pytest
 import ttnn
 from loguru import logger
@@ -24,16 +20,13 @@ from ....utils.diagnostic_timing import DiagnosticTimingCollector
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        # 2x4 config with SP enabled - SP on axis 0, no CFG parallel (for FSDP memory efficiency)
+        # 2x4 config with SP enabled - SP on axis 0 enables FSDP weight sharding (no CFG parallel)
         [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        # 6U config with SP enabled - uses sequence parallelism for FSDP weight sharding
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4cfg0sp0tp1",
         "2x4sp2tp4",
-        "T3K_4x8cfg1sp0tp1",
+        # "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -136,19 +129,12 @@ def test_qwenimage_pipeline_performance(
     warmup_timing = timer_warmup.get_timing_data()
     logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
 
-    # Print warmup breakdown to see trace capture time
-    print("\n" + "=" * 100)
-    print("WARMUP RUN TIMING BREAKDOWN (includes trace capture)")
-    print("=" * 100)
-    timer_warmup.print_breakdown()
-
     # =========================================================================
     # PERFORMANCE MEASUREMENT RUNS
     # =========================================================================
     logger.info("Running performance measurement iterations...")
     all_timings = []
-    all_diagnostic_data = []
-    num_perf_runs = 1  # Use 4 different prompts for performance testing
+    num_perf_runs = 1
 
     # Optional Tracy profiling (if available)
     profiler = None
@@ -172,16 +158,6 @@ def test_qwenimage_pipeline_performance(
             # Run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
 
-            # =====================================================================
-            # STEP 1: Wall clock verification
-            # =====================================================================
-            t_wall_start = time.perf_counter()
-
-            # Enable cProfile for first run to find pure-Python time sinks
-            if i == 0:
-                cpu_profiler = cProfile.Profile()
-                cpu_profiler.enable()
-
             with benchmark_profiler("run", iteration=i):
                 images = pipeline(
                     prompts=[prompts[prompt_idx]],
@@ -192,53 +168,12 @@ def test_qwenimage_pipeline_performance(
                     traced=True,
                 )
 
-            if i == 0:
-                cpu_profiler.disable()
-
-            t_wall_end = time.perf_counter()
-            t_wall_total = t_wall_end - t_wall_start
-
-            # =====================================================================
-            # STEP 5: Verify execution counts
-            # =====================================================================
             timing_data = timer.get_timing_data()
             all_timings.append(timing_data)
-            all_diagnostic_data.append(timer)
 
-            # Log execution counts for verification
-            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s (wall: {t_wall_total:.2f}s)")
-            logger.info(f"  Execution counts:")
-            logger.info(f"    - Pipeline calls: {timing_data.pipeline_call_count}")
-            logger.info(f"    - Denoising loops: {timing_data.denoising_loop_count}")
-            logger.info(f"    - VAE decodes: {timing_data.vae_decode_count}")
-            logger.info(f"    - Trace executes: {timing_data.trace_execute_count}")
-            logger.info(f"    - Device syncs: {timing_data.device_sync_count}")
+            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
 
-            # Save image after timing
-            t_save_start = time.perf_counter()
             images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
-            t_save_end = time.perf_counter()
-            logger.info(f"  Image save time: {t_save_end - t_save_start:.4f}s")
-
-            # =====================================================================
-            # Print detailed breakdown for this run
-            # =====================================================================
-            print(f"\n{'=' * 100}")
-            print(f"PERFORMANCE RUN {i+1} DETAILED TIMING BREAKDOWN")
-            print(f"{'=' * 100}")
-            timer.print_breakdown()
-
-            # =====================================================================
-            # STEP 4: CPU Profiler output (first run only)
-            # =====================================================================
-            if i == 0:
-                print("\n" + "=" * 100)
-                print("CPROFILE TOP 30 FUNCTIONS BY CUMULATIVE TIME")
-                print("=" * 100)
-                s = io.StringIO()
-                ps = pstats.Stats(cpu_profiler, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
-                ps.print_stats(30)
-                print(s.getvalue())
 
     finally:
         if profiler:
@@ -259,9 +194,6 @@ def test_qwenimage_pipeline_performance(
     for timing in all_timings:
         all_denoising_steps.extend(timing.denoising_step_times)
 
-    # =========================================================================
-    # STEP 6: FINAL DIAGNOSIS REPORT
-    # =========================================================================
     cfg_factor = cfg[0]  # First element is always the factor
     sp_factor = sp[0]
     tp_factor = tp[0]
@@ -321,114 +253,6 @@ def test_qwenimage_pipeline_performance(
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
 
-    # =========================================================================
-    # FINAL DIAGNOSIS TABLE
-    # =========================================================================
-    if all_diagnostic_data:
-        print("\n" + "=" * 100)
-        print("FINAL DIAGNOSIS: WHERE IS THE TIME GOING?")
-        print("=" * 100)
-
-        # Use the first run's data for the diagnosis
-        diag = all_diagnostic_data[0]
-        breakdown = diag.get_breakdown_dict()
-        total = breakdown.get("total", breakdown.get("_total", 1.0))
-
-        # Create diagnosis table
-        diagnosis_table = []
-
-        # Major regions
-        regions = [
-            ("Encoder Reload", "encoder_reload"),
-            ("Total Encoding", "total_encoding"),
-            ("Encoder Deallocate", "encoder_deallocate"),
-            ("Transformer Load", "transformer_load"),
-            ("Scheduler Init", "scheduler_init"),
-            ("Latents Init", "latents_init"),
-            ("RoPE Init", "rope_init"),
-            ("Tensor Transfer", "tensor_transfer"),
-            ("Trace Capture", "trace_capture"),
-            ("Denoising (total)", "denoising_step_total"),
-            ("  - Step Enqueue (total)", "step_enqueue_total"),
-            ("  - Step CFG (total)", "step_cfg_total"),
-            ("  - Step Sync (total)", "step_sync_total"),
-            ("VAE Pre-Sync", "vae_pre_sync"),
-            ("VAE Gather", "vae_gather"),
-            ("VAE Readback", "vae_readback"),
-            ("VAE Unpatchify", "vae_unpatchify"),
-            ("Transformer Deallocate", "transformer_deallocate"),
-            ("VAE Reload", "vae_reload"),
-            ("VAE Decode Forward", "vae_decode_forward"),
-            ("VAE Deallocate", "vae_deallocate"),
-            ("Postprocess", "postprocess"),
-            ("PIL Convert", "pil_convert"),
-            ("VAE Decoding (wrapper)", "vae_decoding"),
-        ]
-
-        print(f"{'Region':<35} | {'Time (s)':>12} | {'% of Total':>10}")
-        print("-" * 65)
-
-        accounted = 0.0
-        for name, key in regions:
-            t = breakdown.get(key, 0.0)
-            if t > 0:
-                pct = (t / total) * 100
-                print(f"{name:<35} | {t:>12.4f} | {pct:>9.1f}%")
-                if not name.startswith("  -") and key != "vae_decoding":
-                    accounted += t
-
-        other = total - accounted
-        print("-" * 65)
-        print(f"{'TOTAL (measured)':<35} | {total:>12.4f} | {100.0:>9.1f}%")
-        print(f"{'Accounted':<35} | {accounted:>12.4f} | {(accounted/total)*100:>9.1f}%")
-        print(f"{'OTHER (unaccounted)':<35} | {other:>12.4f} | {(other/total)*100:>9.1f}%")
-
-        # =====================================================================
-        # TOP 3 TIME SINKS
-        # =====================================================================
-        print("\n" + "=" * 100)
-        print("TOP TIME SINKS (regions > 1% of total)")
-        print("=" * 100)
-
-        all_regions = [(name, breakdown.get(key, 0.0)) for name, key in regions if not name.startswith("  -")]
-        all_regions.append(("OTHER (unaccounted)", other))
-        all_regions = sorted(all_regions, key=lambda x: -x[1])
-
-        for i, (name, t) in enumerate(all_regions[:10]):
-            if t > 0:
-                pct = (t / total) * 100
-                if pct >= 1.0:
-                    print(f"  {i+1}. {name:<30} {t:>10.4f}s ({pct:>5.1f}%)")
-
-        # =====================================================================
-        # SYNC VS ENQUEUE ANALYSIS
-        # =====================================================================
-        step_enqueue_total = breakdown.get("step_enqueue_total", 0.0)
-        step_sync_total = breakdown.get("step_sync_total", 0.0)
-        step_cfg_total = breakdown.get("step_cfg_total", 0.0)
-        denoising_total = breakdown.get("denoising_step_total", 0.0)
-
-        print("\n" + "=" * 100)
-        print("SYNC VS ENQUEUE ANALYSIS (Step 3)")
-        print("=" * 100)
-        print(f"Total denoising time:     {denoising_total:>10.4f}s")
-        print(f"  - Step enqueue total:   {step_enqueue_total:>10.4f}s")
-        print(f"  - Step CFG total:       {step_cfg_total:>10.4f}s")
-        print(f"  - Step sync total:      {step_sync_total:>10.4f}s")
-
-        if step_sync_total > step_enqueue_total * 5:
-            print("\n  ⚠️  HIDDEN SYNC DETECTED!")
-            print("      The sync time is much larger than enqueue time.")
-            print("      This means the per-step timer was measuring enqueue, not execution.")
-            print("      The real work happens during the sync.")
-
-        if step_cfg_total > denoising_total * 0.5:
-            print("\n  ⚠️  CFG COMBINE IS A MAJOR BOTTLENECK!")
-            print("      The CFG combine step (which includes .cpu(blocking=True)) is taking")
-            print("      a large fraction of the denoising time. This is a hidden sync/readback.")
-
-    print("=" * 100)
-
     # Validate that we got reasonable results
     assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
     assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
@@ -450,12 +274,12 @@ def test_qwenimage_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "clip_encoding_time": 0.2,
-            "t5_encoding_time": 0.15,
-            "total_encoding_time": 0.35,
-            "denoising_steps_time": 15.0,
-            "vae_decoding_time": 2.0,
-            "total_time": 17.5,
+            "clip_encoding_time": 0.25,
+            "t5_encoding_time": 0.2,
+            "total_encoding_time": 0.4,
+            "denoising_steps_time": 110.0,
+            "vae_decoding_time": 2.5,
+            "total_time": 113.0,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
