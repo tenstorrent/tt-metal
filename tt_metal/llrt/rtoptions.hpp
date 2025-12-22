@@ -25,7 +25,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -151,6 +151,8 @@ class RunTimeOptions {
     InspectorSettings inspector_settings;
 
     bool lightweight_kernel_asserts = false;
+
+    bool enable_llk_asserts = false;
 
     // Fabric profiling settings
     struct FabricProfilingSettings {
@@ -355,6 +357,9 @@ public:
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
+
+    bool get_llk_asserts() const { return enable_llk_asserts; }
+    void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.

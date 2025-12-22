@@ -1,6 +1,6 @@
 set(HAL_STRUCT_SOURCES
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/dev_msgs.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/fabric_telemetry_msgs.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/dev_msgs.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
 )
 
 set(DEV_MSGS_CODEGEN_PY ${CMAKE_CURRENT_SOURCE_DIR}/codegen/codegen.py)

@@ -10,7 +10,7 @@ run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
+    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
@@ -21,7 +21,7 @@ run_async_test() {
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-        python -m tracy -v -r -p --cpp-post-process -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -43,7 +43,11 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        else
+            python -m tracy -v -r -p -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        fi
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -56,6 +60,36 @@ run_async_tracing_T3000_test() {
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
             python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
+
+            # Compare runtime analysis report with legacy path report
+            runtime_report="$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv"
+            echo "Comparing runtime analysis report with legacy path report..."
+            echo "Runtime analysis report: $runtime_report"
+
+            # Regenerate report using legacy path
+            echo "Regenerating report using legacy path (--force-legacy-device-logs)..."
+            ./tools/tracy/process_ops_logs.py -o $PROFILER_ARTIFACTS_DIR -n "legacy_comparison" --force-legacy-device-logs
+
+            # Find the legacy report (it's in the reports subdirectory)
+            legacy_report="$PROFILER_ARTIFACTS_DIR/reports/legacy_comparison/ops_perf_results_legacy_comparison.csv"
+
+            if [ ! -f "$legacy_report" ]; then
+                echo "ERROR: Legacy path report not found at $legacy_report"
+                exit 1
+            fi
+
+            echo "Legacy path report: $legacy_report"
+
+            # Compare the two reports
+            if python tools/tracy/compare_full_op_report.py "$runtime_report" "$legacy_report"; then
+                echo "✓ Reports are identical - runtime analysis and legacy path produce the same results"
+            else
+                echo "✗ Reports differ - runtime analysis and legacy path produce different results"
+                exit 1
+            fi
+
+            rm -rf $PROFILER_ARTIFACTS_DIR/reports/legacy_comparison
+
 
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/$runDate
@@ -79,7 +113,11 @@ run_async_tracing_mid_run_dump_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        else
+            python -m tracy -v -r -p --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        fi
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -90,7 +128,11 @@ run_async_tracing_mid_run_dump_T3000_test() {
         midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
 
-        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+        if [[ -n "${NANOBIND}" ]]; then
+            python -m tracy -v -r -p -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]
+        else
+            python -m tracy -v -r -p -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+        fi
 
         nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv
@@ -107,7 +149,7 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    python -m tracy -v -r -p --cpp-post-process -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    python -m tracy -v -r -p -m "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
@@ -123,6 +165,25 @@ run_ccl_T3000_test() {
     fi
 }
 
+run_trace_only_resnet() {
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    if [[ -n "${NANOBIND}" ]]; then
+        TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m \
+            pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]
+    else
+        TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -p --device-trace-profiler -m \
+            pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+    fi
+    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+    then
+        echo "No verification as test was skipped"
+    else
+        echo "Test ran successfully"
+    fi
+}
+
 run_profiling_test() {
     run_async_test
 
@@ -133,6 +194,8 @@ run_profiling_test() {
     run_async_tracing_mid_run_dump_T3000_test
 
     run_mid_run_data_dump
+
+    run_trace_only_resnet
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
@@ -157,7 +220,14 @@ main() {
         source python_env/bin/activate
     fi
 
-    run_profiling_test
+    # If a function name is provided as first argument, run that function
+    if [[ -n "$1" ]] && [[ "$(type -t "$1")" == "function" ]]; then
+        echo "Running function: $1"
+        "$@"
+    else
+        # Otherwise run all tests
+        run_profiling_test
+    fi
 }
 
 main "$@"

@@ -195,6 +195,7 @@ public:
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
+    std::string get_hostname_for_rank(uint32_t rank) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
 
     // Generic Getters
@@ -219,7 +220,10 @@ public:
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
     YAML::Node generate_yaml_node() const;
-    void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
+    void emit_to_text_proto(const std::optional<std::string>& file_path = std::nullopt);
+    const std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& get_pcie_devices_per_tray() const {
+        return pcie_devices_per_tray_;
+    }
 
 private:
     void run_local_discovery(bool run_live_discovery);
@@ -250,6 +254,7 @@ private:
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
     tt::umd::semver_t ethernet_firmware_version_;
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> pcie_devices_per_tray_;
 };
 
 }  // namespace tt::tt_metal
