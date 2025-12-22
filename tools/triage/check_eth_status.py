@@ -101,6 +101,10 @@ class EthCore(ABC):
                 output.port_status = port_status_str
             log_check_location(self.location, port_status_str != "Down", "port is down")
 
+        # if the port is unused the rest of these checks are not relevant
+        if output.port_status in ("Unused", "Unknown", "Undefined", None):
+            return output
+
         # RETRAIN COUNT
         output.retrain_count = int(
             read_word_from_device(self.location, self.eth_core_definitions.retrain_count, context=self.context)
