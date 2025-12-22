@@ -341,6 +341,22 @@ int main() {
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
+        TT_FATAL(result_vec.size() == golden_vec.size(), "Result vector size mismatch");
+        // Compare results with some tolerance (loose tolerance because of limited precision of bfloat16).
+        constexpr float RELTOL = 0.04;
+        for (size_t i = 0; i < result_vec.size(); i++) {
+            const float expected = static_cast<float>(golden_vec[i]);
+            const float actual = static_cast<float>(result_vec[i]);
+            float relative_error = std::abs(actual - expected) / expected;
+            if (relative_error > RELTOL) {
+                std::cerr << "Mismatch at index " << i << ": " << actual << " vs expected " << expected << std::endl;
+                std::cerr << "Expected relative tolerance: " << RELTOL << " actual relative error: " << relative_error
+                          << std::endl;
+                pass = false;
+            }
+        }
+
+        // Alternative verification method:
         // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
         // This is a measure of how similar the two vectors are.
         // A PCC close to 1 indicates that the two vectors are very similar.
@@ -348,19 +364,6 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pcc);
         constexpr float expected_pcc = 0.97;
         TT_FATAL(pcc >= expected_pcc, "PCC not high enough. Result PCC: {}, Expected PCC: {}", pcc, expected_pcc);
-
-        // Validate results
-        constexpr float eps = 1e-2f;  // Loose tolerance because of limited precision of bfloat16.
-        TT_FATAL(result_vec.size() == golden_vec.size(), "Result vector size mismatch");
-        for (size_t i = 0; i < result_vec.size(); ++i) {
-            const float expected = static_cast<float>(golden_vec[i]);
-            const float actual = static_cast<float>(result_vec[i]);
-
-            if (std::abs(expected - actual) > eps) {
-                pass = false;
-                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
-            }
-        }
 
         pass &= prog_state.mesh_device->close();
 
