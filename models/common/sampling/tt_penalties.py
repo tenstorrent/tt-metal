@@ -239,6 +239,9 @@ class TTPenalties(LightweightModule):
         )
 
     def token_bin_counts_and_mask(self, new_tokens, src, counts=None, mask=None, counts_sliced=None):
+        print(f"scatter_add op_kwargs: {self._op_kwargs}")
+
+        print("foo")
         counts_new = ttnn.scatter_add(self.zeros, 1, new_tokens, src, **self._op_kwargs)
 
         new_tokens.deallocate()
