@@ -1727,12 +1727,11 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    // For bias preparation, use conv_config.weights_dtype if available, otherwise default to BFLOAT16
-    DataType weight_dtype = conv_config.weights_dtype.value_or(DataType::BFLOAT16);
-    DeviceComputeKernelConfig compute_config =
-        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
 
     // Use common setup function to get configuration parameters
     auto params = setup_conv_prep_config(
