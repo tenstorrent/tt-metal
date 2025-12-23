@@ -282,7 +282,7 @@ This allows for efficient memory access and computation.
 
 
 Metalium Programming Model
-========================
+==========================
 
 Tenstorrent devices can be programmed at multiple abstraction levels, from high-level neural network libraries to low-level kernel development.
 At the highest level, TT-NN provides a PyTorch-like Python API for neural network operations, while TT-Metalium serves as the low-level programming
@@ -331,7 +331,7 @@ launch is key to reasoning about performance, correctness, and why the APIs are 
 
 
 Example Metalium Program
-======================
+========================
 
 We will now present a simple example Metalium program that performs an elementwise addition of two tensors of shape MxN.
 This program will be used to illustrate the Metalium programming model, different types of kernels, and how they map to the underlying architecture.
@@ -635,7 +635,7 @@ On the other hand, it also means that errors in the kernel code will not be caug
 when JIT compilation is triggerred.
 
 Exercise 3: Observing JIT Compile Errors
-========================================
+==========================================
 
 Introduce a syntax error in the kernel code and rerun the program to see how JIT compilation errors are reported.
 After observing the error, fix the error and rerun the program to confirm that the program now runs correctly.
@@ -781,7 +781,7 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 
 
 Exercise 4: Using DPRINT to Debug a Kernel
-==========================================
+===========================================
 
 Add DPRINT statements to the writer kernel in our example program to print the values of iterator i and the contents of
 the resulting tile for the first three tiles processed by the kernel.
@@ -812,7 +812,7 @@ unset TT_METAL_DPRINT_CORES
 
 
 Exercise 5: Debugging Metalium Kernels
-====================================
+========================================
 
 Introduce the following bugs:
 
