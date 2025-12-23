@@ -91,6 +91,7 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.slice_tensors = self._create_slice_tensors()
+        self.embed_shape_for_slice = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
@@ -191,8 +192,9 @@ class Generator:
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        self.embed_shape_for_slice[prefill_ids.shape[-1]] = transformed_inputs[0].shape[-1]
+        self.prepare_slice_tensors(last_token_idx, self.embed_shape_for_slice[prefill_ids.shape[-1]], model_id)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
             rot_mats_global=tt_rot_mats_prefill_global,
@@ -205,7 +207,7 @@ class Generator:
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
+        self.prepare_slice_tensors(last_token_idx, self.embed_shape_for_slice[prefill_ids.shape[-1]], model_id)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
@@ -276,7 +278,7 @@ class Generator:
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
         )
 
-        self.prepare_slice_tensors(last_token_idx, prefill_ids.shape[-1], model_id)
+        self.prepare_slice_tensors(last_token_idx, self.embed_shape_for_slice[prefill_ids.shape[-1]], model_id)
 
         ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
 
