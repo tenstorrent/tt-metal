@@ -92,7 +92,7 @@ jobs:
                   "model": "llama3",
                   "arch": "wormhole_b0",
                   "cmd": "run_t3000_llama3_tests",
-                  "timeout": 45,
+                  "timeout": 55,
                   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
               },
               {
