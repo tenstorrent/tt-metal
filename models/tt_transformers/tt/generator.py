@@ -604,10 +604,7 @@ class Generator:
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         sampling_params_list = None
-        if (
-            sampling_params is not None
-            and not getattr(self.model[0], "sampling", None).tt_sampling._force_argmax_sampling
-        ):
+        if sampling_params is not None:
             # Fall back to dataclass defaults when optional fields are omitted
             chunked_fields = {}
             for field in SAMPLING_PARAM_FIELDS:
@@ -619,6 +616,7 @@ class Generator:
                     else:
                         raise
                 chunked_fields[field] = self._chunk_sampling_param(val)
+
             prompt_chunks = (
                 torch.chunk(prompt_tokens, self.data_parallel, 0)
                 if prompt_tokens is not None
@@ -634,16 +632,17 @@ class Generator:
                 for i in range(self.data_parallel)
             ]
             for i in range(self.data_parallel):
-                formatted_params = format_sampling_params(
-                    sampling_params_list[i], 32
-                )  # Sampling needs params padded to 32 regardless of batch_size
-                sampling_module = getattr(self.model[i], "sampling", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                sampling_module.reset_sampling_params(formatted_params)
                 if reset_batch:
-                    sampling_module.reset_seed(formatted_params.seed)
-                    sampling_module.reset_prompt_tokens(prompt_chunks[i])
-                    sampling_module.reset_output_state(output_chunks[i])
+                    formatted_params = format_sampling_params(
+                        sampling_params_list[i], 32
+                    )  # Sampling needs params padded to 32 regardless of batch_size
+                    sampling_module = getattr(self.model[i], "sampling", None)
+                    assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+                    sampling_module.reset_sampling_params(formatted_params)
+                    if not sampling_module.tt_sampling._force_argemax_sampling:
+                        sampling_module.reset_seed(formatted_params.seed)
+                        sampling_module.reset_prompt_tokens(prompt_chunks[i])
+                        sampling_module.reset_output_state(output_chunks[i])
 
         decode_kwargs = {
             "current_pos": start_pos,
