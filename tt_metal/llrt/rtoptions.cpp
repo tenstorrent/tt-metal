@@ -10,8 +10,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -19,9 +21,7 @@
 
 using std::vector;
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
@@ -72,6 +72,7 @@ enum class EnvVarID {
     TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
     TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
     TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
+    TT_METAL_DISABLE_XIP_DUMP,           // Disable XIP dump
 
     // ========================================
     // HARDWARE CONFIGURATION
@@ -79,6 +80,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
@@ -102,15 +104,21 @@ enum class EnvVarID {
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
+    TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
+    TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
 
     // ========================================
     // WATCHER SYSTEM
@@ -136,13 +144,14 @@ enum class EnvVarID {
     // ========================================
     // INSPECTOR
     // ========================================
-    TT_METAL_INSPECTOR,                              // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
-    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
-    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
-    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
-    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
-    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR,                                // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
+    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
+    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
+    TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -156,9 +165,24 @@ enum class EnvVarID {
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
 
     // ========================================
+    // LIGHTWEIGHT KERNEL DEBUGGING
+    // ========================================
+    TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
+
+    // ========================================
+    // LLK ASSERTIONS
+    // ========================================
+    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
+
+    // ========================================
+    // FABRIC CONFIGURATION
+    // ========================================
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
 };
 
 // Environment variable name for TT-Metal root directory
@@ -176,16 +200,44 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
 
 // Helper function to check if environment variable value is "1" (enabled)
 bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
+
+std::string trim_copy(const std::string& input) {
+    auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) { return std::isspace(ch); });
+    if (first == input.end()) {
+        return "";
+    }
+    auto last =
+        std::find_if_not(input.rbegin(), input.rend(), [](unsigned char ch) { return std::isspace(ch); }).base();
+    return std::string(first, last);
+}
+
+std::string to_lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return std::tolower(ch); });
+    return value;
+}
+
+std::string to_upper_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return std::toupper(ch); });
+    return value;
+}
+
+template <typename IntType>
+IntType parse_int_token(const std::string& token, const std::string& context) {
+    try {
+        long long parsed = std::stoll(token, nullptr, 0);
+        return static_cast<IntType>(parsed);
+    } catch (const std::invalid_argument&) {
+        TT_THROW("Invalid token '{}' while parsing {}", token, context);
+    } catch (const std::out_of_range&) {
+        TT_THROW("Out-of-range token '{}' while parsing {}", token, context);
+    }
+}
+
+bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
+
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() :
-    system_kernel_dir("/usr/share/tenstorrent/kernels/"),
-    profiler_enabled(false),
-    profile_dispatch_cores(false),
-    profiler_sync_enabled(false),
-    profiler_mid_run_dump(false),
-    profiler_trace_profiler(false),
-    profiler_buffer_usage_enabled(false) {
+RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -457,11 +509,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_GATHERING=1
         case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
 
-        // TT_METAL_FABRIC_TELEMETRY
-        // Enable fabric telemetry data collection.
+        // TT_METAL_FABRIC_BW_TELEMETRY
+        // Enable fabric bandwidth telemetry data collection.
         // Default: false (telemetry disabled)
-        // Usage: export TT_METAL_FABRIC_TELEMETRY=1
-        case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->enable_fabric_telemetry = true; break;
+        // Usage: export TT_METAL_FABRIC_BW_TELEMETRY=1
+        case EnvVarID::TT_METAL_FABRIC_BW_TELEMETRY: this->enable_fabric_bw_telemetry = true; break;
+
+        // TT_METAL_FABRIC_TELEMETRY
+        // Enable fabric telemetry data collection (supports structured spec).
+        // Default: false (telemetry disabled)
+        // Usage: export TT_METAL_FABRIC_TELEMETRY=1 (enable all stats on all chip/eth/erisc) or
+        //        export TT_METAL_FABRIC_TELEMETRY="chips=all;eth=0,2,7;erisc=all;stats=ROUTER_STATE|BANDWIDTH"
+        case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->ParseFabricTelemetryEnv(value); break;
 
         // TT_FABRIC_PROFILE_RX_CH_FWD
         // Enables fabric RX channel forwarding profiling.
@@ -647,6 +706,28 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_PROFILE_PERF_COUNTERS
+        // Enables Performance Counter profiling using a bitfield to select counter groups.
+        // Default: 0 (disabled)
+        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=value
+        //
+        // Valid values (bitfield):
+        //   1  (1 << 0) - FPU counters
+        //   2  (1 << 1) - PACK counters
+        //   4  (1 << 2) - UNPACK counters
+        //   8  (1 << 3) - L1 counters
+        //   16 (1 << 4) - INSTRN (instruction) counters
+        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //
+        // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
+        // Note: Currently, only FPU counters are supported
+        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
+            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            if (this->profiler_perf_counter_mode != 0) {
+                this->profiler_enabled = true;
+            }
+            break;
+
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.
         // Default: false (trace profiling disabled)
@@ -695,11 +776,58 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_PROFILER_SUM
+        // Enables sum profiling.
+        // Default: false (sum profiling disabled)
+        // Usage: export TT_METAL_PROFILER_SUM=1
+        case EnvVarID::TT_METAL_PROFILER_SUM: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_sum = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT
+        // Specifies the maximum number of programs supported by the profiler.
+        // Default: nullopt (uses profiler default)
+        // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
+        case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
+            // Only set the program support count if device profiler is also enabled
+            if (this->profiler_enabled && value) {
+                this->profiler_program_support_count = std::stoi(value);
+            }
+            break;
+        }
+
         // TT_METAL_TRACY_MID_RUN_PUSH
         // Forces Tracy profiler pushes during execution for real-time profiling.
         // Default: false (no mid-run pushes)
         // Usage: export TT_METAL_TRACY_MID_RUN_PUSH=1
         case EnvVarID::TT_METAL_TRACY_MID_RUN_PUSH: this->tracy_mid_run_push = true; break;
+
+        // TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES
+        // Disables dumping collected device data to files.
+        // Default: false (dump to files)
+        // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
+            // Only disable dumping to files if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_dump_to_files = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY
+        // Disables pushing collected device data to Tracy GUI.
+        // Default: false (push to Tracy GUI)
+        // Usage: export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY: {
+            // Only disable pushing to Tracy GUI if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
 
         // TT_METAL_GTEST_NUM_HW_CQS
         // Number of hardware command queues to use in tests.
@@ -728,6 +856,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
             break;
         }
+
+        // TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE
+        // Terminal command to execute on dispatch timeout.
+        // Default: "" (no command)
+        // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
+        case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
+            this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
 
         // ========================================
         // WATCHER SYSTEM
@@ -963,6 +1099,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT
+        // Enables serialization of inspector state on dispatch timeout. Set to '0' to disable.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+        case EnvVarID::TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT:
+            this->inspector_settings.serialize_on_dispatch_timeout = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.serialize_on_dispatch_timeout = false;
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -1025,6 +1172,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS
+        // Enables lightweight kernel assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
+        case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
+
+        // TT_METAL_LLK_ASSERTS
+        // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
+
         // ========================================
         // DEVICE MANAGER
         // ========================================
@@ -1034,6 +1193,35 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_NUMA_BASED_AFFINITY=1
         case EnvVarID::TT_METAL_NUMA_BASED_AFFINITY: {
             this->numa_based_affinity = is_env_enabled(value);
+            break;
+        }
+
+        // ========================================
+        // FABRIC CONFIGURATION
+        // ========================================
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS
+        // Timeout in milliseconds for fabric router sync
+        // Default: 5000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=8000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS:
+            try {
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS must be non-negative: {}", value);
+                }
+                this->fabric_router_sync_timeout_ms = static_cast<uint32_t>(parsed_value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
+            }
+            break;
+        // TT_METAL_DISABLE_XIP_DUMP
+        // Disable XIP dump
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_XIP_DUMP=1
+        case EnvVarID::TT_METAL_DISABLE_XIP_DUMP: {
+            this->disable_xip_dump = is_env_enabled(value);
             break;
         }
     }
@@ -1099,6 +1287,122 @@ void RunTimeOptions::ParseWatcherEnv() {
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
+}
+
+void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
+    auto disable_telemetry = [&]() {
+        set_enable_fabric_telemetry(false);
+        fabric_telemetry_settings = FabricTelemetrySettings{};
+    };
+
+    if (value == nullptr) {
+        disable_telemetry();
+        return;
+    }
+
+    std::string spec = trim_copy(value);
+    if (spec.empty() || spec == "0") {
+        disable_telemetry();
+        return;
+    }
+
+    FabricTelemetrySettings parsed_settings{};
+    parsed_settings.enabled = true;
+    set_enable_fabric_telemetry(true);
+
+    if (spec == "1") {
+        fabric_telemetry_settings = parsed_settings;
+        return;
+    }
+
+    auto handle_required_entries = [&](bool condition, const char* key) {
+        if (!condition) {
+            TT_THROW("TT_METAL_FABRIC_TELEMETRY {}= requires at least one entry", key);
+        }
+    };
+
+    auto parse_uint32_selection =
+        [&](const std::string& raw_value, FabricTelemetrySelection<uint32_t>& selection, const char* key) {
+            if (raw_value.empty() || equals_all(raw_value)) {
+                selection.set_monitor_all(true);
+                return;
+            }
+            selection.set_monitor_all(false);
+            selection.ids.clear();
+            std::stringstream value_stream(raw_value);
+            std::string token;
+            bool parsed_any = false;
+            while (std::getline(value_stream, token, ',')) {
+                token = trim_copy(token);
+                if (token.empty()) {
+                    continue;
+                }
+                int parsed_value = parse_int_token<int>(token, key);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_TELEMETRY {}= requires non-negative IDs", key);
+                }
+                parsed_any = true;
+                selection.ids.insert(static_cast<uint32_t>(parsed_value));
+            }
+            handle_required_entries(parsed_any, key);
+        };
+
+    std::stringstream section_stream(spec);
+    std::string section;
+    while (std::getline(section_stream, section, ';')) {
+        section = trim_copy(section);
+        if (section.empty()) {
+            continue;
+        }
+
+        auto eq_pos = section.find('=');
+        if (eq_pos == std::string::npos) {
+            TT_THROW("Invalid TT_METAL_FABRIC_TELEMETRY segment '{}'. Expected key=value.", section);
+        }
+
+        std::string key = trim_copy(section.substr(0, eq_pos));
+        std::string raw_value = trim_copy(section.substr(eq_pos + 1));
+        std::string key_lower = to_lower_copy(key);
+
+        if (key_lower == "chips") {
+            parse_uint32_selection(raw_value, parsed_settings.chips, key_lower.c_str());
+        } else if (key_lower == "eth") {
+            parse_uint32_selection(raw_value, parsed_settings.channels, key_lower.c_str());
+        } else if (key_lower == "erisc") {
+            parse_uint32_selection(raw_value, parsed_settings.eriscs, key_lower.c_str());
+        } else if (key_lower == "stats") {
+            if (raw_value.empty() || equals_all(raw_value)) {
+                parsed_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask;
+                continue;
+            }
+            parsed_settings.stats_mask = 0;
+            std::replace(raw_value.begin(), raw_value.end(), '|', ',');
+            std::stringstream stats_stream(raw_value);
+            std::string stats_token;
+            while (std::getline(stats_stream, stats_token, ',')) {
+                stats_token = trim_copy(stats_token);
+                if (stats_token.empty()) {
+                    continue;
+                }
+                std::string upper = to_upper_copy(stats_token);
+                if (upper == "ROUTER_STATE") {
+                    parsed_settings.stats_mask |= static_cast<uint8_t>(DynamicStatistics::ROUTER_STATE);
+                } else if (upper == "BANDWIDTH") {
+                    parsed_settings.stats_mask |= static_cast<uint8_t>(DynamicStatistics::BANDWIDTH);
+                } else if (upper == "HEARTBEAT_TX") {
+                    parsed_settings.stats_mask |= static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX);
+                } else if (upper == "HEARTBEAT_RX") {
+                    parsed_settings.stats_mask |= static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX);
+                } else {
+                    parsed_settings.stats_mask |= static_cast<uint8_t>(parse_int_token<int>(stats_token, "stats"));
+                }
+            }
+        } else {
+            TT_THROW("Unknown TT_METAL_FABRIC_TELEMETRY key '{}'", key);
+        }
+    }
+
+    fabric_telemetry_settings = parsed_settings;
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
@@ -1272,6 +1576,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
+    hash_str += std::to_string(get_lightweight_kernel_asserts());
     std::hash<std::string> hash_fn;
     return hash_fn(hash_str);
 }
@@ -1284,6 +1589,4 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

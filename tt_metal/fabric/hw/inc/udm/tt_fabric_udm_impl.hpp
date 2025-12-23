@@ -20,7 +20,16 @@ namespace tt::tt_fabric::udm {
 /**
  * @brief Enum for UDM control fields
  */
-enum class UDM_CONTROL_FIELD { POSTED, SRC_CHIP_ID, SRC_MESH_ID, SRC_NOC_X, SRC_NOC_Y, RISC_ID, TRANSACTION_ID };
+enum class UDM_CONTROL_FIELD {
+    POSTED,
+    SRC_CHIP_ID,
+    SRC_MESH_ID,
+    SRC_NOC_X,
+    SRC_NOC_Y,
+    RISC_ID,
+    TRANSACTION_ID,
+    INITIAL_DIRECTION
+};
 
 /**
  * @brief UDM (Unified Data Movement) fields for fabric write operations
@@ -61,6 +70,44 @@ struct udm_read_fields {
 };
 
 /**
+ * @brief Calculate the initial direction for a packet based on routing path
+ *
+ * Determines which direction (EAST, WEST, NORTH, SOUTH) a packet should initially
+ * take to reach the destination chip in a 2D mesh topology.
+ *
+ * @param dst_chip_id Destination chip ID
+ * @param my_chip_id Source chip ID
+ * @return Initial direction as uint32_t (eth_chan_directions enum value)
+ */
+FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t my_chip_id) {
+    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+
+    uint32_t initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
+
+    const auto& compressed_route = routing_info->paths[dst_chip_id];
+    uint8_t ns_hops = compressed_route.get_ns_hops();
+    uint8_t ew_hops = compressed_route.get_ew_hops();
+
+    if (ns_hops > 0) {
+        // is there another way to know whether it's north or south hops?
+        if (dst_chip_id < my_chip_id) {
+            initial_dir = static_cast<uint32_t>(eth_chan_directions::NORTH);
+        } else {
+            initial_dir = static_cast<uint32_t>(eth_chan_directions::SOUTH);
+        }
+    } else if (ew_hops > 0) {
+        // is there another way to know whether it's east or west hops?
+        if (dst_chip_id < my_chip_id) {
+            initial_dir = static_cast<uint32_t>(eth_chan_directions::WEST);
+        } else {
+            initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
+        }
+    }
+
+    return initial_dir;
+}
+
+/**
  * @brief Set unicast route for UDMHybridMeshPacketHeader with UDM fields
  *
  * Configures routing and UDM control fields for hybrid mesh packet headers.
@@ -79,19 +126,27 @@ FORCE_INLINE bool fabric_write_set_unicast_route_impl(
     uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_chip_id = routing_table->my_device_id;
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+
+    ASSERT(my_mesh_id == dst_mesh_id);  // we dont support inter-mesh for UDM mode yet
+
+    // Calculate initial direction based on routing path
+    uint32_t initial_dir = calculate_initial_direction(dst_dev_id, my_chip_id);
 
     // First call the original API by casting to base type
     bool result = fabric_set_unicast_route(
         static_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(packet_header), dst_dev_id, dst_mesh_id);
 
     // Set UDM control fields for write operations using routing table info
-    packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
-    packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
+    packet_header->udm_control.write.src_chip_id = my_chip_id;
+    packet_header->udm_control.write.src_mesh_id = my_mesh_id;
     packet_header->udm_control.write.src_noc_x = udm.src_noc_x;
     packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.write.risc_id = udm.risc_id;
     packet_header->udm_control.write.transaction_id = udm.trid;
     packet_header->udm_control.write.posted = udm.posted;
+    packet_header->udm_control.write.initial_direction = initial_dir;
     return result;
 }
 
@@ -143,20 +198,29 @@ FORCE_INLINE bool fabric_read_set_unicast_route_impl(
     uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_chip_id = routing_table->my_device_id;
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+
+    ASSERT(my_mesh_id == dst_mesh_id);  // we dont support inter-mesh for UDM mode yet
+
+    // Calculate initial direction based on routing path
+    uint32_t initial_dir = calculate_initial_direction(dst_dev_id, my_chip_id);
 
     // First call the original API by casting to base type
     bool result = fabric_set_unicast_route(
         static_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(packet_header), dst_dev_id, dst_mesh_id);
 
     // Set UDM control fields for read operations using routing table info
-    packet_header->udm_control.read.src_chip_id = routing_table->my_device_id;
-    packet_header->udm_control.read.src_mesh_id = routing_table->my_mesh_id;
+    packet_header->udm_control.read.src_chip_id = my_chip_id;
+    packet_header->udm_control.read.src_mesh_id = my_mesh_id;
     packet_header->udm_control.read.src_noc_x = udm.src_noc_x;
     packet_header->udm_control.read.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.read.src_l1_address = udm.src_l1_address;
     packet_header->udm_control.read.size_bytes = udm.size_bytes;
     packet_header->udm_control.read.risc_id = udm.risc_id;
     packet_header->udm_control.read.transaction_id = udm.trid;
+    packet_header->udm_control.read.initial_direction = initial_dir;
+
     return result;
 }
 
@@ -231,7 +295,66 @@ FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_pt
         packet_header->udm_control.write.risc_id = static_cast<uint8_t>(value);
     } else if constexpr (Field == UDM_CONTROL_FIELD::TRANSACTION_ID) {
         packet_header->udm_control.write.transaction_id = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::INITIAL_DIRECTION) {
+        packet_header->udm_control.write.initial_direction = static_cast<uint8_t>(value);
     }
+}
+
+WorkerToFabricEdmSender build_from_reserved_l1_info() {
+    constexpr bool is_persistent_fabric = true;
+    const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
+
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    constexpr uint32_t eth_channel = 0;  // always use channel 0 for UDM mode
+    const auto conn = &connection_info->read_only[eth_channel];
+    const auto aligned_conn = &connection_info->read_write[eth_channel];
+    uint8_t direction = conn->edm_direction;
+    uint8_t edm_worker_x = conn->edm_noc_x;
+    uint8_t edm_worker_y = conn->edm_noc_y;
+    uint32_t edm_buffer_base_addr = conn->edm_buffer_base_addr;
+    uint8_t num_buffers_per_channel = conn->num_buffers_per_channel;
+    uint32_t edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+    uint32_t edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
+    uint16_t buffer_size_bytes = conn->buffer_size_bytes;
+    uint32_t edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
+    volatile uint32_t* writer_send_sem_addr =
+        reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
+    uint32_t worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
+
+    // Use second region for worker_teardown_sem_addr
+    constexpr uint32_t eth_channel_teardown = 1;
+    static_assert(
+        eth_channel_teardown < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_teardown out of bounds");
+    const auto aligned_conn_teardown = &connection_info->read_write[eth_channel_teardown];
+    volatile uint32_t* worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t*>(
+        reinterpret_cast<uintptr_t>(&aligned_conn_teardown->worker_flow_control_semaphore));
+
+    // Use third region for worker_buffer_index_semaphore_addr
+    constexpr uint32_t eth_channel_buffer_index = 2;
+    static_assert(
+        eth_channel_buffer_index < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_buffer_index out of bounds");
+    const auto aligned_conn_buffer_index = &connection_info->read_write[eth_channel_buffer_index];
+    uint32_t worker_buffer_index_semaphore_addr =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_conn_buffer_index->worker_flow_control_semaphore));
+
+    return WorkerToFabricEdmSender(
+        is_persistent_fabric,
+        edm_worker_x,
+        edm_worker_y,
+        edm_buffer_base_addr,
+        num_buffers_per_channel,
+        edm_connection_handshake_l1_addr,
+        edm_worker_location_info_addr,
+        buffer_size_bytes,
+        edm_copy_of_wr_counter_addr,
+        writer_send_sem_addr,
+        worker_teardown_sem_addr,
+        worker_buffer_index_semaphore_addr,
+        worker_free_slots_stream_id,
+        my_fc_stream_channel_id);
 }
 
 /**
@@ -253,7 +376,7 @@ FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_ope
         // addresses.
         size_t rt_args_idx = 0;
         static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        conn = build_from_reserved_l1_info();
         conn.open();
         connection = &conn;
         initialized = true;

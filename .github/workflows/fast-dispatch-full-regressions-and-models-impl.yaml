@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "all"
+      enable-ops-recording:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy ops recording for all tests"
 jobs:
   create-test-matrix:
     runs-on: ubuntu-latest
@@ -52,11 +57,15 @@ jobs:
             {"model":"swin_s"},
             {"model":"swin_v2"},
             {"model":"mobilenetv2"},
+            {"model":"mobilenetv3"},
             {"model":"segformer"},
             {"model":"vgg_unet"},
             {"model":"vanilla_unet"},
             {"model":"efficientnetb0"},
+            {"model":"efficientdetd0"},
             {"model":"vovnet"},
+            {"model":"ssd512"},
+            {"model":"retinanet"},
             {"model":"ufld_v2"},
             {"model":"ttt-mistral-7B-v0.3"},
             {"model":"stable_diffusion_xl_base","timeout":75},
@@ -183,13 +192,28 @@ jobs:
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
+            PYTEST_CMD="${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}"
             if [[ "${{ matrix.test-config.model }}" == *"ttt"* ]]; then
-              pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
+              $PYTEST_CMD tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
             elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
-              pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
+              $PYTEST_CMD tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
             else
-              pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+              $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: ${{ github.workspace }}/generated/profiler
+          model-name: ${{ matrix.test-config.model }}
+          card: ${{ matrix.card }}
+      - name: Upload Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: ${{ github.workspace }}/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -278,22 +302,70 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
+        env:
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
         run: |
           if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+            $PYTEST_CMD tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
           else
-            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
           fi
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-config.model }}
+          card: ${{ matrix.card }}
+      - name: Upload Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: /work/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
+  aggregate-ops-recording:
+    needs: [nightly-wh-models, nightly-wh-models-civ2]
+    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all Tracy profiler reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tracy_ops_*
+          path: all_tracy_reports
+          merge-multiple: false
+
+      - name: Aggregate operations report
+        uses: ./.github/actions/aggregate-ops-report
+        with:
+          reports-path: all_tracy_reports
+          output-path: aggregated_ops
+
+      - name: Upload aggregated operations report
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-device-operations
+          path: aggregated_ops/

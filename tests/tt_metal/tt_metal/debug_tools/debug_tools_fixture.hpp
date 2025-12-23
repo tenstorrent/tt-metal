@@ -9,6 +9,14 @@
 
 #include "debug_tools_test_utils.hpp"
 #include "hal_types.hpp"
+#include <impl/debug/dprint_server.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <cstring>
+#include <cerrno>
+#include "tt_stl/assert.hpp"
+#include "fmt/format.h"
 
 namespace tt::tt_metal {
 
@@ -30,7 +38,7 @@ class DebugToolsMeshFixture : public MeshDispatchFixture {
 // A version of MeshDispatchFixture with DPrint enabled on all cores.
 class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
-    inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
+    std::string dprint_file_name;
 
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
@@ -40,10 +48,33 @@ public:
         MetalContext::instance().dprint_server()->await();
     }
 
+    // Destructor ensures file descriptor is closed even if SetUp() throws
+    ~DPrintMeshFixture() override {
+        if (memfd_ >= 0) {
+            close(memfd_);
+        }
+    }
+
 protected:
+    int memfd_ = -1;  // File descriptor for memory-backed file
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
     // disabled for DPRINT tests.
     void SetUp() override {
+        // Create a unique memory-backed file for this test to avoid parallel test conflicts
+        const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
+        std::string test_desc = fmt::format("dprint_{}_{}_{}",
+            getpid(),
+            test_info->test_suite_name(),
+            test_info->name());
+
+        memfd_ = memfd_create(test_desc.c_str(), 0);
+        if (memfd_ < 0) {
+            TT_THROW("Failed to create memory file descriptor: {}", strerror(errno));
+        }
+
+        // Use /proc/self/fd path which works transparently with ofstream/ifstream
+        dprint_file_name = fmt::format("/proc/self/fd/{}", memfd_);
+
         // The core range (virtual) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
@@ -71,6 +102,12 @@ protected:
         // Parent class tears down devices
         DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
+
+        // Close the memory-backed file descriptor
+        if (memfd_ >= 0) {
+            close(memfd_);
+            memfd_ = -1;
+        }
 
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});

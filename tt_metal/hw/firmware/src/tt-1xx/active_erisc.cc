@@ -13,25 +13,25 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dev_msgs.h"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
-#include "dataflow_api.h"
-#include "ethernet/dataflow_api.h"
-#include "ethernet/tunneling.h"
+#include "hostdev/dev_msgs.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "internal/ethernet/tunneling.h"
 #include "dev_mem_map.h"
-#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 #include "eth_fw_api.h"
-#include "erisc.h"
+#include "internal/ethernet/erisc.h"
 
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/stack_usage.h"
-#include "debug/dprint.h"
+#include "internal/debug/watcher_common.h"
+#include "api/debug/waypoint.h"
 
 uint8_t noc_index;
+// Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
+// noc_mode is the same for all erisc kernels in the program
+uint8_t kg_noc_mode;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -89,7 +89,9 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
-        internal_::risc_context_switch();
+        // If the subordinate is using dynamic NOC mode, it may use NOC0 but we don't need to sync the counters
+        // as they are in a shared L1 region with base firmware
+        internal_::risc_context_switch(kg_noc_mode == DM_DYNAMIC_NOC);
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 #endif
@@ -208,14 +210,20 @@ int __attribute__((noinline)) main(void) {
 #if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+
+    // ERISC firmware >= 1.7.2 has already done this step. But on older firmware versions we need to do it here
+    // and it will write to an "unused" region in base firmware.
+    dynamic_noc_local_state_init();
 #endif
 
     set_deassert_addresses();
 
+    kg_noc_mode = DM_DEDICATED_NOC;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
@@ -276,9 +284,29 @@ int __attribute__((noinline)) main(void) {
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
+            // Host side guarantees that if active_erisc is running on ERISC1 (single ERISC mode),
+            // the noc_index will be NOC_1 which ensures no conflict with base firmware running concurrently on ERISC0
+            //
+            // cmd_buf allocation is determined based on the physical ERISC index in tt_metal/hw/inc/dataflow_cmd_bufs.h
+            // ERISC0 is BRISC, ERISC1 is NCRISC.
+            //
+            kg_noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+
+            if (kg_noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != kg_noc_mode) {
+                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                }
+                noc_local_state_init(noc_index);
+            } else {
+                if (prev_noc_mode != kg_noc_mode) {
+                    dynamic_noc_init();
+                }
+                dynamic_noc_local_state_init();
+            }
+            prev_noc_mode = kg_noc_mode;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);

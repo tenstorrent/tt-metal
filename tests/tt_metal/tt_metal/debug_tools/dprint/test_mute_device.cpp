@@ -23,11 +23,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking that disabling dprints on a device won't cause a hang.

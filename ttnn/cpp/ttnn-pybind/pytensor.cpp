@@ -1405,7 +1405,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "device",
-            [](const Tensor& self) { return dynamic_cast<MeshDevice*>(self.device()); },
+            [](const Tensor& self) { return self.device(); },
             R"doc(
             Get the device of the tensor.
 

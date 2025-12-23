@@ -36,9 +36,9 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
-    auto src_buffer_a = a.buffer();
-    auto src_buffer_b = b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer_a = a.buffer();
+    auto* src_buffer_b = b.buffer();
+    auto* dst_buffer = output.buffer();
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 

@@ -13,7 +13,7 @@ def get_model_targets(model_name):
     with open(TARGET_JSON_PATH) as f:
         model_targets_json = json.load(f)
 
-    model_targets = model_targets_json[model_name]
+    model_targets = model_targets_json[model_name.removesuffix("-tp")]
     if model_name.endswith("-tp"):
         model_targets["perf"] = model_targets.pop("perf-tp")
 
@@ -24,7 +24,7 @@ get_approx = lambda range_tuple: (range_tuple[0] * 0.97, range_tuple[1] * 1.03)
 
 
 def using_full_dataset(model_name, num_prompts):
-    if model_name in {"sdxl", "sdxl-tp"}:
+    if model_name in {"sdxl", "sdxl-tp", "sdxl-base-refiner", "sdxl-base-refiner-tp"}:
         return num_prompts == SDXL_DATASET_SIZE
     elif model_name in {"sdxl-inpaint", "sdxl-inpaint-tp"}:
         return num_prompts == SDXL_INPAINT_DATASET_SIZE

@@ -29,6 +29,7 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
             correction (bool, optional): Applies only to :func:`ttnn.std` - whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -48,12 +49,12 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
                 * - BFLOAT8_B
                   - ROW_MAJOR, TILE
 
-            The output tensor will match the data type and layout of the input tensor.
+            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded (L1): Width, Height, and ND sharding
-            - Output sharding/layout will mirror the input
+            - Output sharding will mirror the input
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -70,7 +71,8 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("scalar") = 1.0f,
-            py::arg("correction") = true});
+            py::arg("correction") = true,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

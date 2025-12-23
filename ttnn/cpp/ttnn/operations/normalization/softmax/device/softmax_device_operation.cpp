@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 using namespace tt::tt_metal;
 
@@ -178,7 +179,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
     if (tensors_args.mask.has_value()) {
-        auto& mask = tensors_args.mask.value();
+        const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
         TT_FATAL(
             tensors_args.input_tensor.device() == mask.device(), "Input tensor and mask must be on the same device");
@@ -214,6 +215,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             !attributes.is_scale_causal_mask_hw_dims_softmax,
                             "Scale causal mask HW dims softmax not supported in default program config");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                        // Ensure input tensor is sharded when using sharded program config
+                        TT_FATAL(
+                            tensors_args.input_tensor.is_sharded() &&
+                                tensors_args.input_tensor.shard_spec().has_value(),
+                            "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
                         const auto& shape = tensors_args.input_tensor.padded_shape();
                         uint32_t M = tensors_args.input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
@@ -407,17 +413,15 @@ Tensor softmax(
     if (dim_adjusted == rank - 1) {
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor_4D.padded_shape());
-        const ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-            .pad_shape = input_pad_shape,
-            .pad_value = -std::numeric_limits<float>::infinity(),
-            .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-            input_tensor_4D,
-            input_tensor_4D.device(),
-            input_format_params.pad_shape,
-            input_format_params.pad_value,
-            input_format_params.target_layout);
+            ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_4D.padded_shape());
+        auto formatted_input_tensor = input_tensor_4D;
+        if (formatted_input_tensor.layout() != Layout::TILE) {
+            formatted_input_tensor = ttnn::tilize_with_val_padding(
+                input_tensor_4D,
+                input_pad_shape,
+                -std::numeric_limits<float>::infinity(),
+                input_tensor_4D.memory_config());
+        }
 
         // Attention optimized softmax
         return ttnn::prim::softmax(
@@ -464,18 +468,12 @@ Tensor scale_mask_softmax(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
 
     // Input tensor formatting
-    const ttnn::Shape input_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-    const ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = input_pad_shape,
-        .pad_value = -std::numeric_limits<float>::infinity(),
-        .target_layout = tt::tt_metal::Layout::TILE};
-    auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-        input_tensor,
-        input_tensor.device(),
-        input_format_params.pad_shape,
-        input_format_params.pad_value,
-        input_format_params.target_layout);
+    const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    auto formatted_input_tensor = input_tensor;
+    if (formatted_input_tensor.layout() != Layout::TILE) {
+        formatted_input_tensor = ttnn::tilize_with_val_padding(
+            input_tensor, input_pad_shape, -std::numeric_limits<float>::infinity(), input_tensor.memory_config());
+    }
     const auto rank = formatted_input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -503,17 +501,12 @@ Tensor scale_mask_softmax(
                 mask.value().padded_shape()[i]);
         }
         const ttnn::Shape mask_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().padded_shape());
-        const ttnn::operations::experimental::auto_format::FormatParams mask_format_params = {
-            .pad_shape = mask_pad_shape,
-            .pad_value = -std::numeric_limits<float>::infinity(),
-            .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_mask = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-            mask.value(),
-            mask.value().device(),
-            mask_format_params.pad_shape,
-            mask_format_params.pad_value,
-            mask_format_params.target_layout);
+            ttnn::operations::data_movement::pad_to_tile_shape(mask.value().padded_shape());
+        auto formatted_mask = mask.value();
+        if (formatted_mask.layout() != Layout::TILE) {
+            formatted_mask = ttnn::tilize_with_val_padding(
+                formatted_mask, mask_pad_shape, -std::numeric_limits<float>::infinity(), mask.value().memory_config());
+        }
 
         // Operation
         return ttnn::prim::softmax(

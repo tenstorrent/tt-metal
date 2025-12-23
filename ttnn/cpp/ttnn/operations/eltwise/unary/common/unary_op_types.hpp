@@ -4,7 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <concepts>
+#include <optional>
+#include <span>
+#include <utility>
 #include <vector>
+#include <variant>
+
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
@@ -83,6 +90,7 @@ enum class UnaryOpType {
     UNARY_LE,
     TILED_PROD,
     TYPECAST,
+    BITCAST,
     BITWISE_XOR,
     BITWISE_NOT,
     BITWISE_AND,
@@ -120,6 +128,7 @@ enum class UnaryOpType {
     RPOW,
     CBRT,
     LOGSIGMOID,
+    LOGIT,
 };
 
 enum class VecMode {

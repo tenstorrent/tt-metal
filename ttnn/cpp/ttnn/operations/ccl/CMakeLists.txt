@@ -29,7 +29,9 @@ target_sources(
             all_gather/all_gather.hpp
             all_reduce/all_reduce.hpp
             reduce_scatter/reduce_scatter.hpp
-            all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
+            all_broadcast/device/all_broadcast_device_operation_types.hpp
+            all_broadcast/device/all_broadcast_device_operation.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
+            all_broadcast/device/all_broadcast_program_factory.hpp
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
@@ -74,8 +76,8 @@ target_sources(
         common/host/moe_utils.cpp
         # Ops
         all_broadcast/all_broadcast.cpp
-        all_broadcast/device/all_broadcast_op.cpp
-        all_broadcast/device/all_broadcast_program.cpp
+        all_broadcast/device/all_broadcast_device_operation.cpp
+        all_broadcast/device/all_broadcast_program_factory.cpp
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
@@ -86,6 +88,9 @@ target_sources(
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
+        reduce_to_root/reduce_to_root.cpp
+        reduce_to_root/device/reduce_to_root_op.cpp
+        reduce_to_root/device/reduce_to_root_program.cpp
         reduce_scatter/reduce_scatter.cpp
         reduce_scatter/device/reduce_scatter_device_operation.cpp
         reduce_scatter/device/reduce_scatter_program_factory.cpp
@@ -93,8 +98,8 @@ target_sources(
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
         broadcast/broadcast.cpp
-        broadcast/device/broadcast_op.cpp
-        broadcast/device/broadcast_program.cpp
+        broadcast/device/broadcast_device_operation.cpp
+        broadcast/device/broadcast_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})

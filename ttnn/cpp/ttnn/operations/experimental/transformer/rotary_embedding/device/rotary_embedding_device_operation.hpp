@@ -1,39 +1,48 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-
+#include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation_types.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn::operations::experimental::transformer::rotary_embedding {
 
-enum class RotaryEmbeddingOpParallelizationStrategy { MULTI_CORE };
+struct RotaryEmbeddingDeviceOperation {
+    using operation_attributes_t = rotary_embedding::operation_attributes_t;
+    using tensor_args_t = rotary_embedding::tensor_args_t;
+    using spec_return_value_t = rotary_embedding::spec_return_value_t;
+    using tensor_return_value_t = rotary_embedding::tensor_return_value_t;
+    using program_factory_t = std::variant<rotary_embedding::program::RotaryEmbeddingProgramFactory>;
+    using shared_variables_t = rotary_embedding::program::RotaryEmbeddingProgramFactory::shared_variables_t;
 
-struct RotaryEmbedding {
-    const uint32_t seq_len;
-    std::optional<uint32_t> token_idx;
-    const MemoryConfig output_mem_config;
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    RotaryEmbeddingOpParallelizationStrategy get_parallelization_strategy(
-        const std::vector<Tensor>& input_tensors) const;
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
-    operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        const Tensor& cos,
+        const Tensor& sin,
+        uint32_t seq_len,
+        std::optional<uint32_t> token_idx,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
+        ttnn::DeviceComputeKernelConfig compute_kernel_config);
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding
+
+namespace ttnn::prim {
+constexpr auto rotary_embedding = ttnn::register_operation<
+    "ttnn::prim::rotary_embedding",
+    ttnn::operations::experimental::transformer::rotary_embedding::RotaryEmbeddingDeviceOperation>();
+}  // namespace ttnn::prim

@@ -7,12 +7,10 @@
 #include <fstream>
 #include <string>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 

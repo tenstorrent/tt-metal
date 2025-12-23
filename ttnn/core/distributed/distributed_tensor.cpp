@@ -366,16 +366,20 @@ public:
         });
 
         tt::stl::SmallVector<int> num_chunks;
-        if (config_.dims.size() == 1) {
-            num_chunks.push_back(xtensor_views.size());
-        } else {
-            TT_FATAL(
-                xtensor_views.size() == distribution_shape_.mesh_size(),
-                "ND composition requires the number of tensors {} to match the mesh shape {}",
-                xtensor_views.size(),
-                distribution_shape_);
-            for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
-                num_chunks.push_back(distribution_shape_[i]);
+        // Scalar (0-dim tensor)
+        bool is_single_views = xtensor_views.size() == 1;
+        if (!is_single_views) {
+            if (config_.dims.size() == 1) {
+                num_chunks.push_back(xtensor_views.size());
+            } else {
+                TT_FATAL(
+                    xtensor_views.size() == distribution_shape_.mesh_size(),
+                    "ND composition requires the number of tensors {} to match the mesh shape {}",
+                    xtensor_views.size(),
+                    distribution_shape_);
+                for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
+                    num_chunks.push_back(distribution_shape_[i]);
+                }
             }
         }
 

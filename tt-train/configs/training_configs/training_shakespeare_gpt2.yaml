@@ -1,7 +1,7 @@
 
 training_config:
   project_name: "tt_train_nano_gpt"
-  #model_path: "data/gpt2s_exported.msgpack"
+  #model_path: "data/gpt2s_exported"
   seed: 5489
   model_save_interval: 500
   batch_size: 4
@@ -14,7 +14,7 @@ training_config:
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
   model_config: "configs/model_configs/gpt2s.yaml"
-  use_bpe: true
+  tokenizer_type: "bpe"
 
 device_config:
   enable_ddp: false

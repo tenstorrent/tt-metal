@@ -12,13 +12,12 @@
 
 #include "multihost_fabric_fixtures.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
+namespace tt::tt_fabric::fabric_router_tests::multihost {
 
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
@@ -230,5 +229,4 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
     distributed_context->barrier();
 }
 
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost

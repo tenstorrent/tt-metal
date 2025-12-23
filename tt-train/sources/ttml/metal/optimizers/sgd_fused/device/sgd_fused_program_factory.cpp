@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "sgd_fused_device_operation_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
