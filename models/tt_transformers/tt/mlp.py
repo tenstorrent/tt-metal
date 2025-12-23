@@ -83,7 +83,6 @@ class MLP(LightweightModule):
         ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )
-        self.mlp_structure = getattr(self.args, "mlp_structure", "3_projection")
 
         if self.mlp_structure == "2_projection":
             # AFM: only up (w3) and down (w2) projections
