@@ -104,7 +104,6 @@ def run(
         raise ValueError("input_c_layout is None - required parameter missing")
     layout_b = input_b_layout
     layout_c = input_c_layout
-    layout_d = input_d_layout if has_input_d else None
 
     # Use provided memory configs - fail if not provided (no fallbacks for required tensors)
     mem_config_a = input_a_memory_config
