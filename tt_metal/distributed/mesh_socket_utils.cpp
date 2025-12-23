@@ -458,7 +458,8 @@ void forward_descriptor_to_peer(
 
     std::vector<tt_metal::distributed::multihost::Rank> my_ranks = {};
     std::vector<tt_metal::distributed::multihost::Rank> peer_ranks = {};
-    tt_metal::distributed::multihost::Rank controller_rank;
+    tt_metal::distributed::multihost::Rank controller_rank =
+        tt_metal::distributed::multihost::Rank{std::numeric_limits<int>::max()};
     std::vector<SocketPeerDescriptor> subordinate_descs = {};
 
     const auto& global_logical_bindings =
@@ -468,9 +469,8 @@ void forward_descriptor_to_peer(
         if (std::get<0>(mesh_id_and_host_rank) == my_mesh_id &&
             rank_translation_table.find(rank) != rank_translation_table.end()) {
             my_ranks.push_back(rank_translation_table.at(rank));
-            if (*std::get<1>(mesh_id_and_host_rank) == 0) {  // TODO: Shouldn't derive controller rank from host rank 0.
-                controller_rank = rank_translation_table.at(rank);
-            }
+            controller_rank = (*std::get<1>(mesh_id_and_host_rank) < *controller_rank) ? rank_translation_table.at(rank)
+                                                                                       : controller_rank;
         } else if (
             std::get<0>(mesh_id_and_host_rank) == peer_mesh_id &&
             rank_translation_table.find(rank) != rank_translation_table.end()) {
@@ -551,15 +551,18 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id.value() : config.sender_mesh_id.value();
-    tt_metal::distributed::multihost::Rank peer_controller_rank;
+    tt_metal::distributed::multihost::Rank peer_controller_rank =
+        tt_metal::distributed::multihost::Rank{std::numeric_limits<int>::max()};
 
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (std::get<0>(mesh_id_and_host_rank) == peer_mesh_id && *std::get<1>(mesh_id_and_host_rank) == 0 &&
+        if (std::get<0>(mesh_id_and_host_rank) == peer_mesh_id &&
             rank_translation_table.find(rank) != rank_translation_table.end()) {
-            peer_controller_rank = rank_translation_table.at(rank);
+            peer_controller_rank = (*std::get<1>(mesh_id_and_host_rank) < *peer_controller_rank)
+                                       ? rank_translation_table.at(rank)
+                                       : peer_controller_rank;
         }
     }
     // Query the size of the serialized descriptor first (this is the only element in the header)
