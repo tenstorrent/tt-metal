@@ -171,7 +171,7 @@ class TtResnetBlock2D(LightweightModule):
                 inplace=False,  # We are working with tiled sharded GN
             )
 
-            if self.conv1_slice_config is not None:
+            if self.conv1_slice_config != ttnn.Conv2dL1FullSliceConfig:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
             sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -251,7 +251,7 @@ class TtResnetBlock2D(LightweightModule):
                 negative_mask=None,
                 inplace=False,  # We are working with tiled sharded GN
             )
-            if self.conv2_slice_config is not None:
+            if self.conv2_slice_config != ttnn.Conv2dL1FullSliceConfig:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
             sharded_mem_config = ttnn.create_sharded_memory_config(

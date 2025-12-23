@@ -101,10 +101,7 @@ class TtEncoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceWidth,
-            num_slices=0,
-        )
+        self.conv_out_slice_config = None
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
@@ -171,7 +168,7 @@ class TtEncoder(LightweightModule):
                 inplace=False,  # We are working with tiled sharded GN
             )
 
-            if self.conv_out_slice_config is not None:
+            if self.conv_out_slice_config != ttnn.Conv2dL1FullSliceConfig:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
