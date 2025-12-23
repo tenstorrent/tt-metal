@@ -169,7 +169,7 @@ class SamplingGenerator:
         Capture a trace of the sampling pipeline for the given configuration.
         """
         penalties_on = self._penalties_active
-        log_probs_on = False  # self._log_probs_active
+        log_probs_on = getattr(self, "_log_probs_active", False)
 
         key, slot = self._trace_slot(penalties_on, log_probs_on)
 
@@ -228,7 +228,7 @@ class SamplingGenerator:
         """
 
         penalties_on = self._penalties_active
-        log_probs_on = False  # self._log_probs_active
+        log_probs_on = getattr(self, "_log_probs_active", False)
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
