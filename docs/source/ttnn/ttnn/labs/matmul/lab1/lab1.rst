@@ -229,7 +229,7 @@ For example, a Tensix core can perform a matrix multiplication on two tiles each
 Memory Layout and Tiling
 ========================
 
-Most applications deal with data that is larger than 32x32 tiles, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
+Most applications deal with data that is larger than a single 32x32 tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
 In the previous exercise you performed loop tiling, which changed memory access pattern without changing the underlying data layout,
 which was still stored in row-major order.
 An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
@@ -270,6 +270,15 @@ Observe that all elements of a tile are stored contiguously in memory. In this t
 2. Ordering of tiles relative to other tiles follows row-major ordering. That is, the first tile is stored at the beginning of the memory
    followed by the tile to its right, and so on until the last tile in the row of tiles. Then the next row of tiles is stored,
    starting with the tile in the first column of the next row of tiles.
+
+Note that the number of rows/columns in a matrix may not always evenly divide the number of rows/columns in a tile.
+In this case, the matrix needs to be padded with data to the next tile boundary.
+This data must not impact the result of the computation, so depending on the operation, it may be padded with zeros or some other value.
+In this lab, we will assume that all matrices are aligned to tile boundaries.
+
+With this memory layout, code can now read one tile at a time and find the next tile in memory at a fixed offset rather than having to
+assemble a tile by merging different sections of memory, as would be the case for row-major memory layout.
+This allows for efficient memory access and computation.
 
 
 Tensix Programming Model
@@ -348,9 +357,10 @@ Finally, the program validates the results by comparing the Tensix output with t
 Kernel Types and Data Flow
 --------------------------
 
+Before diving into the function `eltwise_add_tensix`, let us discuss the different types of kernels and how they map to the underlying hardware.
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
 a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM.
-The circular buffers act as producer-consumer queues, enabling safe and efficient data exchange between kernels.
+The circular buffers act as producer-consumer FIFO queues, enabling safe and efficient data exchange between kernels.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 Also note that reader kernels and writer kernels are commonly referred to as data movement kernels.
 
@@ -366,8 +376,8 @@ Also note that reader kernels and writer kernels are commonly referred to as dat
 Each kernel interacts with the buffers as follows:
 
 - **Reader kernel:** Reads data (e.g. from device DRAM) into the circular buffer and signals when new data has been read and is available.
-- **Compute kernel:** Waits for data to become available in the buffer before processing it. After computation, it writes the results to another
-circular buffer and marks data as ready in that buffer.
+- **Compute kernel:** Waits for data to become available in the buffer before processing it. After computation, it writes the results to
+  another circular buffer and marks data as ready in that buffer.
 - **Writer kernel:** Waits for the computed results to appear in the buffer before writing them to the output location (e.g. device DRAM).
 
 This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
@@ -386,20 +396,69 @@ Tensix Core consists of four major parts:
 2. Two Routers - Manage data movement between device DRAM and internal SRAM (L1) memory.
 3. Tensix Engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
 4. Five RISC-V Processors that control the Tensix Engine and routers:
+
    - RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
-   Either of these can be used for reader or writer kernel.
+     Either of these can be used for reader or writer kernel.
    - RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
-   Note that these RISC-V processors don't perform actual tile computations.
-   Instead, they serve as microcontrollers directing the operations of the Tensix Engine. One RISC-V processor is responsible for issuing commands to
-   the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
-   Compute kernel code defines functionality for all three of these processors.
+     Note that these RISC-V processors don't perform actual tile computations.
+     Instead, they serve as microcontrollers directing the operations of the Tensix Engine. One RISC-V processor is responsible for issuing commands to
+     the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
+     Compute kernel code defines functionality for all three of these processors.
 
 
 Kernel Creation and Configuration
 ---------------------------------
 
 The function `eltwise_add_tensix` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
-To understand this code, we need to understand the different types of kernels and how they map to the Tenstorrent architecture.
+At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
+one compute kernel, and three circular buffers to pass data between the kernels.
+
+The function creates three Tensor objects of shape MxN,using tile layout described earlier.
+These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
+The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`,
+where the vectors are the same input vectors that were used for the reference computation.
+
+The function then creates three circular buffers to enable data movement between kernels.
+A circular buffer is a FIFO (First In First Out) buffer with configurable size. Minimum size is one tile.
+In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, reader kernel can be reading one tile
+while the compute kernel is processing the other tile, enabling pipelined execution.
+Creating a circular buffer simply means allocating sufficient memory based on specified configuration, and associating
+specified circular buffer index with this memory and configuration.
+
+
+The function creates three types of kernels that work together to form a pipeline.
+The reader kernel reads data from the DRAM buffers and pushes it into the circular buffers.
+The compute kernel waits for data to become available in the circular buffers, pops the input tiles, performs element-wise addition,
+and pushes the results into the output circular buffer.
+The writer kernel waits for computed results to appear in the output circular buffer, pops them, and writes them back to DRAM.
+This pipeline allows the reader to make data available to the compute kernel, which performs the computation and makes results available to the writer kernel,
+which writes the final results back to DRAM.
+
+To configure the kernels, the function extracts MeshBuffer pointers from the tensors, which hold information about how tensor data is distributed
+across physical DRAM banks.
+While programmers don't need to understand the internals of this distribution, this information must be passed to the kernels.
+The `TensorAccessorArgs` utility packages these data distribution details from the MeshBuffer objects into a format that kernels can understand,
+and this information is pushed into compile-time arguments.
+Compile-time arguments are evaluated during the kernel's JIT compilation at program creation time, allowing the compiler to optimize the kernel
+for the specific use case through techniques like loop unrolling and constant folding, resulting in more efficient kernel code.
+The reader and writer kernels use different RISC-V processors (RISCV_0 and RISCV_1) for data movement, though which processor is used for reading
+versus writing doesn't impact functionality or performance.
+
+Runtime arguments are then set for the reader and writer kernels, providing the base addresses of the input and output buffers in device DRAM
+along with the number of tiles to process.
+Notably, the compute kernel does not require runtime arguments because everything it needs, including the number of tiles, has been provided
+at compile time, illustrating how compile-time arguments can eliminate the need for runtime parameter passing in some cases.
+
+Finally, the function executes the kernels by adding the program to the workload and enqueuing it for execution, waiting for completion.
+Since the input data was already transferred to the device when the tensors were created, the kernels can begin processing immediately.
+Once execution completes, the results are read back from the device using `Tensor::to_vector`, transferring the computed output from device DRAM
+back to host memory.
+
+
+
+
+
+
 
 
 The first step is to create a program object. A program is a collection of kernels that are executed on the device.
@@ -411,7 +470,7 @@ They are a key feature of the Tensix programming model and are used to manage da
 
 
 
-
+Have a diagram which shows what resides where (device, host, CBs, DRAM,...)
 
 
 
