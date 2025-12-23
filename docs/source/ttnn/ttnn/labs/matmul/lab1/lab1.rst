@@ -313,7 +313,7 @@ device memory address space down to the kernels.
 Conversely, when a kernel finishes, any results you want on the host must be explicitly copied back.
 
 There is also a **two-stage view of "compile time" versus "run time" that spans host and device**.
-Your host program is compiled ahead of time by a standard compiler, while Tensix kernels are compiled just-in-time (JIT) by the
+The host program is compiled ahead of time by a standard compiler, while Tensix kernels are compiled just-in-time (JIT) by the
 runtime while the host program is running. At that kernel-compile stage, certain parameters (like tensor layout, tile sizes) are
 known and are considered compile-time constants as far as kernel code is concerned, and hence they end up in the kernel binary.
 The advantage of this is that kernel code can be aggressively optimized.
@@ -359,14 +359,16 @@ Kernel Types and Data Flow
 
 Before diving into the function `eltwise_add_tensix`, let us discuss the different types of kernels and how they map to the underlying hardware.
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
-a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM.
-The circular buffers act as producer-consumer FIFO queues, enabling safe and efficient data exchange between kernels.
+a **compute kernel** for calculations, and a **writer kernel** for data output.
+Reader and writer kernels are collectively referred to as data movement kernels.
+Data movement and compute kernels communicate through circular buffers in internal SRAM.
+The circular buffers act as producer-consumer FIFO (First In First Out) queues, enabling safe and efficient data exchange between kernels.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
-Also note that reader kernels and writer kernels are commonly referred to as data movement kernels.
 
 .. figure:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
    :width: 900
-   :alt: Circular buffer data flow
+   :alt: Kernel data flow through circular buffers
+   :align: center
 
    Figure 1: Kernel data flow through circular buffers
 
@@ -413,39 +415,70 @@ The function `eltwise_add_tensix` creates and configures the kernels that will b
 At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
 one compute kernel, and three circular buffers to pass data between the kernels.
 
-The function creates three Tensor objects of shape MxN,using tile layout described earlier.
+The function creates three Tensor objects of shape MxN using the tile layout described earlier.
 These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
-The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`,
-where the vectors are the same input vectors that were used for the reference computation.
+The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`.
+The vectors passed to `Tensor::from_vector` are the same input vectors that were used for the reference computation.
 
 The function then creates three circular buffers to enable data movement between kernels.
-A circular buffer is a FIFO (First In First Out) buffer with configurable size. Minimum size is one tile.
+A circular buffer is a FIFO buffer with configurable size.
+Creating a circular buffer simply means allocating sufficient internal SRAM memory based on specified configuration, and associating
+specified circular buffer index with this SRAM memory and configuration.
 In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, reader kernel can be reading one tile
 while the compute kernel is processing the other tile, enabling pipelined execution.
-Creating a circular buffer simply means allocating sufficient memory based on specified configuration, and associating
-specified circular buffer index with this memory and configuration.
+Number of tiles in a circular buffer can be adjusted to trade off memory for performance, but generally there are diminishing
+returns observed after several tiles.
+
+The function creates the three types of kernels discussed earlier: reader, compute, and writer.
+Each kerrnel can take two types of arguments: compile-time and runtime kernel arguments, as mentioned earlier.
+
+.. _kernel-args-blurb:
+
+The two types of kernel arguments differ in *when* their values are determined and *how* they are used.
+
+**Compile-time kernel arguments**
+
+* Values that are known when the kernel is built (JIT-compiled).
+
+* They are hard-coded into the kernel binary and can be used by the compiler to specialize and optimize the code, by e.g. unrolling loops, removing branches, choosing specific data paths, etc.
+
+* Changing a compile-time argument effectively means generating a new version of the kernel binary.
+
+* These arguments are provided by the host during kernel configuration as ``compile_args``
+
+**Runtime kernel arguments**
+
+* Values that are provided by the host each time the kernel is launched, possibly varying per core.
+
+* Stored in a small argument block in the core's local memory and read by the kernel at the start of execution, for example using ``get_arg_val<T>(index)``.
+
+* They do not change the compiled binary; instead, they affect kernel behavior at run time. Examples include buffer base addresses,
+  flags to enable/disable certain features, etc.
+
+* Same compiled kernel can be reused many times with different runtime arguments, without recompiling.
+
+In summary, compile-time arguments specialize the kernel *code itself*, while runtime arguments specialize *what that code does on a particular launch*.
+
+In our example program, reader and writer kernels take information about tensor layout and data distribution as compile-time arguments.
+Compile-time arguments are passed as a vector of uint32_t values. TensorAccessorArgs utility is a clean way to append relevant tensor layout
+information into this vector, without programmer having to worry about internal details.
+
+Dataflow kernels take the base addresses of the input and output buffers in device DRAM, along with the number of tiles to process
+as runtime arguments.
+
+Compute kernel takes the number of tiles to process as a compile-time argument and doesn't take any runtime arguments.
+At first, it may seem like an odd choice to pass the number of tiles as a compile-time argument to the compute kernel, but a runtime argument to dataflow kernels.
 
 
-The function creates three types of kernels that work together to form a pipeline.
-The reader kernel reads data from the DRAM buffers and pushes it into the circular buffers.
-The compute kernel waits for data to become available in the circular buffers, pops the input tiles, performs element-wise addition,
-and pushes the results into the output circular buffer.
-The writer kernel waits for computed results to appear in the output circular buffer, pops them, and writes them back to DRAM.
-This pipeline allows the reader to make data available to the compute kernel, which performs the computation and makes results available to the writer kernel,
-which writes the final results back to DRAM.
 
 To configure the kernels, the function extracts MeshBuffer pointers from the tensors, which hold information about how tensor data is distributed
 across physical DRAM banks.
+
 While programmers don't need to understand the internals of this distribution, this information must be passed to the kernels.
 The `TensorAccessorArgs` utility packages these data distribution details from the MeshBuffer objects into a format that kernels can understand,
 and this information is pushed into compile-time arguments.
-Compile-time arguments are evaluated during the kernel's JIT compilation at program creation time, allowing the compiler to optimize the kernel
-for the specific use case through techniques like loop unrolling and constant folding, resulting in more efficient kernel code.
-The reader and writer kernels use different RISC-V processors (RISCV_0 and RISCV_1) for data movement, though which processor is used for reading
-versus writing doesn't impact functionality or performance.
 
-Runtime arguments are then set for the reader and writer kernels, providing the base addresses of the input and output buffers in device DRAM
-along with the number of tiles to process.
+
 Notably, the compute kernel does not require runtime arguments because everything it needs, including the number of tiles, has been provided
 at compile time, illustrating how compile-time arguments can eliminate the need for runtime parameter passing in some cases.
 
@@ -456,9 +489,10 @@ back to host memory.
 
 
 
+Kerneel code
 
 
-
+, and ac  On Tenstorrent, these are the values accessed with functions like ``get_compile_time_arg_val(...)`` inside the kernel and
 
 
 The first step is to create a program object. A program is a collection of kernels that are executed on the device.
