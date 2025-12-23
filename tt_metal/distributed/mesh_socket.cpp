@@ -36,20 +36,50 @@ void point_to_point_barrier(
     }
 }
 
+void validate_device_ownership(
+    multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
+    const auto global_distributed_context = DistributedContext::get_current_world();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    bool is_sender = global_distributed_context->rank() == global_sender_rank;
+    bool is_receiver = global_distributed_context->rank() == global_receiver_rank;
+
+    auto sender_coord_range = control_plane.get_coord_range(config.sender_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
+    auto receiver_coord_range =
+        control_plane.get_coord_range(config.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
+
+    if (is_sender || is_receiver) {
+        for (const auto& connection : config.socket_connection_config) {
+            if (is_sender) {
+                TT_FATAL(
+                    sender_coord_range.contains(connection.sender_core.device_coord),
+                    "Sender core coordinate {} is out of bounds for rank {} on mesh id {}",
+                    connection.sender_core.device_coord,
+                    *global_sender_rank,
+                    *config.sender_mesh_id);
+            } else {
+                TT_FATAL(is_receiver, "Internal Error: Expected receiver rank to be set when sender rank is not set.");
+                TT_FATAL(
+                    receiver_coord_range.contains(connection.receiver_core.device_coord),
+                    "Receiver core coordinate {} is out of bounds for rank {} on mesh id {}",
+                    connection.receiver_core.device_coord,
+                    *global_receiver_rank,
+                    *config.receiver_mesh_id);
+            }
+        }
+    }
+}
+
 }  // namespace
 
-void MeshSocket::initialize_from_host_ranks(const std::shared_ptr<multihost::DistributedContext>& context) {
+void MeshSocket::process_host_ranks() {
     multihost::Rank sender_rank = config_.sender_rank;
     multihost::Rank receiver_rank = config_.receiver_rank;
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     if (config_.distributed_context) {
         std::array<int, 2> socket_ranks = {*sender_rank, *receiver_rank};
         std::array<int, 2> translated_socket_ranks = {-1, -1};
         config_.distributed_context->translate_ranks_to_other_ctx(
             socket_ranks, DistributedContext::get_current_world(), translated_socket_ranks);
-        std::cout << "Translated sender rank: " << *sender_rank << " to " << translated_socket_ranks[0] << std::endl;
-        std::cout << "Translated receiver rank: " << *receiver_rank << " to " << translated_socket_ranks[1]
-                  << std::endl;
         sender_rank = Rank{translated_socket_ranks[0]};
         receiver_rank = Rank{translated_socket_ranks[1]};
         rank_translation_table_[sender_rank] = config_.sender_rank;
@@ -67,37 +97,15 @@ void MeshSocket::initialize_from_host_ranks(const std::shared_ptr<multihost::Dis
         "Invalid socket sender rank {} or receiver rank {} specified.",
         *sender_rank,
         *receiver_rank);
+
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-
-    bool coordinate_found = false;
-    bool is_sender = context->rank() == sender_rank;
-    bool is_receiver = context->rank() == receiver_rank;
-    if (is_sender || is_receiver) {
-        for (const auto& connection : config_.socket_connection_config) {
-            if (is_sender && control_plane.get_coord_range(config_.sender_mesh_id.value(), tt_fabric::MeshScope::LOCAL)
-                                 .contains(connection.sender_core.device_coord)) {
-                coordinate_found = true;
-                break;
-            } else if (
-                is_receiver &&
-                control_plane.get_coord_range(config_.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL)
-                    .contains(connection.receiver_core.device_coord)) {
-                coordinate_found = true;
-                break;
-            }
-        }
-    }
-    TT_FATAL(
-        coordinate_found,
-        "Creating Socket on ranks {} and {} with mesh ids {} and {} but no coordinates found in the local mesh.",
-        *sender_rank,
-        *receiver_rank,
-        *config_.sender_mesh_id,
-        *config_.receiver_mesh_id);
+    // These ranks belong to the global distributed context. Use them to ensure
+    // that the hosts they correspond to own socket connection coordinates.
+    validate_device_ownership(sender_rank, receiver_rank, config_);
 }
 
-void MeshSocket::initialize_from_mesh_ids() {
+void MeshSocket::process_mesh_ids() {
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
 
@@ -118,13 +126,47 @@ void MeshSocket::initialize_from_mesh_ids() {
     }
 }
 
+SocketConfig MeshSocket::populate_mesh_ids(
+    const std::shared_ptr<MeshDevice>& sender,
+    const std::shared_ptr<MeshDevice>& receiver,
+    const SocketConfig& base_config) {
+    auto config = base_config;
+    std::optional<tt_fabric::MeshId> sender_mesh_id = std::nullopt;
+    std::optional<tt_fabric::MeshId> receiver_mesh_id = std::nullopt;
+    for (const auto& conn : config.socket_connection_config) {
+        auto sender_coord = conn.sender_core.device_coord;
+        auto receiver_coord = conn.receiver_core.device_coord;
+
+        if (!sender_mesh_id.has_value()) {
+            sender_mesh_id = sender->get_fabric_node_id(sender_coord).mesh_id;
+        } else {
+            TT_FATAL(
+                sender_mesh_id.value() == sender->get_fabric_node_id(sender_coord).mesh_id,
+                "Expected Mesh IDs for all Sender devices to be identical.");
+        }
+        if (!receiver_mesh_id.has_value()) {
+            receiver_mesh_id = receiver->get_fabric_node_id(receiver_coord).mesh_id;
+        } else {
+            TT_FATAL(
+                receiver_mesh_id.value() == receiver->get_fabric_node_id(receiver_coord).mesh_id,
+                "Expected Mesh IDs for all Receiver devices to be identical.");
+        }
+    }
+
+    config.sender_mesh_id = sender_mesh_id;
+    config.receiver_mesh_id = receiver_mesh_id;
+
+    return config;
+}
+
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
     if (config_.sender_mesh_id.has_value()) {
-        TT_FATAL(config.receiver_mesh_id.has_value(), "Sender mesh id and receiver mesh id must be set.");
-        this->initialize_from_mesh_ids();
+        TT_FATAL(
+            config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
+        this->process_mesh_ids();
     } else {
-        this->initialize_from_host_ranks(context);
+        this->process_host_ranks();
     }
 
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
@@ -179,21 +221,9 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
-    std::vector<Rank> sender_ranks = {};
-    std::vector<Rank> recv_ranks = {};
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
-
-    for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() &&
-            rank_translation_table_.find(rank) != rank_translation_table_.end()) {
-            sender_ranks.push_back(rank_translation_table_.at(rank));
-        } else if (
-            std::get<0>(mesh_id_and_host_rank) == config_.receiver_mesh_id.value() &&
-            rank_translation_table_.find(rank) != rank_translation_table_.end()) {
-            recv_ranks.push_back(rank_translation_table_.at(rank));
-        }
-    }
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
+    // Barrier across all sender and receiver ranks. This ensures that the downstream workloads using these sockst
     for (const auto& sender_rank : sender_ranks) {
         for (const auto& recv_rank : recv_ranks) {
             if (context->rank() == sender_rank || context->rank() == recv_rank) {
@@ -201,38 +231,6 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
             }
         }
     }
-}
-
-SocketConfig MeshSocket::populate_mesh_ids(
-    const std::shared_ptr<MeshDevice>& sender,
-    const std::shared_ptr<MeshDevice>& receiver,
-    const SocketConfig& base_config) {
-    auto config = base_config;
-    std::optional<tt_fabric::MeshId> sender_mesh_id = std::nullopt;
-    std::optional<tt_fabric::MeshId> receiver_mesh_id = std::nullopt;
-    for (const auto& conn : config.socket_connection_config) {
-        auto sender_coord = conn.sender_core.device_coord;
-        auto receiver_coord = conn.receiver_core.device_coord;
-
-        if (!sender_mesh_id.has_value()) {
-            sender_mesh_id = sender->get_fabric_node_id(sender_coord).mesh_id;
-        } else {
-            TT_FATAL(
-                sender_mesh_id.value() == sender->get_fabric_node_id(sender_coord).mesh_id, "Sender mesh id mismatch.");
-        }
-        if (!receiver_mesh_id.has_value()) {
-            receiver_mesh_id = receiver->get_fabric_node_id(receiver_coord).mesh_id;
-        } else {
-            TT_FATAL(
-                receiver_mesh_id.value() == receiver->get_fabric_node_id(receiver_coord).mesh_id,
-                "Receiver mesh id mismatch.");
-        }
-    }
-
-    config.sender_mesh_id = sender_mesh_id;
-    config.receiver_mesh_id = receiver_mesh_id;
-
-    return config;
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(

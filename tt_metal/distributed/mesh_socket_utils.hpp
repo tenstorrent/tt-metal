@@ -62,4 +62,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
     const std::shared_ptr<MeshDevice>& sender_device = nullptr,
     const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
 
+std::vector<multihost::Rank> get_ranks_for_mesh_id(
+    tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+
 }  // namespace tt::tt_metal::distributed
