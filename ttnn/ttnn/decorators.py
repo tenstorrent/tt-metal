@@ -214,8 +214,7 @@ def set_tensor_id(tensor, force=False):
         tensor.tensor_id = ttnn._ttnn.next_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
-            if isinstance(element, torch.Tensor):
-                element.tensor_id = ttnn._ttnn.next_tensor_id()
+            set_tensor_id(element, force)
     else:
         raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
 
