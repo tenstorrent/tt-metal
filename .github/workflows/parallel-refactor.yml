@@ -27,187 +27,23 @@ jobs:
             exit 1
           fi
 
-          # Create matrix: array of objects with batch_id and files
-          MATRIX=$(jq -c '[range(.batch_id | length) as $i | {batch_id: .batch_id[$i], files: .files[$i]}]' batch_mapping.json)
+          # Create nested matrix: one entry per file with batch_id and file_path
+          # This will create a job per file (N jobs per batch)
+          MATRIX=$(jq -c '[range(.batch_id | length) as $i | .files[$i][] | {batch_id: .batch_id[$i], file_path: .}]' batch_mapping.json)
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Generated matrix with $(jq '.batch_id | length' batch_mapping.json) batches"
+          echo "Generated matrix with $(echo "$MATRIX" | jq '. | length') file jobs"
 
-  refactor-batch:
+  refactor-file:
     needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 500
-
-      - name: 💾 Cache Build Artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            build_Debug/**
-            build/**
-            .ccache/**
-          key: ${{ runner.os }}-build-cache-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-build-cache-
-
-      - name: 🔧 Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ runner.os }}-ccache-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-
-          max-size: 2G
-
-      - name: 🌿 Create Branch for Claude Code
-        id: create-branch
-        run: |
-          BRANCH_NAME="refactor/batch-${{ matrix.batch_id }}"
-          BASE_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
-          # If we're on a feature branch, use main as base, otherwise use current branch
-          if [ "$BASE_BRANCH" != "main" ] && [ "$BASE_BRANCH" != "master" ]; then
-            BASE_BRANCH="main"
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Ensure we're on the base branch first
-          git checkout "$BASE_BRANCH" || git checkout -b "$BASE_BRANCH" || git checkout main || git checkout master
-          git pull origin "$BASE_BRANCH" || true
-
-          # Create branch for Claude Code to work on
-          git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
-
-          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
-          echo "BASE_BRANCH=$BASE_BRANCH" >> $GITHUB_ENV
-          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "base=$BASE_BRANCH" >> $GITHUB_OUTPUT
-
-      - name: 📝 Prepare Files List
-        id: prepare-files
-        run: |
-          # Convert JSON array to newline-separated list
-          FILES_JSON='${{ toJson(matrix.files) }}'
-          echo "$FILES_JSON" | jq -r '.[]' > files_to_refactor.txt
-          FILES_LIST=$(cat files_to_refactor.txt | tr '\n' ' ')
-          FILES_COUNT=$(cat files_to_refactor.txt | wc -l)
-          echo "files_list=$FILES_LIST" >> $GITHUB_OUTPUT
-          echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
-          echo "Files to refactor (batch ${{ matrix.batch_id }}):"
-          cat files_to_refactor.txt
-
-      - name: 🤖 Run Claude Code Refactoring
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.AY_KEY }}
-          github_token: ${{ secrets.AI_GH_TOKEN }}
-          prompt: |
-            You are refactoring device operation files to convert from register_operation to direct function calls.
-
-            Follow the instructions in REFACTORING_GUIDE.md exactly. The files to refactor in this batch are:
-            ${{ steps.prepare-files.outputs.files_list }}
-
-            For each file:
-            1. Extract the register_operation call and the invoke function from the .hpp file
-            2. Replace register_operation with a direct function declaration in the .hpp (same namespace)
-            3. Remove the invoke member function declaration from the operation class in the .hpp
-            4. Implement the new global function in the corresponding .cpp file
-            5. Remove the invoke member function implementation from the .cpp
-            6. After refactoring each file, run: ./build_metal.sh -c -e --debug
-            7. If the build fails, analyze the compiler errors and fix the code until it passes
-
-            Do not stop until all files in this batch are refactored and verified with a successful build.
-
-            Read REFACTORING_GUIDE.md for detailed step-by-step instructions.
-          settings: |
-            {
-              "env": {
-                "DEBUG": "true",
-                "VERBOSE": "1"
-              },
-              "hooks": {
-                "PreToolUse": [
-                  {
-                    "matcher": "Bash",
-                    "hooks": [
-                      {
-                        "type": "command",
-                        "command": "echo '🔧 Running Bash command..'"
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          claude_args: |
-            --allowedTools Bash,Edit,Read,Write,mcp__sequential-thinking__sequentialthinking
-            --system-prompt "You are a senior C++ engineer refactoring device operations. Be precise and follow the REFACTORING_GUIDE.md exactly. Use sequential thinking to plan your refactoring steps carefully."
-            --mcp-config '{"mcpServers": {"sequential-thinking": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]}}}'
-            --max-turns 50
-            --verbose
-
-      - name: 🧹 Ensure .gitignore Excludes Cache
-        run: |
-          # Ensure .ccache and build directories are in .gitignore
-          if ! grep -q "^\.ccache/" .gitignore 2>/dev/null; then
-            echo ".ccache/" >> .gitignore
-          fi
-
-      - name: 🔀 Create Pull Request
-        if: success()
-        id: create-pr
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.AI_GH_TOKEN }}
-          branch: refactor/batch-${{ matrix.batch_id }}
-          base: ${{ steps.create-branch.outputs.base || 'main' }}
-          commit-message: |
-            Refactor batch ${{ matrix.batch_id }}: Convert register_operation to direct functions
-
-            Refactored ${{ steps.prepare-files.outputs.files_count }} device operation files:
-            - Removed register_operation calls
-            - Replaced with direct function declarations
-            - Removed invoke member functions
-            - Implemented new global functions
-          title: '[Refactor] Batch ${{ matrix.batch_id }}: Convert register_operation to direct functions'
-          body: |
-            ## Refactoring Batch ${{ matrix.batch_id }}
-
-            This PR contains the refactored device operations from batch ${{ matrix.batch_id }}.
-
-            **Changes:**
-            - Removed `register_operation` calls
-            - Replaced with direct function declarations
-            - Removed `invoke` member functions
-            - Implemented new global functions
-
-            **Files refactored:** ${{ steps.prepare-files.outputs.files_count }}
-
-            **Build status:** ✅ Verified with `./build_metal.sh -c -e --debug`
-
-            This is part of a parallel refactoring effort to convert all device operations.
-            See REFACTORING_GUIDE.md for details.
-          labels: refactor,automated
-          delete-branch: false
-          # Explicitly exclude cache and build directories
-          add-paths: |
-            **/*.hpp
-            **/*.cpp
-            .gitignore
-            REFACTORING_GUIDE.md
-            REFACTORING_PROCESS.md
-            device_ops_to_process.txt
-            batch_mapping.json
+    uses: ./.github/workflows/refactor-single-file.yml
+    secrets: inherit
+    with:
+      file_path: ${{ matrix.file_path }}
+      batch_id: ${{ matrix.batch_id }}
+      base_branch: main
+      branch_name: refactor/batch-${{ matrix.batch_id }}
