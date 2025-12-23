@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from loguru import logger
 
 # from deform_group import custom_deform_conv2d as deform_conv2d
 from torchvision.ops import deform_conv2d as deform_conv2d_torch
@@ -22,27 +23,22 @@ def torch_ref_deform_conv2d(x, offset, weight, bias=None, stride=1, padding=0, d
 @pytest.mark.parametrize(
     "B, C_in, C_out, H, W, kH, kW, stride, padding, dilation, groups, offset_groups",
     [
-        # 🔹 Standard & typical convolution sizes
-        (1, 16, 16, 32, 32, 3, 3, 1, 0, 1, 4, 1),  # Smaller input
-        # (3, 16, 16, 256, 256, 3, 3, 1, 0, 1, 4, 1),  # Larger kernel
-        # (2, 64, 64, 256, 256, 3, 3, 1, 0, 1, 4, 1),
-        # (2, 256, 256, 28, 28, 3, 3, 1, 0, 2, 8, 4),
-        # (6, 512, 512, 16, 44, 3, 3, 1, 1, 1, 4, 1),
-        # # 🔹 Varying stride
-        # (4, 3, 5, 128, 128, 3, 3, 2, 0, 1, 1, 1),  # Stride = 2 downsample
-        # (2, 3, 8, 64, 64, 3, 3, 3, 0, 1, 1, 1),  # Stride = 3 aggressive
-        # # # # 🔹 With padding
-        # (2, 3, 8, 64, 64, 3, 3, 1, 1, 1, 1, 1),  # Padding = 1 (same conv)
-        # (1, 8, 16, 128, 128, 5, 5, 1, 2, 1, 1, 1),  # Larger kernel with padding
-        # (2, 3, 4, 64, 64, 7, 7, 1, 3, 1, 1, 1),  # 7x7 kernel with symmetric padding
-        # # # # 🔹 With dilation
-        # (1, 3, 5, 64, 64, 3, 3, 1, 0, 2, 1, 1),  # Dilation = 2
-        # (1, 3, 5, 64, 64, 3, 3, 1, 1, 2, 1, 1),  # Dilation = 2 + padding
-        # # # # 🔹 Stress tests
-        # (2, 3, 16, 256, 256, 3, 3, 1, 0, 1, 1, 1),  # Large spatial map
-        # (1, 1, 8, 128, 128, 11, 11, 1, 0, 1, 1, 1),  # Large kernel for visual models
-        # (4, 64, 128, 32, 32, 3, 3, 1, 0, 1, 1, 1),  # Deep channels
-        # (1, 32, 32, 16, 16, 3, 3, 1, 0, 1, 1, 1),  # Tiny spatial test
+        (1, 16, 16, 32, 32, 3, 3, 1, 0, 1, 4, 1),
+        (3, 16, 16, 256, 256, 3, 3, 1, 0, 1, 4, 1),
+        (2, 64, 64, 256, 256, 3, 3, 1, 0, 1, 4, 1),
+        (2, 256, 256, 28, 28, 3, 3, 1, 0, 2, 8, 4),
+        (6, 512, 512, 16, 44, 3, 3, 1, 1, 1, 4, 1),
+        (4, 3, 5, 128, 128, 3, 3, 2, 0, 1, 1, 1),
+        (2, 3, 8, 64, 64, 3, 3, 3, 0, 1, 1, 1),
+        (2, 3, 8, 64, 64, 3, 3, 1, 1, 1, 1, 1),
+        (1, 8, 16, 128, 128, 5, 5, 1, 2, 1, 1, 1),
+        (2, 3, 4, 64, 64, 7, 7, 1, 3, 1, 1, 1),
+        (1, 3, 5, 64, 64, 3, 3, 1, 0, 2, 1, 1),
+        (1, 3, 5, 64, 64, 3, 3, 1, 1, 2, 1, 1),
+        (2, 3, 16, 256, 256, 3, 3, 1, 0, 1, 1, 1),
+        (1, 1, 8, 128, 128, 11, 11, 1, 0, 1, 1, 1),
+        (4, 64, 128, 32, 32, 3, 3, 1, 0, 1, 1, 1),
+        (1, 32, 32, 16, 16, 3, 3, 1, 0, 1, 1, 1),
     ],
 )
 def test_deform_conv(device, B, C_in, C_out, H, W, kH, kW, stride, padding, dilation, groups, offset_groups):
@@ -88,5 +84,5 @@ def test_deform_conv(device, B, C_in, C_out, H, W, kH, kW, stride, padding, dila
     assert out_ref.shape == out_torch.shape, "Shape mismatch between TTNN and Torch output"
 
     pcc_passed, pcc_message = assert_with_pcc(out_ref, out_torch, pcc=0.99)
-    print(pcc_message)
+    logger.info(f"PCC: {pcc_message}")
     assert pcc_passed, f"Test failed with PCC below threshold"

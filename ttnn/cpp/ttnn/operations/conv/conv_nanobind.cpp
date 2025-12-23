@@ -16,6 +16,7 @@ namespace ttnn::operations::conv {
 void py_module(nb::module_& mod) {
     ttnn::operations::conv::conv1d::bind_conv1d(mod);
     ttnn::operations::conv::conv2d::bind_conv2d(mod);
+    ttnn::operations::conv::deform_conv2d::bind_deform_conv2d(mod);
     ttnn::operations::conv::conv_transpose2d::bind_conv_transpose2d(mod);
 }
 }  // namespace ttnn::operations::conv
