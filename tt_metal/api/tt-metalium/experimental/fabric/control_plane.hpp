@@ -221,6 +221,17 @@ public:
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
+    // Get chip coordinates mapping from physical chip ID to mesh coordinates
+    // Returns a map of physical chip ID to a vector of coordinates (padded to 4D)
+    std::map<ChipId, std::vector<uint32_t>> get_chip_coordinates() const;
+
+    // Serialize chip coordinates to a YAML file in the format:
+    // chips:
+    //   0: [x, y, z, w]
+    //   1: [x, y, z, w]
+    //   ...
+    void serialize_chip_coordinates_to_file(const std::string& filepath) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;

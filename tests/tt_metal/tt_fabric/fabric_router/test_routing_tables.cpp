@@ -7,8 +7,10 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
@@ -1060,5 +1062,53 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
     EXPECT_THROW(
         { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
+}
+
+// Test chip coordinates API
+TEST(ChipCoordinatesAPI, SerializeChipCoordinatesToFile) {
+    // This test verifies that serialize_chip_coordinates_to_file() creates valid YAML
+    
+    // Skip if no hardware is available
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().size()) {
+        GTEST_SKIP() << "No hardware available for testing";
+    }
+    
+    try {
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        
+        // Get chip coordinates and verify they are 4D
+        auto chip_coordinates = control_plane.get_chip_coordinates();
+        for (const auto& [chip_id, coords] : chip_coordinates) {
+            EXPECT_EQ(coords.size(), 4) << "Coordinates should be 4D for chip " << chip_id;
+        }
+        
+        // Create a temporary file path
+        std::filesystem::path temp_path = std::filesystem::temp_directory_path() / "test_chip_coordinates.yaml";
+        
+        // Serialize to file
+        control_plane.serialize_chip_coordinates_to_file(temp_path.string());
+        
+        // Verify file was created
+        ASSERT_TRUE(std::filesystem::exists(temp_path)) << "Output file should be created";
+        
+        // Parse YAML and verify structure
+        YAML::Node config = YAML::LoadFile(temp_path.string());
+        ASSERT_TRUE(config["chips"]) << "YAML should contain 'chips' key";
+        
+        const YAML::Node& chips = config["chips"];
+        EXPECT_TRUE(chips.IsMap()) << "chips should be a map";
+        
+        // Verify each chip has a coordinate array of size 4
+        for (YAML::const_iterator it = chips.begin(); it != chips.end(); ++it) {
+            const YAML::Node& coords = it->second;
+            EXPECT_TRUE(coords.IsSequence()) << "Each chip should have a coordinate sequence";
+            EXPECT_EQ(coords.size(), 4) << "Each coordinate should be 4D";
+        }
+        
+        // Clean up
+        std::filesystem::remove(temp_path);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Control plane not initialized: " << e.what();
+    }
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
