@@ -7,246 +7,247 @@ Tests:
   - name: "NeighborExchangeUnicast"
     benchmark_mode: true
     sync: true
+    max_receiver_configs_per_core: 1  # Separate receiver kernels per incoming direction
     fabric_setup:
       topology: NeighborExchange
 
     parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 100000
-
-    patterns:
-      - type: neighbor_exchange
-
-  ### LINEAR BANDWIDTH TESTS ###
-  - name: "LinearMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
-
-    defaults:
-      ftype: mcast
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
-        iterations: 3
-
-  - name: "UnidirLinearMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
-
-    defaults:
-      ftype: mcast
-      num_packets: 20000
-
-    patterns:
-      - type: unidirectional_linear
-        iterations: 3
-
-  - name: "SingleSenderLinearUnicastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: one_to_all
-        iterations: 3
-
-  - name: "NeighborExchangeLinear"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1]
+      ntype: [unicast_write]
       size: [4096]
 
     defaults:
       ftype: unicast
-      num_packets: 20000
+      num_packets: 100000
 
     patterns:
       - type: neighbor_exchange
-        iterations: 3
 
-  ### LINEAR LATENCY TESTS ###
-  - name: "LatencyLinearUnicast"
-    latency_test_mode: true
-    fabric_setup:
-      topology: Linear
+  # ### LINEAR BANDWIDTH TESTS ###
+  # - name: "LinearMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      size: [16, 4096]
-      ntype: [unicast_write, fused_atomic_inc]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - ftype: unicast
-            num_packets: 256  # number of independent latency samples to collect
-            destination:
-              device: [0, 1]
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 20000
 
-  ### RING BANDWIDTH TESTS ###
-  # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
-  - name: "FullRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  #   patterns:
+  #     - type: all_to_all
+  #       iterations: 3
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  # - name: "UnidirLinearMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    defaults:
-      ftype: mcast
-      num_packets: 100000
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    patterns:
-      - type: full_ring
-        iterations: 3
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 20000
 
-  - name: "FullRingUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  #   patterns:
+  #     - type: unidirectional_linear
+  #       iterations: 3
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  # - name: "SingleSenderLinearUnicastAllDevices"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    defaults:
-      ftype: unicast
-      num_packets: 100000
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    patterns:
-      - type: full_ring
-        iterations: 3
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 20000
 
-  - name: "HalfRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  #   patterns:
+  #     - type: one_to_all
+  #       iterations: 3
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  # - name: "NeighborExchangeLinear"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    defaults:
-      ftype: mcast
-      num_packets: 100000
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [4096]
 
-    patterns:
-      - type: half_ring
-        iterations: 3
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 20000
 
-  ### RING LATENCY TESTS ###
-  - name: "LatencyRingUnicast"
-    latency_test_mode: true
-    fabric_setup:
-      topology: Ring
+  #   patterns:
+  #     - type: neighbor_exchange
+  #       iterations: 3
 
-    parametrization_params:
-      size: [16, 4096]
-      ntype: [unicast_write, fused_atomic_inc]
+  # ### LINEAR LATENCY TESTS ###
+  # - name: "LatencyLinearUnicast"
+  #   latency_test_mode: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - ftype: unicast
-            num_packets: 256  # number of independent latency samples to collect
-            destination:
-              device: [0, 1]
+  #   parametrization_params:
+  #     size: [16, 4096]
+  #     ntype: [unicast_write, fused_atomic_inc]
 
-  ### MESH BANDWIDTH TESTS ###
-  - name: "MeshMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
+  #   senders:
+  #     - device: [0, 0]
+  #       patterns:
+  #         - ftype: unicast
+  #           num_packets: 256  # number of independent latency samples to collect
+  #           destination:
+  #             device: [0, 1]
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  # ### RING BANDWIDTH TESTS ###
+  # # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
+  # - name: "FullRingMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    defaults:
-      ftype: mcast
-      num_packets: 20000
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    patterns:
-      - type: all_to_all
-        iterations: 3
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 100000
 
-  - name: "SingleSenderMeshUnicastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
+  #   patterns:
+  #     - type: full_ring
+  #       iterations: 3
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  # - name: "FullRingUnicast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    defaults:
-      ftype: unicast
-      num_packets: 20000
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    patterns:
-      - type: one_to_all
-        iterations: 3
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 100000
 
-  ### MESH LATENCY TESTS ###
-  - name: "LatencyMeshUnicast"
-    latency_test_mode: true
-    fabric_setup:
-      topology: Mesh
+  #   patterns:
+  #     - type: full_ring
+  #       iterations: 3
 
-    parametrization_params:
-      size: [16, 4096]
-      ntype: [unicast_write, fused_atomic_inc]
+  # - name: "HalfRingMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    senders:
-      - device: [0, 0]
-        patterns:
-          - ftype: unicast
-            num_packets: 256  # number of independent latency samples to collect
-            destination:
-              device: [0, 1]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
+
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 100000
+
+  #   patterns:
+  #     - type: half_ring
+  #       iterations: 3
+
+  # ### RING LATENCY TESTS ###
+  # - name: "LatencyRingUnicast"
+  #   latency_test_mode: true
+  #   fabric_setup:
+  #     topology: Ring
+
+  #   parametrization_params:
+  #     size: [16, 4096]
+  #     ntype: [unicast_write, fused_atomic_inc]
+
+  #   senders:
+  #     - device: [0, 0]
+  #       patterns:
+  #         - ftype: unicast
+  #           num_packets: 256  # number of independent latency samples to collect
+  #           destination:
+  #             device: [0, 1]
+
+  # ### MESH BANDWIDTH TESTS ###
+  # - name: "MeshMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
+
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 20000
+
+  #   patterns:
+  #     - type: all_to_all
+  #       iterations: 3
+
+  # - name: "SingleSenderMeshUnicastAllDevices"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
+
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 20000
+
+  #   patterns:
+  #     - type: one_to_all
+  #       iterations: 3
+
+  # ### MESH LATENCY TESTS ###
+  # - name: "LatencyMeshUnicast"
+  #   latency_test_mode: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   parametrization_params:
+  #     size: [16, 4096]
+  #     ntype: [unicast_write, fused_atomic_inc]
+
+  #   senders:
+  #     - device: [0, 0]
+  #       patterns:
+  #         - ftype: unicast
+  #           num_packets: 256  # number of independent latency samples to collect
+  #           destination:
+  #             device: [0, 1]

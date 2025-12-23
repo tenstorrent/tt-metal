@@ -160,6 +160,7 @@ struct ParsedTestConfig {
     bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
+    std::optional<uint32_t> max_receiver_configs_per_core;  // Per-test override for receiver allocation
 };
 
 struct TestConfig {
@@ -184,6 +185,7 @@ struct TestConfig {
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
     bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
+    std::optional<uint32_t> max_receiver_configs_per_core;  // Per-test override for receiver allocation
 };
 
 // Latency test results structure (parallel to bandwidth results)

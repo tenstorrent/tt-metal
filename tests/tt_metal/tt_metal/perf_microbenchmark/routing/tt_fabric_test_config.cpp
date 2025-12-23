@@ -267,6 +267,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.skip_packet_validation = parse_scalar<bool>(test_yaml["skip_packet_validation"]);
     }
 
+    if (test_yaml["max_receiver_configs_per_core"]) {
+        test_config.max_receiver_configs_per_core = parse_scalar<uint32_t>(test_yaml["max_receiver_configs_per_core"]);
+    }
+
     return test_config;
 }
 
@@ -911,6 +915,7 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.global_sync = parsed_test.global_sync;
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
+    resolved_test.max_receiver_configs_per_core = parsed_test.max_receiver_configs_per_core;
 
     // Resolve defaults
     if (parsed_test.defaults.has_value()) {
@@ -1527,8 +1532,28 @@ void TestConfigBuilder::expand_neighbor_exchange(
     ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
     log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
-    if (!neighbor_pairs.empty()) {
-        add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+
+    if (neighbor_pairs.empty()) {
+        return;
+    }
+
+    // Create separate senders per direction to avoid bottlenecking on a single sender kernel
+    // (similar to expand_unidirectional_linear_unicast_or_multicast)
+    for (const auto& [src_node, dst_node] : neighbor_pairs) {
+        auto direction = this->route_manager_.get_forwarding_direction(src_node, dst_node);
+        log_info(
+            LogTest,
+            "NeighborExchange: creating sender on device {} -> {} (direction: {})",
+            src_node,
+            dst_node,
+            static_cast<int>(direction));
+
+        ParsedTrafficPatternConfig specific_pattern;
+        specific_pattern.destination = ParsedDestinationConfig{.device = dst_node};
+        specific_pattern.ftype = ChipSendType::CHIP_UNICAST;
+
+        auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+        test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
     }
 }
 

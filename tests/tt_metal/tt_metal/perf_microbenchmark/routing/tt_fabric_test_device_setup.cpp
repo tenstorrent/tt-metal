@@ -964,7 +964,21 @@ void TestDevice::create_sender_kernels() {
             sender_memory_map_->get_local_args_address(),
             addresses_and_size_to_clear);
 
-        log_debug(tt::LogTest, "Created sender kernel on core {}", core);
+        // Log sender kernel info with direction(s)
+        std::string directions_str;
+        for (const auto& [config, connection_key] : sender.configs_) {
+            if (!directions_str.empty()) {
+                directions_str += ", ";
+            }
+            directions_str += std::to_string(static_cast<int>(connection_key.direction));
+        }
+        log_info(
+            tt::LogTest,
+            "Created sender kernel on device {} core {} with {} config(s), direction(s): [{}]",
+            fabric_node_id_,
+            core,
+            sender.configs_.size(),
+            directions_str);
     }
 }
 
@@ -1074,7 +1088,25 @@ void TestDevice::create_receiver_kernels() {
             receiver_memory_map_->get_local_args_address(),
             addresses_and_size_to_clear);
 
-        log_debug(tt::LogTest, "Created receiver kernel on core {}", core);
+        // Log receiver kernel info with credit return direction(s) if any
+        std::string directions_str;
+        for (const auto& [config, credit_connection_key] : receiver.configs_) {
+            if (!directions_str.empty()) {
+                directions_str += ", ";
+            }
+            if (credit_connection_key.has_value()) {
+                directions_str += std::to_string(static_cast<int>(credit_connection_key.value().direction));
+            } else {
+                directions_str += "none";
+            }
+        }
+        log_info(
+            tt::LogTest,
+            "Created receiver kernel on device {} core {} with {} config(s), credit direction(s): [{}]",
+            fabric_node_id_,
+            core,
+            receiver.configs_.size(),
+            directions_str);
     }
 }
 

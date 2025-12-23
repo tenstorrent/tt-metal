@@ -633,6 +633,7 @@ private:
     const IDeviceInfoProvider& device_info_provider_;
     const IRouteManager& route_manager_;
     AllocatorPolicies policies_;
+    uint32_t original_max_receiver_configs_per_core_;  // Store original to restore between tests
     const SenderMemoryMap& sender_memory_map_;
     const ReceiverMemoryMap& receiver_memory_map_;
     std::optional<CoreCoord> worker_grid_size_;
@@ -649,6 +650,7 @@ inline GlobalAllocator::GlobalAllocator(
     device_info_provider_(device_info_provider),
     route_manager_(route_manager),
     policies_(policies),
+    original_max_receiver_configs_per_core_(policies.receiver_config.max_configs_per_core),
     sender_memory_map_(sender_memory_map),
     receiver_memory_map_(receiver_memory_map) {}
 
@@ -918,6 +920,20 @@ private:
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     // Store flow control flag for use during device creation
     enable_flow_control_ = test_config.enable_flow_control;
+
+    // Restore original max_receiver_configs_per_core before applying per-test override
+    // This ensures each test starts with the baseline policy value
+    policies_.receiver_config.max_configs_per_core = original_max_receiver_configs_per_core_;
+
+    // Apply per-test override for max_receiver_configs_per_core if specified
+    if (test_config.max_receiver_configs_per_core.has_value()) {
+        log_warning(
+            tt::LogTest,
+            "Overriding max_receiver_configs_per_core from {} to {} for test",
+            original_max_receiver_configs_per_core_,
+            test_config.max_receiver_configs_per_core.value());
+        policies_.receiver_config.max_configs_per_core = test_config.max_receiver_configs_per_core.value();
+    }
 
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_config : test_config.sync_configs) {
