@@ -46,7 +46,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const uint32_t in_channels = sliding_window_config.channels;
 
     // Output dimensions
-    const tt::tt_metal::Shape output_shape = output.padded_shape();
+    const tt::tt_metal::Shape& output_shape = output.padded_shape();
     const uint32_t out_w = output_shape[2];
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
