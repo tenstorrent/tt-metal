@@ -25,7 +25,7 @@ DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v$REF
 
 # Check if download link exists
 if ! curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then
-  echo "Prebuilt wheel not found for version $REF. Installing from source."
+  echo "Prebuilt wheel not found for version $REF at $DOWNLOAD_LINK. Installing from source."
   python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@v$REF"
 else
   python3 -m pip install "$DOWNLOAD_LINK"

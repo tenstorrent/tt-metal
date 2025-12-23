@@ -122,8 +122,9 @@ jobs:
       - name: 🛠️ Install tt-triage dependencies
         timeout-minutes: 10
         run: |
+          source /opt/venv/bin/activate
           ./scripts/install_debugger.sh
-          /opt/venv/bin/pip install -r ./tools/triage/requirements.txt
+          pip install -r ./tools/triage/requirements.txt
 
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}
