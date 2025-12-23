@@ -458,7 +458,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     // There are two cases:
     // (a) each core processes all M,N dimensions of b number of batches
-    // (b) each core processes a subset of M,N dimensions of b number of batches
+    // (b) each core processes a subset of M dimension of b number of batches
     // The start_tile_id is computed differently in each case.
     // Only case (b)'s start _tile is impacted by the transpose_a and transpose_b flags.
     // We detect case (b) with `is_work_split_by_batch` boolean.
@@ -487,8 +487,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             mm_reader_args[1] = num_blocks_written * in0_start_tile_stride;  // in0_tensor_start_tile_id
             mm_writer_args[1] = num_blocks_written * in1_start_tile_stride;  // in1_tensor_start_tile_id
         } else {
-            mm_reader_args[1] = (i / per_core_N) * in0_start_tile_stride;  // in0_tensor_start_tile_id
-            mm_writer_args[1] = (i % per_core_N) * in1_start_tile_stride;  // in1_tensor_start_tile_id
+            mm_reader_args[1] = i * in0_start_tile_stride;  // in0_tensor_start_tile_id
+            mm_writer_args[1] = 0;                          // in1_tensor_start_tile_id
         }
 
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
