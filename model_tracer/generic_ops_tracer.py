@@ -36,8 +36,8 @@ from datetime import datetime
 def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
     """Standalone function to fix UnparsedElements - can be used anywhere"""
     # Prevent infinite recursion (safety measure)
-    if depth > max_depth:
-        if depth == max_depth + 1:  # Only print once
+    if depth >= max_depth:
+        if depth == max_depth:  # Only print once
             print(f"⚠️  Warning: Max recursion depth ({max_depth}) reached while fixing unparsed elements")
         return obj
 
@@ -1365,13 +1365,12 @@ Note: The tracer automatically detects whether to use pytest or run as a standal
                 with open(master_file, "w") as f:
                     json.dump(master_data, f, indent=2)
 
-                if unparsed_before:
-                    if unparsed_after:
-                        print("   ⚠️  Warning: Some unparsed elements remain")
-                    else:
-                        print("   ✅ All unparsed elements fixed!")
-                else:
+                if not unparsed_before:
                     print("   ✅ No unparsed elements found")
+                elif unparsed_after:
+                    print("   ⚠️  Warning: Some unparsed elements remain")
+                else:
+                    print("   ✅ All unparsed elements fixed!")
         except Exception as e:
             print(f"   ⚠️  Could not perform post-processing: {e}")
 
