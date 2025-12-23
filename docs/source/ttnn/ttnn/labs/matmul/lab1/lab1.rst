@@ -673,7 +673,7 @@ DPRINT supports printing integers, floats, and strings, but it does **not** dire
 The common pattern is to cast booleans to an integer (for example, ``uint32_t``) before printing them.
 The following example shows a simple print of local kernel variables, including a Boolean flag:
 
-.. code-block:: c++
+.. code-block:: cpp
 
    #include "api/debug/dprint.h"
 
@@ -705,7 +705,7 @@ The key rules are:
 
 Simplified example of printing a full tile from an output CB in a writer kernel is shown below.
 
-.. code-block:: c++
+.. code-block:: cpp
 
    #include "api/dataflow/dataflow_api.h"
    #include "api/debug/dprint.h"
