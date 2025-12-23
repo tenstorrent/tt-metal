@@ -1,0 +1,156 @@
+name: Parallel Refactoring - Device Operations
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Generate Matrix from batch_mapping.json
+        id: set-matrix
+        run: |
+          if [ ! -f batch_mapping.json ]; then
+            echo "Error: batch_mapping.json not found. Run codegen_tools/partition_ops.py first."
+            exit 1
+          fi
+
+          # Create matrix: array of objects with batch_id and files
+          MATRIX=$(jq -c '[range(.batch_id | length) as $i | {batch_id: .batch_id[$i], files: .files[$i]}]' batch_mapping.json)
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Generated matrix with $(jq '.batch_id | length' batch_mapping.json) batches"
+
+  refactor-batch:
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    runs-on: tt-beta-ubuntu-2204-n300-large-stable
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🌿 Create Branch
+        id: create-branch
+        run: |
+          BRANCH_NAME="refactor/batch-${{ matrix.batch_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: 📝 Prepare Files List
+        id: prepare-files
+        run: |
+          # Convert JSON array to newline-separated list
+          FILES_JSON='${{ toJson(matrix.files) }}'
+          echo "$FILES_JSON" | jq -r '.[]' > files_to_refactor.txt
+          FILES_LIST=$(cat files_to_refactor.txt | tr '\n' ' ')
+          echo "files_list=$FILES_LIST" >> $GITHUB_OUTPUT
+          echo "Files to refactor (batch ${{ matrix.batch_id }}):"
+          cat files_to_refactor.txt
+
+      - name: 🤖 Run Claude Code Refactoring
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are refactoring device operation files to convert from register_operation to direct function calls.
+
+            Follow the instructions in REFACTORING_GUIDE.md exactly. The files to refactor in this batch are:
+            ${{ steps.prepare-files.outputs.files_list }}
+
+            For each file:
+            1. Extract the register_operation call and the invoke function from the .hpp file
+            2. Replace register_operation with a direct function declaration in the .hpp (same namespace)
+            3. Remove the invoke member function declaration from the operation class in the .hpp
+            4. Implement the new global function in the corresponding .cpp file
+            5. Remove the invoke member function implementation from the .cpp
+            6. After refactoring each file, run: ./build_metal.sh -c -e --debug
+            7. If the build fails, analyze the compiler errors and fix the code until it passes
+
+            Do not stop until all files in this batch are refactored and verified with a successful build.
+
+            Read REFACTORING_GUIDE.md for detailed step-by-step instructions.
+          claude_args: |
+            --allowedTools Bash,Edit,Read,Write
+            --system-prompt "You are a senior C++ engineer refactoring device operations. Be precise and follow the REFACTORING_GUIDE.md exactly."
+
+      - name: 📤 Push Changes
+        if: success()
+        run: |
+          BRANCH_NAME="${{ steps.create-branch.outputs.branch }}"
+          git push origin "$BRANCH_NAME" || {
+            echo "Push failed, trying to pull and rebase..."
+            git pull origin "$BRANCH_NAME" --rebase || true
+            git push origin "$BRANCH_NAME"
+          }
+
+      - name: 🔀 Create Pull Request
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branchName = '${{ steps.create-branch.outputs.branch }}';
+            const batchId = '${{ matrix.batch_id }}';
+            const filesCount = '${{ length(matrix.files) }}';
+
+            // Check if PR already exists
+            const { data: existingPRs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branchName}`,
+              state: 'open'
+            });
+
+            if (existingPRs.length > 0) {
+              console.log(`PR already exists: ${existingPRs[0].html_url}`);
+              return;
+            }
+
+            // Create new PR
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Refactor] Batch ${batchId}: Convert register_operation to direct functions`,
+              head: branchName,
+              base: 'main',
+              body: `## Refactoring Batch ${batchId}
+
+              This PR contains the refactored device operations from batch ${batchId}.
+
+              **Changes:**
+              - Removed \`register_operation\` calls
+              - Replaced with direct function declarations
+              - Removed \`invoke\` member functions
+              - Implemented new global functions
+
+              **Files refactored:** ${filesCount}
+
+              **Build status:** ✅ Verified with \`./build_metal.sh -c -e --debug\`
+
+              This is part of a parallel refactoring effort to convert all device operations.
+              See REFACTORING_GUIDE.md for details.`
+            });
+
+            console.log(`Created PR: ${pr.html_url}`);
