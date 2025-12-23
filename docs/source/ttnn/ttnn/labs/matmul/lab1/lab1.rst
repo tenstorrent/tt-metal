@@ -145,7 +145,7 @@ The tiled version should be implemented as follows:
 4. Allow parameterization of tile size
 5. Verify the correctness of the implementation by comparing the result with the reference implementation.
 6. Profile the performance of the implementation and compare it with the reference implementation.
-Make sure to compile with -O3 optimization level when comparing performance.
+   Make sure to compile with -O3 optimization level when comparing performance.
 
 
 
@@ -265,11 +265,11 @@ In tiled memory layout with tile size 3x2, this matrix is stored in memory as:
    Add an image of a tiled memory layout here.
 
 Observe that all elements of a tile are stored contiguously in memory. In this tiled layout there are two "second-order" row-major orderings:
-1. Elements within each tile are stored in row-major order.
-2. Ordering of tiles relative to other tiles follows row-major ordering. That is, the first tile is stored at the beginning of the memory followed by the
-tile to its right, and so on until the last tile in the row of tiles. Then the next row of tiles is stored, starting with the tile in the first column
-of the next row of tiles.
 
+1. Elements within each tile are stored in row-major order.
+2. Ordering of tiles relative to other tiles follows row-major ordering. That is, the first tile is stored at the beginning of the memory
+   followed by the tile to its right, and so on until the last tile in the row of tiles. Then the next row of tiles is stored,
+   starting with the tile in the first column of the next row of tiles.
 
 
 Tensix Programming Model
@@ -350,12 +350,21 @@ Kernel Types and Data Flow
 
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
 a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM.
-These circular buffers act as producer-consumer queues, enabling safe and efficient data exchange between kernels.
+The circular buffers act as producer-consumer queues, enabling safe and efficient data exchange between kernels.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
+Also note that reader kernels and writer kernels are commonly referred to as data movement kernels.
 
-.. image:: docs/source/common/images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
+.. image:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
    :width: 900
    :alt: Circular buffer data flow
+
+   Figure 1: Kernel data flow through circular buffers
+
+!!!!
+NOTE: THIS IMAGE HAS PROBLEMS!!!
+Writer should be Kernel 1 not Kernel 0.
+"Think them as pipes!!!"
+!!!!
 
 Each kernel interacts with the buffers as follows:
 
@@ -376,13 +385,13 @@ pipelined execution across the hardware. Different kernel types are mapped to th
 Tensix Core consists of four major parts:
 
 1. Internal SRAM (L1) Memory - Stores input/output tiles in circular buffers for fast access by the Tensix engine.
-It also holds program code for all RISC-V processors within the core.
+   It also holds program code for all RISC-V processors within the core.
 2. Two Routers - Manage data movement between device DRAM and internal SRAM (L1) memory.
 3. Tensix Engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
 4. Five RISC-V Processors that control the Tensix Engine and routers:
-   * RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
+   - RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
    Either of these can be used for reader or writer kernel.
-   * RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
+   - RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
    Note that these RISC-V processors don't perform actual tile computations.
    Instead, they serve as microcontrollers directing the operations of the Tensix Engine. One RISC-V processor is responsible for issuing commands to
    the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
