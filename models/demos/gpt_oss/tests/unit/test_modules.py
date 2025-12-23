@@ -56,7 +56,7 @@ def run_attention_component(
         hidden_states=hidden_states,
         position_embeddings=position_embeddings,
         attention_mask=mask,
-        use_cache=True,
+        use_cache=False,
     )
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
@@ -230,9 +230,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     model_name = getattr(setup["model_args"], "model_name", None)
-
-    if seq_len >= 4096 and model_name == "gpt-oss-20b":
-        pytest.skip("prefill seq_len=4096 currently unsupported for gpt-oss-20b")
 
     config = setup["config"]
 
