@@ -40,7 +40,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    runs-on: tt-beta-ubuntu-2204-n300-large-stable
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: write
@@ -52,6 +52,25 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 💾 Cache Build Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            build_Debug/**
+            build/**
+            .ccache/**
+          key: ${{ runner.os }}-build-cache-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-build-cache-
+
+      - name: 🔧 Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+          max-size: 2G
 
       - name: 🌿 Create Branch
         id: create-branch
