@@ -25,6 +25,8 @@ using namespace tt::tt_metal;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
+// Maximum number of sticks to process per batch for optimal NOC utilization
+constexpr uint32_t MAX_BATCH_SIZE = 5;
 
 // Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
 static uint16_t nearest_float_to_bfloat16(float value) {
@@ -118,13 +120,13 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     // Check if fill value is zero (can use zero_out_page instead of fill CB)
     const bool fill_is_zero = (fill_value_bf16 == 0);
 
-    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy (only needed for non-zero fill)
+    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy
     uint32_t fill_cb_index = 0;
-    if (!fill_is_zero) {
-        auto [cb_index, cb_handle] = tt::tt_metal::create_cb(
-            tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
-        fill_cb_index = cb_index;
-    }
+    auto [cb_index, cb_handle] =
+        tt::tt_metal::create_cb(tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+    fill_cb_index = cb_index;
+    // Batch size is limited by available CB pages or MAX_BATCH_SIZE, whichever is smaller
+    const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_time_args = {
@@ -138,9 +140,10 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         fill_cb_index,                        // ct_arg[7]: fill_cb_index (0 if fill_is_zero)
         input_stick_nbytes,                   // ct_arg[8]: input_stick_nbytes (unaligned, for fill)
         static_cast<uint32_t>(fill_is_zero),  // ct_arg[9]: fill_is_zero
+        batch_size                            // ct_arg[10]: batch_size
     };
 
-    // Append tensor accessor args for input tensor (starts at ct_arg[10])
+    // Append tensor accessor args for input tensor (starts at ct_arg[11])
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     // Writer compile-time arguments (RISCV_1)
@@ -148,9 +151,10 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         output_cb_index,              // ct_arg[0]: output_cb_index
         aligned_output_stick_nbytes,  // ct_arg[1]: aligned_output_stick_nbytes
         num_cb_pages,                 // ct_arg[2]: num_cb_pages
+        batch_size,                   // ct_arg[3]: batch_size
     };
 
-    // Append tensor accessor args for output tensor (starts at ct_arg[3])
+    // Append tensor accessor args for output tensor (starts at ct_arg[4])
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Create reader kernel
