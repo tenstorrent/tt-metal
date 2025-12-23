@@ -78,7 +78,7 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                     parsed_data = json_module.loads(fixed_json_str)
                     # Recursively fix any nested UnparsedElements
                     return fix_unparsed_elements_standalone(parsed_data, depth + 1, max_depth)
-                except:
+                except Exception:
                     pass
 
             # If parsing failed, return as-is

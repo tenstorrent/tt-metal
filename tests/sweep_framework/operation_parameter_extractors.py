@@ -2030,7 +2030,7 @@ def _extract_sdpa_decode_params(config: List) -> Optional[Dict]:
             if isinstance(arg8_val, str):
                 try:
                     params["scale"] = float(arg8_val)
-                except:
+                except (ValueError, TypeError):
                     params["scale"] = arg8_val
 
         # arg9: k_chunk_size
@@ -2039,7 +2039,7 @@ def _extract_sdpa_decode_params(config: List) -> Optional[Dict]:
             if isinstance(arg9_val, str):
                 try:
                     params["k_chunk_size"] = int(arg9_val)
-                except:
+                except (ValueError, TypeError):
                     params["k_chunk_size"] = arg9_val
 
         # arg10: output_memory_config

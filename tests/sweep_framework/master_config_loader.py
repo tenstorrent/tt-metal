@@ -1231,6 +1231,7 @@ class MasterConfigLoader:
                                     scalar_value = float(arg_val)
                                     break
                                 except (ValueError, TypeError):
+                                    # Non-numeric string: intentionally ignore and continue searching for a scalar
                                     pass
 
                 # Accept either 2 tensors OR 1 tensor + 1 scalar
