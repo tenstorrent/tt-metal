@@ -24,8 +24,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-UntilizeMultiCoreProgramFactory::cached_program_t
-UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
+UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactory::create(
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& output) {
