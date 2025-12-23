@@ -12,6 +12,29 @@ from models.common.utility_functions import is_blackhole
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
 
+def get_expected_metrics(mesh_device):
+    if tuple(mesh_device.shape) == (2, 4):
+        return {
+            "clip_encoding_time": 0.15,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.25,
+            "denoising_steps_time": 11.3,
+            "vae_decoding_time": 1.6,
+            "total_time": 13.2,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        return {
+            "clip_encoding_time": 0.2,
+            "t5_encoding_time": 0.12,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 4.2,
+            "vae_decoding_time": 1.35,
+            "total_time": 5.9,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
@@ -270,27 +293,8 @@ def test_sd35_new_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
-        expected_metrics = {
-            "clip_encoding_time": 0.15,
-            "t5_encoding_time": 0.1,
-            "total_encoding_time": 0.25,
-            "denoising_steps_time": 11.3,
-            "vae_decoding_time": 1.6,
-            "total_time": 13.2,
-        }
-    elif tuple(mesh_device.shape) == (4, 8):
-        expected_metrics = {
-            "clip_encoding_time": 0.2,
-            "t5_encoding_time": 0.12,
-            "total_encoding_time": 0.6,
-            "denoising_steps_time": 4.2,
-            "vae_decoding_time": 1.35,
-            "total_time": 5.9,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
+    expected_metrics = get_expected_metrics(mesh_device)
     if is_ci_env:
         # In CI, dump a performance report
         benchmark_data = BenchmarkData()

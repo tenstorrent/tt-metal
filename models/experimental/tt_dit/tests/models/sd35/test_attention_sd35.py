@@ -129,7 +129,7 @@ def test_sd35_joint_attention(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
