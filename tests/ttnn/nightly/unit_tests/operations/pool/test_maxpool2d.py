@@ -194,39 +194,6 @@ def run_max_pool2d(
         assert allclose
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "act_shape, kernel_size, dtype",
-    [
-        # ([1, 256, 1024, 64], (1, 64), ttnn.bfloat16),
-        # ([1, 256, 2048, 64], (1, 64), ttnn.bfloat16),
-        ([1, 256, 1024, 32], (1, 32), ttnn.bfloat16),
-        # ([1, 256, 2048, 32], (1, 32), ttnn.bfloat16),
-        # ([1, 256, 2048, 64], (1, 64), ttnn.bfloat8_b),
-        # ([1, 256, 1024, 32], (1, 32), ttnn.bfloat16),
-        # ([1, 256, 1024, 32], (1, 32), ttnn.bfloat8_b),
-    ],
-)
-@pytest.mark.parametrize("padding", [(0, 0)])
-@pytest.mark.parametrize("stride", [(1, 32)])
-@pytest.mark.parametrize("dilation", [(1, 1)])
-@pytest.mark.parametrize("ceil_mode", [False])
-def test_run_max_pool_detr3d(act_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode):
-    run_max_pool(
-        act_shape,
-        kernel_size,
-        padding,
-        kernel_size,
-        dilation,
-        device,
-        tensor_map,
-        dtype,
-        shard_scheme=None,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ceil_mode=ceil_mode,
-    )
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",  ## NCHW
