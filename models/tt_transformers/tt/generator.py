@@ -107,7 +107,7 @@ class Generator:
 
     def prepare_slice_tensors(self, last_token_idx, embed_shape, model_id):
         start_slice_tensor = ttnn.from_torch(torch.tensor([0, 0, last_token_idx, 0]))
-        end_slice_tensor = ttnn.from_torch(torch.tensor([0, 0, last_token_idx + 32, embed_shape]))
+        end_slice_tensor = ttnn.from_torch(torch.tensor([1, 1, last_token_idx + 32, embed_shape]))
         host_tensors = [start_slice_tensor, end_slice_tensor]
         device_tensors = [self.slice_tensors[model_id][0], self.slice_tensors[model_id][1]]
         copy_host_to_device(host_tensors, device_tensors, mesh_device=self.model_args[model_id].mesh_device)
@@ -362,7 +362,7 @@ class Generator:
                     prefill_ids,
                     page_table=page_table_user,
                     user_id=group_user_id,
-                    last_token_idx=last_token_idx,
+                    last_token_idx=(last_token_idx // 32) * 32,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
