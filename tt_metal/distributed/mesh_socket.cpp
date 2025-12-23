@@ -178,10 +178,43 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
     }
 }
 
+SocketConfig MeshSocket::populate_mesh_ids(
+    const std::shared_ptr<MeshDevice>& sender,
+    const std::shared_ptr<MeshDevice>& receiver,
+    const SocketConfig& base_config) {
+    auto config = base_config;
+    std::optional<tt_fabric::MeshId> sender_mesh_id = std::nullopt;
+    std::optional<tt_fabric::MeshId> receiver_mesh_id = std::nullopt;
+    for (const auto& conn : config.socket_connection_config) {
+        auto sender_coord = conn.sender_core.device_coord;
+        auto receiver_coord = conn.receiver_core.device_coord;
+
+        if (!sender_mesh_id.has_value()) {
+            sender_mesh_id = sender->get_fabric_node_id(sender_coord).mesh_id;
+        } else {
+            TT_FATAL(
+                sender_mesh_id.value() == sender->get_fabric_node_id(sender_coord).mesh_id, "Sender mesh id mismatch.");
+        }
+        if (!receiver_mesh_id.has_value()) {
+            receiver_mesh_id = receiver->get_fabric_node_id(receiver_coord).mesh_id;
+        } else {
+            TT_FATAL(
+                receiver_mesh_id.value() == receiver->get_fabric_node_id(receiver_coord).mesh_id,
+                "Receiver mesh id mismatch.");
+        }
+    }
+
+    config.sender_mesh_id = sender_mesh_id;
+    config.receiver_mesh_id = receiver_mesh_id;
+
+    return config;
+}
+
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& sender,
     const std::shared_ptr<MeshDevice>& receiver,
-    const SocketConfig& config) {
+    const SocketConfig& base_config) {
+    auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
     auto recv_config_buffer = create_socket_config_buffer(receiver, config, SocketEndpoint::RECEIVER);
     auto socket_data_buffer = create_socket_data_buffer(receiver, config);
@@ -196,10 +229,12 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     auto send_peer_descriptor = generate_local_endpoint_descriptor(sender_socket);
     auto recv_peer_descriptor = generate_local_endpoint_descriptor(receiver_socket);
 
-    write_socket_configs(sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER);
-    write_socket_configs(recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER);
+    write_socket_configs(
+        sender_config_buffer, send_peer_descriptor, recv_peer_descriptor, SocketEndpoint::SENDER, receiver);
+    write_socket_configs(
+        recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
 
-    auto fabric_node_id_map = generate_fabric_node_id_map(config);
+    auto fabric_node_id_map = generate_fabric_node_id_map(config, sender, receiver);
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;

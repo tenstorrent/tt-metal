@@ -2243,7 +2243,7 @@ TEST(SocketSerializationTest, PeerDesc) {
 
     SocketMemoryConfig socket_mem_config_l1_mh(BufferType::L1, socket_fifo_size);
     SocketConfig socket_config_l1 =
-        SocketConfig(socket_connections, socket_mem_config_l1_mh, multihost::Rank{0}, multihost::Rank{1});
+        SocketConfig(socket_connections, socket_mem_config_l1_mh, tt_fabric::MeshId{0}, tt_fabric::MeshId{1});
 
     // Populate sender size peer descriptor based on config, addresses and device coordinates
     SocketPeerDescriptor send_socket_peer_desc_l1 = SocketPeerDescriptor{
