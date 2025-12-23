@@ -145,7 +145,7 @@ jobs:
                     "hooks": [
                       {
                         "type": "command",
-                        "command": "echo '🔧 Running Bash command:' && echo '${{ tool.command }}'"
+                        "command": "echo '🔧 Running Bash command..'"
                       }
                     ]
                   }
