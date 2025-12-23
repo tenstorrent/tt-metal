@@ -22,7 +22,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
     validate_outputs_with_pcc,
     convert_pytorch_outputs_to_numpy,
 )
-from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     save_predictions,
@@ -254,18 +253,7 @@ def run_panoptic_deeplab_demo(
             ins_embed_head_channels=ins_embed_head_channels,
         )
 
-        # Create model configurations
-        logger.info("Creating model configurations...")
-        model_configs = ModelOptimisations(
-            conv_act_dtype=ttnn.bfloat8_b,
-            conv_w_dtype=ttnn.bfloat8_b,
-        )
-        model_configs.setup_resnet_backbone()
-        model_configs.setup_aspp()
-        model_configs.setup_decoder()
-        model_configs.setup_heads()
-
-        # Create TTNN model
+        # Create TTNN model (handles parameter creation, fusion, model configs, and model initialization)
         ttnn_model = create_ttnn_model(
             device=device,
             pytorch_model=pytorch_model,
@@ -278,7 +266,6 @@ def run_panoptic_deeplab_demo(
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            model_configs=model_configs,
         )
 
     except FileNotFoundError:
