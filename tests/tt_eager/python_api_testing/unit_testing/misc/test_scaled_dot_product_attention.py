@@ -151,7 +151,19 @@ def run_test_sdpa_tt(
 
 
 def run_sdpa_noncausal(
-    device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    sq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    sk=None,
+    use_mask=True,
+    rmse_threshold=None,
+    bcast_mask_head_dim=True,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -182,6 +194,7 @@ def run_sdpa_noncausal(
             torch.full(
                 (
                     b,
+                    1 if bcast_mask_head_dim else nh,
                     sq,
                     sk,
                 ),
@@ -453,6 +466,46 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     if (sq % q_chunk_size != 0) or (sk % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 8, 8, 99, 128],),
+)
+def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    rmse_threshold = 0.0069
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        rmse_threshold=rmse_threshold,
+        use_mask=True,
+        bcast_mask_head_dim=True,
+    )
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        rmse_threshold=rmse_threshold,
+        use_mask=True,
+        bcast_mask_head_dim=False,
+    )
 
 
 def run_test_chunked_sdpa(
