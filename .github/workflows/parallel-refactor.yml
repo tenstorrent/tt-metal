@@ -2,6 +2,11 @@ name: Parallel Refactoring - Device Operations
 
 on:
   workflow_dispatch:
+    secrets:
+      AY_KEY:
+        required: true
+      AI_GH_TOKEN:
+        required: true
 
 jobs:
   generate-matrix:
@@ -45,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          token: ${{ secrets.AI_GH_TOKEN }}
+          fetch-depth: 500
 
       - name: 💾 Cache Build Artifacts
         uses: actions/cache@v4
@@ -123,12 +128,8 @@ jobs:
         run: |
           BRANCH_NAME="${{ steps.create-branch.outputs.branch }}"
 
-          # Configure git to use the token for authentication
+          # Configure git remote with token for push operations
           git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-
-          # Ensure git user is configured
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Check if there are uncommitted changes (Claude Code may have made changes)
           if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -137,21 +138,13 @@ jobs:
             git commit -m "Refactor batch ${{ matrix.batch_id }}: Convert register_operation to direct functions" || echo "Commit failed or nothing to commit"
           fi
 
-          # Push the branch with retry logic
+          # Push the branch
           echo "Pushing branch $BRANCH_NAME..."
-          if ! git push origin "$BRANCH_NAME"; then
-            echo "Initial push failed, attempting to sync with remote..."
-            # Fetch and try to rebase if branch exists remotely
-            git fetch origin "$BRANCH_NAME" 2>/dev/null || true
-            if git show-ref --verify --quiet refs/remotes/origin/"$BRANCH_NAME"; then
-              echo "Remote branch exists, rebasing..."
-              git pull origin "$BRANCH_NAME" --rebase || git reset --hard origin/"$BRANCH_NAME"
-              git push origin "$BRANCH_NAME"
-            else
-              echo "Remote branch doesn't exist, force pushing..."
-              git push -f origin "$BRANCH_NAME"
-            fi
-          fi
+          git push origin "$BRANCH_NAME" || {
+            echo "Push failed, trying to pull and rebase..."
+            git pull origin "$BRANCH_NAME" --rebase || true
+            git push origin "$BRANCH_NAME"
+          }
 
           echo "✅ Successfully pushed branch $BRANCH_NAME"
 
