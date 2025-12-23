@@ -1307,7 +1307,7 @@ def handle_gather(func, args, kwargs):
     if not isinstance(index, TorchTTNNTensor):
         if isinstance(index, (int, float)):
             index = torch.tensor(index)
-        index = TorchTTNNTensor(index, dtype=torch.int64)
+        index = TorchTTNNTensor(index, dtype=torch.uint32)
         deallocate_b = True
     else:
         if index.ttnn_tensor is None:
@@ -1323,6 +1323,9 @@ def handle_gather(func, args, kwargs):
         )
     if index.to_ttnn.layout != ttnn.TILE_LAYOUT:
         index.ttnn_tensor = ttnn.to_layout(index.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if index.to_ttnn.dtype != ttnn.uint32:
+        index.ttnn_tensor = ttnn.typecast(index.ttnn_tensor, ttnn.uint32)
 
     res = TorchTTNNTensor(ttnn.gather(input_tensor.to_ttnn, dim, index.to_ttnn))
 
@@ -1434,6 +1437,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                     return False
     if not any_ttnn_tensor:
         return False
+    passed = True
     if "aten::slice.Tensor" == func_name:
         if (
             not isinstance(args[1], int)
@@ -1441,13 +1445,16 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             or not isinstance(args[3], int)
             or len(args) not in [4, 5]
         ):
-            return False
+            print("TTNN: aten::slice.Tensor only supports int arguments for start, end, step.")
+            passed = False
         if len(args) == 5:
             if not isinstance(args[4], int):
-                return False
+                print("TTNN: aten::slice.Tensor only supports int argument for dim.")
+                passed = False
     if "aten::addmm" == func_name:
         if len(kwargs) > 0:
-            return False
+            print("TTNN: aten::addmm does not support keyword arguments.")
+            passed = False
     if "aten::index.Tensor" == func_name:
         if (
             len(kwargs) > 0
@@ -1457,10 +1464,12 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             or not isinstance(args[1][0], (TorchTTNNTensor, torch.Tensor))
             or not len(args[1][0].shape) == 1
         ):
-            return False
+            print("TTNN: aten::index.Tensor only supports a single 1D tensor as index.")
+            passed = False
     if "aten::topk" == func_name:
         if len(kwargs) > 0 or not (len(args) == 2 or len(args) == 5):
-            return False
+            print("TTNN: aten::topk only supports 2 or 5 positional arguments.")
+            passed = False
     if "aten::bitwise_not" == func_name:
         if (
             len(kwargs) > 0
@@ -1468,15 +1477,18 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             or not isinstance(args[0], torch.Tensor)
             or not args[0].dtype == torch.bool
         ):
-            return False
+            print("TTNN: aten::bitwise_not only supports a single boolean tensor argument.")
+            passed = False
     if "aten::sum.dim_IntList" == func_name:
         if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32]:
-            return False
+            print("TTNN: aten::sum.dim_IntList only supports float32, bfloat16, bfloat8_b, and uint32 dtypes.")
+            passed = False
     if "aten::unsqueeze" == func_name:
         if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32]:
-            return False
+            print("TTNN: aten::unsqueeze only supports float32, bfloat16, int32, and uint32 dtypes.")
+            passed = False
     if func_name in func_to_ttnn_compatible:
-        return True
+        return passed
     if func_name != "aten::_scaled_dot_product_flash_attention_for_cpu":
         print(
             f"Found Operation {func_name} that if written in ttnn would be more efficient. "
