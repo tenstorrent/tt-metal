@@ -132,7 +132,7 @@ Tiled Version
                    some_computation(row, col);
 
 
-Exercies 1: Tiled Matrix Multiplication
+Exercise 1: Tiled Matrix Multiplication
 ========================================
 
 In this part of the lab, you will implement two versions of matrix multiplication: a straightforward triply-nested loop, and a tiled version.
@@ -214,8 +214,8 @@ local SRAM-resident data, and only transfer compact outputs or checkpoints back 
 When used this way, host-device communication over PCIe represents a relatively small fraction of the total runtime,
 allowing the accelerator's on-card compute and data-movement engines to dominate performance.
 
-In this lab we will focus on programming a single Tensix processor in TT-Metalium and descriptions of the architectural features will be limited to this context.
-We will extend the architectural descriptions and programming model to multiple Tensix processors in subsequent labs.
+In this lab we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features will be limited to this context.
+We will extend the architectural and programming model description to multiple Tensix cores in subsequent labs.
 
 Tile-Based Architecture
 -----------------------
@@ -281,7 +281,7 @@ assemble a tile by merging different sections of memory, as would be the case fo
 This allows for efficient memory access and computation.
 
 
-Tensix Programming Model
+Metalium Programming Model
 ========================
 
 Tenstorrent devices can be programmed at multiple abstraction levels, from high-level neural network libraries to low-level kernel development.
@@ -298,7 +298,7 @@ This means the same kernel code can run efficiently on different Tenstorrent pro
 for each architecture.
 TT-Metalium serves as the foundation for higher-level frameworks, providing the base layer for all Tenstorrent software development.
 
-Before we look at a Tensix program, it's important to emphasize a fundamental distinction is between the **host** and the **device**.
+Before we look at a Metalium program, it's important to emphasize a fundamental distinction is between the **host** and the **device**.
 The **host** is the conventional CPU system (often x86 or ARM) where the main application runs.
 The **device** is the accelerator: a mesh of Tensix cores with their own on-chip memories and access to off-chip DRAM
 (recall that this is **device DRAM**, distinct from **host DRAM**).
@@ -313,7 +313,7 @@ device memory address space down to the kernels.
 Conversely, when a kernel finishes, any results you want on the host must be explicitly copied back.
 
 There is also a **two-stage view of "compile time" versus "run time" that spans host and device**.
-The host program is compiled ahead of time by a standard compiler, while Tensix kernels are compiled just-in-time (JIT) by the
+The host program is compiled ahead of time by a standard compiler, while kernels are compiled just-in-time (JIT) by the
 runtime while the host program is running. At that kernel-compile stage, certain parameters (like tensor layout, tile sizes) are
 known and are considered compile-time constants as far as kernel code is concerned, and hence they end up in the kernel binary.
 The advantage of this is that kernel code can be aggressively optimized.
@@ -330,18 +330,18 @@ Understanding which information lives on the host, which is baked into the kerne
 launch is key to reasoning about performance, correctness, and why the APIs are structured the way they are.
 
 
-Example Tensix Program
+Example Metalium Program
 ======================
 
-We will now present a simple example Tensix program that performs an elementwise addition of two tensors of shape MxN.
-This program will be used to illustrate the Tensix programming model, different types of kernels, and how they map to the underlying architecture.
+We will now present a simple example Metalium program that performs an elementwise addition of two tensors of shape MxN.
+This program will be used to illustrate the Metalium programming model, different types of kernels, and how they map to the underlying architecture.
 Key points will be highlighted in this text. Detailed comments are provided in the C++ code in this and other files to help with code understanding.
 
 The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 First thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
 
 Looking at the main function, we see that the host program first initializes input data for the operation and performs a reference computation on the host CPU.
-This will be used to verify the correctness of the Tensix implementation. Note that the data type used is bfloat16 (brain floating point), which is a
+This will be used to verify the correctness of the Metalium implementation. Note that the data type used is bfloat16 (brain floating point), which is a
 16-bit floating point format commonly used in AI applications. Since the host CPU doesn't natively support bfloat16,
 we use the `bfloat16` class from the `tt-metalium` library and cast data between this type and single-precision (32-bit) floating point as needed.
 
@@ -393,18 +393,18 @@ pipelined execution across the hardware. Different kernel types are mapped to th
 
 Tensix Core consists of four major parts:
 
-1. Internal SRAM (L1) Memory - Stores input/output tiles in circular buffers for fast access by the Tensix engine.
+1. Internal SRAM (L1) memory - Stores input/output tiles in circular buffers for fast access by the Tensix engine.
    It also holds program code for all RISC-V processors within the core.
-2. Two Routers - Manage data movement between device DRAM and internal SRAM (L1) memory.
-3. Tensix Engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
-4. Five RISC-V Processors that control the Tensix Engine and routers:
+2. Two routers - Manage data movement between device DRAM and internal SRAM (L1) memory.
+3. Tensix engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
+4. Five RISC-V Processors that control the Tensix engine and routers:
 
    - RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
      Either of these can be used for reader or writer kernel.
-   - RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
+   - RISC-V 1 through RISC-V 3 - These processors control the Tensix engine through specialized Tensix instructions.
      Note that these RISC-V processors don't perform actual tile computations.
-     Instead, they serve as microcontrollers directing the operations of the Tensix Engine. One RISC-V processor is responsible for issuing commands to
-     the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
+     Instead, they serve as microcontrollers directing the operations of the Tensix engine. One RISC-V processor is responsible for issuing commands to
+     the compute engine, while the other two are responsible for transferring tile data between circular buffers in SRAM and Tensix engine registers.
      Compute kernel code defines functionality for all three of these processors.
 
 
@@ -493,7 +493,7 @@ The function can be summarized by the following pseudo-code:
    read_runtime_arguments()
    read_compile_time_arguments()
    create_address_generators()
-   for (i in range (0 .. n_tiles) {
+   for (i in 0 .. n_tiles) {
        transfer_tile_from_dram_to_circular_buffer(in0, i)
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
@@ -538,7 +538,7 @@ The function can be summarized by the following pseudo-code:
 
    read_compile_time_arguments()
    initialize_tensix_engine_for_elementwise_addition()
-   for (i in range (0 .. n_tiles) {
+   for (i in 0 .. n_tiles) {
        add_tiles_in_input_circular_buffers()
        write_result_to_output_circular_buffer()
    }
@@ -586,34 +586,24 @@ with the compute processor writing results and the packer processor reading them
 Writer Kernel Code
 ------------------
 
-The function can be summarized by the following pseudo-code:
+The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring
+computed results from circular buffers in internal device SRAM back to device DRAM.
+The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
 
-   write_tiles(c_16, n_tiles);
+   for (i in 0 .. n_tiles) {
+       transfer_tile_from_circular_buffer_to_dram(out0, i)
+   }
 
-The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring computed results from circular buffers in internal device SRAM back to device DRAM, where they can eventually be read back to the host.
-The kernel reads two runtime arguments: the base address of the output tensor in DRAM and the total number of tiles to write.
-These runtime arguments enable the same compiled kernel to work with different output tensor locations without recompilation.
-
-The kernel uses circular buffer ``c_16`` as the source buffer containing the computed results produced by the compute kernel.
-It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
-Similar to the reader kernel, the writer kernel creates an address generator object using ``TensorAccessor`` to determine where each tile should be written in DRAM.
-The address generator is constructed by extracting tensor layout parameters from compile-time arguments using ``TensorAccessorArgs``, then combining them with the runtime base address.
-This allows the address generator to automatically compute the correct physical DRAM address for any given tile index, abstracting away the complexity of the tiled memory layout and data distribution.
-
-The main processing loop iterates over all tiles, implementing a consumer pattern that complements the compute kernel's producer role.
-For each tile, the kernel first waits for a tile to become available in the circular buffer using the blocking call ``cb_wait_front``.
-This ensures that the compute kernel has finished producing the tile before the writer attempts to read it.
-Once a tile is available, the kernel obtains a read pointer to the circular buffer and initiates a non-blocking asynchronous write operation using ``noc_async_write_tile``.
-This call takes the tile index, the address generator (which maps the logical index to the physical DRAM address), and the circular buffer read address.
-After initiating the write, the kernel calls ``noc_async_write_barrier``, which is a blocking call that waits until the write operation completes.
-This synchronization is critical to ensure that data has actually been written to DRAM before the kernel proceeds.
-Finally, the kernel marks the tile in the circular buffer as consumed by calling ``cb_pop_front``, which frees up space in the circular buffer for the compute kernel to produce the next tile.
+Most of the code is similar to the reader kernel, with the main difference being that the writer kernel writes to DRAM instead of reading from it.
+The circular buffer the writer kernel reads from has capacity for two tiles, allowing the compute kernel to write to one new tile, while the writer
+kernel is reading from the previously produced tile.
 This coordination between the compute and writer kernels enables pipelined execution, where computation and data movement can overlap.
 
-
-
+It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
+division of tasks and data between host and device.
+The following diagram summarizes what code and data resides where (device, host, CBs, DRAM,...)
 
 TODO: Have a diagram which shows what resides where (device, host, CBs, DRAM,...)
 
