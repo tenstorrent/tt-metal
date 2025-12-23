@@ -2179,39 +2179,24 @@ jobs:
                         else
                           echo "metalium-api-owners team owns non-API files (e.g., programming_examples/), using standard selection"
                         fi
+                      fi
 
-                        # Select up to 2 additional owners from remaining members (common for both API and non-API)
-                        if [ -n "$TEAM_UNAPPROVED" ]; then
-                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+                      # Common selection logic: select up to 2 owners from remaining unapproved members
+                      # For metalium-api-owners API files: this is in addition to akerteszTT (if added above)
+                      # For all other cases: this is the primary selection
+                      if [ -n "$TEAM_UNAPPROVED" ]; then
+                        IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                        TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
 
-                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                        if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                        elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                          RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                          RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          while [ $RAND2 -eq $RAND1 ]; do
                             RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            while [ $RAND2 -eq $RAND1 ]; do
-                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            done
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
-                          fi
-                        fi
-                      else
-                        # Standard selection for other teams - select up to 2 owners
-                        if [ -n "$TEAM_UNAPPROVED" ]; then
-                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
-
-                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
-                            RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            while [ $RAND2 -eq $RAND1 ]; do
-                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            done
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
-                          fi
+                          done
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
                         fi
                       fi
                     fi
