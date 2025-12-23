@@ -99,20 +99,22 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
-    this->id_ = other.id_;
-    if (this->tensor_attributes != other.tensor_attributes) {
-        this->tensor_attributes = other.tensor_attributes;
+    if (this == &other) {
+        return *this;
     }
+    this->id_ = other.id_;
+    this->tensor_attributes = other.tensor_attributes;
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
     this->id_ = other.id_;
     other.id_ = INVALID_TENSOR_ID;
-    if (this->tensor_attributes != other.tensor_attributes) {
-        this->tensor_attributes = std::move(other.tensor_attributes);
-    }
+    this->tensor_attributes = std::move(other.tensor_attributes);
     this->mesh_device_ = other.mesh_device_;
     return *this;
 }

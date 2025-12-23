@@ -53,7 +53,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
     TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
-    Tensor output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
+    Tensor output = tensor_impl::to_layout(input_tensor, target_layout);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
