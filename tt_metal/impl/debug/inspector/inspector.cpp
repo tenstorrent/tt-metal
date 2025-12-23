@@ -510,6 +510,10 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
 
 namespace experimental::inspector {
 
+bool IsEnabled() {
+    return Inspector::is_enabled();
+}
+
 void EmitMeshWorkloadAnnotation(
     tt::tt_metal::distributed::MeshWorkload& workload,
     std::string_view operation_name,

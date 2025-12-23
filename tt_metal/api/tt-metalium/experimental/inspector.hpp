@@ -11,6 +11,9 @@
 
 namespace tt::tt_metal::experimental::inspector {
 
+// Inspector feature flag
+bool IsEnabled();
+
 // Inspector-only annotation for correlating higher-level execution with MeshWorkload runs.
 void EmitMeshWorkloadAnnotation(
     tt::tt_metal::distributed::MeshWorkload& workload,
