@@ -95,14 +95,19 @@ struct Node {
     HostId host_id{0};
 
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
-    using PortEndpoint = std::pair<TrayId, PortId>;
-    using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
-    std::unordered_map<PortType, std::vector<PortConnection>> inter_board_connections;
+    using BoardEndpoint = std::pair<TrayId, PortId>;
+    using BoardConnection = std::pair<BoardEndpoint, BoardEndpoint>;
+    std::unordered_map<PortType, std::vector<BoardConnection>> inter_board_connections;
 };
 
 // Normalize a node-level connection pair so the smaller endpoint is always first (for consistent comparison)
-inline Node::PortConnection normalize_node_connection(const Node::PortConnection& conn) {
-    return (conn.first < conn.second) ? conn : Node::PortConnection(conn.second, conn.first);
+inline Node::BoardConnection normalize_node_connection(const Node::BoardConnection& conn) {
+    return (conn.first < conn.second) ? conn : Node::BoardConnection(conn.second, conn.first);
+}
+
+// Normalize a graph-level connection pair so the smaller endpoint is always first (for consistent comparison)
+inline PortConnection normalize_graph_connection(const PortConnection& conn) {
+    return (conn.first < conn.second) ? conn : PortConnection(conn.second, conn.first);
 }
 
 // Resolved graph instance with concrete nodes (tree structure)
@@ -152,9 +157,6 @@ public:
     // Equality comparison operator
     bool operator==(const CablingGenerator& other) const;
 
-    // Utility functions for directory and file handling
-    static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
-
     // Friend function for build_from_directory to access private merge
     template <typename DeploymentArg>
     friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
@@ -182,7 +184,7 @@ private:
     void merge(
         const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources);
 
-    // Utility functions for directory and file handling
+    // Utility function for finding descriptor files in a directory
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
 
     // Validate that each host_id is assigned to exactly one node
