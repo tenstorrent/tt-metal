@@ -271,7 +271,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
                 if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
                     uint32_t num_blocks_block =
                         (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                        (TILE_HEIGHT * TILE_WIDTH);
+                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
 
                     // Compute grid area and initial blocks-per-core using integer math.
                     // const uint32_t grid_area = grid_size.x * grid_size.y;
