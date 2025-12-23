@@ -60,9 +60,6 @@ class TTSampling(LightweightModule):
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
 
-        # Force argmax sampling
-        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
-
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.max_batch_size = 32
@@ -84,6 +81,12 @@ class TTSampling(LightweightModule):
             self.sampling_memory_config = args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"]
         else:
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+        # Force argmax sampling
+        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
+        if self._force_argmax_sampling:
+            self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
+            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
 
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
@@ -234,9 +237,24 @@ class TTSampling(LightweightModule):
         """
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            if list(self.mesh_device.shape) == [1, 2]:
-                # all gather x to all devices
-                x = self._perform_all_gather(x, dim=-1)
+            # Gather the output across all devices and untilize the tensor (for argmax)
+            num_devices = self.mesh_device.get_num_devices()
+            if num_devices > 1:
+                cluster_axis = 1
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                    num_links=self.num_gather_links,
+                    memory_config=x.memory_config(),
+                    cluster_axis=cluster_axis,
+                    topology=self.ag_topology,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             x_untilized = ttnn.untilize(x, use_multicore=True)
             bogus_log_probs = ()
             return (

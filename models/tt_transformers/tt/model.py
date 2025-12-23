@@ -450,7 +450,7 @@ class Transformer(LightweightModule):
             return tt_toks, tt_log_probs
 
         # Gather the output across all devices and untilize the tensor (for argmax)
-        if self.args.num_devices > 1:
+        if self.args.num_devices > 1 and not self.sampling.tt_sampling._force_argmax_sampling:
             cluster_axis = 0 if self.args.is_galaxy else None
             num_links = 2 if self.args.is_galaxy else 1
             tt_logits = ttnn.experimental.all_gather_async(
