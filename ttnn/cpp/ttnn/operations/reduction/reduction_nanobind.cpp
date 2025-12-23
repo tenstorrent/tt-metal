@@ -20,6 +20,7 @@
 #include "ttnn/operations/reduction/sampling/sampling_nanobind.hpp"
 #include "ttnn/operations/reduction/topk/topk_nanobind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_nanobind.hpp"
+#include "ttnn/operations/reduction/tilize_untilize/tilize_untilize_nanobind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -44,6 +45,7 @@ void py_module(nb::module_& mod) {
     detail::bind_reduction_sampling_operation(mod);
     detail::bind_reduction_topk_operation(mod);
     detail::bind_manual_seed_operation(mod);
+    tilize_untilize::py_bind_tilize_untilize(mod);
 }
 
 }  // namespace ttnn::operations::reduction
