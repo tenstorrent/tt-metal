@@ -16,8 +16,9 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
