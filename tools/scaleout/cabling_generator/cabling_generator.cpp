@@ -818,31 +818,6 @@ CablingGenerator::CablingGenerator(
         populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
     }
 }
-
-// Helper to deep copy a ResolvedGraphInstance
-static std::unique_ptr<ResolvedGraphInstance> clone_resolved_graph_instance(const ResolvedGraphInstance& source) {
-    auto clone = std::make_unique<ResolvedGraphInstance>();
-    clone->template_name = source.template_name;
-    clone->instance_name = source.instance_name;
-
-    // Copy nodes (Node is copyable)
-    clone->nodes = source.nodes;
-
-    // Copy internal_connections and rebuild lookup structures
-    for (const auto& [port_type, connections] : source.internal_connections) {
-        for (const auto& conn : connections) {
-            clone->add_connection(port_type, conn);
-        }
-    }
-
-    // Deep copy subgraphs (must clone each unique_ptr)
-    for (const auto& [name, subgraph] : source.subgraphs) {
-        clone->subgraphs.emplace(name, clone_resolved_graph_instance(*subgraph));
-    }
-
-    return clone;
-}
-
 // Helper to find template key for a node by matching motherboard, board count, architecture, and board type
 static std::optional<std::string> find_template_key_for_node(
     const Node& node, const std::unordered_map<std::string, Node>& node_desc_name_to_node) {
@@ -999,7 +974,14 @@ static void merge_resolved_graph_instances(
             // Note: We don't recreate nodes from templates here because recreate_nodes_from_templates()
             // will do that for all nodes after merging is complete
         } else {
-            throw std::runtime_error(fmt::format("Node '{}' not found in target", name));
+            // Node exists in source but not in target
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': node '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(new_source_file),
+                get_source_description(existing_source_file)));
         }
     }
 
@@ -1010,8 +992,39 @@ static void merge_resolved_graph_instances(
             merge_resolved_graph_instances(
                 *target.subgraphs[name], *source_subgraph, existing_source_file, new_source_file, node_templates);
         } else {
-            // New subgraph - deep copy it (will be processed when we process connections)
-            target.subgraphs[name] = clone_resolved_graph_instance(*source_subgraph);
+            // Subgraph exists in source but not in target
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': subgraph '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(new_source_file),
+                get_source_description(existing_source_file)));
+        }
+    }
+
+    // Backward pass: Validate that target doesn't have any children that source doesn't have
+    // This ensures graph_templates have identical children across all descriptor files
+    for (const auto& [name, _] : target.nodes) {
+        if (!source.nodes.count(name)) {
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': node '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(existing_source_file),
+                get_source_description(new_source_file)));
+        }
+    }
+    for (const auto& [name, _] : target.subgraphs) {
+        if (!source.subgraphs.count(name)) {
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': subgraph '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(existing_source_file),
+                get_source_description(new_source_file)));
         }
     }
 
