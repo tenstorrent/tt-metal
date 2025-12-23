@@ -140,6 +140,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts = mapping_shape[-1];
+    uint32_t experts_per_device = tt::div_up(experts, num_devices);
 
     auto input_page_size = detail::get_page_size(input_tensor);
     auto indices_page_size = detail::get_page_size(indices_tensor);
@@ -343,7 +344,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_d_buffer_id,
         program,
         full_grid,
-        experts * dispatch_devices * l1_alignment,
+        experts_per_device * dispatch_devices * l1_alignment,
         1,
         tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
                                   // 16B aligned

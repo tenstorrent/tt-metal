@@ -326,9 +326,9 @@ inline void fabric_send_noc_unicast_with_semaphore(
                 addrgen,
                 offset);
         } else {
-            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            // Fill header for unicast write command when it is not the last packet
             tt::tt_fabric::linear::to_noc_unicast_write(
-                align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen);
+                align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen, offset);
         }
 
         // Send payload followed by header over the fabric.
@@ -458,13 +458,6 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    if (linearized_dest_mesh_coord == 2) {
-        if (route == eth_chan_directions::EAST) {
-            DPRINT << "sending to east, distance: " << distance << " page: " << noc_payload_page << ENDL();
-        } else if (route == eth_chan_directions::WEST) {
-            DPRINT << "sending to west, distance: " << distance << " page: " << noc_payload_page << ENDL();
-        }
-    }
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
