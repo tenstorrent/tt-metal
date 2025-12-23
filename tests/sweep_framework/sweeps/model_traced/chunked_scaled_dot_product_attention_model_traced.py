@@ -84,12 +84,10 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Extract shapes for Q, K, V, and page_table from input_shape dict or use defaults
+    # Extract shapes for Q and K from input_shape dict or use defaults
     if isinstance(input_shape, dict):
         shape_q = input_shape.get("input_a", (1, 8, 32, 64))
         shape_k_paged = input_shape.get("input_b", (64, 1, 64, 64))  # [num_pages, nkv, page_size, d]
-        shape_v_paged = input_shape.get("input_c", shape_k_paged)
-        shape_page_table = input_shape.get("input_d", (1, 32))
     else:
         shape_q = input_shape if isinstance(input_shape, (tuple, list)) else (1, 8, 32, 64)
         # Default paged format
@@ -98,8 +96,6 @@ def run(
         max_num_blocks_per_seq = max(1, (sq + page_block_size - 1) // page_block_size)
         nkv = 1
         shape_k_paged = (b * max_num_blocks_per_seq, nkv, page_block_size, d)
-        shape_v_paged = shape_k_paged
-        shape_page_table = (b, max_num_blocks_per_seq)
 
     # Extract dimensions from Q
     b, nh, sq, d = shape_q

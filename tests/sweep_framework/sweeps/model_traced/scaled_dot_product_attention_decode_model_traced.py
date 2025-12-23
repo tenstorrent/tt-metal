@@ -93,11 +93,10 @@ def run(
 
     # Handle both sample suite (tuple/list) and model_traced suite (dict with keys for multi-input ops)
     if isinstance(input_shape, dict):
-        # Multi-input operation - extract individual shapes for Q, K, V, and cur_pos
+        # Multi-input operation - extract individual shapes for Q, K, V
         shape_q = tuple(input_shape.get("input_a", (1, 8, 1, 64)))
         shape_k = tuple(input_shape.get("input_b", (1, 8, 2048, 64)))
         shape_v = tuple(input_shape.get("input_c", shape_k))
-        shape_cur_pos = tuple(input_shape.get("input_d", (1,)))  # cur_pos tensor
     else:
         # Convert list to tuple if needed
         shape_q = tuple(input_shape) if isinstance(input_shape, list) else input_shape
@@ -106,7 +105,6 @@ def run(
         # For decode, K and V have accumulated cache, use 2048 as default cache size
         shape_k = (b, nh, 2048, d)
         shape_v = shape_k
-        shape_cur_pos = (1,)  # Default cur_pos for sample
 
     # Extract dimensions following unit test pattern
     # Q shape: [1, b, nh_q, d]
