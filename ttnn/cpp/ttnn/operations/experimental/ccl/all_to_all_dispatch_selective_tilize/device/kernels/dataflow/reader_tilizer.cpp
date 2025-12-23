@@ -201,24 +201,23 @@ void kernel_main() {
 
     // Wait for all fabric writer cores to signal that indices/scores have been sent
     // This ensures the metadata all-gather is complete before post-processing
-    // Only drain_tilizer_cores receive the atomic increments, so only they need to wait
+    // Only drain_tilizer_cores receive the atomic increments and do the post-processing
     if (is_drain_tilizer_core) {
         noc_semaphore_wait((uint32_t*)indices_sent_semaphore_address, dispatch_devices - 1);
         noc_semaphore_set((uint32_t*)indices_sent_semaphore_address, 0);
-    }
 
-    // POST-PROCESSING STAGE:
-    // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the E-D
-    // buffer
-    uint32_t base_ed_table_offset = experts_per_device * dispatch_devices * l1_alignment;
-    for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
-        for (uint32_t indices_page = 0; indices_page < indices_pages; indices_page++) {
-            uint32_t metadata_page = device_id * indices_pages + indices_page;
-            cb_reserve_back(indices_tensor_cb_id, 1);
-            noc_async_read_page(metadata_page, metadata_tensor_addr_gen, get_write_ptr(indices_tensor_cb_id));
-            noc_async_read_barrier();
-            cb_push_back(indices_tensor_cb_id, 1);
-            // update the ground truth E-D table offset into the second half of the E-D buffer
+        // POST-PROCESSING STAGE:
+        // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the
+        // E-D buffer. Must be done AFTER semaphore wait to ensure all-gather is complete.
+        uint32_t base_ed_table_offset = experts_per_device * dispatch_devices * l1_alignment;
+        for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
+            for (uint32_t indices_page = 0; indices_page < indices_pages; indices_page++) {
+                uint32_t metadata_page = device_id * indices_pages + indices_page;
+                cb_reserve_back(indices_tensor_cb_id, 1);
+                noc_async_read_page(metadata_page, metadata_tensor_addr_gen, get_write_ptr(indices_tensor_cb_id));
+                noc_async_read_barrier();
+                cb_push_back(indices_tensor_cb_id, 1);
+            }
         }
     }
 

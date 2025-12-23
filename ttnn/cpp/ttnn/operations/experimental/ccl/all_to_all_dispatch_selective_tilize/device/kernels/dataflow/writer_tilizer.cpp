@@ -208,42 +208,47 @@ void kernel_main() {
     uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
 
     // POST-PROCESSING STAGE:
-    // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the E-D
-    // buffer. We iterate through all source devices' metadata, counting how many tokens will arrive at each
-    // local expert from each source device.
-    constexpr uint32_t tile_height = 32;
-    uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
-    volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
+    // Only drain_tilizer_cores do the ground truth computation, matching the reader_tilizer
+    // which only pushes CB pages for drain cores after waiting for the all-gather semaphore.
+    if (is_drain_tilizer_core) {
+        // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the
+        // E-D buffer. We iterate through all source devices' metadata, counting how many tokens will arrive at each
+        // local expert from each source device.
+        constexpr uint32_t tile_height = 32;
+        // l1_alignment is in bytes, but ed_table is uint32_t*, so we need to divide by sizeof(uint32_t)
+        // to get the correct stride for pointer arithmetic
+        constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
+        uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
+        volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
 
-    for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
-        uint32_t tokens_processed = 0;
-        uint32_t indices_page = 0;
+        DPRINT << "linearized_mesh_coord: " << linearized_mesh_coord << ENDL();
+        for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
+            uint32_t tokens_processed = 0;
+            uint32_t indices_page = 0;
 
-        while (tokens_processed < tokens_per_device) {
-            cb_wait_front(indices_tensor_cb_id, 1);
-            uint16_t* indices_ptr = (uint16_t*)get_read_ptr(indices_tensor_cb_id);
+            while (tokens_processed < tokens_per_device) {
+                cb_wait_front(indices_tensor_cb_id, 1);
+                uint16_t* indices_ptr = (uint16_t*)get_read_ptr(indices_tensor_cb_id);
 
-            // Process tokens within this tile, but don't exceed tokens_per_device
-            uint32_t tile_row = 0;
-            while (tile_row < tile_height && tokens_processed < tokens_per_device) {
-                uint16_t* token_ptr = tile_row_offset(indices_ptr, tile_row);
-                for (uint32_t k = 0; k < selected_experts_k; k++) {
-                    uint16_t expert_chosen = tile_col_offset(token_ptr, k)[0];
-                    uint16_t d = devices_for_experts[expert_chosen];
-                    if (d == dispatch_index) {
-                        uint32_t local_expert = expert_chosen % experts_per_device;
-                        ed_table[local_expert * dispatch_devices + device_id]++;
+                // Process tokens within this tile, but don't exceed tokens_per_device
+                uint32_t tile_row = 0;
+                while (tile_row < tile_height && tokens_processed < tokens_per_device) {
+                    uint16_t* token_ptr = tile_row_offset(indices_ptr, tile_row);
+                    for (uint32_t k = 0; k < selected_experts_k; k++) {
+                        uint16_t expert_chosen = tile_col_offset(token_ptr, k)[0];
+                        uint16_t d = devices_for_experts[expert_chosen];
+                        if (d == linearized_mesh_coord) {
+                            uint32_t local_expert = expert_chosen % experts_per_device;
+                            ed_table[(local_expert * dispatch_devices + device_id) * entries_per_l1_alignment]++;
+                        }
                     }
+                    tile_row++;
+                    tokens_processed++;
                 }
-                tile_row++;
-                tokens_processed++;
-            }
 
-            cb_pop_front(indices_tensor_cb_id, 1);
-            indices_page++;
+                cb_pop_front(indices_tensor_cb_id, 1);
+                indices_page++;
+            }
         }
     }
-    constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
-    print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
-        ed_table, linearized_mesh_coord, "ground truth E-D table");
 }
