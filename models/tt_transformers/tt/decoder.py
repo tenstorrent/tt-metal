@@ -230,6 +230,7 @@ class TransformerBlock(LightweightModule):
         )
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -263,12 +264,15 @@ class TransformerBlock(LightweightModule):
             )
             residual = hidden_states
             hidden_states = self.pre_ff_norm(hidden_states, mode)
+
         ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
+
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -299,4 +303,5 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+
         return out  # fractured across devices
