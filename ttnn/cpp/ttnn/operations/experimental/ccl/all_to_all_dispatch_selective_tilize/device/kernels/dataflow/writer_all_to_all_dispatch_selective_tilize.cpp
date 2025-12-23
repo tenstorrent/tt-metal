@@ -492,6 +492,7 @@ void kernel_main() {
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
+    // tt::data_movement::common::spin(100000);
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be

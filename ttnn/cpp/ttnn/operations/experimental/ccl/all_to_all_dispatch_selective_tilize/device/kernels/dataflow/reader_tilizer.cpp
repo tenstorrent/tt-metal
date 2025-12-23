@@ -67,6 +67,29 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
+// DEBUG: Print E-D table contents
+template <uint32_t ExpertsPerDevice, uint32_t DispatchDevices, uint32_t EntriesPerL1Alignment>
+void print_ed_table(volatile tt_l1_ptr uint32_t* ed_table, uint32_t device_id, const char* label) {
+    // Invalidate L1 cache to see updates from remote writes
+    invalidate_l1_cache();
+
+    DPRINT << "=== E-D Table: " << label << " (device " << device_id << ") ===" << ENDL();
+    for (uint32_t local_expert = 0; local_expert < ExpertsPerDevice; local_expert++) {
+        DPRINT << "Expert " << local_expert << ": [";
+        for (uint32_t src_dev = 0; src_dev < DispatchDevices; src_dev++) {
+            // Each entry is l1_alignment bytes apart, access first uint32 of each entry
+            uint32_t entry_idx = (local_expert * DispatchDevices + src_dev) * EntriesPerL1Alignment;
+            uint32_t val = ed_table[entry_idx];
+            DPRINT << val;
+            if (src_dev < DispatchDevices - 1) {
+                DPRINT << ", ";
+            }
+        }
+        DPRINT << "]" << ENDL();
+    }
+    DPRINT << "---" << ENDL();
+}
+
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
@@ -109,19 +132,27 @@ void kernel_main() {
     constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
     constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
 
+    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
+
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t dispatch_index =
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
-    zero_buffer_async(ed_addr, experts * dispatch_devices * l1_alignment * sizeof(uint32_t));
+    zero_buffer_async(ed_addr, experts_per_device * dispatch_devices * l1_alignment * sizeof(uint32_t));
     size_t rt_args_idx = 0;
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 0
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);       // 1
     uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 2
     bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);       // 3
     zero_buffer_barrier();
+
+    // DEBUG: Print E-D table right after zeroing to verify it's actually zeroed
+    constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
+    volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_addr);
+    // print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
+    //     ed_table, linearized_mesh_coord, "after zero");
 
     // Signal all sender cores that E-D buffer has been zeroed
     // Set local semaphore to 1, then multicast write to all sender cores
@@ -150,4 +181,16 @@ void kernel_main() {
     // scores and indices tensors use same page size
     const auto output_scores_tensor_addr_gen =
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+
+    // DEBUG: Polling loop to verify E-D buffer semaphore increments are landing
+    uint32_t poll_iteration = 0;
+    // while (true) {
+    //     DPRINT << "Poll #" << poll_iteration << ENDL();
+    //     print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
+    //         ed_table, linearized_mesh_coord, "polling");
+
+    //     poll_iteration++;
+    //     // Small delay between polls to avoid flooding DPRINT
+    //     for (volatile uint32_t delay = 0; delay < 100000; delay++) {}
+    // }
 }
