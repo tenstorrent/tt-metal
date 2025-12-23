@@ -645,6 +645,100 @@ TEST_F(DescriptorMergerTest, RejectWHAndBHMesh) {
     }
 }
 
+TEST_F(DescriptorMergerTest, RejectGraphTemplatesWithDifferentChildren_ForwardPass) {
+    // Test forward pass: source has nodes that target doesn't have
+    // File 1 has {node_a, node_b}, File 2 has {node_c, node_d} - completely different sets
+    const std::string test_dir = create_test_dir("different_children_forward_test");
+
+    // File 1: graph_template "cluster" with node_a and node_b
+    write_textproto(test_dir + "file1.textproto", R"(
+graph_templates {
+  key: "cluster"
+  value {
+    children { name: "node_a" node_ref { node_descriptor: "WH_GALAXY" } }
+    children { name: "node_b" node_ref { node_descriptor: "WH_GALAXY" } }
+  }
+}
+root_instance {
+  template_name: "cluster"
+  child_mappings { key: "node_a" value { host_id: 0 } }
+  child_mappings { key: "node_b" value { host_id: 1 } }
+}
+)");
+
+    // File 2: graph_template "cluster" with node_c and node_d (completely different names!)
+    write_textproto(test_dir + "file2.textproto", R"(
+graph_templates {
+  key: "cluster"
+  value {
+    children { name: "node_c" node_ref { node_descriptor: "WH_GALAXY" } }
+    children { name: "node_d" node_ref { node_descriptor: "WH_GALAXY" } }
+  }
+}
+root_instance {
+  template_name: "cluster"
+  child_mappings { key: "node_c" value { host_id: 0 } }
+  child_mappings { key: "node_d" value { host_id: 1 } }
+}
+)");
+
+    // This should throw during forward pass - source has nodes target doesn't have
+    try {
+        CablingGenerator gen(test_dir, create_host_vector(2));
+        FAIL() << "Expected std::runtime_error for graph_templates with different children (forward pass)";
+    } catch (const std::runtime_error& e) {
+        const std::string error_msg = e.what();
+        // Verify error mentions the children/template mismatch
+        EXPECT_TRUE(
+            error_msg.find("different sets of children") != std::string::npos ||
+            error_msg.find("Graph templates must have identical children") != std::string::npos)
+            << "Error message doesn't match expected: " << error_msg;
+    }
+}
+
+TEST_F(DescriptorMergerTest, RejectGraphTemplatesWithDifferentChildren_BackwardPass) {
+    // Test backward pass: target has nodes that source doesn't have
+    // File 1 has {node_x, node_y}, File 2 has {node_x} (subset)
+    // Note: Both files must have compatible host_id mappings, so both use only host_id: 0
+    const std::string test_dir = create_test_dir("different_children_backward_test");
+
+    // File 1: graph_template "cluster" with node_x and node_y (loaded first = target)
+    // Use alphabetically first filename so it loads first
+    write_textproto(test_dir + "a_file1.textproto", R"(
+graph_templates {
+  key: "cluster"
+  value {
+    children { name: "node_x" node_ref { node_descriptor: "WH_GALAXY" } }
+    children { name: "node_y" node_ref { node_descriptor: "WH_GALAXY" } }
+  }
+}
+root_instance {
+  template_name: "cluster"
+  child_mappings { key: "node_x" value { host_id: 0 } }
+  child_mappings { key: "node_y" value { host_id: 0 } }
+}
+)");
+
+    // File 2: graph_template "cluster" with only node_x (missing node_y!)
+    write_textproto(test_dir + "b_file2.textproto", R"(
+graph_templates {
+  key: "cluster"
+  value {
+    children { name: "node_x" node_ref { node_descriptor: "WH_GALAXY" } }
+  }
+}
+root_instance {
+  template_name: "cluster"
+  child_mappings { key: "node_x" value { host_id: 0 } }
+}
+)");
+
+    // This should throw during backward pass - target has node_y that source doesn't have
+    EXPECT_THROW(
+        { CablingGenerator gen(test_dir, create_host_vector(1)); }, std::runtime_error)
+        << "Should reject graph_templates with different children (backward pass: target has extra nodes)";
+}
+
 TEST_F(DescriptorMergerTest, AllowCrossDescriptorConnectionsOnDifferentPorts) {
     // Test that the same node can connect to different nodes across multiple descriptors
     // as long as different ports are used. This is valid because:
