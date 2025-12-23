@@ -171,10 +171,6 @@ class TtnnFurthestPointSampling(LightweightModule):
         # Initialize farthest indices
         farthest = ttnn.zeros((B,), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-        # Create batch indices
-        batch_indices = ttnn.arange(0, B, dtype=ttnn.int32, device=device)
-        batch_indices = ttnn.reshape(batch_indices, (B, 1))
-
         centroid_list = []
         for i in range(n_samples):
             # Create index tensor with proper shape for scatter
