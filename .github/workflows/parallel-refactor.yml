@@ -29,7 +29,8 @@ jobs:
 
           # Create nested matrix: one entry per file with batch_id and file_path
           # This will create a job per file (N jobs per batch)
-          MATRIX=$(jq -c '[range(.batch_id | length) as $i | .files[$i][] | {batch_id: .batch_id[$i], file_path: .}]' batch_mapping.json)
+          # We need to capture batch_id in a variable before iterating over files
+          MATRIX=$(jq -c '[range(.batch_id | length) as $i | .batch_id[$i] as $batch_id | .files[$i][] | {batch_id: $batch_id, file_path: .}]' batch_mapping.json)
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "Generated matrix with $(echo "$MATRIX" | jq '. | length') file jobs"
