@@ -388,6 +388,8 @@ class MasterConfigLoader:
     def _count_tensor_inputs(self, configs: List) -> int:
         """
         Count the number of tensor inputs by checking the first config.
+        Only counts consecutive tensor arguments from the start, before the first non-tensor argument.
+        This prevents counting output pre-allocation tensors that appear later in the argument list.
 
         Args:
             configs: List of operation configurations (list of (arguments, source) tuples)
@@ -403,10 +405,15 @@ class MasterConfigLoader:
         first_config_args, first_source, first_machine_info = configs[0]
         tensor_count = 0
 
+        # Only count consecutive tensors from the start
+        # Stop when we hit the first non-tensor (this prevents counting output tensors)
         for arg in first_config_args:
             tensor_config = self.extract_tensor_config(arg)
             if tensor_config:
                 tensor_count += 1
+            else:
+                # Stop at first non-tensor argument
+                break
 
         return tensor_count
 
