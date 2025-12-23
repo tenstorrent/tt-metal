@@ -98,3 +98,22 @@ class TTNNLinearLLama(TTNNLinear):
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
         return super().forward(input_tensor)
+
+
+class TTNNLinearLLamaBFloat16(TTNNLinear):
+    """TTNN Linear layer optimized for LLaMA models using bfloat16."""
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear):
+        """Create TTNNLinearLLama from PyTorch Linear layer."""
+        new_linear = TTNNLinearLLamaBFloat16(
+            in_features=linear.in_features,
+            out_features=linear.out_features,
+        )
+        new_linear._fallback_torch_layer = linear
+        return new_linear
+
+    @deallocate_weights_after
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Forward pass with automatic weight deallocation."""
+        return super().forward(input_tensor)
