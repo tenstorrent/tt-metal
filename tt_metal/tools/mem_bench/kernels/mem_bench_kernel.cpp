@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 #include <cstdlib>
 #include "noc_overlay_parameters.h"

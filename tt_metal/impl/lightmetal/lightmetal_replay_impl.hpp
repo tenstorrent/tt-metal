@@ -63,23 +63,23 @@ public:
     // Executor functions for all traced host API calls (commands)
     // Trace APIs are no longer supported due to trace API deprecation. See Issue #24955
     void execute(const tt::tt_metal::flatbuffer::Command* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command) const;
-    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command) const;
-    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command) const;
-    void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) const;
+    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) const;
+    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) const;
+    void execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command) const;
+    void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) const;
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) const;
-    void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command) const;
+    void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) const;
 
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);

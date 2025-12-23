@@ -281,6 +281,8 @@ std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
             program_analysis_data.program_analyses_results[results_config.analysis_name] =
                 program_perf_results.analysis_results[i];
         }
+        program_analysis_data.core_count = program_perf_results.program_meta_data.num_fw_cores;
+        program_analysis_data.num_available_cores = program_perf_results.program_meta_data.num_available_worker_cores;
         programs_analyses_data.insert(program_analysis_data);
     }
     return programs_analyses_data;

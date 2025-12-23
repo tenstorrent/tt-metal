@@ -720,8 +720,8 @@ private:
         uint32_t partition_size,
         uint32_t total_num_workers);
 
-    Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_size);
-    Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index) const;
+    Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& input_shape, int slice_dim, uint32_t partition_size);
+    Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& input_shape, int slice_dim, uint32_t partition_index) const;
 
     // Class member variables
     Shape4D<uint32_t> tensor_shape{};

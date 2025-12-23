@@ -39,10 +39,24 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_linear", "fabric_manager_enabled_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])

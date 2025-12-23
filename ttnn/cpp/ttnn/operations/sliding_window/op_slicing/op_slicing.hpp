@@ -31,19 +31,35 @@ class OpSliceAttr {
 public:
     virtual ~OpSliceAttr() = default;
     using IOShape = std::tuple<uint32_t, uint32_t>;
-    virtual std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) = 0;
+    virtual std::tuple<IOShape, IOShape> get_input_slice(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const = 0;
 
-    virtual uint32_t get_L1_usage() = 0;
+    virtual uint32_t get_L1_usage(
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end,
+        const op_slicing::Op2DSliceConfig& slice_config) const = 0;
+
     virtual tt::tt_metal::MemoryConfig get_input_memory_config(
-        IOShape output_slice_start, IOShape output_slice_end) = 0;
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const = 0;
     virtual ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
-    virtual std::string name() = 0;
+        const ttnn::Tensor& sliced_input_tensor,
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end) = 0;
+    virtual std::string name() const = 0;
 };
+
+Op2DSliceConfig determine_slice_config(
+    OpSliceAttr* op_slice_attr,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    std::optional<Op2DSliceConfig> slice_config_,
+    tt::tt_metal::Layout output_layout,
+    tt::tt_metal::distributed::MeshDevice* device);
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
     OpSliceAttr* op_slice_attr,
-    Op2DSliceConfig dram_slice_config);
+    std::optional<Op2DSliceConfig> dram_slice_config_);
 
 }  // namespace ttnn::operations::op_slicing

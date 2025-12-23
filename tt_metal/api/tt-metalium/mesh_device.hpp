@@ -155,7 +155,7 @@ private:
 
 public:
     MeshDevice(
-        std::shared_ptr<ScopedDevices> scoped_devices,
+        std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;

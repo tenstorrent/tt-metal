@@ -9,7 +9,7 @@
 #include "ckernel_template.h"
 #include "cpack_common.h"
 #include "ckernel_globals.h"
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 
 #include "llk_io.h"
 #include "llk_defs.h"

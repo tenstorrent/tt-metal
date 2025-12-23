@@ -529,7 +529,11 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-layout0-ag_input_dtype0-mesh_device0]
+  if [[ -n "${NANOBIND}" ]]; then
+    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  else
+    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-layout0-ag_input_dtype0-mesh_device0]
+  fi
   # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
@@ -549,7 +553,11 @@ run_t3000_ccl_tests() {
 
   # all reduce: 1 test should be enough
   # 4 chip test with bfloat8_b
-  pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-math_op0-2x4x2048x32-bfloat8_b-DRAM-4-1]
+  if [[ -n "${NANOBIND}" ]]; then
+    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-ReduceType.Sum-2x4x2048x32-bfloat8_b-DRAM-4-1]
+  else
+    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-math_op0-2x4x2048x32-bfloat8_b-DRAM-4-1]
+  fi
 
   # p2p: 1 test should be enough
   # trace test with device delay
@@ -561,14 +569,30 @@ run_t3000_ccl_tests() {
 
   # all to all dispatch: 1 test for 2d and 1 for 1d linear should be enough
   # fabric 1d linear test on cluster axis 0 as other CCL tests aren't testing on this axis
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-dtype0-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
+  if [[ -n "${NANOBIND}" ]]; then
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
+  else
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-dtype0-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
+  fi
   # fabric 2d test on cluster axis 1
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-dtype0-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
+  if [[ -n "${NANOBIND}" ]]; then
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
+  else
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-dtype0-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
+  fi
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
+  if [[ -n "${NANOBIND}" ]]; then
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
+  else
+    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
+  fi
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
-  # pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
+  # if [[ -n "${NANOBIND}" ]]; then
+  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
+  # else
+  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
+  # fi
 
   # Record the end time
   end_time=$(date +%s)
@@ -577,6 +601,47 @@ run_t3000_ccl_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_tt_dit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_tt_dit_tests"
+
+  #T5 Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
+
+  #Clip Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
+
+  #Image DiTs VAE with one iteration pcc and perf test
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
+
+  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
+
+  #DITs Wan2.2 VAE
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
+
+  #DITs Wan2.2 Transformer
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-no_load_cache-short_seq-2x4sp0tp1-True] ; fail+=$?
+
+  #Mochi Transformer
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
+
+  #Mochi VAE main component
+  FAKE_DEVICE=T3K pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py::test_tt_resblock_forward[wormhole_b0-mesh_device0-device_params0-1link-l768] ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_tt_dit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
 }
 
 run_t3000_tests() {
@@ -627,6 +692,9 @@ run_t3000_tests() {
 
   # Run unet shallow tests
   run_t3000_unet_shallow_tests
+
+  # Run tt_dit tests
+  run_t3000_tt_dit_tests
 }
 
 fail=0
