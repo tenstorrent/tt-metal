@@ -841,9 +841,9 @@ static std::optional<std::string> find_template_key_for_node(
     return std::nullopt;
 }
 
-// Helper to create a base node from template (resets port availability for graph-level connections)
-// This is needed because when merging, nodes may have ports marked as used from graph-level connections
-// in the source, but we need base nodes with only inter-board connection ports marked as used.
+// Helper to recreate a node from its template, resetting port availability
+// After merging descriptors, nodes may have stale port usage info. This function
+// preserves host_id and merged inter_board_connections
 static Node create_base_node_from_template(
     const Node& source_node, const std::unordered_map<std::string, Node>& node_templates) {
     // Find the template by matching motherboard and board structure
@@ -1583,14 +1583,9 @@ void CablingGenerator::populate_host_id_from_resolved_graph(const std::unique_pt
 
 void CablingGenerator::recreate_nodes_from_templates(ResolvedGraphInstance& graph) {
     // Recreate all nodes in this graph from templates
+    // This resets port availability (template only has inter-board connection ports marked as used)
     for (auto& [node_name, node] : graph.nodes) {
-        Node base_node = create_base_node_from_template(node, node_templates_);
-        // Preserve host_id and inter_board_connections (they may have been merged)
-        base_node.host_id = node.host_id;
-        base_node.inter_board_connections = node.inter_board_connections;
-        // Re-mark ports as used for inter-board connections
-        mark_ports_used_for_connections(base_node);
-        node = base_node;
+        node = create_base_node_from_template(node, node_templates_);
     }
 
     // Recursively process subgraphs
