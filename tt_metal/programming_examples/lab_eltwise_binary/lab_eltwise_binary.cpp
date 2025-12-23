@@ -117,9 +117,7 @@ ProgramState init_program() {
 // clang-format off
 /**
  * Helper function to create a circular buffer with the specified number of tiles and CB index.
- * Internalizes the calculation of single_tile_size based on bfloat16 tile dimensions.
- *
- * Return value: void
+ * Page size is set to the size of a single tile.
  *
  * | Argument  | Description                                               |
  * |-----------|-----------------------------------------------------------|
@@ -130,10 +128,12 @@ ProgramState init_program() {
  */
 // clang-format on
 void create_cb(Program& program, const tt::tt_metal::CoreCoord& core, uint32_t num_tiles, tt::CBIndex cb_index) {
-    const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    const tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, cb_data_format}})
-                                         .set_page_size(cb_index, single_tile_size);
+    constexpr uint32_t single_tile_bytes = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    constexpr tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+
+    // Technically, circular buffers operate on pages, not tiles. However, it is most common to have one tile per page.
+    CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_bytes, {{cb_index, cb_data_format}})
+                                         .set_page_size(cb_index, single_tile_bytes);
     tt_metal::CreateCircularBuffer(program, core, cb_config);
 }
 
@@ -292,9 +292,6 @@ int main() {
     bool pass = true;
 
     try {
-        // Initialize program state (includes device creation)
-        ProgramState prog_state = init_program();
-
         // Define some constants that will be used throughout the program.
         // We will be adding two matrices of shape MxN
         constexpr size_t M = 640;  // user-defined
@@ -323,6 +320,9 @@ int main() {
 
         // Invoke the element-wise addition on the Tensix device
         std::vector<bfloat16> result_vec(M * N);
+
+        // Initialize program state (includes device creation)
+        ProgramState prog_state = init_program();
         eltwise_add_tensix(src0_vec, src1_vec, result_vec, M, N, prog_state);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
