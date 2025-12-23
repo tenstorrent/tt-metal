@@ -23,7 +23,7 @@ void MAIN {
     // FPU has a destination register, which is an array that can fit multiple tiles (details vary on data type).
     // For our case, FPU will add two tiles and produce a result that is a single tile.
     // We will instruct FPU to store the result in the destination register array at index 0.
-    constexpr uint32_t dst_reg = 0;
+    constexpr uint32_t dst_reg_idx = 0;
 
     // Initialize the FPU to perform an elementwise binary operation using circular buffers c_in0, c_in1 and c_out0.
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
@@ -39,6 +39,8 @@ void MAIN {
     // relieving programmer from having to write different code for each core.
     for (uint32_t i = 0; i < n_tiles; i++) {
         // Wait until there is a tile in each of the input circular buffers.
+        // In more advanced applications we could wait for multiple tiles in each buffer and use them to
+        // perform a more complex operation or to improve performance.
         // These are blocking calls.
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
@@ -48,13 +50,11 @@ void MAIN {
         // The initalization is not needed for this example, but is quite useful for matrix multiply.
         tile_regs_acquire();
 
-        // Add the tiles from the input circular buffers and write the result to the destination register.
-        // 0, 0 are offsets into cb_in0 and cb_in1 to read the tiles from.
-        // Recall that dst_reg just contains index 0.
-        // Since we only waited for a single tile in each buffer above, that is all we can use.
-        // In more advanced applications we could wait for multiple tiles in each buffer and use them to
-        // perform a more complex operation or to improve performance.
-        add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
+        // Add the tiles from the input circular buffers: 0, 0 are tile indices into cb_in0 and cb_in1
+        // to read the tiles from. Since we only waited for a single tile in each buffer above, there is
+        // is only one tile to read from each buffer, so both indices are 0.
+        // Write the result of FPU computation at specified index in the destination register array.
+        add_tiles(cb_in0, cb_in1, 0, 0, dst_reg_idx);
 
         // Mark the tiles in the input circular buffers as consumed.
         cb_pop_front(cb_in0, 1);
@@ -68,8 +68,7 @@ void MAIN {
         // Make sure there is space in the output circular buffer to write result to.
         cb_reserve_back(cb_out0, 1);
         // Copy the result of addition from destination register to the output circular buffer.
-        // Recall that dst_reg just contains index 0.
-        pack_tile(dst_reg, cb_out0);
+        pack_tile(dst_reg_idx, cb_out0);
         // Mark the tile in the output circular buffer as ready.
         cb_push_back(cb_out0, 1);
 
