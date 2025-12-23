@@ -368,7 +368,7 @@ class Generator:
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_relative)
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             out_list.append(logits.cpu(blocking=False))
@@ -386,10 +386,11 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=((last_token_idx_relative) % 32))
+            output_logits[idx] = self.model[model_id].process_output_prefill(
+                out, last_token_idx=((last_token_idx_relative) % 32)
+            )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-        print(f"output_logits: {output_logits}")
         return output_logits
 
     def prefill_forward_single_user_text(
@@ -403,14 +404,6 @@ class Generator:
         num_cached_tokens: int = 0,
         **kwargs,
     ):
-        ttnn.set_printoptions(profile="full")
-        print("prefill_forward_single_user_text called with:")
-        print(f"tokens: {tokens}")
-        print(f"page_table: {page_table}")
-        print(f"last_token_idx: {last_token_idx}")
-        print(f"num_cached_tokens: {num_cached_tokens}")
-        ttnn.set_printoptions(profile="short")
-
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
@@ -473,23 +466,6 @@ class Generator:
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
-                print(f"executing chunked prefill for chunk_start: {chunk_start}")
-                print(f"chunk_tokens: {chunk_tokens}")
-                print(f"chunk_page_table: {chunk_page_table}")
-                print(f"chunk_start: {chunk_start}")
-                print(f"chunk_end: {chunk_end}")
-                print(f"chunk_start_relative: {chunk_start_relative}")
-                print(f"chunk_end_relative: {chunk_end_relative}")
-                print(f"last_token_idx_in_chunk: {last_token_idx_in_chunk}")
-                print(f"last_chunk_start: {last_chunk_start}")
-                print(f"seq_len: {seq_len}")
-                print(f"num_cached_tokens: {num_cached_tokens}")
-                print(f"chunk_size: {chunk_size}")
-                print(f"last_token_idx: {last_token_idx}")
-                print(f"block_size: {block_size}")
-                print(f"last_token_idx_in_seq: {last_token_idx_in_seq}")
-                print(f"page_table_user_padded: {page_table_user_padded}")
-                print(f"page_table_user: {page_table_user}")
 
                 (
                     chunk_prefill_input,
@@ -517,7 +493,6 @@ class Generator:
                 )
 
                 if chunk_start_relative == last_chunk_start:
-                    print(f"returning tt_logits: {tt_logits}")
                     return tt_logits
                 else:
                     del tt_logits

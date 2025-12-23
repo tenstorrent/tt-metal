@@ -495,9 +495,6 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
 
-        # Synchronize device to ensure KV cache update completes before SDPA reads from it
-        ttnn.synchronize_device(self.mesh_device)
-
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
@@ -565,8 +562,6 @@ class Attention(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-                # Synchronize device to ensure async all_gather_matmul completes before using the result
-                ttnn.synchronize_device(self.mesh_device)
             else:
                 all_gather_output = ttnn.experimental.all_gather_async(
                     attn_output_cat,
@@ -581,8 +576,6 @@ class Attention(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-                # Synchronize device to ensure async all_gather completes before using the result
-                ttnn.synchronize_device(self.mesh_device)
 
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
@@ -816,22 +809,9 @@ class Attention(LightweightModule):
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
-        # Synchronize device to ensure KV cache fill completes before SDPA reads from it
-        ttnn.synchronize_device(self.mesh_device)
-
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
-
-        print("SDPA input tensors:")
-        ttnn.set_printoptions(profile="full")
-        print(f"q_heads_1QSD_8b LO: {q_heads_1QSD_8b[0, 0, :8, :4]}")
-        print(f"q_heads_1QSD_8b HI: {q_heads_1QSD_8b[0, 0, -8:, :4]}")
-        # print(f"keys_BKSD first page: {keys_BKSD[1293, 0, :, :4]}")
-        # print(f"values_BKSD first page: {values_BKSD[1293, 0, :, :4]}")
-        # print(f"keys_BKSD second page: {keys_BKSD[64, 0, :, :4]}")
-        # print(f"values_BKSD second page: {values_BKSD[64, 0, :, :4]}")
-        print(f"chunk_start_idx: {chunk_start_idx}")
 
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
@@ -856,12 +836,6 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
-
-        # Synchronize device to ensure SDPA completes on all devices before using the output
-        ttnn.synchronize_device(self.mesh_device)
-
-        print(f"attn_output_84SD LO: {attn_output_84SD[0, 0, :8, :4]}")
-        print(f"attn_output_84SD HI: {attn_output_84SD[0, 0, -8:, :4]}")
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
@@ -898,8 +872,6 @@ class Attention(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-            # Synchronize device to ensure async all_gather completes before using the result
-            ttnn.synchronize_device(self.mesh_device)
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
@@ -929,9 +901,6 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
-        print(f"Attention.py: returning output_11SH LO: {output_11SH[0, 0, :8, :4]}")
-        print(f"Attention.py: returning output_11SH HI: {output_11SH[0, 0, -8:, :4]}")
-        ttnn.set_printoptions(profile="short")
         return output_11SH
 
     def forward(

@@ -230,7 +230,6 @@ class TransformerBlock(LightweightModule):
         )
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
-        print(f"decoder.py: attn_out after to_memory_config: {attn_out}")
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -240,9 +239,7 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
         else:
             hidden_states = attn_out
-        print(f"decoder.py: hidden_states: {hidden_states}")
         hidden_states = self.ff_norm(hidden_states, mode)
-        print(f"decoder.py: hidden_states after ff_norm: {hidden_states}")
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices
@@ -266,15 +263,12 @@ class TransformerBlock(LightweightModule):
             )
             residual = hidden_states
             hidden_states = self.pre_ff_norm(hidden_states, mode)
-        print(f"decoder.py: hidden_states after pre_ff_norm: {hidden_states}")
         ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
-        print(f"decoder.py: hidden_states before feed_forward: {hidden_states}")
         hidden_states = self.feed_forward.forward(hidden_states, mode)
-        print(f"decoder.py: hidden_states after feed_forward: {hidden_states}")
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -297,7 +291,6 @@ class TransformerBlock(LightweightModule):
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-        print(f"decoder.py: hidden_states before add: {hidden_states}")
         out = ttnn.add(
             residual,
             hidden_states,
@@ -306,5 +299,4 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
-        print(f"decoder.py: out: {out}")
         return out  # fractured across devices

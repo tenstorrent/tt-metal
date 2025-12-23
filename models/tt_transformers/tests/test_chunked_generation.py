@@ -146,9 +146,23 @@ def test_chunked_prefill_single_user(
 
     # Run TT model, collecting various last_token_idxs
     logger.info("Running TT model")
-    for last_token_idx in (prefill_chunk_size - 1, prefill_chunk_size, prefill_chunk_size + 1):
+    for last_token_idx in [
+        prefill_chunk_size - 10,
+        prefill_chunk_size - 1,
+        prefill_chunk_size,
+        prefill_chunk_size + 1,
+        seq_len - 10,
+        seq_len - 1,
+    ]:
         prefill_input_trimmed = tt_prefill_input[:, : last_token_idx + 1]
-        for start_pos in (0, block_size, 2 * block_size):  # Reuse zero, one or two block of cache
+
+        for start_pos in [
+            0,
+            1 * block_size,
+            2 * block_size,
+            3 * block_size,
+            4 * block_size,
+        ]:  # Reuse zero or more blocks of cache
             logger.info(f"Running TT model for last_token_idx: {last_token_idx}, start_pos: {start_pos}")
             tt_output_torch = generator.prefill_forward_text(
                 prefill_input_trimmed,
@@ -158,11 +172,11 @@ def test_chunked_prefill_single_user(
                 start_pos=[start_pos],
             )
             ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
-            logger.info(f"ref_output_slice: {ref_output_slice}")
-            logger.info(f"tt_output_torch: {tt_output_torch}")
 
             passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output_slice, tt_output_torch))
-            logger.info(f"PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos})")
+            logger.info(
+                f"passing: {passing}, PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos})"
+            )
             assert passing
