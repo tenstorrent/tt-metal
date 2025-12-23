@@ -21,7 +21,7 @@ namespace tt::tt_fabric::udm {
 
 // Placeholder max page size for the addrgen until the page size is properly visible by the worker
 // https://github.com/tenstorrent/tt-metal/issues/25966
-static constexpr uint32_t max_fabric_payload_size = 4352;
+static constexpr uint32_t max_fabric_payload_size = 8704;
 
 /**
  * @brief Number of Data Mover (DM) processors for fabric operations

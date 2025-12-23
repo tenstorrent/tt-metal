@@ -14,7 +14,7 @@ Tests:
     parametrization_params:
       num_links: [1]
       ntype: [unicast_write]
-      size: [4096]
+      size: [8192]
 
     defaults:
       ftype: unicast
