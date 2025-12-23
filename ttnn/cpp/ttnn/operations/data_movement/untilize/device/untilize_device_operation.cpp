@@ -204,28 +204,6 @@ UntilizeDeviceOperation::tensor_return_value_t UntilizeDeviceOperation::create_o
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    operation::Hash hash = operation::hash_operation<UntilizeDeviceOperation>(
-        operation_attributes.output_mem_config,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume(),
-        operation_attributes.use_multicore,
-        operation_attributes.use_pack_untilize,
-        operation_attributes.fp32_dest_acc_en,
-        operation_attributes.sub_core_grids,
-        operation_attributes.enough_space_width,
-        operation_attributes.enough_space_height,
-        operation_attributes.pf_type);
-    return hash;
-}
-
 UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;

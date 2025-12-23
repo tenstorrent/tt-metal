@@ -67,7 +67,7 @@ struct PointToPointOp {
             const tt::tt_metal::GlobalSemaphore& semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -146,8 +146,8 @@ Fabric1DRoute fabric_1d_routing(
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& send_coord,
+    const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore);
 
