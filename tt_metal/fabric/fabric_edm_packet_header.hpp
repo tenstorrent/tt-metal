@@ -677,84 +677,223 @@ public:
     }
 };
 
-struct LowLatencyRoutingFields {
+// Base class for shared routing field constants
+struct LowLatencyRoutingFieldsConstants {
     static constexpr uint32_t FIELD_WIDTH = 2;
     static constexpr uint64_t FIELD_MASK = 0b11;
     static constexpr uint32_t NOOP = 0b00;
     static constexpr uint32_t WRITE_ONLY = 0b01;
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
-    static constexpr uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
-    uint64_t value;
+    static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
 };
 
-struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
-    LowLatencyRoutingFields routing_fields;
-    uint8_t padding0[4];
+// Primary template for 1D routing fields with route buffer (ExtensionWords >= 1)
+template <uint32_t ExtensionWords = 1>
+struct LowLatencyRoutingFieldsT : LowLatencyRoutingFieldsConstants {
+    static constexpr uint32_t ExtensionWords_v = ExtensionWords;  // For constexpr access
+    static constexpr uint32_t MAX_NUM_ENCODINGS = BASE_HOPS * (1 + ExtensionWords);
 
-private:
-    static uint64_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
-        // Example of unicast 3 hops away
-        // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
-        // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
-        // the 3rd chip, we will write only. Together this means the final encoding is 0b011010
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
-#endif
-        const uint64_t shift_amount =
-            static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
-               (static_cast<uint64_t>(LowLatencyRoutingFields::WRITE_ONLY) << shift_amount);
+    // Block >32 hops until memory map is updated
+    static_assert(
+        ExtensionWords <= 1,
+        "ERROR: 1D routing with >32 hops (ExtensionWords > 1) requires memory map updates.\n"
+        "Current L1 allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max 32 hops.");
+
+    uint32_t value;                         // Active routing field (always read by router)
+    uint32_t route_buffer[ExtensionWords];  // Extension storage
+};
+
+// Partial specialization for 16-hop mode
+template <>
+struct LowLatencyRoutingFieldsT<0> : LowLatencyRoutingFieldsConstants {
+    static constexpr uint32_t ExtensionWords_v = 0;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = 16;  // 16 hops max
+
+    uint32_t value;  // Only field - no route_buffer member
+};
+
+// Template for 1D packet headers with variable routing field sizes
+template <uint32_t ExtensionWords = 0>
+struct LowLatencyPacketHeaderT : public PacketHeaderBase<LowLatencyPacketHeaderT<ExtensionWords>> {
+    LowLatencyRoutingFieldsT<ExtensionWords> routing_fields;
+
+    // Constexpr helpers for size calculation
+public:
+    static constexpr size_t base_size() {
+        // PacketHeaderBase: NocCommandFields(40) + payload_size_bytes(2) + noc_send_type(1) + src_ch_id(1)
+        return sizeof(NocCommandFields) + sizeof(uint16_t) + sizeof(NocSendType) + sizeof(uint8_t);
     }
-    static uint64_t calculate_chip_multicast_routing_fields_value(
-        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
-        // Example of starting 3 hops away mcasting to 2 chips
-        // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
-        // (forward to neighbor is not encoded in the field) Second line will do 0xFFFFFFFF & 0b11 = 0b11. 0b11 << 4 =
-        // 0b110000. This means starting from the 3rd chip, we will write and forward once. Last line will do 0b01 << 6
-        // = 0b01000000. This means that on the 5th chip, we will write only. Together this means the final encoding is
-        // 0b01111010
-        uint32_t distance_in_hops =
-            chip_multicast_command_header.start_distance_in_hops + chip_multicast_command_header.range_hops - 1;
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        ASSERT(
-            chip_multicast_command_header.start_distance_in_hops > 0 &&
-            distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
-#endif
-        const uint64_t total_shift = static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
-        const uint64_t start_shift = static_cast<uint64_t>(chip_multicast_command_header.start_distance_in_hops - 1) *
-                                     LowLatencyRoutingFields::FIELD_WIDTH;
-        const uint64_t range_bits =
-            static_cast<uint64_t>(chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH;
 
-        return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << total_shift) - 1ULL)) |
-               ((LowLatencyRoutingFields::WR_ONLY_FIELD & ((1ULL << range_bits) - 1ULL)) << start_shift);
+    static constexpr size_t routing_fields_size() { return sizeof(LowLatencyRoutingFieldsT<ExtensionWords>); }
+
+    static constexpr size_t unpadded_size() { return base_size() + routing_fields_size(); }
+
+    static constexpr size_t target_size() {
+        // 48B for 16-hop (ExtensionWords=0), 64B for 32-hop and above
+        return (ExtensionWords == 0) ? 48 : 64;
+    }
+
+    static constexpr size_t padding_size() { return target_size() - unpadded_size(); }
+
+public:
+    // Explicit padding to reach target size
+    // ExtensionWords=0: 48B total → 0B padding (44 base + 4 routing = 48)
+    // ExtensionWords=1: 64B total → 12B padding (44 base + 8 routing + 12 padding = 64)
+    // ExtensionWords=2: 64B total → 8B padding (44 base + 12 routing + 8 padding = 64)
+    // ExtensionWords=3: 64B total → 4B padding (44 base + 16 routing + 4 padding = 64)
+    uint8_t padding0[padding_size()];
+
+    // Helper to calculate routing fields for unicast
+    template <uint32_t EW = ExtensionWords>
+    static LowLatencyRoutingFieldsT<EW> calculate_chip_unicast_routing_fields(uint8_t distance_in_hops) {
+        LowLatencyRoutingFieldsT<EW> result{};
+
+        // Determine which word contains the WRITE operation
+        const uint32_t write_hop_index = distance_in_hops - 1;
+        const uint32_t write_word_index = write_hop_index / LowLatencyRoutingFieldsConstants::BASE_HOPS;
+        const uint32_t write_bit_pos = (write_hop_index % LowLatencyRoutingFieldsConstants::BASE_HOPS) *
+                                       LowLatencyRoutingFieldsConstants::FIELD_WIDTH;
+
+        // Build the word containing the WRITE: FORWARDs up to write position, then WRITE
+        const uint32_t forward_mask = (1U << write_bit_pos) - 1;
+        const uint32_t write_word_value = (LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD & forward_mask) |
+                                          (LowLatencyRoutingFieldsConstants::WRITE_ONLY << write_bit_pos);
+
+        // Fill result.value (word 0)
+        result.value = (write_word_index == 0) ? write_word_value : LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD;
+
+        // Fill route_buffer (words 1, 2, 3...) with loop
+        if constexpr (EW >= 1) {
+            for (uint32_t i = 0; i < EW; i++) {
+                const uint32_t curr_word_index = i + 1;  // route_buffer[0] is word 1, etc.
+                if (curr_word_index < write_word_index) {
+                    result.route_buffer[i] =
+                        LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD;  // Words before write: all forwards
+                } else if (curr_word_index == write_word_index) {
+                    result.route_buffer[i] = write_word_value;  // The word with write
+                } else {
+                    result.route_buffer[i] = 0;  // Words after write: NOOPs
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Helper to calculate routing fields for multicast
+    // Example: starting 3 hops away, multicasting to 2 chips (start_distance_in_hops=3, range_hops=2)
+    //   Hop 0 (bit 0-1): FORWARD_ONLY = 0b10
+    //   Hop 1 (bit 2-3): FORWARD_ONLY = 0b10
+    //   Hop 2 (bit 4-5): WRITE_AND_FORWARD = 0b11 (start of multicast range)
+    //   Hop 3 (bit 6-7): WRITE_ONLY = 0b01 (end of range)
+    //   Result: 0b01111010
+    //
+    // Pattern construction:
+    //   - Hops before range: FORWARD_ONLY (0b10)
+    //   - Hops within range interior: WRITE_AND_FORWARD (0b11)
+    //   - Final hop in range: WRITE_ONLY (0b01)
+    //
+    // The router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
+    template <uint32_t EW = ExtensionWords>
+    static LowLatencyRoutingFieldsT<EW> calculate_chip_multicast_routing_fields(
+        const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+        LowLatencyRoutingFieldsT<EW> result{};
+
+        const uint32_t start_hop = chip_multicast_command_header.start_distance_in_hops;
+        const uint32_t range = chip_multicast_command_header.range_hops;
+        const uint32_t end_hop = start_hop + range - 1;
+
+        // Helper to set 2-bit field at specific hop position
+        auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+            const uint32_t word_idx = hop_index / LowLatencyRoutingFieldsConstants::BASE_HOPS;
+            const uint32_t bit_pos = (hop_index % LowLatencyRoutingFieldsConstants::BASE_HOPS) *
+                                     LowLatencyRoutingFieldsConstants::FIELD_WIDTH;
+
+            if (word_idx == 0) {
+                result.value |= (field_value << bit_pos);
+            } else if constexpr (EW >= 1) {
+                result.route_buffer[word_idx - 1] |= (field_value << bit_pos);
+            }
+        };
+
+        // Initialize all fields to zero
+        result.value = 0;
+        if constexpr (EW >= 1) {
+            for (uint32_t i = 0; i < EW; i++) {
+                result.route_buffer[i] = 0;
+            }
+        }
+
+        // Build pattern: FORWARD_ONLY before multicast range, WRITE_AND_FORWARD within range, WRITE_ONLY at end
+        for (uint32_t hop = 0; hop < start_hop - 1; hop++) {
+            set_hop_field(hop, LowLatencyRoutingFieldsConstants::FORWARD_ONLY);
+        }
+
+        for (uint32_t hop = start_hop - 1; hop < end_hop; hop++) {
+            set_hop_field(hop, LowLatencyRoutingFieldsConstants::WRITE_AND_FORWARD);
+        }
+
+        set_hop_field(end_hop, LowLatencyRoutingFieldsConstants::WRITE_ONLY);
+
+        return result;
     }
 
 public:
     // Specialized implementations for LowLatencyPacketHeader
-    void set_routing_fields(LowLatencyRoutingFields& fields) { this->routing_fields = fields; }
+    void set_routing_fields(LowLatencyRoutingFieldsT<ExtensionWords>& fields) { this->routing_fields = fields; }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        this->routing_fields = calculate_chip_unicast_routing_fields<ExtensionWords>(distance_in_hops);
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        this->routing_fields = calculate_chip_multicast_routing_fields<ExtensionWords>(chip_multicast_command_header);
     }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
+        auto routing = calculate_chip_unicast_routing_fields<ExtensionWords>(distance_in_hops);
+        this->routing_fields.value = routing.value;
+        if constexpr (ExtensionWords >= 1) {
+            for (uint32_t i = 0; i < ExtensionWords; i++) {
+                this->routing_fields.route_buffer[i] = routing.route_buffer[i];
+            }
+        }
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
-        this->routing_fields.value =
-            LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+        auto routing = calculate_chip_multicast_routing_fields<ExtensionWords>(chip_multicast_command_header);
+        this->routing_fields.value = routing.value;
+        if constexpr (ExtensionWords >= 1) {
+            for (uint32_t i = 0; i < ExtensionWords; i++) {
+                this->routing_fields.route_buffer[i] = routing.route_buffer[i];
+            }
+        }
     }
 };
+
+// Validate expected sizes with detailed checks
+static_assert(LowLatencyPacketHeaderT<0>::base_size() == 44, "Base size must be 44B");
+static_assert(LowLatencyPacketHeaderT<0>::routing_fields_size() == 4, "16-hop routing must be 4B");
+static_assert(LowLatencyPacketHeaderT<0>::unpadded_size() == 48, "16-hop unpadded must be 48B");
+static_assert(LowLatencyPacketHeaderT<0>::padding_size() == 0, "16-hop needs 0B padding");
+static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "16-hop total must be 48B");
+
+static_assert(LowLatencyPacketHeaderT<1>::routing_fields_size() == 8, "32-hop routing must be 8B");
+static_assert(LowLatencyPacketHeaderT<1>::unpadded_size() == 52, "32-hop unpadded must be 52B");
+static_assert(LowLatencyPacketHeaderT<1>::padding_size() == 12, "32-hop needs 12B padding");
+static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "32-hop total must be 64B");
+
+// Conditional type selection based on injected define
+#ifndef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
+// Default: backward compatibility (host-side compilation or no define set)
+using LowLatencyPacketHeader = LowLatencyPacketHeaderT<1>;  // 64B, 32-hop
+using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<1>;
+#else
+// Device-side: use injected define to select appropriate template instantiation
+using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
+using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
+#endif
 
 struct LowLatencyMeshRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 8;
