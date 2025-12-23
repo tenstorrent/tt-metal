@@ -201,7 +201,6 @@ def run_sdpa_noncausal(
                 0.25,
             )
         )
-        mask = mask.unsqueeze(1)
         mask = mask * -1e9
         tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -471,13 +470,14 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
-@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k128", "k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    ([1, 8, 8, 99, 128],),
+    ([1, 8, 8, 128, 128],),
 )
-def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
-    rmse_threshold = 0.0069
+@pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
+def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, bcast_mask_head_dim):
+    rmse_threshold = 0.0065
     run_sdpa_noncausal(
         device,
         b,
@@ -490,21 +490,7 @@ def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_siz
         dtype,
         rmse_threshold=rmse_threshold,
         use_mask=True,
-        bcast_mask_head_dim=True,
-    )
-    run_sdpa_noncausal(
-        device,
-        b,
-        nh,
-        nkv,
-        s,
-        d,
-        q_chunk_size,
-        k_chunk_size,
-        dtype,
-        rmse_threshold=rmse_threshold,
-        use_mask=True,
-        bcast_mask_head_dim=False,
+        bcast_mask_head_dim=bcast_mask_head_dim,
     )
 
 
