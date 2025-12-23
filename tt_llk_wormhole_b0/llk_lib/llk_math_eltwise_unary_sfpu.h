@@ -31,12 +31,22 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     }
         .set(ADDR_MOD_7);
 
-    if (sfpu_op == SfpuType::topk_local_sort)
+    if constexpr (sfpu_op == SfpuType::topk_local_sort)
     {
         addr_mod_t {
             .srca = {.incr = 0},
             .srcb = {.incr = 0},
             .dest = {.incr = 32},
+        }
+            .set(ADDR_MOD_6);
+    }
+
+    if constexpr (sfpu_op == SfpuType::typecast)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
         }
             .set(ADDR_MOD_6);
     }
