@@ -40,7 +40,7 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
-            output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
+            tokens_per_chunk (int, optional): the number of tokens to process per chunk. Defaults to `32`.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
@@ -72,7 +72,8 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> cluster_axis,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_fabric::Topology> topology,
+               uint32_t tokens_per_chunk) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
@@ -80,7 +81,8 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                     expert_mapping_tensor,
                     cluster_axis,
                     num_links,
-                    topology);
+                    topology,
+                    tokens_per_chunk);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -89,7 +91,8 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             py::kw_only(),
             py::arg("cluster_axis") = std::nullopt,
             py::arg("num_links") = std::nullopt,
-            py::arg("topology").noconvert() = std::nullopt});
+            py::arg("topology").noconvert() = std::nullopt,
+            py::arg("tokens_per_chunk") = 32});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

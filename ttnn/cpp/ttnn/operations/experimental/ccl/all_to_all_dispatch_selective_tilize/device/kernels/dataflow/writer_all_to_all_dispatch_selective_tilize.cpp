@@ -552,6 +552,27 @@ void kernel_main() {
                         subtoken_offset);
                 }
                 send_preparation_buffer[(local_token * num_devices) + d] = 1;
+            } else {
+                // Token was already sent to this device for a previous expert selection,
+                // but we still need to increment the E-D buffer for bookkeeping
+                if (d == linearized_mesh_coord) {
+                    // Local device: just increment the semaphore
+                    noc_semaphore_inc(ed_table_noc_addr, 1);
+                    needs_barrier = true;
+                } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+                    // Remote device: send semaphore increment only (no payload)
+                    fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                        linearized_mesh_coord,
+                        topology,
+                        mesh_rows,
+                        mesh_cols>(
+                        fabric_connections,
+                        unicast_packet_header,
+                        d,
+                        ed_table_noc_addr,
+                        1,       // increment_value
+                        false);  // flush=false as requested
+                }
             }
         }
         cb_pop_front(input_tensor_cb_id, 1);

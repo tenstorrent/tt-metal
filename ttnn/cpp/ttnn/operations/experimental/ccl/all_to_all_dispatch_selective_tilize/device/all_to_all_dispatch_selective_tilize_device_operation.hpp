@@ -25,8 +25,10 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        static constexpr auto attribute_names = std::forward_as_tuple("axis", "num_links", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(axis, num_links, topology); };
+        const uint32_t tokens_per_chunk;
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("axis", "num_links", "topology", "tokens_per_chunk");
+        auto attribute_values() const { return std::forward_as_tuple(axis, num_links, topology, tokens_per_chunk); };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -100,7 +102,8 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology);
+        tt::tt_fabric::Topology topology,
+        uint32_t tokens_per_chunk);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

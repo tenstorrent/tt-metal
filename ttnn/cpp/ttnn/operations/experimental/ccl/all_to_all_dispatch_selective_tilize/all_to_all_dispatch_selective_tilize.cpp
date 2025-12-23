@@ -21,7 +21,8 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    uint32_t tokens_per_chunk) {
     auto* mesh_device = input_tensor.device();
 
     uint32_t num_links_ = num_links.value_or(::ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
@@ -29,7 +30,14 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
 
     return ttnn::prim::all_to_all_dispatch_selective_tilize(
-        input_tensor, expert_indices_tensor, expert_scores_tensor, expert_mapping_tensor, axis, num_links_, topology_);
+        input_tensor,
+        expert_indices_tensor,
+        expert_scores_tensor,
+        expert_mapping_tensor,
+        axis,
+        num_links_,
+        topology_,
+        tokens_per_chunk);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

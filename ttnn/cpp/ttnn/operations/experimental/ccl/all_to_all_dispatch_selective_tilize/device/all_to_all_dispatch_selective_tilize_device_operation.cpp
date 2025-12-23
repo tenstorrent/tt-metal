@@ -116,12 +116,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    uint32_t tokens_per_chunk) {
     return {
         operation_attributes_t{
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
+            .tokens_per_chunk = tokens_per_chunk,
         },
         tensor_args_t{
             .input_tensor = input_tensor,

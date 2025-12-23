@@ -19,7 +19,8 @@ struct ExecuteAllToAllDispatchSelectiveTilize {
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
         std::optional<uint32_t> num_links,
-        std::optional<tt::tt_fabric::Topology> topology);
+        std::optional<tt::tt_fabric::Topology> topology,
+        uint32_t tokens_per_chunk = 32);
 };
 
 }  // namespace operations::experimental::ccl

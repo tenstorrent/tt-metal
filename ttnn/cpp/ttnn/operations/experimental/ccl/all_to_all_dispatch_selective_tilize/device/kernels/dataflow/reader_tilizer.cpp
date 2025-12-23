@@ -90,6 +90,21 @@ void print_ed_table(volatile tt_l1_ptr uint32_t* ed_table, uint32_t device_id, c
     DPRINT << "---" << ENDL();
 }
 
+template <uint32_t experts_per_device, uint32_t dispatch_devices, uint32_t entries_per_l1_alignment>
+void poll_ed_table_loop(volatile tt_l1_ptr uint32_t* ed_table, uint32_t linearized_mesh_coord) {
+    uint32_t poll_iteration = 0;
+    while (true) {
+        DPRINT << "Poll #" << poll_iteration << ENDL();
+        print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
+            ed_table, linearized_mesh_coord, "polling");
+
+        poll_iteration++;
+        // Small delay between polls to avoid flooding DPRINT
+        for (volatile uint32_t delay = 0; delay < 100000; delay++) {
+        }
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
@@ -183,14 +198,6 @@ void kernel_main() {
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
 
     // DEBUG: Polling loop to verify E-D buffer semaphore increments are landing
-    uint32_t poll_iteration = 0;
-    // while (true) {
-    //     DPRINT << "Poll #" << poll_iteration << ENDL();
-    //     print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
-    //         ed_table, linearized_mesh_coord, "polling");
-
-    //     poll_iteration++;
-    //     // Small delay between polls to avoid flooding DPRINT
-    //     for (volatile uint32_t delay = 0; delay < 100000; delay++) {}
-    // }
+    // poll_ed_table_loop<experts_per_device, dispatch_devices, entries_per_l1_alignment>(ed_table,
+    // linearized_mesh_coord);
 }
