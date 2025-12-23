@@ -222,7 +222,7 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-TEST_F(MeshDeviceExaboxFixture, CustomContextValidation) {
+TEST_F(SplitGalaxyMeshDeviceFixture, CustomContextValidation) {
     // Create a SubContext with sender rank = 0 and receiver rank = 2
     using namespace tt_metal::distributed::multihost;
     std::vector<int> handshake_ranks = {0, 2};
@@ -247,7 +247,7 @@ TEST_F(MeshDeviceExaboxFixture, CustomContextValidation) {
     parent_context->barrier();
 }
 
-TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
+TEST_F(SplitGalaxyMeshDeviceFixture, SocketSanity) {
     auto& metal_context = tt::tt_metal::MetalContext::instance();
     const auto& distributed_context = metal_context.global_distributed_context();
 
@@ -301,10 +301,10 @@ TEST_F(MeshDeviceExaboxFixture, SocketSanity) {
 
     if (local_mesh_binding[0] == sender_mesh_id) {
         auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
-        test_socket_send_recv_big_mesh(mesh_device_, send_socket, 1024, 64, 20, std::nullopt);
+        test_socket_send_recv(mesh_device_, send_socket, 1024, 64, 20, std::nullopt);
     } else {
         auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
-        test_socket_send_recv_big_mesh(mesh_device_, recv_socket, 1024, 64, 20, std::nullopt);
+        test_socket_send_recv(mesh_device_, recv_socket, 1024, 64, 20, std::nullopt);
     }
     distributed_context.barrier();
 }
