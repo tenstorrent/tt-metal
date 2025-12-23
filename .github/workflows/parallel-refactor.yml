@@ -40,6 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     uses: ./.github/workflows/refactor-single-file.yml
     secrets: inherit
     with:
