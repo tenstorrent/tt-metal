@@ -1920,6 +1920,8 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         return;
     }
 
+    log_info(tt::LogMetal, "Dumping device results mid run dump {} device {}", is_mid_run_dump, this->device_id);
+
     if (!this->thread_pool) {
         this->thread_pool =
             create_device_bound_thread_pool(MetalContext::instance()
@@ -2374,6 +2376,17 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
                 this->getProfilerDramBufferAddress(next_active_dram_buffer_index);
             temp_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
             stalled_risc_types[virtual_core].push_back(risc_type);
+
+            // Note: Do not use the writeToCoreControlBuffer function as it will overwrite the entire control buffer.
+            // We only want to update the fields for the stalled riscs.
+            const auto dram_profiler_address_offset = risc_type_to_control_buffer_dram_address_offset(risc_type);
+            const DeviceAddr addr =
+                getControlVectorAddress(device, virtual_core) + (dram_profiler_address_offset * sizeof(uint32_t));
+            // Need to use write_reg to guarantee a single write to the control buffer
+            MetalContext::instance().get_cluster().write_reg(
+                &temp_control_buffers[virtual_core][control_buffer_dram_addr_index],
+                tt_cxy_pair(device->id(), virtual_core),
+                addr);
         }
 
         // No stalled riscs, nothing to do
@@ -2388,8 +2401,6 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
         if (index_1_present) {
             virtual_cores_to_process_dram_index_1.push_back(virtual_core);
         }
-
-        writeToCoreControlBuffer(device, virtual_core, temp_control_buffers[virtual_core], true);
     }
 
     if (virtual_cores_to_process_dram_index_0.empty() && virtual_cores_to_process_dram_index_1.empty()) {
