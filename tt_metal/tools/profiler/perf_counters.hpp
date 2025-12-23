@@ -118,6 +118,10 @@ uint32_t get_flag_for_counter_group(PerfCounterGroup counter_group) {
     uint32_t flag = 0;
     switch (counter_group) {
         case PerfCounterGroup::FPU: flag = PROFILE_PERF_COUNTERS_FPU; break;
+        case PerfCounterGroup::PACK: flag = PROFILE_PERF_COUNTERS_PACK; break;
+        case PerfCounterGroup::UNPACK: flag = PROFILE_PERF_COUNTERS_UNPACK; break;
+        case PerfCounterGroup::L1: flag = PROFILE_PERF_COUNTERS_L1; break;
+        case PerfCounterGroup::INSTRN: flag = PROFILE_PERF_COUNTERS_INSTRN; break;
         default: {
             ASSERT(false);
             break;
