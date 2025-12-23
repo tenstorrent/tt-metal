@@ -51,7 +51,6 @@ def run(
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config,
-    scalar=None,  # For tensor-scalar operations
     storage_type="StorageType::DEVICE",
     *,
     device,
