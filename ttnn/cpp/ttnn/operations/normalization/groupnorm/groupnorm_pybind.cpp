@@ -99,7 +99,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
 
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
-              - For the :attr:`input_tensor`, H*W must be a multiple of the tile size (32) and C must divide evenly into :attr:`num_groups`.
+              - For the :attr:`input_tensor`, N*H*W must be a multiple of the tile size (32) and C must divide evenly into :attr:`num_groups`.
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
               - :attr:`gamma` and :attr:`beta` must be provided
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
