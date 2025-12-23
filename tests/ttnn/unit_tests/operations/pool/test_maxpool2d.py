@@ -258,3 +258,56 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_ma
         out_dtype=out_dtype,
         nightly_skips=False,
     )
+
+
+# ===========================
+# Test for maxpool hang
+from models.tt_cnn.tt.builder import TtMaxPool2d, MaxPool2dConfiguration, L1FullSliceStrategyConfiguration
+import torch
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 1024}], indirect=True)
+def test_isolated_maxpool_bh_p150(device):
+    torch_tensor = torch.randn(1, 1, 131072, 128, dtype=torch.bfloat16)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=[1024, 128],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 9))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+    )
+
+    # Recreate the 130-core maxpool config
+    maxpool_config = MaxPool2dConfiguration(
+        input_height=256,
+        input_width=512,
+        channels=128,
+        batch_size=1,
+        kernel_size=(3, 3),
+        stride=(2, 2),
+        padding=(1, 1),
+        dilation=(1, 1),
+        dtype=ttnn.bfloat8_b,
+        output_layout=ttnn.TILE_LAYOUT,
+        slice_strategy=L1FullSliceStrategyConfiguration(),
+    )
+
+    # Create TTNN maxpool
+    ttnn_maxpool = TtMaxPool2d(maxpool_config, device)
+    print("Created maxpool and input")
+
+    # Run TTNN maxpool
+    # This is where the hang likely occurs
+    ttnn_output = ttnn_maxpool(ttnn_input)
+
+    print("Hanging...")
+    print(f"ttnn_output: {ttnn_output}")
+    print(f"ttnn_output shape: {ttnn_output.shape}")
+
+    # If we reach here, test passed
+    assert True
