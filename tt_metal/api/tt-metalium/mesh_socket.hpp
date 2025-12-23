@@ -175,8 +175,8 @@ private:
         config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void initialize_from_host_ranks(const std::shared_ptr<multihost::DistributedContext>& context);
-    void initialize_from_mesh_ids();
+    void process_host_ranks();
+    void process_mesh_ids();
     static SocketConfig populate_mesh_ids(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
