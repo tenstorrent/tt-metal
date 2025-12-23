@@ -71,12 +71,13 @@ jobs:
             ${{ runner.os }}-ccache-
           max-size: 2G
 
-      - name: 🌿 Create Branch
+      - name: 🌿 Create Branch for Claude Code
         id: create-branch
         run: |
           BRANCH_NAME="refactor/batch-${{ matrix.batch_id }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Create branch for Claude Code to work on
           git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
@@ -121,79 +122,54 @@ jobs:
             --allowedTools Bash,Edit,Read,Write
             --system-prompt "You are a senior C++ engineer refactoring device operations. Be precise and follow the REFACTORING_GUIDE.md exactly."
 
-      - name: 📤 Push Changes
-        if: success()
-        env:
-          GITHUB_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+      - name: 🧹 Ensure .gitignore Excludes Cache
         run: |
-          BRANCH_NAME="${{ steps.create-branch.outputs.branch }}"
-
-          # Configure git remote with token for push operations
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-
-          # Check if there are uncommitted changes (Claude Code may have made changes)
-          if ! git diff --quiet || ! git diff --cached --quiet; then
-            echo "Found uncommitted changes, committing them..."
-            git add -A
-            git commit -m "Refactor batch ${{ matrix.batch_id }}: Convert register_operation to direct functions" || echo "Commit failed or nothing to commit"
+          # Ensure .ccache and build directories are in .gitignore
+          if ! grep -q "^\.ccache/" .gitignore 2>/dev/null; then
+            echo ".ccache/" >> .gitignore
           fi
-
-          # Push the branch
-          echo "Pushing branch $BRANCH_NAME..."
-          git push origin "$BRANCH_NAME" || {
-            echo "Push failed, trying to pull and rebase..."
-            git pull origin "$BRANCH_NAME" --rebase || true
-            git push origin "$BRANCH_NAME"
-          }
-
-          echo "✅ Successfully pushed branch $BRANCH_NAME"
 
       - name: 🔀 Create Pull Request
         if: success()
-        uses: actions/github-script@v7
+        id: create-pr
+        uses: peter-evans/create-pull-request@v8
         with:
-          github-token: ${{ secrets.AI_GH_TOKEN }}
-          script: |
-            const branchName = '${{ steps.create-branch.outputs.branch }}';
-            const batchId = '${{ matrix.batch_id }}';
-            const filesCount = '${{ steps.prepare-files.outputs.files_count }}';
+          token: ${{ secrets.AI_GH_TOKEN }}
+          branch: refactor/batch-${{ matrix.batch_id }}
+          commit-message: |
+            Refactor batch ${{ matrix.batch_id }}: Convert register_operation to direct functions
 
-            // Check if PR already exists
-            const { data: existingPRs } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head: `${context.repo.owner}:${branchName}`,
-              state: 'open'
-            });
+            Refactored ${{ steps.prepare-files.outputs.files_count }} device operation files:
+            - Removed register_operation calls
+            - Replaced with direct function declarations
+            - Removed invoke member functions
+            - Implemented new global functions
+          title: '[Refactor] Batch ${{ matrix.batch_id }}: Convert register_operation to direct functions'
+          body: |
+            ## Refactoring Batch ${{ matrix.batch_id }}
 
-            if (existingPRs.length > 0) {
-              console.log(`PR already exists: ${existingPRs[0].html_url}`);
-              return;
-            }
+            This PR contains the refactored device operations from batch ${{ matrix.batch_id }}.
 
-            // Create new PR
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[Refactor] Batch ${batchId}: Convert register_operation to direct functions`,
-              head: branchName,
-              base: 'main',
-              body: `## Refactoring Batch ${batchId}
+            **Changes:**
+            - Removed `register_operation` calls
+            - Replaced with direct function declarations
+            - Removed `invoke` member functions
+            - Implemented new global functions
 
-              This PR contains the refactored device operations from batch ${batchId}.
+            **Files refactored:** ${{ steps.prepare-files.outputs.files_count }}
 
-              **Changes:**
-              - Removed \`register_operation\` calls
-              - Replaced with direct function declarations
-              - Removed \`invoke\` member functions
-              - Implemented new global functions
+            **Build status:** ✅ Verified with `./build_metal.sh -c -e --debug`
 
-              **Files refactored:** ${filesCount}
-
-              **Build status:** ✅ Verified with \`./build_metal.sh -c -e --debug\`
-
-              This is part of a parallel refactoring effort to convert all device operations.
-              See REFACTORING_GUIDE.md for details.`
-            });
-
-            console.log(`Created PR: ${pr.html_url}`);
+            This is part of a parallel refactoring effort to convert all device operations.
+            See REFACTORING_GUIDE.md for details.
+          labels: refactor,automated
+          delete-branch: false
+          # Explicitly exclude cache and build directories
+          add-paths: |
+            **/*.hpp
+            **/*.cpp
+            .gitignore
+            REFACTORING_GUIDE.md
+            REFACTORING_PROCESS.md
+            device_ops_to_process.txt
+            batch_mapping.json
