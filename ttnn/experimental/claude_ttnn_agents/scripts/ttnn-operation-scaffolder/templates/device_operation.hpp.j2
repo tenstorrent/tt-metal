@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "{{ operation_name }}_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "{{ operation_name }}_device_operation_types.hpp"
+
+namespace {{ namespace }} {
+
+struct {{ operation_name_pascal }}DeviceOperation {
+    using operation_attributes_t = {{ operation_name }}::operation_attributes_t;
+    using tensor_args_t = {{ operation_name }}::tensor_args_t;
+    using spec_return_value_t = {{ operation_name }}::spec_return_value_t;
+    using tensor_return_value_t = {{ operation_name }}::tensor_return_value_t;
+    using program_factory_t = std::variant<program::{{ operation_name_pascal }}ProgramFactory>;
+
+    // ALL STATIC FUNCTIONS - This is the modern pattern!
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+{% for tensor in input_tensors %}
+        const Tensor& {{ tensor.cpp_name }},
+{% endfor %}
+{% for param in parameters %}
+        {{ param.cpp_type }} {{ param.name }},
+{% endfor %}
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
+};
+
+}  // namespace {{ namespace }}
+
+namespace ttnn::prim {
+constexpr auto {{ operation_name }} =
+    ttnn::register_operation<"ttnn::prim::{{ operation_name }}", {{ namespace }}::{{ operation_name_pascal }}DeviceOperation>();
+}  // namespace ttnn::prim
