@@ -354,17 +354,14 @@ The circular buffers act as producer-consumer queues, enabling safe and efficien
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 Also note that reader kernels and writer kernels are commonly referred to as data movement kernels.
 
-.. image:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
+.. figure:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
    :width: 900
    :alt: Circular buffer data flow
 
    Figure 1: Kernel data flow through circular buffers
 
-!!!!
-NOTE: THIS IMAGE HAS PROBLEMS!!!
-Writer should be Kernel 1 not Kernel 0.
-"Think them as pipes!!!"
-!!!!
+.. note::
+   **Note:** This image has known issues. Writer should be Kernel 1, not Kernel 0. Think of them as pipes!
 
 Each kernel interacts with the buffers as follows:
 
