@@ -14,6 +14,9 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
 
+SliceWidth = ttnn.Op2DDRAMSliceWidth
+SliceHeight = ttnn.Op2DDRAMSliceHeight
+
 
 # helper to correct torch output for asymmetric padding
 def correct_torch_asym_pad(
@@ -530,6 +533,7 @@ def test_avg_pool2d_compute_kernel_config(
         ([1, 512, 256, 256], 8),
         ([1, 320, 384, 384], 6),
         ([1, 64, 96, 96], 4),
+        ([1, 256, 81, 81], 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -539,6 +543,7 @@ def test_avg_pool2d_compute_kernel_config(
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
+        (2, 2),
         (3, 3),
         (5, 5),
     ),
@@ -577,7 +582,7 @@ def test_avg_pool2d_compute_kernel_config(
 )
 @pytest.mark.parametrize(
     "slice_type",
-    [ttnn.Op2dDRAMSliceWidth, ttnn.Op2dDRAMSliceHeight],
+    [SliceWidth, SliceHeight],
 )
 def test_avg_pool2d_dram(
     device,
@@ -594,7 +599,7 @@ def test_avg_pool2d_dram(
     in_dtype,
     slice_type,
 ):
-    if slice_type == ttnn.Op2dDRAMSliceHeight and input_shape[3] >= 256:
+    if slice_type == SliceHeight and input_shape[3] >= 256:
         pytest.skip("Skip height slice for inputs with large width")
     dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
 
