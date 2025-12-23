@@ -99,10 +99,6 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = true;
     constexpr bool zero_srca_avgpool = false;
 
-    unary_op_init_common(in_cb_id_0, in_cb_id_0);
-    copy_tile_to_dst_init_short(in_cb_id_0);
-    max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
-
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr w_chunks = kernel_w % max_rows_for_reduction == 0 ? kernel_w / max_rows_for_reduction
                                                                 : kernel_w / max_rows_for_reduction + 1;
@@ -130,8 +126,13 @@ void MAIN {
         sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
         cb_wait_front(intra_kernel_right_inc_cb_id, 1);
         cb_wait_front(intra_kernel_down_left_wrap_inc_cb_id, 1);
+        copy_dest_values_init();
         copy_dest_values(index_dst_idx, index_temp_dst_idx);  // make a copy of the initial indexes for large kernel use
     }
+
+    unary_op_init_common(in_cb_id_0, in_cb_id_0);
+    copy_tile_to_dst_init_short(in_cb_id_0);
+    max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
@@ -181,6 +182,7 @@ void MAIN {
                     }
                 } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
                     if (last_chunk) {          // reset to the initial indexes for this C block
+                        copy_dest_values_init();
                         copy_dest_values(index_temp_dst_idx, index_dst_idx);
                     } else {  // increment for the next chunk within the same C block
                         increment_needed = true;
@@ -199,6 +201,7 @@ void MAIN {
                     // we allow overflow here for negative values as this only occurs in padding regions
                     add_int_tile_init();
                     add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                    copy_dest_values_init();
                     copy_dest_values(index_scratch_out_dst_idx, index_dst_idx);
                     if (is_large_kernel) {
                         copy_dest_values(index_scratch_out_dst_idx, index_temp_dst_idx);
