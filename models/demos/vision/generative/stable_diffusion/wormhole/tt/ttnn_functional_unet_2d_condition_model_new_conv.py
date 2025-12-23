@@ -10,7 +10,9 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import reshard_for_output_channels_divisibility
+from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import (
+    reshard_for_output_channels_divisibility,
+)
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )

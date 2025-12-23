@@ -12,9 +12,13 @@ from models.demos.vision.classification.vit.common.common import load_torch_mode
 from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 
 if is_wormhole_b0():
-    from models.demos.vision.classification.vit.wormhole.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+    from models.demos.vision.classification.vit.wormhole.tt import (
+        ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit,
+    )
 elif is_blackhole():
-    from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
+    from models.demos.vision.classification.vit.blackhole.tt import (
+        ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit,
+    )
 else:
     from models.demos.vision.classification.vit.common.tt import ttnn_optimized_sharded_vit
 
