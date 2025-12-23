@@ -81,10 +81,9 @@ Generates a Factory System Descriptor (FSD) and Cabling Guide from Cabling and D
 
 For large systems (e.g., BH Exabox), you can organize cabling into multiple descriptor files and merge them automatically. This is useful when managing different cable batches separately:
 
-- Intrapod cables for forming big meshes
-- Cables between 4x32 meshes
-- Cables between 8x16 meshes
-- Other specialized cables
+- **Intrapod Cabling**: Cables for forming big meshes within a pod
+- **Interpod Cabling**: Connections used to build a SuperPod
+- **Inter-SuperPod Cabling**: Connections to build a cluster of SuperPods
 
 **Directory-based merging:**
 ```bash
