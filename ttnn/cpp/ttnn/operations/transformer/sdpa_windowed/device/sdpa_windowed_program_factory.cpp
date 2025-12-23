@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_windowed_program_factory.hpp"
-#include "sdpa_windowed_op.hpp"
+#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 
 #include <optional>
 #include <cmath>
@@ -19,7 +18,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa_windowed::program {
 
 // Implementation of windowed SDPA
 // [INFO] This implementation is based on the multi-core implementation of SDPA in the tt-metal repository.
@@ -28,17 +27,26 @@ namespace ttnn::operations::transformer::detail {
 // compute and write: mostly the same as the multi-core implementation of SDPA.
 // [INFO] a natural thought for potentially faster implementation is to only compute the SDPA within each windown as
 // defined by cu_window_seqlens; this should be driven by performance analysis results of whole ML model
-operation::ProgramWithCallbacks sdpa_windowed_multi_core(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& cu_window_seqlens,
-    const Tensor& output_tensor,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config) {
+WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor_q = tensor_args.q;
+    const auto& input_tensor_k = tensor_args.k;
+    const auto& input_tensor_v = tensor_args.v;
+    const auto& cu_window_seqlens = tensor_args.cu_window_seqlens;
+    auto& output_tensor = tensor_return_value;
+    auto scale = operation_attributes.scale;
+    if (not scale.has_value()) {
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
+    }
+
+    auto program_config = operation_attributes.program_config;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    std::size_t q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+    std::size_t k_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
     /*
     Q: B x NQH x S x DH
     K: B x NKH x S x DH
@@ -101,11 +109,11 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
-    auto cu_window_seqlens_buffer = cu_window_seqlens.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
+    auto* cu_window_seqlens_buffer = cu_window_seqlens.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
@@ -248,6 +256,14 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -257,6 +273,8 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -330,6 +348,8 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -588,46 +608,55 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
             });
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id](
-            const void* operation,
-            Program& program,
-            const operation::Tensors& input_tensors,
-            const operation::OptionalConstTensors& optional_input_tensors,
-            const operation::Tensors& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto cu_window_seqlens_buffer = input_tensors.at(3).buffer();
-            auto out0_buffer = output_tensors.at(0).buffer();
-
-            const uint32_t q_addr = q_buffer->address();
-            const uint32_t k_addr = k_buffer->address();
-            const uint32_t v_addr = v_buffer->address();
-            const uint32_t cu_window_seqlens_addr = cu_window_seqlens_buffer->address();
-            const uint32_t cu_window_seqlens_eles = input_tensors.at(3).logical_shape()[0];
-            const uint32_t out_addr = out0_buffer->address();
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-                reader_args[3] = cu_window_seqlens_addr;
-                reader_args[4] = cu_window_seqlens_eles;
-
-                writer_args[0] = out_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {
+            .reader_kernels_id = reader_kernels_id,
+            .writer_kernels_id = writer_kernels_id,
+            .compute_kernels_id = compute_kernels_id,
+            .grid_size = grid_size,
+            .num_cores = num_cores,
+        }};
 }
 
-}  // namespace ttnn::operations::transformer::detail
+void WindowedSDPAProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t&,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+
+    auto* q_buffer = tensor_args.q.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
+    auto* v_buffer = tensor_args.v.buffer();
+    auto* cu_window_seqlens_buffer = tensor_args.cu_window_seqlens.buffer();
+    auto* out0_buffer = tensor_return_value.buffer();
+
+    const uint32_t q_addr = q_buffer->address();
+    const uint32_t k_addr = k_buffer->address();
+    const uint32_t v_addr = v_buffer->address();
+    const uint32_t cu_window_seqlens_addr = cu_window_seqlens_buffer->address();
+    const uint32_t cu_window_seqlens_eles = tensor_args.cu_window_seqlens.logical_shape()[0];
+    const uint32_t out_addr = out0_buffer->address();
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+
+    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
+        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+
+        reader_args[0] = q_addr;
+        reader_args[1] = k_addr;
+        reader_args[2] = v_addr;
+        reader_args[3] = cu_window_seqlens_addr;
+        reader_args[4] = cu_window_seqlens_eles;
+
+        writer_args[0] = out_addr;
+    }
+}
+
+}  // namespace ttnn::operations::transformer::sdpa_windowed::program

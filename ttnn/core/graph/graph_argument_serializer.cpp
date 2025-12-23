@@ -178,6 +178,7 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<float>();
     GraphArgumentSerializer::register_type<uint8_t>();
     GraphArgumentSerializer::register_type<uint16_t>();
+    GraphArgumentSerializer::register_type<double>();
     GraphArgumentSerializer::register_type<std::string>();
     GraphArgumentSerializer::register_type<tt::tt_metal::DataType>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Layout>();
@@ -199,5 +200,9 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<std::variant<int, float>>();
     GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
     GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
+    GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 2>>>();
+    GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 4>>>();
+    GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 8>>>();
+    GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 16>>>();
 }
 }  // namespace ttnn::graph

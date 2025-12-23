@@ -39,14 +39,14 @@
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Kernel;
 enum class HalProgrammableCoreType;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 uint64_t get_next_counter() {
@@ -202,7 +202,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // Generate Dispatch Commands for each Program in the MeshWorkload.
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
-    auto mesh_device = mesh_cq.device();
+    auto* mesh_device = mesh_cq.device();
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
 

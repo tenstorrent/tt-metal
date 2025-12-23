@@ -17,7 +17,7 @@ namespace detail {
 namespace py = pybind11;
 
 void bind_grid_sample(py::module& module) {
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Performs grid sampling on the input tensor using the provided sampling grid.
 
         Grid sample uses bilinear interpolation to sample input values at arbitrary

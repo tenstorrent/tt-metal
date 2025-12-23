@@ -14,13 +14,12 @@
 #include "multihost_fabric_fixtures.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
+namespace tt::tt_fabric::fabric_router_tests::multihost {
 
 using namespace multihost_utils;
 
@@ -226,5 +225,4 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost

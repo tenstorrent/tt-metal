@@ -1,0 +1,118 @@
+name: "(TM-DM) Data Movement Test Suite"
+
+on:
+  workflow_dispatch:
+    inputs:
+      microbenchmarks:
+        description: 'Run data movement microbenchmarks'
+        required: false
+        default: true
+        type: boolean
+      run-n150:
+        description: 'Run tests on N150'
+        required: false
+        default: true
+        type: boolean
+      run-n300:
+        description: 'Run tests on N300'
+        required: false
+        default: true
+        type: boolean
+      run-p150b:
+        description: 'Run tests on P150b'
+        required: false
+        default: true
+        type: boolean
+      run-perf-tests:
+        description: 'Run data movement performance tests'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+      tracy: true
+      skip-tt-train: true
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        shell: bash
+        run: |
+          matrix_items=()
+
+          # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            run_n150="${{ inputs.run-n150 }}"
+            run_n300="${{ inputs.run-n300 }}"
+            run_p150b="${{ inputs.run-p150b }}"
+          else
+            # Default to true for workflow_call and push events
+            run_n150="true"
+            run_n300="true"
+            run_p150b="true"
+          fi
+
+          if [[ "$run_n150" == "true" ]]; then
+            matrix_items+=('{"arch":"wormhole_b0","runner-label":"N150"}')
+          fi
+
+          if [[ "$run_n300" == "true" ]]; then
+            matrix_items+=('{"arch":"wormhole_b0","runner-label":"N300"}')
+          fi
+
+          if [[ "$run_p150b" == "true" ]]; then
+            matrix_items+=('{"arch":"blackhole","runner-label":"P150b"}')
+          fi
+
+          # If no items selected, add a placeholder to avoid matrix error
+          if [ ${#matrix_items[@]} -eq 0 ]; then
+            echo "No runners selected, adding placeholder"
+            matrix_items+=('{"arch":"wormhole_b0","runner-label":"N150"}')
+          fi
+
+          # Convert array to JSON array format
+          matrix_json="["
+          for i in "${!matrix_items[@]}"; do
+            if [ $i -gt 0 ]; then
+              matrix_json+=","
+            fi
+            matrix_json+="${matrix_items[$i]}"
+          done
+          matrix_json+="]"
+
+          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $matrix_json"
+  data-movement-unit-tests:
+    uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    with:
+        arch: ${{ matrix.test-group.arch }}
+        runner-label: ${{ matrix.test-group.runner-label }}
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        gtest_filter: "*-*NIGHTLY_*"
+  data-movement-perf-tests:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
+    uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
+    needs: build-artifact
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

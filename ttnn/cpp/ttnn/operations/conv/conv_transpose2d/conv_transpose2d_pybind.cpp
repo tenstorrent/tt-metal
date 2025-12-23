@@ -70,6 +70,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
             mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored. Default: False
+            dram_slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for DRAM slicing. If provided, the operation will use DRAM slicing, else will fall back to L1 version. Default: None
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
@@ -94,18 +95,19 @@ void py_bind_conv_transpose2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> output_padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
+               const std::optional<const conv2d::Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias) -> Result {
+               const bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -126,6 +128,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     conv_config,
                     compute_config,
                     memory_config,
+                    dram_slice_config,
                     mirror_kernel,
                     return_output_dim,
                     return_weights_and_bias);
@@ -150,6 +153,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("dram_slice_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
             py::arg("return_output_dim") = false,
             py::arg("return_weights_and_bias") = false});
@@ -178,6 +182,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
+        py::arg("dram_slice_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
 
     module.def(
@@ -201,7 +206,8 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("input_dtype"),
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("dram_slice_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::conv::conv_transpose2d

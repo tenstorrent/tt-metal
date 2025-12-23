@@ -20,6 +20,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
+#include <tt-metalium/data_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace ttnn::types {
@@ -38,6 +39,18 @@ void py_module_types(py::module& module) {
     export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(module, "BcastOpDim");
     export_enum<tt::CoreType>(module, "CoreType");
+
+    // Bind tt_metal data types
+    export_enum<tt::tt_metal::DataMovementProcessor>(module, "DataMovementProcessor");
+
+    // Manually bind NOC enum to ensure all aliases are exported
+    py::enum_<tt::tt_metal::NOC>(module, "NOC")
+        .value("RISCV_0_default", tt::tt_metal::NOC::RISCV_0_default)
+        .value("RISCV_1_default", tt::tt_metal::NOC::RISCV_1_default)
+        .value("NOC_0", tt::tt_metal::NOC::NOC_0)
+        .value("NOC_1", tt::tt_metal::NOC::NOC_1);
+
+    export_enum<tt::tt_metal::NOC_MODE>(module, "NOC_MODE");
 
     py::implicitly_convertible<py::int_, ttnn::QueueId>();
     py::implicitly_convertible<py::int_, tt::CoreType>();

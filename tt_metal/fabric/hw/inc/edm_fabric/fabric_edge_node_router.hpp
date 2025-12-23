@@ -11,7 +11,7 @@
 FORCE_INLINE uint32_t recompute_path(
     PACKET_HEADER_TYPE* packet_header,
     ROUTING_FIELDS_TYPE& cached_routing_fields,
-    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
+    const tt::tt_fabric::routing_l1_info_t& routing_table) {
     if (packet_header->mcast_params_64 != 0 && packet_header->dst_start_mesh_id == routing_table.my_mesh_id) {
         fabric_set_mcast_route(packet_header);
     } else {
@@ -26,7 +26,7 @@ FORCE_INLINE uint32_t recompute_path(
 FORCE_INLINE uint32_t get_cmd_with_mesh_boundary_adjustment(
     PACKET_HEADER_TYPE* packet_header,
     ROUTING_FIELDS_TYPE& cached_routing_fields,
-    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
+    const tt::tt_fabric::routing_l1_info_t& routing_table) {
     uint32_t hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
     if constexpr (is_intermesh_router_on_edge || is_intramesh_router_on_edge) {
         if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {

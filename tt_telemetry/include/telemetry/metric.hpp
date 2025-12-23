@@ -62,15 +62,41 @@ public:
         return changed_since_transmission_;
     }
 
-    void mark_transmitted() {
-        changed_since_transmission_ = false;
-    }
+    void mark_transmitted() { changed_since_transmission_ = false; }
 
     virtual ~Metric() {
     }
 
     uint64_t timestamp() const {
         return timestamp_;
+    }
+
+    // Custom label support for Prometheus
+    // Labels are immutable key-value pairs that appear in Prometheus output alongside path-derived labels.
+    // Derived metric classes can override this method to provide custom labels by constructing a map on-demand.
+    //
+    // Example usage:
+    //   class EthernetMetric : public UIntMetric {
+    //       int channel_;
+    //       int asic_location_;
+    //   public:
+    //       EthernetMetric(int channel, int asic) : channel_(channel), asic_location_(asic) {}
+    //
+    //       std::unordered_map<std::string, std::string> labels() const override {
+    //           return {
+    //               {"channel", std::to_string(channel_)},
+    //               {"asic", std::to_string(asic_location_)}
+    //           };
+    //       }
+    //   };
+    //
+    // Prometheus output:
+    //   my_metric{hostname="...",device="0",channel="5",asic="0"} 42
+    //
+    // Labels must be set at construction time and remain immutable. This simplifies delta transmission
+    // since labels only need to be sent once (in the initial snapshot).
+    virtual std::unordered_map<std::string, std::string> labels() const {
+        return {};  // Default: no custom labels
     }
 
 protected:

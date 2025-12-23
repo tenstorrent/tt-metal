@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,35 +6,50 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/constants.hpp>
+#include "ttnn/decorators.hpp"
+#include "copy_device_operation_types.hpp"
+#include "copy_program_factory.hpp"
 
-#include "ttnn/run_operation.hpp"
-
-namespace ttnn::operations::data_movement {
-
-enum class CopyOpParallelizationStrategy { MULTI_CORE };
+namespace ttnn::operations::data_movement::copy {
 
 struct CopyDeviceOperation {
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const tt::tt_metal::DataType output_dtype{};
+    using operation_attributes_t = copy::operation_attributes_t;
+    using tensor_args_t = copy::tensor_args_t;
+    using spec_return_value_t = copy::spec_return_value_t;
+    using tensor_return_value_t = copy::tensor_return_value_t;
+    using program_factory_t = std::variant<copy::program::CopyProgramFactory>;
 
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors);
 
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    CopyOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
+        const tt::tt_metal::DataType& output_dtype,
+        const std::optional<Tensor>& preallocated_output,
+        bool backwards = false);
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks copy_multi_core(
-    const Tensor& input, const Tensor& output, bool backwards = false);
+}  // namespace ttnn::operations::data_movement::copy
 
-}  // namespace ttnn::operations::data_movement
+namespace ttnn::prim {
+constexpr auto copy =
+    ttnn::register_operation<"ttnn::prim::copy", ttnn::operations::data_movement::copy::CopyDeviceOperation>();
+}  // namespace ttnn::prim

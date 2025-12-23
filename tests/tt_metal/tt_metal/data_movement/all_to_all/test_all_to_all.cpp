@@ -301,7 +301,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -358,7 +358,7 @@ void custom_test(
     uint32_t num_of_transactions,
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -405,7 +405,7 @@ TO-DO:
 /* ======== All to All ======== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 300;
 
@@ -424,7 +424,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 301;
 

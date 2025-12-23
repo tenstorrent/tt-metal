@@ -14,8 +14,6 @@ from models.experimental.mnist.tt.mnist_model import mnist_model
 from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 
 from models.common.utility_functions import profiler
@@ -36,7 +34,6 @@ from models.perf.perf_utils import prep_perf_report
     ),
 )
 def test_perf(device, expected_inference_time, expected_compile_time, iterations, model_location_generator):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_iter"
@@ -66,8 +63,6 @@ def test_perf(device, expected_inference_time, expected_compile_time, iterations
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_out
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_out = tt_model(tt_input)
