@@ -202,22 +202,38 @@ class TTPenalties(LightweightModule):
         )
         self.token_bin_counts_and_mask(new_tokens=prompt_tokens, src=src, mask=self.prompt_mask)
 
-    def reset_output_tokens(self, tokens):
-        # replaces -1s in tokens with self.vocab_size - 1
-        tokens = torch.where(tokens == -1, self.vocab_size - 1, tokens)
-        tokens_tt = ttnn.from_torch(
-            tokens.reshape(-1, tokens.shape[-1]),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
+    def reset_output_tokens(self, tokens=None):
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
         self.output_counts = ttnn.mul(self.output_counts, 0, output_tensor=self.output_counts, **self._op_kwargs)
         self.output_counts_gathered = ttnn.mul(
             self.output_counts_gathered, 0, output_tensor=self.output_counts_gathered, **self._op_kwargs
         )
-        self.update_output_tokens(tokens_tt)
+        if tokens is not None:
+            # Mask out padding positions (-1) instead of inventing a fake token id by expanding vocab_size.
+            tokens_2d = tokens.reshape(-1, tokens.shape[-1])
+            tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
+            src_host = (tokens_2d != -1).to(torch.int32)
+            idx_host = torch.where(tokens_2d == -1, torch.zeros_like(tokens_2d), tokens_2d)
+
+            tokens_tt = ttnn.from_torch(
+                idx_host,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            src_tt = ttnn.from_torch(
+                src_host,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.token_bin_counts_and_mask(
+                new_tokens=tokens_tt,
+                counts=self.output_counts_gathered,
+                src=src_tt,
+                counts_sliced=self.output_counts,
+                mask=self.output_mask,
+            )
 
     def update_output_tokens(self, new_tokens):
         # reshape decode token
