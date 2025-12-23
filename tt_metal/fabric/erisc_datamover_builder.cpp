@@ -693,17 +693,20 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channels_connection_semaphore_id(sender_channels_connection_semaphore_id),
     sender_channels_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
     sender_channel_is_traffic_injection_channel_array(std::move(sender_channel_injection_flags)),
+    actual_sender_channels_per_vc_(actual_sender_channels_per_vc),
+    actual_receiver_channels_per_vc_(actual_receiver_channels_per_vc),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     has_tensix_extension(has_tensix_extension),
     // First level ack is enabled to support bubble flow control
     enable_first_level_ack(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
-    // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are stored for runtime use
-    // but we intentionally DON'T override config values because:
+    // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are:
+    // 1. Stored as members for later use in compile-time args
+    // 2. Used for connection validation
+    // We intentionally DON'T override config values because:
     // 1. config.multi_pool_allocator was created with MAX channel counts
     // 2. Changing config counts would cause emit_ct_args to emit wrong number of args
-    // 3. Device-side uses NUM_SENDER_CHANNELS to size arrays - must stay consistent
-    // The actual channel counts are used by channel_mapping for connection validation only
+    // The config stays at MAX, but we pass actual counts to device via compile-time args
     // Validate injection flags vector size matches the number of sender channels
     TT_FATAL(
         sender_channel_is_traffic_injection_channel_array.size() == config.num_used_sender_channels,
@@ -989,7 +992,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // unsure which one we should prefer at the moment
     // bool z_routers_enabled = fabric_context.get_builder_context().get_intermesh_vc_config().router_type ==
     // IntermeshRouterType::Z_INTERMESH;
-    bool z_router_enabled = fabric_context.has_z_router_on_device(local_physical_chip_id);
+    bool z_router_enabled = fabric_context.has_z_router_on_device(local_fabric_node_id);
 
     log_debug(
         LogFabric,
@@ -1043,8 +1046,17 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         false,                         // VC1 first level ack (always false - VC1 doesn't use bubble flow control)
         enable_risc_cpu_data_cache,
         z_router_enabled,
-        vc0_downstream_edm_size,   // VC0_DOWNSTREAM_EDM_SIZE: array size for VC0 downstream EDMs
-        vc1_downstream_edm_size};  // VC1_DOWNSTREAM_EDM_SIZE: array size for VC1 downstream EDMs
+        vc0_downstream_edm_size,  // VC0_DOWNSTREAM_EDM_SIZE: array size for VC0 downstream EDMs
+        vc1_downstream_edm_size,  // VC1_DOWNSTREAM_EDM_SIZE: array size for VC1 downstream EDMs
+        // Actual sender channel counts per VC for this router (may differ from MAX)
+        static_cast<uint32_t>(
+            actual_sender_channels_per_vc_.has_value()
+                ? actual_sender_channels_per_vc_.value()[0]
+                : config.num_used_sender_channels_per_vc[0]),  // ACTUAL_VC0_SENDER_CHANNELS
+        static_cast<uint32_t>(
+            actual_sender_channels_per_vc_.has_value()
+                ? actual_sender_channels_per_vc_.value()[1]
+                : config.num_used_sender_channels_per_vc[1])};  // ACTUAL_VC1_SENDER_CHANNELS
 
     const std::vector<uint32_t> main_args_part2 = {
         static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[0]),
@@ -1157,6 +1169,32 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
     }
+
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t idx = 0; idx < num_sender_channels; idx++) {
+        oss << this->sender_channel_connection_liveness_check_disable_array[idx];
+        if (idx != num_sender_channels - 1) {
+            oss << ", ";
+        }
+    }
+    oss << "]";
+    log_debug(
+        LogFabric,
+        "Fabric Node Mesh {}, Chip {}, Channel({}): Sender Channel Live: {}",
+        local_fabric_node_id.mesh_id.get(),
+        local_fabric_node_id.chip_id,
+        my_eth_channel_,
+        oss.str());
+
+    log_debug(
+        LogFabric,
+        "Fabric Node Mesh {}, Chip {}, Channel({}): Number of Sender Channels: {} Number of Receiver Channels: {}",
+        local_fabric_node_id.mesh_id.get(),
+        local_fabric_node_id.chip_id,
+        my_eth_channel_,
+        num_sender_channels,
+        num_receiver_channels);
 
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_is_traffic_injection_channel_array.at(i));

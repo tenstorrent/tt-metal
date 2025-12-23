@@ -154,14 +154,11 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         add_direction_pairs(RoutingDirection::S, RoutingDirection::E);
         add_direction_pairs(RoutingDirection::S, RoutingDirection::W);
 
-        // NOTE: Z↔mesh connections are NOT added here because they are local connections
-        // (Z and mesh routers are on the same device). They are handled by configure_local_connections()
-        // which uses MESH_TO_Z/Z_TO_MESH connection types from the channel mappings.
         // Z router connections - connect Z routers to all 4 mesh directions
-        // add_direction_pairs(RoutingDirection::Z, RoutingDirection::N);
-        // add_direction_pairs(RoutingDirection::Z, RoutingDirection::S);
-        // add_direction_pairs(RoutingDirection::Z, RoutingDirection::E);
-        // add_direction_pairs(RoutingDirection::Z, RoutingDirection::W);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::N);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::S);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::E);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::W);
     } else if (wrap_around_mesh_ && num_intra_chip_neighbors == 2) {
         // 1D Routing wrap the corner chips, fold the internal connections
         auto it = chip_neighbors_.begin();
@@ -205,17 +202,35 @@ void FabricBuilder::connect_routers() {
 
     // Add Z routers to the map for local connections (Z↔mesh on same device)
     // These weren't added by connection_pairs since they're purely local connections
-    for (const auto& [eth_chan, router] : routers_) {
-        if (router->get_location().direction == RoutingDirection::Z) {
-            // Add this Z router to all mesh routers' maps
-            for (const auto& [other_chan, other_router] : routers_) {
-                if (other_router->get_location().direction != RoutingDirection::Z) {
-                    routers_by_direction_map[other_router.get()][RoutingDirection::Z] = router.get();
-                    routers_by_direction_map[router.get()][other_router->get_location().direction] = other_router.get();
-                }
-            }
-        }
-    }
+    // IMPORTANT: Pair each Z router with mesh routers at the SAME NOC X coordinate
+    // This ensures each mesh router connects to its local Z router, not all to one Z router
+    // for (const auto& [eth_chan, router] : routers_) {
+    //     if (router->get_location().direction == RoutingDirection::Z) {
+    //         // Add this Z router to all mesh routers' maps
+    //         for (const auto& [other_chan, other_router] : routers_) {
+    //             if (other_router->get_location().direction != RoutingDirection::Z) {
+    //                 routers_by_direction_map[other_router.get()][RoutingDirection::Z] = router.get();
+    //                 routers_by_direction_map[router.get()][other_router->get_location().direction] =
+    //                 other_router.get();
+    //             }
+    //         }
+    //     }
+    // }
+
+    // for (const auto& [z_eth_chan, z_router] : routers_) {
+    //     if (z_router->get_location().direction == RoutingDirection::Z) {
+    //         size_t z_noc_x = z_router->get_noc_x();
+    //         // Add this Z router ONLY to mesh routers at the same NOC X
+    //         for (const auto& [mesh_chan, mesh_router] : routers_) {
+    //             if (mesh_router->get_location().direction != RoutingDirection::Z &&
+    //                 mesh_router->get_noc_x() == z_noc_x) {
+    //                 routers_by_direction_map[mesh_router.get()][RoutingDirection::Z] = z_router.get();
+    //                 routers_by_direction_map[z_router.get()][mesh_router->get_location().direction] =
+    //                 mesh_router.get();
+    //             }
+    //         }
+    //     }
+    // }
 
     // Configure local connections between routers on this device
     configure_local_connections(routers_by_direction_map);

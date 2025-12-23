@@ -278,29 +278,37 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+bool FabricContext::has_z_router_on_device(const FabricNodeId& fabric_node_id) const {
+    // Check if this fabric node has Z router ethernet channels
+    // Query control plane for active channels and check if any have Z direction
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
 
-    // Iterate through all meshes to find which one contains this device
-    const auto& mesh_ids = mesh_graph.get_mesh_ids();
-    for (const auto& mesh_id : mesh_ids) {
-        const auto& mesh_connections = inter_mesh_connectivity[*mesh_id];
-
-        // Check if this device ID is within this mesh's connectivity map
-        if (device_id < mesh_connections.size()) {
-            const auto& chip_connections = mesh_connections[device_id];
-
-            // Check if any connection from this chip uses Z direction
-            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                if (router_edge.port_direction == RoutingDirection::Z) {
-                    return true;
-                }
+    try {
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            // direction is eth_chan_directions, compare with eth_chan_directions::Z
+            if (direction == eth_chan_directions::Z) {
+                log_debug(
+                    LogMetal,
+                    "Fabric node M{}D{} HAS Z router (channel {} has Z direction)",
+                    *fabric_node_id.mesh_id,
+                    fabric_node_id.chip_id,
+                    eth_chan_id);
+                return true;
             }
         }
+    } catch (...) {
+        // If no channels assigned yet or error, assume no Z router
+        log_debug(
+            LogMetal,
+            "Fabric node M{}D{} does NOT have Z router (no channels or error)",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        return false;
     }
 
+    log_debug(LogMetal, "Fabric node M{}D{} does NOT have Z router", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
     return false;
 }
 
