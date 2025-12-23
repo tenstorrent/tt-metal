@@ -440,6 +440,17 @@ class Operation:
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
 
+        def set_output_tensor_id_decorator(function):
+            @wraps(function)
+            def call_wrapper(*function_args, **function_kwargs):
+                output = function(*function_args, **function_kwargs)
+                output_tensors = get_all_tensors(output)
+                # Set new tensor id to store the outputs of in-place operations correctly
+                set_tensor_id(output_tensors, force=True)
+                return output
+
+            return call_wrapper
+
         def duration_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
@@ -498,6 +509,7 @@ class Operation:
                     )
 
                 if local_golden_function_output is not None:
+                    set_tensor_id(local_golden_function_output)
                     local_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
                         local_golden_function_output,
@@ -508,6 +520,7 @@ class Operation:
                     )
 
                 if global_golden_function_output is not None:
+                    set_tensor_id(global_golden_function_output)
                     postprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
@@ -574,6 +587,8 @@ class Operation:
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
+                    set_tensor_id(input_tensors)
+                    decorated_function = set_output_tensor_id_decorator(decorated_function)
 
                 if ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
