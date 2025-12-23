@@ -46,13 +46,45 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Checkout base branch and pull latest
-          git checkout "$BASE_BRANCH" || git checkout main || git checkout master
-          git pull origin "$BASE_BRANCH" || true
+          # Fetch all branches from origin
+          git fetch origin --depth=500 || git fetch origin
 
-          # Create or checkout feature branch
-          git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
-          git pull origin "$BRANCH_NAME" || true
+          # Determine the actual default branch (main/master) for creating new branches
+          if git ls-remote --heads origin main | grep -q main; then
+            DEFAULT_BASE="main"
+          elif git ls-remote --heads origin master | grep -q master; then
+            DEFAULT_BASE="master"
+          else
+            # Try to get default branch from remote
+            DEFAULT_BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+          fi
+
+          # Checkout default branch first (for creating new batch branches)
+          git checkout -b "$DEFAULT_BASE" "origin/$DEFAULT_BASE" 2>/dev/null || \
+          git checkout "$DEFAULT_BASE" 2>/dev/null || \
+          git checkout -b "$DEFAULT_BASE" "origin/$DEFAULT_BASE"
+
+          # Pull latest default branch
+          git pull origin "$DEFAULT_BASE" || true
+
+          # Now handle the batch branch (refactor/batch-XX)
+          # This branch is shared by all files in the same batch
+          # Base branch for refactor/batch-XX is main (or master)
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            # Branch exists remotely, checkout and pull latest
+            # This happens for subsequent files in the same batch
+            git checkout -b "$BRANCH_NAME" "origin/$BRANCH_NAME" 2>/dev/null || \
+            git checkout "$BRANCH_NAME"
+            git pull origin "$BRANCH_NAME" --rebase || git pull origin "$BRANCH_NAME" || true
+          else
+            # Branch doesn't exist yet (first file in this batch)
+            # Create refactor/batch-XX from main (the base branch)
+            echo "Creating new batch branch: $BRANCH_NAME from $DEFAULT_BASE (base branch)"
+            git checkout -b "$BRANCH_NAME"
+          fi
+
+          echo "Current branch: $(git branch --show-current)"
+          echo "Branch setup complete for: $BRANCH_NAME"
 
       - name: 💾 Cache Build Artifacts
         uses: actions/cache@v4
