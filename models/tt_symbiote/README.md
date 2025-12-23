@@ -9,6 +9,25 @@ TT-Symbiote enables TTNN acceleration of pretrained PyTorch models by replacing 
 - Device management and memory allocation
 - Fallback to PyTorch when TTNN operations fail
 
+## Run Modes
+
+TT-Symbiote supports multiple execution modes via the `TT_SYMBIOTE_RUN_MODE` environment variable:
+
+- **NORMAL** - Default TTNN execution mode
+- **NORMAL_WITH_FALLBACK** - TTNN with automatic PyTorch fallback on errors
+- **SEL** - Segment Each Layer mode. Pytorch takes TTNN tensors as input, compares outputs with PCC.
+- **DPL** - Debug Per Layer. runs both TTNN and PyTorch separately, compares outputs with PCC.
+- **DPL_NO_ERROR_PROP** - DPL but TTNN takes Pytorch tensors as input to avoid error propagation.
+- **CPU** - CPU-only execution mode
+
+```bash
+# Set execution mode before running
+export TT_SYMBIOTE_RUN_MODE=NORMAL && pytest tests/test_resnet50.py
+
+# Or use DPL mode for debugging
+export TT_SYMBIOTE_RUN_MODE=DPL && pytest tests/test_vit.py
+```
+
 ## Quick Start
 
 ```python
@@ -108,40 +127,119 @@ The base class handles:
 - Weight lifecycle management
 - Device placement
 
-## Running Tests
+## Weight Management
 
-Tests require manual invocation with a TTNN device:
+The framework provides sophisticated weight lifecycle management:
 
 ```python
-pytest tests/test_vit.py
-pytest tests/test_llama.py
-pytest tests/test_owl_vit.py
-pytest tests/test_speech_t5.py
+# Automatic weight preprocessing and device placement
+module.preprocess_weights()           # Convert PyTorch → TTNN format (once)
+module.move_weights_to_device()       # Transfer to device
+module.move_weights_to_host()         # Move back to CPU
+module.deallocate_weights()           # Free device memory
+
+# Auto-deallocation decorator for memory-constrained scenarios
+from models.tt_symbiote.core.module import deallocate_weights_after
+
+class TTNNLinearLLama(TTNNLinear):
+    @deallocate_weights_after
+    def forward(self, input_tensor):
+        # Weights automatically deallocated after forward pass
+        return super().forward(input_tensor)
+```
+
+## TorchTTNNTensor
+
+The framework uses a custom tensor wrapper that enables transparent operation dispatch:
+
+```python
+from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+# Wrap PyTorch tensor for TTNN dispatch
+tensor = TorchTTNNTensor(torch.randn(10, 20))
+
+# Access underlying representations
+tensor.to_torch    # Get PyTorch tensor
+tensor.to_ttnn     # Get TTNN tensor
+
+# Supports standard operations with automatic dispatch
+result = tensor * 2.0 + 3.0  # Dispatched to TTNN backend
+```
+
+## Running Tests
+
+Tests work with pytest fixtures for device management:
+
+```bash
+pytest tests/test_vit.py           # ViT with TTNN Linear and LayerNorm
+pytest tests/test_llama.py         # LLaMA-3.2-1B-Instruct
+pytest tests/test_owl_vit.py       # OWL-ViT object detection
+pytest tests/test_speech_t5.py     # SpeechT5 speech synthesis
+pytest tests/test_resnet50.py      # ResNet50 with Conv and Bottleneck
+pytest tests/test_glm.py           # GLM-4.5-Air with mesh device support
+pytest tests/test_gptoss.py        # GPT-OSS-20B model
+pytest tests/test_dpl.py           # Debug Per Layer test
 ```
 
 ## Architecture
 
 ```
 core/
-├── module.py          # TTNNModule base class with auto-fallback
-├── tensor.py          # TorchTTNNTensor wrapper for PyTorch dispatch
-└── dispatcher.py      # TTNN operation dispatch handlers
+├── module.py            # TTNNModule base class with auto-fallback
+├── tensor.py            # TorchTTNNTensor wrapper for PyTorch dispatch
+├── dispatcher.py        # TTNN operation dispatch handlers
+├── torch_dispatcher.py  # PyTorch operation dispatch handlers
+├── run_config.py        # Runtime configuration and mode management
+└── utils.py             # Utility functions for dtype conversion
 
-modules/               # TTNN implementations
-├── linear.py          # TTNNLinear, TTNNLinearLLama,...
-├── attention.py       # TTNNViTSelfAttention,...
-├── normalization.py   # TTNNLayerNorm,...
-└── activation.py      # TTNNSilu,...
+modules/                 # TTNN implementations
+├── linear.py            # TTNNLinear, TTNNLinearLLama, TTNNLinearLLamaBFloat16
+├── attention.py         # TTNNViTSelfAttention
+├── normalization.py     # TTNNLayerNorm
+├── activation.py        # TTNNSilu, TTNNReLU
+├── conv.py              # TTNNConv2dNHWC, TTNNConv2dBNNHWC, TTNNBottleneck
+└── tensor.py            # TTNNPermute, TTNNReshape
 
 utils/
 ├── module_replacement.py  # Recursive module swapping
 └── device_management.py   # Device configuration
 ```
 
+## Available TTNN Modules
+
+**Linear Layers:**
+- `TTNNLinear` - Standard linear layer (bfloat16)
+- `TTNNLinearLLama` - Optimized for LLaMA (bfloat8_b, auto-deallocates weights)
+- `TTNNLinearLLamaBFloat16` - LLaMA variant with bfloat16
+
+**Activation Functions:**
+- `TTNNSilu` - SiLU/Swish activation
+- `TTNNReLU` - ReLU activation
+
+**Normalization:**
+- `TTNNLayerNorm` - Layer normalization
+
+**Attention:**
+- `TTNNViTSelfAttention` - Vision Transformer self-attention
+
+**Convolution:**
+- `TTNNConv2dNHWC` - 2D convolution with NHWC layout
+- `TTNNConv2dBNNHWC` - Conv2d fused with BatchNorm
+- `TTNNConv2dBNActivationNHWC` - Conv2d + BatchNorm + Activation
+- `TTNNBottleneck` - ResNet bottleneck block
+
+**Tensor Operations:**
+- `TTNNPermute` - Tensor permutation
+- `TTNNReshape` - Tensor reshaping
+
 ## Examples
 
 See [tests/](tests/) directory:
-- [test_vit.py](tests/test_vit.py) - Vision Transformer with TTNN Linear, LayerNorm, Attention
-- [test_llama.py](tests/test_llama.py) - LLaMA-3-8B with bfloat8 optimizations
-- [test_owl_vit.py](tests/test_owl_vit.py) - OWL-ViT with TTNN Attention and Linear
-- [test_speech_t5.py](tests/test_speech_t5.py) - SpeechT5 with TTNN Linear LLama and LayerNorm
+- [test_vit.py](tests/test_vit.py) - Vision Transformer with TTNN Linear and LayerNorm
+- [test_llama.py](tests/test_llama.py) - LLaMA-3.2-1B-Instruct with bfloat8 optimizations
+- [test_owl_vit.py](tests/test_owl_vit.py) - OWL-ViT object detection model
+- [test_speech_t5.py](tests/test_speech_t5.py) - SpeechT5 speech synthesis model
+- [test_resnet50.py](tests/test_resnet50.py) - ResNet50 with Conv and Bottleneck blocks
+- [test_glm.py](tests/test_glm.py) - GLM-4.5-Air with mesh device support
+- [test_gptoss.py](tests/test_gptoss.py) - GPT-OSS-20B model
+- [test_dpl.py](tests/test_dpl.py) - Dual path logging example
