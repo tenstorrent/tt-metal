@@ -75,12 +75,26 @@ jobs:
         id: create-branch
         run: |
           BRANCH_NAME="refactor/batch-${{ matrix.batch_id }}"
+          BASE_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
+          # If we're on a feature branch, use main as base, otherwise use current branch
+          if [ "$BASE_BRANCH" != "main" ] && [ "$BASE_BRANCH" != "master" ]; then
+            BASE_BRANCH="main"
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Ensure we're on the base branch first
+          git checkout "$BASE_BRANCH" || git checkout -b "$BASE_BRANCH" || git checkout main || git checkout master
+          git pull origin "$BASE_BRANCH" || true
+
           # Create branch for Claude Code to work on
           git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
+
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "BASE_BRANCH=$BASE_BRANCH" >> $GITHUB_ENV
           echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "base=$BASE_BRANCH" >> $GITHUB_OUTPUT
 
       - name: 📝 Prepare Files List
         id: prepare-files
@@ -118,9 +132,32 @@ jobs:
             Do not stop until all files in this batch are refactored and verified with a successful build.
 
             Read REFACTORING_GUIDE.md for detailed step-by-step instructions.
+          settings: |
+            {
+              "env": {
+                "DEBUG": "true",
+                "VERBOSE": "1"
+              },
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "command": "echo '🔧 Running Bash command:' && echo '${{ tool.command }}'"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
           claude_args: |
-            --allowedTools Bash,Edit,Read,Write
-            --system-prompt "You are a senior C++ engineer refactoring device operations. Be precise and follow the REFACTORING_GUIDE.md exactly."
+            --allowedTools Bash,Edit,Read,Write,mcp__sequential-thinking__sequentialthinking
+            --system-prompt "You are a senior C++ engineer refactoring device operations. Be precise and follow the REFACTORING_GUIDE.md exactly. Use sequential thinking to plan your refactoring steps carefully."
+            --mcp-config '{"mcpServers": {"sequential-thinking": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]}}}'
+            --max-turns 50
+            --verbose
 
       - name: 🧹 Ensure .gitignore Excludes Cache
         run: |
@@ -136,6 +173,7 @@ jobs:
         with:
           token: ${{ secrets.AI_GH_TOKEN }}
           branch: refactor/batch-${{ matrix.batch_id }}
+          base: ${{ steps.create-branch.outputs.base || 'main' }}
           commit-message: |
             Refactor batch ${{ matrix.batch_id }}: Convert register_operation to direct functions
 
