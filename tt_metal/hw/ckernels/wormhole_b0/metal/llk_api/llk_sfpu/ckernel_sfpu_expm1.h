@@ -22,7 +22,7 @@ namespace ckernel::sfpu {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     sfpi::vFloat y = sfpi::vConstNeg1;
     v_if(sfpi::abs(val) < sfpi::s2vFloat16b(0.4f)) {
@@ -127,7 +127,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_improved_<true>(sfpi::vFloat val) {
     return _sfpu_expm1_f32_accurate_(val);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
     if constexpr (APPROXIMATION_MODE) {
         // Use original approximation mode
@@ -154,7 +154,7 @@ void expm1_init() {
         sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
         sfpi::vConstIntPrgm1 = 0xf94ee7;
         sfpi::vConstIntPrgm2 = 0x560e;
-    } else if (is_fp32_dest_acc_en) {
+    } else {
         sfpi::vConstFloatPrgm0 = 0.5f;
         sfpi::vConstFloatPrgm1 = 0.500000059604644775390625f;
         sfpi::vConstFloatPrgm2 = 1.99588379473425447940826416015625e-4f;
