@@ -22,7 +22,7 @@ namespace ckernel::sfpu {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_exp>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     sfpi::vFloat y = sfpi::vConstNeg1;
     v_if(sfpi::abs(val) < sfpi::s2vFloat16b(0.4f)) {
