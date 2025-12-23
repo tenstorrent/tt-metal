@@ -463,9 +463,7 @@ class TTNNSpeechT5Encoder:
             memory_config=self.L1_MEMCFG,
         )
 
-        # Op 4: Pre-encoder dropout (skip in inference)
-        # if self.training:
-        #     hidden_states = ttnn.dropout(hidden_states, p=self.config.dropout)
+        # Op 4: Pre-encoder dropout is omitted in this TTNN implementation (inference-focused).
 
         # Op 3: Encoder blocks
         position_bias = self._compute_position_bias(seq_len)
