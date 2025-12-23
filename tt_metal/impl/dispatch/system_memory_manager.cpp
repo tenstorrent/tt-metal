@@ -27,7 +27,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/debug/inspector/inspector.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -74,8 +77,7 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -291,6 +293,14 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 
+void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
+    // The completion queue follows issue queue in contiguous memory
+    // get_issue_queue_limit() returns absolute device address where the issue queue ends.
+    // We subtract channel_offset (absolute device channel base) to get relative offset,
+    // then add it to cq_sysmem_start (host channel base) to get host virtual address
+    return (void*)(this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset));
+}
+
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
     return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
 }
@@ -397,7 +407,6 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
@@ -445,10 +454,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
-            // Serialize Inspector RPC data before throwing
-            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
-            Inspector::serialize_rpc();
-
+            on_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -498,12 +504,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     // Handler for the timeout
-    auto on_timeout = [&exit_condition]() {
+    auto on_timeout = [&exit_condition, this]() {
         exit_condition.store(true);
 
-        // Serialize Inspector RPC data before throwing
-        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
-        Inspector::serialize_rpc();
+        this->on_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
@@ -573,6 +577,29 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     }
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
+}
+
+void SystemMemoryManager::on_timeout_detected() const {
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    // Serialize Inspector RPC data if enabled
+    if (rtoptions.get_serialize_inspector_on_dispatch_timeout()) {
+        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+        Inspector::serialize_rpc();
+    }
+
+    // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
+    std::string command = rtoptions.get_dispatch_timeout_command_to_execute();
+    if (!command.empty()) {
+        log_info(LogAlways, "Timeout detected - executing command: {}", command);
+
+        int result = std::system(command.c_str());
+
+        if (result != 0) {
+            log_warning(
+                LogAlways, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

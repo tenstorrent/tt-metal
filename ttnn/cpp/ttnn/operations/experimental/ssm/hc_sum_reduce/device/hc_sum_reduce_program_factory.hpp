@@ -7,7 +7,7 @@
 #include "hc_sum_reduce_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ssm::program {
+namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program {
 
 struct HCSumReduceSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -29,7 +29,7 @@ struct HCSumReduceProgramFactory {
     static cached_program_t create(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
@@ -38,4 +38,4 @@ struct HCSumReduceProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ssm::program
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program

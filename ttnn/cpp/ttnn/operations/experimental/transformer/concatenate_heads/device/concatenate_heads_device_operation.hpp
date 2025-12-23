@@ -4,25 +4,48 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "concatenate_heads_program_factory.hpp"
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "concatenate_heads_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 struct ConcatenateHeadsDeviceOperation {
-    CoreCoord compute_with_storage_grid_size;
-    tt::tt_metal::MemoryConfig output_mem_config;
+    using operation_attributes_t = transformer::operation_attributes_t;
+    using tensor_args_t = transformer::tensor_args_t;
+    using spec_return_value_t = transformer::spec_return_value_t;
+    using tensor_return_value_t = transformer::tensor_return_value_t;
+    using program_factory_t = std::variant<program::ConcatenateHeadsProgramFactory>;
 
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const CoreCoord& compute_with_storage_grid_size,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& preallocated_output);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
+
+namespace ttnn::prim {
+constexpr auto concatenate_heads = ttnn::register_operation<
+    "ttnn::prim::concatenate_heads",
+    ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation>();
+}  // namespace ttnn::prim

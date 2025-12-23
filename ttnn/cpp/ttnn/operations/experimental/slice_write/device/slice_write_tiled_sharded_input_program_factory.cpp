@@ -15,8 +15,8 @@
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
-#include "ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -33,7 +33,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
@@ -158,10 +158,14 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         id_per_dim[0] = 0;
         uint32_t unpadded_written = num_sticks_read;
         uint32_t start_id = id_per_dim[0] + start_offset + width_offset;
-        uint32_t max_num_tiles_this_core = 0;
+        int max_num_tiles_this_core = 0;
 
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_tiles_per_dim[j];
+            if (j == num_dims - 1 && unpadded_written == num_input_tiles_per_dim[j]) {
+                // Handle edge case where last dimension is completely written
+                id_per_dim[j] = num_input_tiles_per_dim[j];
+            }
             unpadded_written = unpadded_written / num_input_tiles_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_tiles_per_dim[j - 1];
             size_till_end[j] = num_input_tiles_per_dim[j] - id_per_dim[j] - ((j == 1) ? 0 : 1);
@@ -169,8 +173,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         }
         WriterKernelArgs writer_kernel_args = common_writer_kernel_args;
 
-        uint32_t num_tiles_this_core =
-            std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_tiles_this_core);
+        uint32_t num_tiles_this_core = std::min<uint32_t>(
+            num_tiles_nhw_per_core * num_tiles_per_channel, std::max<int>(max_num_tiles_this_core, 0));
 
         log_trace(
             tt::LogOp,
@@ -331,8 +335,8 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& src_tensor = tensor_args.input;
-    auto& dst_tensor = tensor_return_value;
+    const auto& src_tensor = tensor_args.input;
+    const auto& dst_tensor = tensor_return_value;
 
     UpdateDynamicCircularBufferAddress(
         cached_program.program, std::get<1>(cached_program.shared_variables.cb_input_tuple), *src_tensor.buffer());

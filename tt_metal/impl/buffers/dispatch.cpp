@@ -33,9 +33,9 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
-namespace buffer_dispatch {
+namespace tt::tt_metal::buffer_dispatch {
 
 // ====== Utility Functions for Writes ======
 
@@ -1169,6 +1169,4 @@ template void issue_read_buffer_dispatch_command_sequence<BufferReadDispatchPara
 template void issue_read_buffer_dispatch_command_sequence<ShardedBufferReadDispatchParams>(
     Buffer&, ShardedBufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
 
-}  // namespace buffer_dispatch
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::buffer_dispatch

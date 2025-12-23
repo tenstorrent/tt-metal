@@ -8,14 +8,7 @@ from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    profiler,
-    run_for_grayskull,
-    run_for_wormhole_b0,
-)
+from models.common.utility_functions import is_blackhole, profiler, run_for_wormhole_b0
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
@@ -47,7 +40,6 @@ def run_perf_bert11(
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    disable_persistent_kernel_cache()
     first_embedding_key = "first_embedding_preprocessing"
     first_attention_mask_key = "first_attention_mask"
     first_run_key = "first_run"
@@ -106,7 +98,6 @@ def run_perf_bert11(
         del tt_embedding_inputs
         del tt_embedding
         del tt_output
-        enable_persistent_kernel_cache()
 
         profiler.start(second_run_accum_key)
         # First input to device
@@ -165,34 +156,6 @@ def test_perf_bare_metal_wh(
     model_location_generator,
 ):
     skip_unsupported_config(device, model_config_str, batch_size)
-    run_perf_bert11(
-        batch_size,
-        model_config_str,
-        expected_inference_time,
-        expected_compile_time,
-        inference_iterations,
-        model_location_generator,
-        device,
-    )
-
-
-@run_for_grayskull(reason_str="Batch size only supported for GS")
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(
-    "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    ([12, "BFLOAT8_B-SHARDED", 0.0272, 6.5, 10],),
-)
-def test_perf_bare_metal_gs(
-    device,
-    batch_size,
-    model_config_str,
-    expected_inference_time,
-    expected_compile_time,
-    inference_iterations,
-    model_location_generator,
-):
-    skip_unsupported_config(device, model_config_str, batch_size)
-
     run_perf_bert11(
         batch_size,
         model_config_str,

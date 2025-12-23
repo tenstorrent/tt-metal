@@ -310,13 +310,15 @@ void py_module(py::module& module) {
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids);
             },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 
     module.def(
         "num_cores_to_corerangeset",
@@ -328,6 +330,75 @@ void py_module(py::module& module) {
         py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
             &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
+
+    module.def(
+        "split_work_to_cores",
+        py::overload_cast<const CoreCoord, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        py::arg("grid_size"),
+        py::arg("units_to_divide"),
+        py::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a grid.
+
+        This function divides a specified number of work units across cores in a grid.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    module.def(
+        "split_work_to_cores",
+        py::overload_cast<const CoreRangeSet&, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        py::arg("core_grid"),
+        py::arg("units_to_divide"),
+        py::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a CoreRangeSet.
+
+        This function divides a specified number of work units across cores in a CoreRangeSet.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(core_rangeset, 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
 }
 
 }  // namespace ttnn::operations::core

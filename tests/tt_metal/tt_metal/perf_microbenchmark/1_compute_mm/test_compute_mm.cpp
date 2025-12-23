@@ -858,7 +858,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     }};
 
     uint32_t index = 0;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         auto subblock_h = std::get<0>(subblock_hw);
         auto subblock_w = std::get<1>(subblock_hw);
         if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
@@ -1469,7 +1469,7 @@ void prepare_inputs(
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
-            auto target_device = device->get_devices()[0];
+            auto* target_device = device->get_devices()[0];
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
             TT_ASSERT(pass);
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
@@ -1606,7 +1606,7 @@ bool validation(
             std::vector<uint32_t> result_vec;
             uint32_t num_r = (r == num_cores_y - 1) ? (last_block_h) : (per_core_Mt);
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
-            auto target_device = device->get_devices()[0];
+            auto* target_device = device->get_devices()[0];
             tt_metal::detail::ReadFromDeviceL1(
                 target_device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);

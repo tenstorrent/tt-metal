@@ -35,7 +35,7 @@ void bind_repeat(py::module& module, const data_movement_operation_t& operation,
 }  // namespace detail
 
 void py_bind_repeat(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
 
         Args:

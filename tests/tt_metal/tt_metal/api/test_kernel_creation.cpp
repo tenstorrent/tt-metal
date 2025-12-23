@@ -58,7 +58,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
     }
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);

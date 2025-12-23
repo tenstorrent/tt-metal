@@ -7,7 +7,6 @@
 #include <variant>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/decorators.hpp"
@@ -16,6 +15,7 @@
 #include "scatter_device_operation_types.hpp"
 
 #include "scatter_program_factory.hpp"
+#include "scatter_reduce_bfloat16_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -26,7 +26,8 @@ struct ScatterDeviceOperation {
     using tensor_args_t = scatter::tensor_args_t;
     using spec_return_value_t = scatter::spec_return_value_t;
     using tensor_return_value_t = scatter::tensor_return_value_t;
-    using program_factory_t = std::variant<scatter::ScatterProgramFactory>;
+    using program_factory_t =
+        std::variant<scatter::ScatterProgramFactory, scatter::ScatterReduceBfloat16ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -46,7 +47,8 @@ struct ScatterDeviceOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
-        const std::optional<ScatterReductionType>& opt_reduction);
+        const ScatterReductionType& opt_reduction,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter
