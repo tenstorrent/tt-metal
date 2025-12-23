@@ -1363,3 +1363,54 @@ def test_untilize_fp32_not_use_pack_untilize(device, tensor_shape):
     result = ttnn.to_torch(untilized)
 
     assert torch.equal(result, torch_tensor), f"untilize lost FP32 precision"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_multicore", [True, False])
+@pytest.mark.parametrize(
+    "shape_pairs",
+    [
+        # Pairs of shapes with same volume but different dimensions
+        # These would cause hash collisions if only volume is used in hash
+        ([[1, 256, 128], [1, 128, 256]], 32768),  # 8x4 tiles vs 4x8 tiles
+        ([[1, 320, 128], [1, 128, 320]], 40960),  # 10x4 tiles vs 4x10 tiles
+        ([[1, 4, 128, 128], [1, 2, 128, 256]], 65536),  # 4D tensors with same volume
+        ([[1, 8, 128, 64], [1, 4, 64, 256]], 65536),  # Different 4D arrangements
+    ],
+)
+def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, shape_pairs):
+    """
+    Regression test for program cache hash collision issue.
+
+    This test verifies that tensors with the same volume but different shapes
+    are correctly handled by untilize without hash collisions in the program cache.
+
+    The bug was that compute_program_hash() used input_shape.volume() instead of
+    the full shape, causing tensors like (1, 256, 128) and (1, 128, 256) to have
+    the same hash and incorrectly share cached programs.
+    """
+    shapes, expected_volume = shape_pairs
+
+    # Verify test setup - shapes should have same volume
+    for shape in shapes:
+        volume = 1
+        for dim in shape:
+            volume *= dim
+        assert volume == expected_volume, f"Shape {shape} has volume {volume}, expected {expected_volume}"
+
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    # Run untilize on all shapes in sequence to trigger potential cache reuse issues
+    for shape in shapes:
+        torch.manual_seed(42)
+        input_torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+
+        input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
+
+        ttnn_output_tensor = ttnn.untilize(
+            input_ttnn_tensor, memory_config=output_memory_config, use_multicore=use_multicore
+        )
+
+        assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
