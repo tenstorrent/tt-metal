@@ -74,12 +74,4 @@ void test_multi_mesh_multi_conn_bidirectional(
     uint32_t data_size,
     SystemConfig system_config);
 
-bool test_socket_send_recv_big_mesh(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
-    tt::tt_metal::distributed::MeshSocket& socket,
-    uint32_t data_size,
-    uint32_t page_size,
-    uint32_t num_txns = 20,
-    std::optional<std::mt19937> gen = std::nullopt);
-
 }  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils
