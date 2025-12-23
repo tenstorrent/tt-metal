@@ -504,7 +504,7 @@ Tensor ExecutePrelu::invoke(
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
     return result;
 }
-
+// a - (b * floor(a/b))
 Tensor run_remainder(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -601,6 +601,13 @@ Tensor ExecuteBinaryRemainder::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
+
+    // INT32 inputs are handled by the kernel directly, skip composite path
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+    if (is_int32) {
+        return ttnn::prim::binary(
+            input_a, input_b, BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
+    }
 
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;

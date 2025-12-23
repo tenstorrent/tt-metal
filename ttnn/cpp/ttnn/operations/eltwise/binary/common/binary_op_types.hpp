@@ -27,6 +27,7 @@ enum class BinaryOpType {
     DIV,
     DIV_FLOOR,
     DIV_TRUNC,
+    REMAINDER,
     RSUB,
     POWER,
     BITWISE_XOR,

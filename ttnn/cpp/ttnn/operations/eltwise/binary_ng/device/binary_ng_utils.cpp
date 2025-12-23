@@ -146,6 +146,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
         case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
+        case BinaryOpType::REMAINDER: binary_op = SfpuBinaryOp::REMAINDER; break;
         // b - a
         case BinaryOpType::RSUB:
             if (is_sfpu_op()) {
@@ -399,6 +400,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
+        case REMAINDER: return {"remainder_int32_tile_init();", "remainder_int32_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
