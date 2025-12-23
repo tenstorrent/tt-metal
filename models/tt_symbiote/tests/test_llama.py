@@ -12,7 +12,7 @@ from models.tt_symbiote.utils.module_replacement import register_module_replacem
 
 def test_llama(device):
     """Test LLaMA model with TTNN acceleration."""
-    model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+    model_id = "meta-llama/Llama-3.2-1B-Instruct"
     nn_to_ttnn = {
         nn.Linear: TTNNLinearLLama,
         nn.SiLU: TTNNSilu,
