@@ -33,13 +33,11 @@ class MLP(LightweightModule):
         self.model_config = model_config
         self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        # torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
 
         self.mlp_structure = getattr(self.args, "mlp_structure", "3_projection")
-        # mlp_structure = getattr(args, "mlp_structure", "3_projection")
 
         def torch_weight(name):
             # For 2-projection MLP, skip w1 (gate projection)
