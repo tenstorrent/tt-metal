@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "{{ operation_name }}.hpp"
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::{{ operation_name }} {
+
+using namespace tt;
+using namespace tt::tt_metal;
+
+ttnn::Tensor Execute{{ operation_name_pascal }}::invoke(
+{% for tensor in input_tensors %}
+    const ttnn::Tensor& {{ tensor.cpp_name }},
+{% endfor %}
+{% for param in parameters %}
+    {{ param.cpp_type }} {{ param.name }},
+{% endfor %}
+    const std::optional<MemoryConfig>& memory_config) {
+    // Call the primitive device operation
+    return ttnn::prim::{{ operation_name }}(
+{% for tensor in input_tensors %}
+        {{ tensor.cpp_name }},
+{% endfor %}
+{% for param in parameters %}
+        {{ param.name }},
+{% endfor %}
+        memory_config);
+}
+
+}  // namespace ttnn::operations::{{ operation_name }}
