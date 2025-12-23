@@ -286,7 +286,10 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "q_proj.weight" in key or "k_proj.weight" in key:
+        if "vision_tower" in key:
+            # Skip conversion for vision tower weights (Mistral vision support)
+            converted_weights[key] = tensor
+        elif "q_proj.weight" in key or "k_proj.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
@@ -640,6 +643,7 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+        ("patch_conv.weight", "patch_conv._linear.weight"),  # Minimal addition for Mistral vision
     ]
     return replace_keys(loaded_weights, replacements)
 
@@ -772,3 +776,32 @@ def convert_rope_style_hf_to_meta(cos_hf: torch.Tensor, sin_hf: torch.Tensor) ->
     sin_meta = torch.repeat_interleave(sin_unique, repeats=2, dim=-1)
 
     return cos_meta, sin_meta
+
+
+# Minimal addition for Mistral vision support
+def map_vision_meta_to_hf_keys(loaded_weights):
+    """
+    Map vision model Meta checkpoint keys to HuggingFace checkpoint keys.
+    Added for Mistral-Small-3.1-24B-Instruct-2503 vision support.
+    """
+    base_mapping = [
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+        ("_linear.weight", "weight"),
+    ]
+    return replace_keys(loaded_weights, base_mapping)
+
+
+# Minimal addition for Mistral vision support
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    """
+    Convert vision model state dict from Meta to HuggingFace format.
+    Added for Mistral-Small-3.1-24B-Instruct-2503 vision support.
+    """
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict

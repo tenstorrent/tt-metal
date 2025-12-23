@@ -113,7 +113,7 @@ def run(
 
     # If we store result to L1 required volume should not be larger than 1Mb
     while input_a_memory_config == ttnn.L1_MEMORY_CONFIG and max_volume(rehape_shape) > 1024 * 1024 and i < num_tries:
-        rehape_shape = gen_reshape_shape(input_shape)
+        rehape_shape = gen_reshape_shape(tuple(input_shape))
         i += 1
 
     torch_output_tensor = torch.reshape(torch_input_tensor_a, rehape_shape)

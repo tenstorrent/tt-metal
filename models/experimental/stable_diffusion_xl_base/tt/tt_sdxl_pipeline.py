@@ -25,6 +25,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     batch_encode_prompt_on_device,
     retrieve_timesteps,
     run_tt_image_gen,
+    determinate_min_batch_size,
 )
 from models.common.utility_functions import profiler
 
@@ -74,9 +75,7 @@ class TtSDXLPipeline(LightweightModule):
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
-        self.batch_size = (
-            list(self.ttnn_device.shape)[1] if pipeline_config.use_cfg_parallel else ttnn_device.get_num_devices()
-        )
+        self.batch_size = determinate_min_batch_size(ttnn_device, pipeline_config.use_cfg_parallel)
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
         self._reset_num_inference_steps()
