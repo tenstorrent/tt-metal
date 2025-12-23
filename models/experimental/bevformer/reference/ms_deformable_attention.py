@@ -16,7 +16,7 @@ def multi_scale_deformable_attn(
     sampling_locations: torch.Tensor,
     attention_weights: torch.Tensor,
 ) -> torch.Tensor:
-    """Reference version of multi-scale deformable attention.
+    """Multi-scale deformable attention core logic.
 
     Args:
         value (torch.Tensor): The value has shape
@@ -26,11 +26,11 @@ def multi_scale_deformable_attn(
             last dimension 2 represent (h, w)
         sampling_locations (torch.Tensor): The location of sampling points,
             has shape
-            (bs ,num_queries, num_heads, num_levels, num_points, 2),
+            (bs, num_queries, num_heads, num_levels, num_points, 2),
             the last dimension 2 represent (x, y).
         attention_weights (torch.Tensor): The weight of sampling points used
             when calculate the attention, has shape
-            (bs ,num_queries, num_heads, num_levels, num_points),
+            (bs, num_queries, num_heads, num_levels, num_points),
 
     Returns:
         torch.Tensor: has shape (bs, num_queries, embed_dims)
@@ -38,9 +38,12 @@ def multi_scale_deformable_attn(
 
     bs, _, num_heads, head_dim = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
+
     value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
+
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
+
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         # bs, H_*W_, num_heads, head_dim -> bs*num_heads, head_dim, H_, W_
         value_l_ = value_list[level].flatten(2).transpose(1, 2).reshape(bs * num_heads, head_dim, H_, W_)
@@ -126,17 +129,17 @@ class MSDeformableAttention(nn.Module):
             identity: [bs, num_queries, embed_dims] Identity for residual connection
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
-            reference_points: [bs, num_queries, num_levels, 2] Reference points
+            reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
             spatial_shapes: [num_levels, 2] Spatial shapes (H, W) for each level
 
         Returns:
             output: [bs, num_queries, embed_dims]
         """
+
         # Handle input defaults
         if value is None:
-            value = query if key is None else key
-        if key is None:
-            key = query
+            value = query
+
         if identity is None:
             identity = query
 
@@ -152,6 +155,7 @@ class MSDeformableAttention(nn.Module):
 
         bs, num_queries, _ = query.shape
         bs, num_keys, _ = value.shape
+        bs, num_queries, D, _ = reference_points.shape
 
         # Validate required inputs
         assert spatial_shapes is not None, "spatial_shapes is required"
@@ -188,8 +192,17 @@ class MSDeformableAttention(nn.Module):
             offset_normalizer = offset_normalizer[None, None, None, :, None, :]  # Broadcasting shape
 
             # Add reference points to sampling offsets
-            reference_points = reference_points[:, :, None, :, None, :]  # Add head and point dimensions
-            sampling_locations = reference_points + sampling_offsets / offset_normalizer
+            reference_points = reference_points[:, :, None, None, None, :, :]  # Add head, level and point dimensions
+            sampling_offsets = sampling_offsets / offset_normalizer
+
+            sampling_offsets = sampling_offsets.view(
+                bs, num_queries, self.num_heads, self.num_levels, self.num_points // D, D, 2
+            )
+            sampling_locations = reference_points + sampling_offsets
+
+            sampling_locations = sampling_locations.view(
+                bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2
+            )
 
         elif reference_points.shape[-1] == 4:
             # 4D reference points format - not commonly used
