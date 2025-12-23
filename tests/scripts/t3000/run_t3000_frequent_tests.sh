@@ -11,7 +11,6 @@ run_t3000_ethernet_tests() {
   echo "LOG_METAL: Running run_t3000_ethernet_tests"
 
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_bidirectional_bandwidth_microbenchmark.py ; fail+=$?
-  pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_ring_latency_microbenchmark.py ; fail+=$?
   pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_ethernet_link_ping_latency.py ; fail+=$?
 
   # Record the end time
@@ -383,6 +382,35 @@ run_t3000_flux1_tests() {
     "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux"
 }
 
+run_t3000_motif_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
+    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
+}
+
+run_t3000_wan22_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_wan22_tests"
+
+  # Run test_model for Wan2.2
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 2x4 and real_weights and check_output and _1f"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_wan22_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_mochi_tests() {
   # Record the start time
   fail=0
@@ -403,7 +431,6 @@ run_t3000_mochi_tests() {
     exit 1
   fi
 }
-
 
 run_t3000_tests() {
   # Run ethernet tests
@@ -455,9 +482,17 @@ run_t3000_tests() {
   # Run flux1 tests
   run_t3000_flux1_tests
 
+  # Run motif tests
+  run_t3000_motif_tests
+
   # Run trace tests
   run_t3000_trace_stress_tests
 
+  # Run wan22 tests
+  run_t3000_wan22_tests
+
+  # Run mochi tests
+  run_t3000_mochi_tests
 }
 
 fail=0

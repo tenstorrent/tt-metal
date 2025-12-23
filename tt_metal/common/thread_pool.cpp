@@ -125,7 +125,9 @@ public:
         // has progressed (data has been read).
         // A stall is only required when the ring_buffer_ backing the queue
         // is full. Realistically, this should never happen, given the size
-        while (tail_.load()->next == head_.load());
+        while (tail_.load()->next == head_.load()) {
+            ;
+        }
         tail_.load()->data = std::move(task);
         tail_.store(tail_.load()->next);
     }
@@ -343,7 +345,7 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override { f(); }
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
 };
 

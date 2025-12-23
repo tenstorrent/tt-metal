@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 
 using namespace tt;
 using namespace tt::tt_fabric;
@@ -59,9 +59,6 @@ void kernel_main() {
     // supported in this path (see guard below). This API will change soon. The future 2D
     // interface will mirror the 1D style. See linear/api.h for the reference shape.
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
     (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
 
     sender.open<true>();

@@ -1,7 +1,7 @@
 [
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE TRACE FIRMWARE DURATION [ns]"
         },
@@ -17,8 +17,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE TRACE KERNEL DURATION [ns]"
         },
@@ -34,8 +34,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE KERNEL FIRST TO LAST START [ns]"
         },
@@ -49,8 +49,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE FW DURATION [ns]",
             "display_start_and_end_timestamps": true,
@@ -67,10 +67,13 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
-            "analysis_name": "DEVICE KERNEL DURATION [ns]"
+            "analysis_name": "DEVICE KERNEL DURATION [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE KERNEL START CYCLE",
+            "end_timestamp_header": "DEVICE KERNEL END CYCLE"
         },
         "start_config": {
             "marker_type": "ZONE_START",
@@ -82,10 +85,13 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
-            "analysis_name": "DEVICE KERNEL DURATION DM START [ns]"
+            "analysis_name": "DEVICE KERNEL DURATION DM START [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE KERNEL DM START CYCLE",
+            "end_timestamp_header": "DEVICE KERNEL DM END CYCLE"
         },
         "start_config": {
             "risc": ["BRISC", "NCRISC", "ERISC"],
@@ -98,8 +104,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE BRISC KERNEL DURATION [ns]"
         },
@@ -115,8 +121,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE NCRISC KERNEL DURATION [ns]"
         },
@@ -132,8 +138,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE TRISC0 KERNEL DURATION [ns]"
         },
@@ -149,8 +155,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE TRISC1 KERNEL DURATION [ns]"
         },
@@ -166,8 +172,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE TRISC2 KERNEL DURATION [ns]"
         },
@@ -183,8 +189,8 @@
         }
     },
     {
-        "type": "OP_FIRST_TO_LAST_MARKER",
-        "dimension": "OP",
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
         "results_config": {
             "analysis_name": "DEVICE ERISC KERNEL DURATION [ns]"
         },

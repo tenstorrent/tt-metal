@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -112,6 +112,10 @@ public:
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
     bool is_local(const MeshCoordinate& coord) const;
+
+    // Returns the coordinate range of all local devices in this view.
+    // The range is a bounding box that encompasses all local coordinates.
+    MeshCoordinateRange get_local_mesh_coord_range() const;
 
 private:
     DistributedMeshContainer<IDevice*> devices_;

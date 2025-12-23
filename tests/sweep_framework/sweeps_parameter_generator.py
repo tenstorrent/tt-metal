@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import sys
-import importlib
-import pathlib
 import datetime
-import os
 import hashlib
+import importlib
 import json
+import os
+import pathlib
 import random
+import sys
 
-from framework.permutations import *
-from framework.serialize import serialize, serialize_structured
-from framework.statuses import VectorValidity, VectorStatus
+from framework.permutations import permutations
+from framework.serialize import serialize_structured
+from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -42,10 +42,7 @@ def generate_vectors(module_name):
             v["sweep_name"] = module_name
 
         invalidate_vectors(test_module, suite_vectors)
-        if DUMP_FILE:
-            export_suite_vectors_json(module_name, suite, suite_vectors)
-        else:
-            export_suite_vectors(module_name, suite, suite_vectors)
+        export_suite_vectors_json(module_name, suite, suite_vectors)
 
 
 # Perform any post-gen validation to the resulting vectors.
@@ -59,119 +56,248 @@ def invalidate_vectors(test_module, vectors) -> None:
             vector["invalid_reason"] = reason
 
 
+def _serialize_vectors(vectors):
+    """Serialize vectors and compute their hashes.
+
+    Args:
+        vectors: List of vector dictionaries to serialize
+
+    Returns:
+        dict: Dictionary mapping input_hash to serialized vector
+    """
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    serialized_vectors = dict()
+    warnings = []
+
+    for i in range(len(vectors)):
+        vector = dict()
+        for elem in vectors[i].keys():
+            vector[elem] = serialize_structured(vectors[i][elem], warnings)
+        input_hash = _compute_vector_hash(vector)
+        vector["timestamp"] = current_time
+        vector["input_hash"] = input_hash
+        vector["tag"] = SWEEPS_TAG
+        serialized_vectors[input_hash] = vector
+
+    return serialized_vectors
+
+
+def _compute_vector_hash(vector):
+    """Compute SHA224 hash of a serialized vector.
+
+    Args:
+        vector: Dictionary representing a vector
+
+    Returns:
+        str: Hexadecimal hash string
+    """
+    try:
+        # Deterministic JSON serialization for stable hashing
+        hash_input = json.dumps(vector, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        # Fallback if non-serializable objects are present
+        hash_input = str(vector)
+    return hashlib.sha224(hash_input.encode("utf-8")).hexdigest()
+
+
+def _backup_corrupted_json_file(path: pathlib.Path) -> None:
+    """Rename a corrupted JSON file to a timestamped backup for inspection."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = path.with_suffix(path.suffix + f".corrupted.{ts}")
+        path.rename(backup_path)
+        logger.warning(f"Backed up corrupted JSON file from {path} to {backup_path}")
+    except OSError as e:
+        logger.warning(f"Failed to back up corrupted JSON file {path}: {e}")
+
+
+def validate_exported_vectors(export_path, module_name, suite_name):
+    """Validate that exported JSON file can be read back correctly.
+
+    Args:
+        export_path: Path to the exported JSON file
+        module_name: Name of the module
+        suite_name: Name of the suite
+
+    Returns:
+        bool: True if validation succeeds, False otherwise
+    """
+    try:
+        if not export_path.exists():
+            logger.warning(f"Validation failed: export file does not exist at {export_path}")
+            return False
+
+        with open(export_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        if not isinstance(data, dict):
+            logger.warning(f"Validation failed: exported file is not a dictionary")
+            return False
+
+        if suite_name not in data:
+            logger.warning(f"Validation failed: suite '{suite_name}' not found in exported file")
+            return False
+
+        suite_data = data[suite_name]
+        if not isinstance(suite_data, dict):
+            logger.warning(f"Validation failed: suite data is not a dictionary")
+            return False
+
+        # Check that vectors have required fields
+        for vector_id, vector_data in suite_data.items():
+            if not isinstance(vector_data, dict):
+                logger.warning(f"Validation failed: vector {vector_id} is not a dictionary")
+                return False
+            required_fields = ["input_hash", "timestamp", "tag"]
+            for field in required_fields:
+                if field not in vector_data:
+                    logger.warning(f"Validation failed: vector {vector_id} missing required field '{field}'")
+                    return False
+
+        return True
+    except json.JSONDecodeError as e:
+        logger.warning(f"Validation failed: JSON decode error - {e}")
+        return False
+    except IOError as e:
+        logger.warning(f"Validation failed: IO error - {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Validation failed: unexpected error - {e}")
+        return False
+
+
 def export_suite_vectors_json(module_name, suite_name, vectors):
+    """Export test vectors to JSON file with atomic writes and deduplication.
+
+    Args:
+        module_name: Name of the test module
+        suite_name: Name of the test suite
+        vectors: List of vector dictionaries to export
+    """
     EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
-    EXPORT_PATH = EXPORT_DIR_PATH / str(module_name + ".json")
-    if not EXPORT_DIR_PATH.exists():
-        EXPORT_DIR_PATH.mkdir()
+    EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
+
+    # Create export directory with proper error handling
+    try:
+        EXPORT_DIR_PATH.mkdir(parents=True, exist_ok=True)
+    except PermissionError as e:
+        logger.error(f"Permission denied creating export directory {EXPORT_DIR_PATH}: {e}")
+        raise
+    except OSError as e:
+        logger.error(f"Failed to create export directory {EXPORT_DIR_PATH}: {e}")
+        raise
 
     # Randomize order only when explicitly requested via --randomize
     if DO_RANDOMIZE:
         rng = random.Random(SHUFFLE_SEED)
         rng.shuffle(vectors)
 
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    serialized_vectors = dict()
-    warnings = []
-    for i in range(len(vectors)):
-        vector = dict()
-        for elem in vectors[i].keys():
-            vector[elem] = serialize_structured(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
-        vector["timestamp"] = current_time
-        vector["input_hash"] = input_hash
-        vector["tag"] = SWEEPS_TAG
-        serialized_vectors[input_hash] = vector
+    # Serialize vectors
+    serialized_vectors = _serialize_vectors(vectors)
+
+    # Load existing data and check for deduplication
+    existing_data = {}
+    existing_hashes = set()
 
     if EXPORT_PATH.exists():
-        with open(EXPORT_PATH, "r") as file:
-            data = json.load(file)
-        with open(EXPORT_PATH, "w") as file:
-            data[suite_name] = serialized_vectors
-            json.dump(data, file, indent=2)
-    else:
-        with open(EXPORT_PATH, "w") as file:
-            json.dump({suite_name: serialized_vectors}, file, indent=2)
-    logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+        try:
+            with open(EXPORT_PATH, "r", encoding="utf-8") as file:
+                existing_data = json.load(file)
 
+            # Check if suite already exists and compare hashes
+            if suite_name in existing_data:
+                existing_suite_data = existing_data[suite_name]
+                if isinstance(existing_suite_data, dict):
+                    # Only consider hashes for vectors with the same tag to avoid cross-tag dedup collisions
+                    existing_hashes = {
+                        input_hash
+                        for input_hash, vec in existing_suite_data.items()
+                        if isinstance(vec, dict) and vec.get("tag") == SWEEPS_TAG
+                    }
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse existing JSON file {EXPORT_PATH}: {e}. Will overwrite after backup.")
+            _backup_corrupted_json_file(EXPORT_PATH)
+            existing_data = {}
+        except IOError as e:
+            logger.warning(f"Failed to read existing file {EXPORT_PATH}: {e}. Will overwrite after backup if possible.")
+            try:
+                _backup_corrupted_json_file(EXPORT_PATH)
+            except Exception as e:
+                logger.warning(f"Failed to backup corrupted JSON file {EXPORT_PATH}: {e}. Will overwrite after backup.")
+            existing_data = {}
+        except Exception as e:
+            logger.warning(f"Unexpected error reading existing file {EXPORT_PATH}: {e}. Will overwrite after backup.")
+            _backup_corrupted_json_file(EXPORT_PATH)
+            existing_data = {}
 
-# Output the individual test vectors.
-def export_suite_vectors(module_name, suite_name, vectors):
-    # Perhaps we export with some sort of readable id, which can be passed to a runner to run specific sets of input vectors. (export seed as well for reproducability)
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
-
-    index_name = VECTOR_INDEX_PREFIX + module_name
-    warnings = []
-
-    try:
-        response = client.search(
-            index=index_name,
-            query={
-                "bool": {
-                    "must": [
-                        {"match": {"tag.keyword": SWEEPS_TAG}},
-                        {"match": {"status.keyword": str(VectorStatus.CURRENT)}},
-                        {"match": {"suite_name.keyword": suite_name}},
-                    ]
-                }
-            },
-            size=10000,
-        )["hits"]["hits"]
-        old_vector_ids = set(vector["_id"] for vector in response)
-        old_vector_hashes = set(vector["_source"]["input_hash"] for vector in response)
-    except NotFoundError as e:
-        old_vector_ids = set()
-        old_vector_hashes = set()
-        pass
-
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-    new_vector_hashes = set()
-    serialized_vectors = dict()
-    for i in range(len(vectors)):
-        vector = dict()
-        for elem in vectors[i].keys():
-            vector[elem] = serialize(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
-        new_vector_hashes.add(input_hash)
-        vector["timestamp"] = current_time
-        vector["input_hash"] = input_hash
-        vector["tag"] = SWEEPS_TAG
-        serialized_vectors[input_hash] = vector
-
-    if old_vector_hashes == new_vector_hashes:
+    # Check for deduplication: skip write if vectors haven't changed
+    new_hashes = set(serialized_vectors.keys())
+    if existing_hashes == new_hashes:
         logger.info(
-            f"Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. ({len(old_vector_hashes)} existing tests). Skipping..."
+            f"Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, "
+            f"and have not changed. ({len(existing_hashes)} existing tests). Skipping..."
         )
         return
-    else:
-        logger.info(
-            f"New vectors found for module {module_name}, suite {suite_name}, with tag {SWEEPS_TAG}. Archiving old vectors and saving new suite. This step may take several minutes."
-        )
-        for old_vector_id in old_vector_ids:
-            client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
-        serialized_vectors = list(serialized_vectors.values())
-        while serialized_vectors != []:
-            bulk = serialized_vectors[: min(200, len(serialized_vectors))]
-            serialized_vectors = serialized_vectors[min(200, len(serialized_vectors)) :]
-            bulk_query = []
-            for vector in bulk:
-                bulk_query.append({"create": {"_index": index_name}})
-                bulk_query.append(vector)
-            client.bulk(index=index_name, body=bulk_query)
 
-        logger.info(f"SWEEPS: Generated {len(new_vector_hashes)} test vectors for suite {suite_name}.")
+    # Prepare data for atomic write
+    data_to_write = existing_data.copy()
+    data_to_write[suite_name] = serialized_vectors
+
+    # Atomic write using temporary file
+    tmp_path = EXPORT_PATH.with_suffix(EXPORT_PATH.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as file:
+            json.dump(data_to_write, file, indent=2)
+            file.flush()
+            try:
+                os.fsync(file.fileno())
+            except OSError:
+                # fsync may fail on some systems, but file is still written
+                pass
+
+        # Atomic replace
+        os.replace(tmp_path, EXPORT_PATH)
+
+        # Validate the exported file
+        if not validate_exported_vectors(EXPORT_PATH, module_name, suite_name):
+            logger.warning(
+                f"Validation failed after export. File was written to {EXPORT_PATH}. "
+                f"If issues persist, delete the file and regenerate."
+            )
+
+        logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+    except (IOError, OSError) as e:
+        logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
+        raise
+    finally:
+        # Ensure temporary file is removed on success or failure
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                # It's safe to ignore errors when deleting the temporary file (file may not exist)
+                pass
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, skip_modules=None):
+def generate_tests(module_name, skip_modules=None, model_traced_only=False):
     skip_modules_set = set()
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
     if not module_name:
-        for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
+        # Determine which directory to search based on model_traced_only flag
+        if model_traced_only:
+            search_dir = SWEEP_SOURCES_DIR / "model_traced"
+            logger.info("Generating test vectors for model_traced operations only.")
+            # Only search directly in model_traced directory, not subdirectories
+            glob_pattern = "*.py"
+        else:
+            search_dir = SWEEP_SOURCES_DIR
+            glob_pattern = "**/*.py"
+
+        for file_name in sorted(search_dir.glob(glob_pattern)):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
             if module_name in skip_modules_set:
                 logger.info(f"Skipping module {module_name} (in skip list).")
@@ -195,25 +321,6 @@ def generate_tests(module_name, skip_modules=None):
             raise
 
 
-def clean_module(module_name):
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
-    vector_index = VECTOR_INDEX_PREFIX + module_name
-
-    if not client.indices.exists(index=vector_index):
-        logger.error(f"Could not clean vectors for module {module_name} as there is no corresponding index.")
-        exit(1)
-
-    update_script = {"source": f"ctx._source.status = '{str(VectorStatus.ARCHIVED)}'", "lang": "painless"}
-    client.update_by_query(
-        index=vector_index, query={"match": {"tag.keyword": SWEEPS_TAG}}, script=update_script, refresh=True
-    )
-    logger.info(
-        f"Marked all vectors with tag {SWEEPS_TAG} in index {vector_index} as archived. Proceeding with generation..."
-    )
-
-    client.close()
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="Sweep Test Vector Generator",
@@ -221,19 +328,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted")
-    parser.add_argument(
-        "--clean",
-        action="store_true",
-        default=False,
-        required=False,
-        help="Must be set with module_name. Setting this flag will mark ALL old vectors for an sweep as Archived, and generate the new set. Use this if you make a mistake when generating your vectors and want to refresh to the current state of your op test file.",
-    )
-    parser.add_argument(
-        "--elastic",
-        required=False,
-        default="corp",
-        help="Elastic Connection String for vector database. Available presets are ['corp', 'cloud']",
-    )
     parser.add_argument(
         "--tag",
         required=False,
@@ -245,7 +339,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="If set, dumps the results to disk in JSON instead of using ES",
+        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
     )
     parser.add_argument(
         "--randomize",
@@ -258,19 +352,22 @@ if __name__ == "__main__":
         required=False,
         help="Comma-separated list of module names to skip during generation",
     )
+    parser.add_argument(
+        "--model-traced",
+        required=False,
+        action="store_true",
+        help="If set, only generate test vectors for operations in sweeps/model_traced directory",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
-    global DUMP_FILE
-    if not args.dump_file:
-        from elasticsearch import Elasticsearch, NotFoundError
-        from framework.elastic_config import *
-
-        global ELASTIC_CONNECTION_STRING
-        ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
-        DUMP_FILE = False
-    else:
-        DUMP_FILE = True
+    # Vectors are always dumped to disk in JSON format.
+    if args.dump_file:
+        logger.warning(
+            "The --dump-file flag is deprecated and will be removed in a future version. "
+            "Vectors are now always dumped to disk in JSON format by default. "
+            "Please remove this flag from your scripts."
+        )
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
@@ -280,6 +377,7 @@ if __name__ == "__main__":
         exit(1)
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
+    logger.info("Vectors will be exported to: tests/sweep_framework/vectors_export/")
 
     # Enable reproducible shuffling only when --randomize is provided
     if args.randomize is not None:
@@ -290,10 +388,4 @@ if __name__ == "__main__":
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
 
-    if args.clean and not args.module_name:
-        logger.error("The clean flag must be set in conjunction with a module name.")
-        exit(1)
-    elif args.clean:
-        clean_module(args.module_name)
-
-    generate_tests(args.module_name, args.skip_modules)
+    generate_tests(args.module_name, args.skip_modules, args.model_traced)

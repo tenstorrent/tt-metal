@@ -26,7 +26,7 @@ struct UnaryDeviceOperation {
     using tensor_args_t = unary::tensor_args_t;
     using spec_return_value_t = unary::spec_return_value_t;
     using tensor_return_value_t = unary::tensor_return_value_t;
-    using program_factory_t = std::variant<program::UnaryProgramFactory, program::UnaryShardedProgramFactory>;
+    using program_factory_t = std::variant<program::UnaryProgramFactory, program::UnarySubCoreGridProgramFactory, program::UnaryShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,7 +35,7 @@ struct UnaryDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
@@ -49,7 +49,8 @@ struct UnaryDeviceOperation {
         bool fp32_dest_acc_en,
         bool preserve_fp32_precision,
         bool bfp8_pack_precise,
-        const std::optional<Tensor>& preallocated_output);
+        const std::optional<Tensor>& preallocated_output,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::unary

@@ -12,12 +12,21 @@
 
 namespace ttml::nanobind::util {
 
-nb::ndarray<nb::numpy> make_numpy_tensor(
+nb::object make_numpy_tensor(
     const tt::tt_metal::Tensor& tensor,
     std::optional<tt::tt_metal::DataType> new_type = std::nullopt,
     const ttnn::distributed::MeshToTensor* composer = nullptr);
+
+// Fast path for standard NumPy dtypes (validated by nanobind)
 tt::tt_metal::Tensor make_metal_tensor(
-    nb::ndarray<> data,
+    nb::ndarray<nb::numpy> data,
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    std::optional<tt::tt_metal::DataType> new_type = std::nullopt,
+    const ttnn::distributed::TensorToMesh* mapper = nullptr);
+
+// Fallback for custom dtypes (like ml_dtypes.bfloat16)
+tt::tt_metal::Tensor make_metal_tensor(
+    nb::object data,
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
     std::optional<tt::tt_metal::DataType> new_type = std::nullopt,
     const ttnn::distributed::TensorToMesh* mapper = nullptr);

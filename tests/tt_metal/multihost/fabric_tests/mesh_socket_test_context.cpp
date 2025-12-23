@@ -9,14 +9,14 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
-    config_(config), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
+    config_(config), mesh_device_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 
@@ -153,12 +153,9 @@ void MeshSocketTestContext::setup_fabric_configuration() {
     tt::tt_fabric::FabricConfig fabric_config;
     // TODO: Add support for other Fabric Configs as well
     switch (config_.fabric_config.topology) {
-        case tt::tt_fabric::Topology::Mesh:
-            switch (config_.fabric_config.routing_type) {
-                case RoutingType::Dynamic: fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC; break;
-                default: TT_THROW("Unsupported fabric routing type, must be Dynamic");
-            }
-            break;
+        case tt::tt_fabric::Topology::Mesh: {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
+        } break;
         default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 

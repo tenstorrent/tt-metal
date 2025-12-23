@@ -96,7 +96,6 @@ run_t3000_qwen25_tests() {
 
   MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
   HF_MODEL=$qwen25_72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
-  pip install -r models/tt_transformers/requirements.txt
   HF_MODEL=$qwen25_coder_32b TT_CACHE_PATH=$tt_cache_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
 
   # Record the end time
@@ -141,7 +140,6 @@ run_t3000_qwen3_tests() {
 
   echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
   echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
-  pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
   qwen32b=Qwen/Qwen3-32B
@@ -237,6 +235,8 @@ run_t3000_mistral_tests() {
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
+  # test max_seq_len overrides
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 120 -k "ci-long-context-16k" --max_seq_len=16384
 
 }
 
@@ -311,7 +311,7 @@ run_t3000_dit_tests() {
 
   echo "LOG_METAL: Running ${test_name}"
 
-  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -330,32 +330,10 @@ run_t3000_flux1_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
 }
 
-
-run_t3000_llama3_load_checkpoints_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_load_checkpoints_tests"
-
-  # Llama3.1-70B weights
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/original_weights/
-  # Llama3.2-90B weights
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
-
-  for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
-    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_load_checkpoints_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+run_t3000_motif_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
+
 
 run_t3000_gemma3_tests() {
   # Record the start time
@@ -373,6 +351,43 @@ run_t3000_gemma3_tests() {
   echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
 }
 
+run_t3000_whisper_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_whisper_tests"
+
+  pytest -n auto models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_whisper_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_wan22_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_wan22_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_wan22_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_mochi_tests() {
   # Record the start time
   fail=0
@@ -381,7 +396,6 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
 
   # Record the end time
@@ -394,9 +408,6 @@ run_t3000_mochi_tests() {
 }
 
 run_t3000_tests() {
-  # Run llama3 load checkpoints tests
-  run_t3000_llama3_load_checkpoints_tests
-
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests
 
@@ -439,8 +450,17 @@ run_t3000_tests() {
   # Run flux1 tests
   run_t3000_flux1_tests
 
+  # Run motif tests
+  run_t3000_motif_tests
+
   # Run gemma3 tests
   run_t3000_gemma3_tests
+
+  # Run whisper tests
+  run_t3000_whisper_tests
+
+  # Run Wan2.2 tests
+  run_t3000_wan22_tests
 
   # Run mochi tests
   run_t3000_mochi_tests

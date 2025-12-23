@@ -97,8 +97,15 @@ class T5Encoder(Module):
         self.encoder.load_torch_state_dict(substate(state_dict, "encoder"))
         self.final_layer_norm.load_torch_state_dict(substate(state_dict, "encoder.final_layer_norm"))
 
-    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def forward(
+        self, prompt: ttnn.Tensor, device: ttnn.Device, *, attention_mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
+
+        if attention_mask is not None:
+            attention_mask = (attention_mask - 1.0) * float("inf")
+            position_bias += attention_mask
+
         hidden_states = self.encoder(embeddings, position_bias)
 
         output = self.final_layer_norm(hidden_states[-1])

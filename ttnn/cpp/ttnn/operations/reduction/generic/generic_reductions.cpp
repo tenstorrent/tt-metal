@@ -15,8 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn {
-namespace operations::reduction {
+namespace ttnn::operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -69,6 +68,8 @@ ttnn::SmallVector<int> generate_reduce_dim(
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
         }
+        // It's already sorted and all are non-negative.
+        return dim;
     }
 
     for (int i = 0; i < dim.size(); i++) {
@@ -175,8 +176,8 @@ static Tensor reduce_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    const ttnn::SmallVector<int>& non_height_width_dims) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
+    const ttnn::SmallVector<int>& non_height_width_dims,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -224,7 +225,8 @@ static Tensor reduce_impl(
                             memory_config,
                             compute_kernel_config,
                             effective_scalar,
-                            non_height_width_dims);
+                            non_height_width_dims,
+                            sub_core_grids);
                     } else {
                         output_tensor = reduce_impl<ReduceType::Sum>(
                             output_tensor,
@@ -233,7 +235,8 @@ static Tensor reduce_impl(
                             memory_config,
                             compute_kernel_config,
                             effective_scalar,
-                            non_height_width_dims);
+                            non_height_width_dims,
+                            sub_core_grids);
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
@@ -278,41 +281,45 @@ static Tensor reduce_impl(
                                          : input_tensor_arg;
 
         if constexpr (reduce_type == ReduceType::Sum) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
                 scalar,
                 memory_config,
                 std::nullopt,
-                compute_kernel_config);
+                compute_kernel_config,
+                sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,
                 std::nullopt,
-                compute_kernel_config);
+                compute_kernel_config,
+                sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Max) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MAX,
                 reduce_op_dim,
                 scalar,
                 memory_config,
                 std::nullopt,
-                compute_kernel_config);
+                compute_kernel_config,
+                sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Min) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MIN,
                 reduce_op_dim,
                 scalar,
                 memory_config,
                 std::nullopt,
-                compute_kernel_config);
+                compute_kernel_config,
+                sub_core_grids);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -329,8 +336,8 @@ static Tensor std_var_impl(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims,
-    bool correction) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -363,7 +370,14 @@ static Tensor std_var_impl(
     scalar /= reduced_volume;
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
-        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
+        input_tensor_arg,
+        dim,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        non_height_width_dims,
+        sub_core_grids);
 
     auto mean_square_tensor = reduce_impl<ReduceType::Sum>(
         ttnn::pow(input_tensor_arg, 2.0f, memory_config),
@@ -372,11 +386,12 @@ static Tensor std_var_impl(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        non_height_width_dims);
+        non_height_width_dims,
+        sub_core_grids);
     Tensor output_tensor =
         ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
     if constexpr (reduce_type == ReduceType::Std) {
-        output_tensor = ttnn::sqrt(output_tensor, memory_config);
+        output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
     }
     return output_tensor;
 }
@@ -417,7 +432,8 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction) {
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
@@ -449,10 +465,18 @@ Tensor Reduce<reduce_type>::invoke(
             compute_kernel_config,
             scalar,
             non_height_width_dims,
-            correction);
+            correction,
+            sub_core_grids);
     }
     return reduce_impl<reduce_type>(
-        input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
+        input_tensor,
+        dim,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        non_height_width_dims,
+        sub_core_grids);
 }
 
 Tensor pool_sum(
@@ -468,7 +492,8 @@ Tensor pool_sum(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        /*non_height_width_dims=*/{});
+        /*non_height_width_dims=*/{},
+        /*sub_core_grids=*/std::nullopt);
 }
 
 template struct Reduce<ReduceType::Sum>;
@@ -477,5 +502,4 @@ template struct Reduce<ReduceType::Max>;
 template struct Reduce<ReduceType::Min>;
 template struct Reduce<ReduceType::Std>;
 template struct Reduce<ReduceType::Var>;
-}  // namespace operations::reduction
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction

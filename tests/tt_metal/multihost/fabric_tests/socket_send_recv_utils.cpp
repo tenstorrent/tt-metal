@@ -11,17 +11,14 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
     switch (system_config) {
@@ -220,7 +217,8 @@ bool test_socket_send_recv(
             }
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
-            auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+            const auto& core_to_core_id =
+                recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
@@ -251,11 +249,9 @@ bool test_socket_send_recv(
 std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
     std::vector<uint32_t> recv_ranks;
 
-    if (system_config == SystemConfig::NANO_EXABOX) {
-        // Nano-Exabox has 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+    if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
         recv_ranks = {0, 2, 3, 4};
-    } else if (system_config == SystemConfig::EXABOX) {
-        recv_ranks = {0, 2, 3};
     } else if (system_config == SystemConfig::SPLIT_T3K || system_config == SystemConfig::DUAL_T3K) {
         // Only a single recv node is needed for the dual host configurations.
         recv_ranks = {0};
@@ -538,7 +534,4 @@ void test_multi_mesh_multi_conn_bidirectional(
     distributed_context->barrier();
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -69,13 +68,13 @@ struct TraceScope {
 namespace tt::tt_metal {
 
 // Per Command type capture helper functions
-void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
+void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, bool blocking);
 
-void CaptureEnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
+void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
 
-void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t tid);
+void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id);
 
-void CaptureReleaseTrace(IDevice* device, uint32_t tid);
+void CaptureReleaseTrace(IDevice* device, uint32_t trace_id);
 
 void CaptureBufferCreate(
     const std::shared_ptr<Buffer>& buffer,
@@ -105,7 +104,6 @@ void CaptureEnqueueReadBuffer(
 
 void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
 void CaptureProgramConstructor(Program& program);
-void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 void CaptureCreateKernel(
     KernelHandle kernel_id,

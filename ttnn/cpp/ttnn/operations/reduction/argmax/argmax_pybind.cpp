@@ -1,22 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_pybind.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn-pybind/decorators.hpp"
-
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
-
 namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
-            ``ttnn.argmax(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
-
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
@@ -70,18 +65,6 @@ void bind_reduction_argmax_operation(py::module& module) {
                 - Sharding is not supported for this operation
                 - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
                 - The (optional) preallocated output tensor must have ROW_MAJOR layout
-
-            Example:
-              .. code-block:: python
-
-                  input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-                  # Last dim reduction yields shape of [1, 1, 32, 1]
-                  output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
-
-                  # All dim reduction yields shape of []
-                  output_alldim = ttnn.argmax(input_tensor)
-
         )doc";
 
     using OperationType = decltype(ttnn::argmax);

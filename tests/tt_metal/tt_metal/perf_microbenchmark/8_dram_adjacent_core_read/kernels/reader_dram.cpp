@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t input_addr = get_compile_time_arg_val(0);
@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t num_pages = get_compile_time_arg_val(3);
     constexpr uint32_t block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t last_page_size = get_compile_time_arg_val(6);
 
     const uint32_t bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
@@ -35,13 +36,22 @@ void kernel_main() {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         uint32_t l1_write_addr = get_write_ptr(cb_id);
 
-        noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
+        noc_async_read_set_trid(curr_block_trid);
 
         for (uint32_t h = 0; h < num_pages; ++h) {
-            noc_async_read_tile_dram_sharded_with_state_with_trid(
+            uint32_t current_page_size = page_size;
+            if constexpr (last_page_size != page_size) {
+                if (h == num_pages - 1) {
+                    current_page_size = last_page_size;
+                }
+                // Set state for current page size
+                noc_async_read_one_packet_set_state<true>(src_base_addr, current_page_size, vc);
+            }
+
+            noc_async_read_one_packet_with_state_with_trid(
                 src_base_addr, l1_read_addr, l1_write_addr, curr_block_trid);
-            l1_read_addr += page_size;
-            l1_write_addr += page_size;
+            l1_read_addr += current_page_size;
+            l1_write_addr += current_page_size;
         }
 
         if (num_free_blocks_in_buffer == 2) {

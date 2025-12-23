@@ -13,7 +13,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <cmath>
 #include <cstdlib>
-#include <exception>
 #include <map>
 #include <memory>
 #include <optional>
@@ -45,11 +44,13 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -128,7 +129,7 @@ void verify_cb_config(
             if (!mesh_device->is_local(coord)) {
                 continue;
             }
-            auto device = mesh_device->get_device(coord);
+            auto* device = mesh_device->get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
                 for (const auto& core_coord : core_range) {
@@ -181,6 +182,70 @@ void validate_sems(
 using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
 using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+
+// Parameterized: runs once with either submesh (index 0 or 1) executing the program.
+class MeshWorkloadTestSuiteSubmeshFixture : public MeshWorkloadTestSuite, public ::testing::WithParamInterface<int> {};
+
+// The test succeeds if it completes without hanging.
+TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWorkloads) {
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Requires at least 2 devices";
+    }
+
+    // Create two evenly sized submeshes (split along columns if possible, else rows).
+    MeshShape parent_shape = mesh_device_->shape();
+    std::optional<MeshShape> sub_shape;
+    if (parent_shape.dims() == 2 && (parent_shape[1] % 2 == 0)) {
+        sub_shape = MeshShape(parent_shape[0], parent_shape[1] / 2);
+    } else if (parent_shape.dims() == 2 && (parent_shape[0] % 2 == 0)) {
+        sub_shape = MeshShape(parent_shape[0] / 2, parent_shape[1]);
+    }
+
+    if (!sub_shape.has_value()) {
+        GTEST_SKIP() << "Mesh shape is not evenly splittable into two submeshes";
+    }
+
+    auto submeshes = mesh_device_->create_submeshes(*sub_shape);
+    ASSERT_EQ(submeshes.size(), 2u);
+
+    int submesh_index = GetParam();
+    ASSERT_TRUE(submesh_index == 0 || submesh_index == 1);
+    auto& submesh = submeshes[submesh_index];
+
+    // Single-core no-op program for submesh
+    Program submesh_program = CreateProgram();
+    CoreCoord single_core = {0, 0};
+    CreateKernel(submesh_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    MeshWorkload submesh_workload;
+    submesh_workload.add_program(MeshCoordinateRange(submesh->shape()), std::move(submesh_program));
+
+    // Single-core no-op program for parent mesh
+    Program parent_program = CreateProgram();
+    CreateKernel(parent_program, "tt_metal/kernels/compute/blank.cpp", single_core, ComputeConfig{});
+    MeshWorkload parent_workload;
+    parent_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(parent_program));
+
+    // 1) Run on submesh (non-blocking)
+    EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+
+    // Enqueue a record event to ensure the last event ID is higher on the submesh than on the parent mesh.
+    submesh->mesh_command_queue().enqueue_record_event();
+
+    // 2) Quiesce all submeshes from the parent
+    mesh_device_->quiesce_devices();
+
+    // 3) Run on parent (non-blocking)
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
+
+    // 4) Quiesce again
+    mesh_device_->quiesce_devices();
+
+    // 5) Run again on the same submesh (non-blocking) and finish to ensure completion
+    EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+    Finish(submesh->mesh_command_queue());
+}
+
+INSTANTIATE_TEST_SUITE_P(QuiesceSubmeshIndex, MeshWorkloadTestSuiteSubmeshFixture, ::testing::Values(0, 1));
 
 TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     uint32_t num_workloads = 10;
@@ -456,13 +521,14 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
-    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    uint32_t num_rows = mesh_device_->num_rows();
+    uint32_t num_rows_in_mesh_workload = num_rows / 2;
+    TT_FATAL(num_rows_in_mesh_workload > 0, "The MeshWorkload must be enqueued on at least one row.");
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_mesh_workload - 1, mesh_device_->num_cols() - 1});
     MeshCoordinateRange devices_1(
-        MeshCoordinate{0, num_cols_in_workload},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{num_rows_in_mesh_workload, 0}, MeshCoordinate{num_rows - 1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -491,7 +557,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     dst_vec,
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
-                if (device_coord[1] <= num_cols_in_workload - 1) {
+                if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
                     for (int i = 0; i < dst_vec.size(); i++) {
                         EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
                     }
@@ -570,10 +636,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, 0});
-    MeshCoordinateRange devices_1(
-        MeshCoordinate{0, mesh_device_->num_cols() - 1},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(program));
     mesh_workload.add_program(devices_1, std::move(*program_1));
 
@@ -669,7 +733,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
-    for (const auto device : mesh_device_->get_devices()) {
+    for (auto* const device : mesh_device_->get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
     }
 }
@@ -707,7 +771,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         if (!mesh_device_->is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_0);
     }
 
@@ -715,7 +779,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
         if (!mesh_device_->is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
 }

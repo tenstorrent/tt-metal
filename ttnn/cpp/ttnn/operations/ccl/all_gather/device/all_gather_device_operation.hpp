@@ -14,7 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 
 namespace ttnn::operations::ccl {
@@ -30,6 +30,7 @@ struct AllGatherDeviceOperation {
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
+        const std::optional<CoreRangeSet> sub_core_grid;
     };
 
     struct tensor_args_t {
@@ -38,6 +39,7 @@ struct AllGatherDeviceOperation {
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = ttnn::Tensor;
 
     struct AllGatherProgram {
@@ -64,7 +66,7 @@ struct AllGatherDeviceOperation {
             const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -78,6 +80,7 @@ struct AllGatherDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
@@ -89,7 +92,8 @@ struct AllGatherDeviceOperation {
         const ttnn::MemoryConfig& memory_config,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology);
+        tt::tt_fabric::Topology topology,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::ccl

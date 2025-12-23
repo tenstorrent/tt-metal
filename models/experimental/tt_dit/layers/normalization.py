@@ -159,8 +159,8 @@ class DistributedRMSNorm(Module):
 
         self.weight = (
             Parameter(
-                total_shape=[embedding_dim // n, n],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                total_shape=[1, embedding_dim],
+                layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 mesh_axes=[None, mesh_axis],
             )
@@ -170,15 +170,28 @@ class DistributedRMSNorm(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = (
-                state["weight"]
-                .reshape(self.mesh_width, -1, self.TILE_SIZE)
-                .permute(1, 0, 2)
-                .reshape(-1, self.TILE_SIZE * self.mesh_width)
-            )
+            state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
-        stats = ttnn.rms_norm_pre_all_gather(x)
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        num_heads_per_device=1,
+        compute_kernel_config=None,
+        rope_cos=None,
+        rope_sin=None,
+        trans_mat=None,
+    ) -> ttnn.Tensor:
+        expected_dim = self.embedding_dim // self.mesh_width
+        if x.shape[-1] != expected_dim:
+            msg = (
+                f"last dimension of input tensor with shape {tuple(x.shape)} should match "
+                f"embedding_dim / mesh_width = {expected_dim}"
+            )
+            raise ValueError(msg)
+
+        stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+            x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+        )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             stats = ttnn.experimental.all_gather_async(
@@ -194,12 +207,16 @@ class DistributedRMSNorm(Module):
                 num_links=self.ccl_manager.num_links,
             )
 
-        x = ttnn.rms_norm_post_all_gather(
+        x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
             x,
             stats,
-            weight=self.weight.data if self.weight is not None else None,
             epsilon=self.norm_eps,
+            num_heads_per_device=num_heads_per_device,
+            weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            transformation_mat=trans_mat,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
         )
         return x
 
@@ -417,7 +434,8 @@ class GroupNorm(Module):
         if "bias" in state:
             state["bias"] = self._prepare_param(state["bias"])
 
-        state["mask"] = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        input_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        state["mask"] = ttnn.to_torch(input_mask)
 
     def _prepare_param(self, param: torch.Tensor) -> torch.Tensor:
         expected_shape = (self.num_channels * self.num_devices,)

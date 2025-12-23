@@ -4,6 +4,7 @@ set(BENCHMARK_SRCS
     "operations/ternary/benchmark_where.cpp"
     "benchmark_host_alloc_on_tensor_readback.cpp"
     "benchmark_host_dtype_conversion.cpp"
+    "matmul/test_matmul_benchmark.cpp"
 )
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
@@ -15,7 +16,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
     target_link_libraries(
         ${TEST_TARGET}
         PUBLIC
-            ttnn
+            TTNN::TTNN
             test_common_libs
             benchmark::benchmark
             Python3::Python
@@ -28,6 +29,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${PROJECT_SOURCE_DIR}/ttnn/cpp
+            ${PROJECT_SOURCE_DIR}/ttnn/api
             ${PROJECT_SOURCE_DIR}/ttnn/
             ${CMAKE_CURRENT_SOURCE_DIR}
     )

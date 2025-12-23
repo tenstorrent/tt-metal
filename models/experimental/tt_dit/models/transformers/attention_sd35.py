@@ -226,7 +226,7 @@ class SD35JointAttention:
         Outputs are width-fractured
         """
 
-        qkv_1BNF = self.to_qkv(spatial_1BND, core_grid=self.core_grid)
+        qkv_1BNF = self.to_qkv(spatial_1BND)
         local_heads = self.n_local_heads
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
@@ -235,7 +235,7 @@ class SD35JointAttention:
         q_BHNE = self.norm_q(q_BHNE)
         k_BHNE = self.norm_k(k_BHNE)
 
-        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD, core_grid=self.core_grid)
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=local_heads, transpose_key=False
         )
@@ -303,7 +303,7 @@ class SD35JointAttention:
                 **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(spatial_1BND, core_grid=self.core_grid)
+        spatial_1BND = self.to_out(spatial_1BND)
 
         prompt_out = None
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -324,7 +324,7 @@ class SD35JointAttention:
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                     **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLD = self.to_add_out(prompt_1BLD, core_grid=self.core_grid)
+            prompt_1BLD = self.to_add_out(prompt_1BLD)
             prompt_out = prompt_1BLD
 
         return spatial_1BND, prompt_out

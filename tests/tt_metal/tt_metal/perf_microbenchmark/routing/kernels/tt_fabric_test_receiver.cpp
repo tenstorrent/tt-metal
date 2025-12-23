@@ -2,23 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #include "tt_fabric_test_kernels_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 using namespace tt::tt_fabric::fabric_tests;
 
 constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
-constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
-constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(2);
-constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(3);
-constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(4);
-constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(5);
-constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(6);
-constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(7);
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(1);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(2);
+constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
+constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
+constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(5);
+constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(6);
 
-using ReceiverKernelConfigType =
-    ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>;
+using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(

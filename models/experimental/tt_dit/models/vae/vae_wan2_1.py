@@ -81,20 +81,20 @@ class WanAttentionBlock:
             weight = weight.permute(0, 2, 3, 1).reshape(out_c, in_c)
             return weight
 
-        self.to_qkv.load_state_dict(
+        self.to_qkv.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["to_qkv.weight"]),
                 "bias": state_dict["to_qkv.bias"],
             }
         )
-        self.proj.load_state_dict(
+        self.proj.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["proj.weight"]),
                 "bias": state_dict["proj.bias"],
             }
         )
 
-        self.norm.load_state_dict(
+        self.norm.load_torch_state_dict(
             {
                 "weight": state_dict["norm.gamma"].squeeze(),
             }
@@ -150,7 +150,7 @@ class WanAttentionBlock:
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config, core_grid=self.core_grid)
+        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
@@ -163,7 +163,7 @@ class WanAttentionBlock:
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
-        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config, core_grid=self.core_grid)
+        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config)
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
@@ -240,9 +240,6 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -336,7 +333,7 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
@@ -358,7 +355,7 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -370,6 +367,12 @@ class WanCausalConv3d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -451,8 +454,8 @@ class WanResidualBlock:
         def rename_norm_state(state):
             return {"weight": state["gamma"].squeeze()}
 
-        self.norm1.load_state_dict(rename_norm_state(substate(state_dict, "norm1")))
-        self.norm2.load_state_dict(rename_norm_state(substate(state_dict, "norm2")))
+        self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
+        self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
         self.conv1.load_state_dict(substate(state_dict, "conv1"))
         self.conv2.load_state_dict(substate(state_dict, "conv2"))
 
@@ -463,7 +466,7 @@ class WanResidualBlock:
             return weight
 
         if self.conv_shortcut is not None:
-            self.conv_shortcut.load_state_dict(
+            self.conv_shortcut.load_torch_state_dict(
                 {
                     "weight": conv_1d_to_matmul_weight(state_dict["conv_shortcut.weight"]),
                     "bias": state_dict["conv_shortcut.bias"],
@@ -473,9 +476,7 @@ class WanResidualBlock:
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
-            self.conv_shortcut(
-                x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config, core_grid=self.core_grid
-            )
+            self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
@@ -639,9 +640,6 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -713,7 +711,7 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -735,7 +733,7 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -747,6 +745,12 @@ class WanConv2d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -1012,7 +1016,7 @@ class WanDecoder3d:
         def rename_norm_state(state):
             return {"weight": state["gamma"].squeeze()}
 
-        self.norm_out.load_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
+        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
         self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0], first_chunk=False):
@@ -1162,7 +1166,7 @@ class WanDecoder:
             state["bias"] = bias
             return state
 
-        self.post_quant_conv.load_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
+        self.post_quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
         self.decoder.load_state_dict(substate(state_dict, "decoder"))
 
     def clear_cache(self):
@@ -1198,3 +1202,13 @@ class WanDecoder:
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
         return (output_BCTHW, new_logical_h)
+
+
+def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
+    """
+    Neighbor pad can use no more links than the product of the upper dimensions of the input tensor.
+    """
+    upper_dims = 1
+    for i in range(dim):
+        upper_dims *= input_tensor.shape[i]
+    return min(upper_dims, ccl_manager.num_links)

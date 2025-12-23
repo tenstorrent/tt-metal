@@ -18,8 +18,6 @@ template <typename unary_operation_t>
 void bind_reduction_prod_operation(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-            ``{1}(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
-
             Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
 
             If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.
@@ -75,25 +73,6 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                 - All input tensors must be on-device.
                 - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
                 - Sharding is not supported for this operation
-
-            Example:
-                .. code-block:: python
-
-                    tensor = ttnn.rand((1,2), device=device)
-                    output = {1}(tensor, dim=0)
-                    output_all_dims = {1}(tensor)
-
-            Example (NC Product):
-                .. code-block:: python
-
-                    dims = [0,1]
-                    input_shape = [2, 3, 4, 5]
-                    output_shape = [1, 1, 4, 5] # shape on any dimension being reduced will be 1
-
-                    input_tensor = ttnn.rand(input_shape, device)
-                    output_tensor = ttnn.rand(output_shape, device)
-
-                    output = {1}(input_tensor=input_tensor, output_tensor=output_tensor, dims=dims)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());

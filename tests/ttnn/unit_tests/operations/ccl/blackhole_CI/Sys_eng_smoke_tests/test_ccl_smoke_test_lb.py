@@ -6,12 +6,13 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from models.common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 # Test uses 3.932GB of space per device to nearly fill the dram
 @skip_for_wormhole_b0()
+@run_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
@@ -27,14 +28,10 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
         "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -116,27 +113,16 @@ def test_ccl_ddr_smoke_test(
 # P300 with 2 harvested columns so 110 cores are available.
 # Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
 @skip_for_wormhole_b0()
+@run_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
+    "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis, ag_input_dtype",
     [
-        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 0),
-        (2, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 1),
+        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 0, ttnn.bfloat16),
+        (2, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 1, ttnn.uint32),
+        (2, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 1, ttnn.bfloat8_b),
     ],
-    ids=["horizontal_test", "vertical_test"],
-)
-@pytest.mark.parametrize(
-    "ag_input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
-    ],
-    ids=[
-        "float_16",
-        "uint_32",
-        "bfloat_8",
-    ],
+    ids=["horizontal_test_bf16", "vertical_test_u32", "vertical_test_bf8"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",

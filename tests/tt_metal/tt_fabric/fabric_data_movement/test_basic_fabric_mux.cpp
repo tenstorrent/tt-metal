@@ -9,10 +9,9 @@
 #include <algorithm>
 #include <unordered_map>
 #include <string_view>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -25,9 +24,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-namespace fabric_mux_tests {
+namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests {
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string sender_kernel_src =
@@ -300,7 +297,7 @@ void create_worker_kernel(
     const CoreCoord& mux_virtual_core,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     tt::tt_metal::Program& program_handle) {
-    auto worker_memory_map = worker_test_config.memory_map;
+    auto* worker_memory_map = worker_test_config.memory_map;
     CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
     auto channel_type = worker_test_config.channel_type;
     auto worker_id = worker_test_config.worker_id;
@@ -971,6 +968,4 @@ TEST_F(Fabric2DMuxFixture, TestFabricMux2DFourChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-}  // namespace fabric_mux_tests
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests

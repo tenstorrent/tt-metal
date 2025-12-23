@@ -53,6 +53,9 @@ on:
       tt-metal-l2-nightly-result:
         description: 'Result of All post-commit C++ tests (status:url format)'
         value: ${{ jobs.setup-and-test.outputs.tt-metal-l2-nightly-result }}
+      perf-device-models-result:
+        description: 'Result of Device perf regressions (status:url format)'
+        value: ${{ jobs.setup-and-test.outputs.perf-device-models-result }}
 
 concurrency:
   group: llk-integration-${{ inputs.mirrored_branch }}
@@ -64,7 +67,7 @@ env:
   WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
-  GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+  GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
   MAX_RETRIES: 3
   POLL_INTERVAL: 120
 
@@ -86,16 +89,18 @@ jobs:
       all-post-commit-run-id: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
       blackhole-run-id: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
       tt-metal-l2-nightly-run-id: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
+      perf-device-models-run-id: ${{ steps.trigger-workflows.outputs.perf-device-models-run-id }}
       all-post-commit-result: ${{ steps.monitor-workflows.outputs.all-post-commit-result }}
       blackhole-result: ${{ steps.monitor-workflows.outputs.blackhole-result }}
       tt-metal-l2-nightly-result: ${{ steps.monitor-workflows.outputs.tt-metal-l2-nightly-result }}
+      perf-device-models-result: ${{ steps.monitor-workflows.outputs.perf-device-models-result }}
     steps:
       - name: Setup
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-metal
           submodules: recursive
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           fetch-depth: 0
           ref: main
           clean: true
@@ -112,7 +117,7 @@ jobs:
           cd "$SUBMODULE_PATH"
 
           # Ensure correct remote and fetch mirrored branch
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git remote set-url origin https://${{ secrets.LLK_UPLIFT_PAT }}@github.com/tenstorrent/tt-llk.git
           if git fetch origin "$MIRRORED_BRANCH:$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
@@ -178,7 +183,8 @@ jobs:
           declare -A workflows
           workflows["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
           workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
-          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}"
+          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
+          workflows["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
 
           declare -A run_ids
 
@@ -187,9 +193,16 @@ jobs:
             local workflow_file="$1"
             local display_name="$2"
 
-            # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
+            # Special handling for tt-metal-l2-nightly.yaml to pass C++ and other test configuration flags
             if [ "$workflow_file" = "tt-metal-l2-nightly.yaml" ]; then
-              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_APC_cpp_tests=true
+              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_cpp_tests=true \
+              -f run_metal_iommu_tests=true \
+              -f run_sd_unit_tests=true \
+              -f run_fd_unit_tests=true \
+              -f run_profiler_regression=true \
+              -f run_tt_train_cpp_unit_tests=true \
+              -f run_models_unit_tests=true \
+              -f run_tt_cnn_unit_tests=true
             else
               gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
             fi
@@ -235,6 +248,14 @@ jobs:
                     echo "✅ All post-commit C++ tests run: $run_url"
                   fi
                   ;;
+                "perf-device-models.yaml")
+                  run_data=$(trigger_and_get_id "$workflow" "Device Perf Regressions")
+                  if [ -n "$run_data" ]; then
+                    run_ids["perf-device-models"]=$(echo "$run_data" | cut -d'|' -f1)
+                    run_url=$(echo "$run_data" | cut -d'|' -f2)
+                    echo "✅ Device perf regressions run: $run_url"
+                  fi
+                  ;;
               esac
             fi
           done
@@ -243,6 +264,7 @@ jobs:
           echo "all-post-commit-run-id=${run_ids[all-post-commit]}" >> $GITHUB_OUTPUT
           echo "blackhole-run-id=${run_ids[blackhole]}" >> $GITHUB_OUTPUT
           echo "tt-metal-l2-nightly-run-id=${run_ids[tt-metal-l2-nightly]}" >> $GITHUB_OUTPUT
+          echo "perf-device-models-run-id=${run_ids[perf-device-models]}" >> $GITHUB_OUTPUT
       - name: Monitor triggered workflows
         id: monitor-workflows
         if: |
@@ -256,6 +278,7 @@ jobs:
           ALL_POST_COMMIT_RUN_ID: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
           BLACKHOLE_RUN_ID: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
           TT_METAL_L2_NIGHTLY_RUN_ID: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
+          PERF_DEVICE_MODELS_RUN_ID: ${{ steps.trigger-workflows.outputs.perf-device-models-run-id }}
         run: |
           # Helper function for workflow monitoring
           monitor_workflow() {
@@ -324,7 +347,8 @@ jobs:
           declare -A workflow_configs
           workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
           workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
-          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
+          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
+          workflow_configs["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$PERF_DEVICE_MODELS_RUN_ID:perf-device-models-result"
           exit_code=0
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
@@ -344,7 +368,7 @@ jobs:
         run: |
           echo "🔄 Parent workflow cancelled - cleaning up spawned workflows..."
           # Workflows spawned by this job
-          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml")
+          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
           # Consider both queued and in_progress runs
           STATUSES=("queued" "in_progress")
           for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
@@ -417,7 +441,8 @@ jobs:
             declare -A test_configs
             test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
             test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
-            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
+            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
+            test_configs["Device Perf Regressions"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.perf-device-models-result }}"
 
             # Function to display test result
             display_test_result() {

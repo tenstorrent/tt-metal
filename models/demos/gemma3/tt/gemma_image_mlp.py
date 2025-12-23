@@ -75,7 +75,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         batch_size = x.shape[0]
 
         # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = seq_len if self.args.is_gemma else self.args.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len
 
         x_in = x
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
@@ -117,7 +117,7 @@ class TtGemmaImageFeedForward(LightweightModule):
                 persistent_output_buffer=None,
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
+                num_links=4 if self.args.is_galaxy else 1,
                 topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,

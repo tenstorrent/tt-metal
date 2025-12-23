@@ -9,10 +9,8 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    StableDiffusion3Pipeline,
-    TimingCollector,
-)
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
 
 @pytest.mark.parametrize(
@@ -44,7 +42,6 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd35_pipeline(
     *,
@@ -62,25 +59,15 @@ def test_sd35_pipeline(
     no_prompt,
     model_location_generator,
     traced,
-    use_cache,
     is_ci_env,
-    monkeypatch,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
 
     model_version = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
-
-    # Create timing collector
-    timing_collector = TimingCollector()
+    if is_ci_env and traced:
+        pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     # Create pipeline
     pipeline = StableDiffusion3Pipeline.create_pipeline(
@@ -96,12 +83,8 @@ def test_sd35_pipeline(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
-        use_cache=use_cache,
+        checkpoint_name=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
     )
-
-    # Set timing collector
-    pipeline.timing_collector = timing_collector
 
     # Define test prompt
     prompt = (
@@ -114,17 +97,21 @@ def test_sd35_pipeline(
     if no_prompt:
         # Run single generation
         negative_prompt = ""
-        images = pipeline(
-            prompt_1=[prompt],
-            prompt_2=[prompt],
-            prompt_3=[prompt],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
-            num_inference_steps=num_inference_steps,
-            seed=0,
-            traced=traced,
-        )
+        benchmark_profiler = BenchmarkProfiler()
+        with benchmark_profiler("run", iteration=0):
+            images = pipeline(
+                prompt_1=[prompt],
+                prompt_2=[prompt],
+                prompt_3=[prompt],
+                negative_prompt_1=[negative_prompt],
+                negative_prompt_2=[negative_prompt],
+                negative_prompt_3=[negative_prompt],
+                num_inference_steps=num_inference_steps,
+                seed=0,
+                traced=traced,
+                profiler=benchmark_profiler,
+                profiler_iteration=0,
+            )
 
         # Save image
         output_filename = f"sd35_new_{image_w}_{image_h}.png"
@@ -132,15 +119,13 @@ def test_sd35_pipeline(
         logger.info(f"Image saved as {output_filename}")
 
         # Print timing information
-        timing_data = timing_collector.get_timing_data()
-        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
-        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
-        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
-        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
-        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
-        if timing_data.denoising_step_times:
-            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
-            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
+        logger.info(f"CLIP encoding time: {benchmark_profiler.get_duration('clip_encoding', 0):.2f}s")
+        logger.info(f"T5 encoding time: {benchmark_profiler.get_duration('t5_encoding', 0):.2f}s")
+        logger.info(f"Total encoding time: {benchmark_profiler.get_duration('encoder', 0):.2f}s")
+        logger.info(f"VAE decoding time: {benchmark_profiler.get_duration('vae', 0):.2f}s")
+        logger.info(f"Total pipeline time: {benchmark_profiler.get_duration('total', 0):.2f}s")
+        avg_step_time = benchmark_profiler.get_duration("denoising", 0) / num_inference_steps
+        logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
 
     else:
         # Interactive demo

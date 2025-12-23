@@ -15,9 +15,8 @@ namespace ttnn::operations::point_to_point {
 namespace py = pybind11;
 
 void py_bind_point_to_point(py::module& module) {
-    auto doc =
-        R"doc(point_to_point(input_tensor: ttnn.Tensor, sender_coord: ttnn.MeshCoordinate, receiver_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, output_tensor: Optional[ttnn.Tensor] = None, intermediate_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
-
+    const auto* doc =
+        R"doc(
             Point-to-point send and receive operation. Send a tensor from one device to another.
 
             Args:

@@ -10,7 +10,6 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -67,7 +66,7 @@ struct Matmul_RS {
             std::vector<Tensor>& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             std::vector<Tensor>& tensor_return_value);

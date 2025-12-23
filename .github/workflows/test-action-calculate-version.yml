@@ -116,6 +116,8 @@ jobs:
       - name: Verify Test 4 Results
         run: |
           echo "Test 4 Results:"
+          echo "  Latest semver: ${{ steps.test-dev.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev.outputs.new_version }}"
           echo "  Final version: ${{ steps.test-dev.outputs.final_version }}"
 
           # Dev version should have -dev suffix with date
@@ -123,6 +125,13 @@ jobs:
             echo "FAIL: Expected final_version to contain -dev suffix"
             exit 1
           fi
+
+          # Dev tag should always increment minor version from latest (v2.1.0 -> v2.2.0)
+          if [ "${{ steps.test-dev.outputs.new_version }}" != "v2.2.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v2.2.0, got ${{ steps.test-dev.outputs.new_version }}"
+            exit 1
+          fi
+
           echo "PASS: Test 4 passed"
 
   test-version-bumping:
@@ -232,6 +241,309 @@ jobs:
             exit 1
           fi
           echo "PASS: PATCH bump test passed"
+
+  test-dev-tag-versioning:
+    name: Test Dev Tag Minor Version Bumping
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test dev tag with different base versions
+      - name: Test dev tag from v1.5.3
+        run: |
+          git tag v1.5.3
+          echo "Created base tag v1.5.3"
+
+      - name: Test dev tag minor increment from v1.5.3
+        id: test-dev-v1-5-3
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v1.5.3
+        run: |
+          echo "Dev tag from v1.5.3 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v1-5-3.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v1-5-3.outputs.latest_semver }}" != "v1.5.3" ]; then
+            echo "FAIL: Expected latest_semver to be v1.5.3"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v1-5-3.outputs.new_version }}" != "v1.6.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v1.6.0, got ${{ steps.test-dev-v1-5-3.outputs.new_version }}"
+            exit 1
+          fi
+
+          # Check final version has correct format with date
+          current_date=$(date +%Y%m%d)
+          expected_final="v1.6.0-dev$current_date"
+          if [ "${{ steps.test-dev-v1-5-3.outputs.final_version }}" != "$expected_final" ]; then
+            echo "FAIL: Expected final version to be $expected_final, got ${{ steps.test-dev-v1-5-3.outputs.final_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v1.5.3 test passed"
+
+      # Test dev tag from major version
+      - name: Test dev tag from v3.0.0
+        run: |
+          git tag v3.0.0
+          echo "Created base tag v3.0.0"
+
+      - name: Test dev tag minor increment from v3.0.0
+        id: test-dev-v3-0-0
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v3.0.0
+        run: |
+          echo "Dev tag from v3.0.0 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v3-0-0.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v3-0-0.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v3-0-0.outputs.latest_semver }}" != "v3.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v3.0.0"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v3-0-0.outputs.new_version }}" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v3.1.0, got ${{ steps.test-dev-v3-0-0.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v3.0.0 test passed"
+
+      # Test dev tag ignores commit indicators
+      - name: Test dev tag ignores commit version indicators
+        run: |
+          git reset --hard v3.0.0
+          echo "major change" > major-change.txt
+          git add major-change.txt
+          git commit -m "Breaking API change (MAJOR)"
+
+          echo "patch fix" > patch-fix.txt
+          git add patch-fix.txt
+          git commit -m "Bug fix (PATCH)"
+
+      - name: Test dev tag ignores MAJOR/PATCH commits
+        id: test-dev-ignores-commits
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag ignores commit indicators
+        run: |
+          echo "Dev tag ignores commits results:"
+          echo "  Latest semver: ${{ steps.test-dev-ignores-commits.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-ignores-commits.outputs.final_version }}"
+
+          # Should still be v3.1.0 regardless of MAJOR/PATCH commits
+          if [ "${{ steps.test-dev-ignores-commits.outputs.new_version }}" != "v3.1.0" ]; then
+            echo "FAIL: Expected dev tag to always increment minor to v3.1.0 regardless of commit indicators, got ${{ steps.test-dev-ignores-commits.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag ignores commit indicators test passed"
+
+      # Test dev tag from v0.0.0 (no previous tags)
+      - name: Test dev tag from no previous tags
+        run: |
+          # Remove all tags to test v0.0.0 scenario
+          git tag -d $(git tag -l) || echo "No tags to delete"
+
+      - name: Test dev tag minor increment from v0.0.0
+        id: test-dev-v0-0-0
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag increments minor from v0.0.0
+        run: |
+          echo "Dev tag from v0.0.0 results:"
+          echo "  Latest semver: ${{ steps.test-dev-v0-0-0.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-v0-0-0.outputs.final_version }}"
+
+          if [ "${{ steps.test-dev-v0-0-0.outputs.latest_semver }}" != "v0.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v0.0.0 when no tags exist"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-dev-v0-0-0.outputs.new_version }}" != "v0.1.0" ]; then
+            echo "FAIL: Expected dev tag to increment minor version to v0.1.0 from v0.0.0, got ${{ steps.test-dev-v0-0-0.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag minor increment from v0.0.0 test passed"
+
+  test-dev-tag-consistency:
+    name: Test Dev Tag Consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test that dev tags are consistent when called multiple times without base version change
+      - name: Setup base version for consistency test
+        run: |
+          git tag v2.3.5
+          echo "Created base tag v2.3.5 for consistency testing"
+
+      - name: First dev tag generation
+        id: first-dev-call
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Second dev tag generation (same conditions)
+        id: second-dev-call
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag consistency
+        run: |
+          echo "First dev call results:"
+          echo "  Latest semver: ${{ steps.first-dev-call.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.first-dev-call.outputs.new_version }}"
+          echo "  Final version: ${{ steps.first-dev-call.outputs.final_version }}"
+          echo ""
+          echo "Second dev call results:"
+          echo "  Latest semver: ${{ steps.second-dev-call.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.second-dev-call.outputs.new_version }}"
+          echo "  Final version: ${{ steps.second-dev-call.outputs.final_version }}"
+
+          # Both calls should have same latest_semver
+          if [ "${{ steps.first-dev-call.outputs.latest_semver }}" != "${{ steps.second-dev-call.outputs.latest_semver }}" ]; then
+            echo "FAIL: Expected latest_semver to be the same in both calls"
+            echo "  First: ${{ steps.first-dev-call.outputs.latest_semver }}"
+            echo "  Second: ${{ steps.second-dev-call.outputs.latest_semver }}"
+            exit 1
+          fi
+
+          # Both calls should have same new_version (base increment)
+          if [ "${{ steps.first-dev-call.outputs.new_version }}" != "${{ steps.second-dev-call.outputs.new_version }}" ]; then
+            echo "FAIL: Expected new_version to be the same in both calls"
+            echo "  First: ${{ steps.first-dev-call.outputs.new_version }}"
+            echo "  Second: ${{ steps.second-dev-call.outputs.new_version }}"
+            exit 1
+          fi
+
+          # Both calls should have same final_version (since same date)
+          if [ "${{ steps.first-dev-call.outputs.final_version }}" != "${{ steps.second-dev-call.outputs.final_version }}" ]; then
+            echo "FAIL: Expected final_version to be the same in both calls (same date)"
+            echo "  First: ${{ steps.first-dev-call.outputs.final_version }}"
+            echo "  Second: ${{ steps.second-dev-call.outputs.final_version }}"
+            exit 1
+          fi
+
+          # Verify the expected version pattern
+          if [ "${{ steps.first-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+            echo "FAIL: Expected new_version to be v2.4.0 (minor increment from v2.3.5)"
+            exit 1
+          fi
+
+          # Verify final version has correct date format
+          current_date=$(date +%Y%m%d)
+          expected_final="v2.4.0-dev$current_date"
+          if [ "${{ steps.first-dev-call.outputs.final_version }}" != "$expected_final" ]; then
+            echo "FAIL: Expected final version to be $expected_final"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag consistency test passed - multiple calls produce identical results"
+
+      # Test consistency even with additional commits (but no new release tags)
+      - name: Add commits without new release tags
+        run: |
+          echo "additional change 1" > change1.txt
+          git add change1.txt
+          git commit -m "Some development work (MINOR)"
+
+          echo "additional change 2" > change2.txt
+          git add change2.txt
+          git commit -m "Bug fix (PATCH)"
+
+          echo "additional change 3" > change3.txt
+          git add change3.txt
+          git commit -m "Breaking change (MAJOR)"
+
+      - name: Third dev tag generation (with additional commits)
+        id: third-dev-call
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Fourth dev tag generation (with additional commits)
+        id: fourth-dev-call
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev tag consistency with commits
+        run: |
+          echo "Third dev call results (with commits):"
+          echo "  Latest semver: ${{ steps.third-dev-call.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.third-dev-call.outputs.new_version }}"
+          echo "  Final version: ${{ steps.third-dev-call.outputs.final_version }}"
+          echo ""
+          echo "Fourth dev call results (with commits):"
+          echo "  Latest semver: ${{ steps.fourth-dev-call.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.fourth-dev-call.outputs.new_version }}"
+          echo "  Final version: ${{ steps.fourth-dev-call.outputs.final_version }}"
+
+          # Latest semver should still be the same (v2.3.5 - no new release tags)
+          if [ "${{ steps.third-dev-call.outputs.latest_semver }}" != "v2.3.5" ]; then
+            echo "FAIL: Expected latest_semver to still be v2.3.5 (no new release tags)"
+            exit 1
+          fi
+
+          if [ "${{ steps.fourth-dev-call.outputs.latest_semver }}" != "v2.3.5" ]; then
+            echo "FAIL: Expected latest_semver to still be v2.3.5 (no new release tags)"
+            exit 1
+          fi
+
+          # New version should still be v2.4.0 (dev always increments minor from latest release)
+          if [ "${{ steps.third-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+            echo "FAIL: Expected new_version to still be v2.4.0 (dev ignores commit indicators)"
+            exit 1
+          fi
+
+          if [ "${{ steps.fourth-dev-call.outputs.new_version }}" != "v2.4.0" ]; then
+            echo "FAIL: Expected new_version to still be v2.4.0 (dev ignores commit indicators)"
+            exit 1
+          fi
+
+          # Final versions should be identical (same date)
+          if [ "${{ steps.third-dev-call.outputs.final_version }}" != "${{ steps.fourth-dev-call.outputs.final_version }}" ]; then
+            echo "FAIL: Expected final_version to be identical in both calls with commits"
+            exit 1
+          fi
+
+          echo "PASS: Dev tag consistency with commits test passed - dev tags ignore commit content and remain consistent"
 
   test-edge-cases:
     name: Test Edge Cases
@@ -361,18 +673,273 @@ jobs:
 
           echo "PASS: Integration test passed"
 
+  test-force-bump-and-ignore-commits:
+    name: Test Force Bump and Ignore Commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      # Test force-bump-type functionality
+      - name: Create commit with MINOR indicator
+        run: |
+          echo "feature" > feature.txt
+          git add feature.txt
+          git commit -m "Add new feature (MINOR)"
+
+      - name: Test force-bump-type overrides commit analysis
+        id: test-force-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          force-bump-type: "major"
+
+      - name: Verify force-bump-type works
+        run: |
+          echo "Force bump test results:"
+          echo "  Bump type: ${{ steps.test-force-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-force-major.outputs.new_version }}"
+
+          if [ "${{ steps.test-force-major.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected forced bump_type to be major, got ${{ steps.test-force-major.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-force-major.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-force-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Force bump type test passed"
+
+      # Test ignore-commits functionality
+      - name: Reset and create multiple commits
+        id: setup-ignore-test
+        run: |
+          git reset --hard v1.0.0
+
+          # Create commit with MAJOR indicator
+          echo "breaking change" > breaking.txt
+          git add breaking.txt
+          git commit -m "Breaking API change (MAJOR)"
+          MAJOR_SHA=$(git rev-parse HEAD)
+          echo "major-sha=$MAJOR_SHA" >> $GITHUB_OUTPUT
+
+          # Create commit with MINOR indicator
+          echo "new feature" > feature.txt
+          git add feature.txt
+          git commit -m "Add dashboard (MINOR)"
+
+      - name: Test ignore-commits with MAJOR commit ignored
+        id: test-ignore-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: ${{ steps.setup-ignore-test.outputs.major-sha }}
+
+      - name: Verify ignore-commits works
+        run: |
+          echo "Ignore commits test results:"
+          echo "  Bump type: ${{ steps.test-ignore-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-ignore-major.outputs.new_version }}"
+          echo "  Ignored SHA: ${{ steps.setup-ignore-test.outputs.major-sha }}"
+
+          # Should be minor since we ignored the major commit
+          if [ "${{ steps.test-ignore-major.outputs.bump_type }}" != "minor" ]; then
+            echo "FAIL: Expected bump_type to be minor after ignoring major commit, got ${{ steps.test-ignore-major.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-ignore-major.outputs.new_version }}" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-ignore-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Ignore commits test passed"
+
+      # Test multiple ignored commits
+      - name: Reset and create multiple commits to ignore
+        run: |
+          git reset --hard v1.0.0
+
+          # Create first commit to ignore
+          echo "fixing1" > fixing1.txt
+          git add fixing1.txt
+          git commit -m "Fix bug 1 (PATCH)"
+          PATCH_SHA1=$(git rev-parse HEAD)
+
+          # Create second commit to ignore
+          echo "fixing2" > fixing2.txt
+          git add fixing2.txt
+          git commit -m "Fix bug 2 (PATCH)"
+          PATCH_SHA2=$(git rev-parse HEAD)
+
+          # Create commit to keep
+          echo "patch fix" > patch.txt
+          git add patch.txt
+          git commit -m "Fix bug"
+
+          echo "PATCH_SHA1=$PATCH_SHA1" >> $GITHUB_ENV
+          echo "PATCH_SHA2=$PATCH_SHA2" >> $GITHUB_ENV
+
+            # Test multiple ignored commits
+      - name: Create additional commits for multiple ignore test
+        id: setup-multiple-ignore
+        run: |
+          # Create another MAJOR commit
+          echo "another breaking change" > breaking2.txt
+          git add breaking2.txt
+          git commit -m "Another API break (MAJOR)"
+          MAJOR_SHA1=$(git rev-parse HEAD)
+          echo "major-sha1=$MAJOR_SHA1" >> $GITHUB_OUTPUT
+
+          # Create another MAJOR commit
+          echo "yet another breaking change" > breaking3.txt
+          git add breaking3.txt
+          git commit -m "Yet another break (MAJOR)"
+          MAJOR_SHA2=$(git rev-parse HEAD)
+          echo "major-sha2=$MAJOR_SHA2" >> $GITHUB_OUTPUT
+
+      - name: Test multiple ignore-commits
+        id: test-ignore-multiple
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: "${{ steps.setup-multiple-ignore.outputs.major-sha1 }},${{ steps.setup-multiple-ignore.outputs.major-sha2 }}"
+
+      - name: Verify multiple ignored commits
+        run: |
+          echo "Multiple ignore test results:"
+          echo "  Bump type: ${{ steps.test-ignore-multiple.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-ignore-multiple.outputs.new_version }}"
+
+          # Should be patch since we ignored both major commits
+          if [ "${{ steps.test-ignore-multiple.outputs.bump_type }}" != "patch" ]; then
+            echo "FAIL: Expected bump_type to be patch after ignoring major commits, got ${{ steps.test-ignore-multiple.outputs.bump_type }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-ignore-multiple.outputs.new_version }}" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-ignore-multiple.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: Multiple ignore commits test passed"
+
+      # Test force-bump-type with none
+      - name: Test force-bump-type none
+        id: test-force-none
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          force-bump-type: "none"
+
+      - name: Verify force none bump
+        run: |
+          echo "Force none test results:"
+          echo "  Bump type: ${{ steps.test-force-none.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-force-none.outputs.new_version }}"
+
+          if [ "${{ steps.test-force-none.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected forced bump_type to be none"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-force-none.outputs.new_version }}" != "v1.0.0" ]; then
+            echo "FAIL: Expected new_version to stay v1.0.0 with no bump"
+            exit 1
+          fi
+          echo "PASS: Force none bump test passed"
+
+      # Test ignore with short SHA
+      - name: Test ignore with short SHA
+        id: setup-short-sha-test
+        run: |
+          git reset --hard v1.0.0
+          echo "major change" > major.txt
+          git add major.txt
+          git commit -m "API breaking change (MAJOR)"
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "short-sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "full-sha=$FULL_SHA" >> $GITHUB_OUTPUT
+
+      - name: Test ignore-commits with short SHA
+        id: test-ignore-short-sha
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+          ignore-commits: ${{ steps.setup-short-sha-test.outputs.short-sha }}
+
+      - name: Verify short SHA ignore works
+        run: |
+          echo "Short SHA ignore test results:"
+          echo "  Bump type: ${{ steps.test-ignore-short-sha.outputs.bump_type }}"
+          echo "  Short SHA used: ${{ steps.setup-short-sha-test.outputs.short-sha }}"
+          echo "  Full SHA: ${{ steps.setup-short-sha-test.outputs.full-sha }}"
+
+          # Should be none since we ignored the only commit
+          if [ "${{ steps.test-ignore-short-sha.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected bump_type to be none after ignoring commit with short SHA"
+            exit 1
+          fi
+          echo "PASS: Short SHA ignore test passed"
+
+      - name: New features test summary
+        run: |
+          echo "All new feature tests passed!"
+          echo ""
+          echo "New feature test coverage includes:"
+          echo "  - Force bump type overrides commit analysis"
+          echo "  - Ignore specific commits by full SHA"
+          echo "  - Ignore multiple commits"
+          echo "  - Force bump type to none"
+          echo "  - Ignore commits using short SHA"
+
+  final-test-summary:
+    name: Final Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits]
+    steps:
       - name: Test summary
         run: |
-          echo "All tests passed successfully!"
+          echo "🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉"
           echo ""
-          echo "Test coverage includes:"
-          echo "  - No previous tags scenario"
-          echo "  - Existing tags detection"
-          echo "  - RC tag generation"
-          echo "  - Dev tag generation"
-          echo "  - MAJOR version bumping"
-          echo "  - MINOR version bumping"
-          echo "  - PATCH version bumping"
-          echo "  - No bump scenario"
-          echo "  - RC increment logic"
-          echo "  - Integration scenario"
+          echo "Complete test coverage includes:"
+          echo ""
+          echo "Basic Functionality:"
+          echo "  ✅ No previous tags scenario"
+          echo "  ✅ Existing tags detection"
+          echo "  ✅ RC tag generation"
+          echo "  ✅ Dev tag generation"
+          echo ""
+          echo "Version Bumping:"
+          echo "  ✅ MAJOR version bumping"
+          echo "  ✅ MINOR version bumping"
+          echo "  ✅ PATCH version bumping"
+          echo "  ✅ No bump scenario"
+          echo ""
+          echo "Dev Tag Versioning:"
+          echo "  ✅ Dev tag minor increment from v1.5.3"
+          echo "  ✅ Dev tag minor increment from v3.0.0"
+          echo "  ✅ Dev tag minor increment from v0.0.0"
+          echo "  ✅ Dev tag ignores commit indicators"
+          echo "  ✅ Dev tag consistency across multiple calls"
+          echo "  ✅ Dev tag consistency with additional commits"
+          echo ""
+          echo "Advanced Features:"
+          echo "  ✅ RC increment logic"
+          echo "  ✅ Integration scenario"
+          echo "  ✅ Force bump type overrides"
+          echo "  ✅ Ignore commits by SHA"
+          echo "  ✅ Multiple ignored commits"
+          echo "  ✅ Force no bump"
+          echo "  ✅ Short SHA support"
+          echo ""
+          echo "The calculate-version action is working correctly! 🚀"

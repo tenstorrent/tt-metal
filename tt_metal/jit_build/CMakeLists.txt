@@ -2,6 +2,7 @@ set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/build_env_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/depend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/genfiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_build_options.cpp
@@ -9,6 +10,10 @@ set(JIT_BUILD_SRCS
 )
 
 add_library(jit_build OBJECT ${JIT_BUILD_SRCS})
+
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(jit_build)
+
 target_link_libraries(
     jit_build
     PUBLIC

@@ -63,7 +63,7 @@ fi
 ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 # install requirements
-mpirun --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/requirements.txt
+mpirun-ulfm --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/requirements.txt
 
 CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE}"
 # use tt-run to run the training script across all machines

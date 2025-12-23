@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     pad_or_trim_seq_len,
     run_module_forward,
 )
@@ -58,7 +59,7 @@ def test_forward_pass(
     hf_config: Any,
     mesh_device: ttnn.Device,
     ccl: CCL,
-    tmp_path: Path,
+    cache_path: Path,
     set_deterministic_env: Any,
 ):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
@@ -71,8 +72,9 @@ def test_forward_pass(
     # Pad input to SEQ_LEN_CHUNK_SIZE if necessary
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
-    # Setup: Convert weights and get weight_config
-    weight_config = LMHead.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+    )
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

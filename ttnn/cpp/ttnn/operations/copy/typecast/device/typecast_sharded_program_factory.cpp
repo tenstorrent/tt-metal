@@ -90,8 +90,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
     log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
@@ -161,8 +161,8 @@ void TypecastShardedProgramFactory::override_runtime_arguments(
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }

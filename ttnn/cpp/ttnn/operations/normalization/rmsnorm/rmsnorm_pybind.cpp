@@ -19,8 +19,6 @@ void bind_normalization_rms_norm(py::module& module) {
         module,
         ttnn::rms_norm,
         R"doc(
-            ``ttnn.rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
-
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
@@ -92,18 +90,7 @@ void bind_normalization_rms_norm(py::module& module) {
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
             - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
-
-        Example:
-            .. code-block:: python
-
-              h, w = 32, 64
-              batch_size = 1
-
-              input_tensor = ttnn.rand([batch_size, h, w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-              weight = ttnn.rand([w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-              output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
-
-            )doc",
+        )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),

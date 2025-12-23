@@ -696,6 +696,7 @@ def load_dit(
             model_name="mochi-1-preview",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -704,7 +705,7 @@ def load_dit(
         cache_dict = load_cache_dict(cache_path)
         transformer.from_cached_state_dict(cache_dict)
     else:
-        transformer.load_state_dict(torch_transformer.state_dict())
+        transformer.load_torch_state_dict(torch_transformer.state_dict())
 
     return transformer
 
