@@ -7,6 +7,7 @@
 import numpy as np
 import ml_dtypes
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
@@ -31,13 +32,13 @@ class GPTMLP(AbstractModuleBase):
         # Linear weights must be in TILE layout
         fc1_shape = (1, 1, embedding_dim * 4, embedding_dim)
         fc1_np = np.random.normal(0.0, 0.02, size=fc1_shape).astype(ml_dtypes.bfloat16)
-        fc1_tensor = ttml.autograd.Tensor.from_numpy(fc1_np, layout=ttml.Layout.TILE)
+        fc1_tensor = ttml.autograd.Tensor.from_numpy(fc1_np, layout=ttnn.Layout.TILE)
         self.fc1 = Parameter(fc1_tensor)
 
         # Second linear: embedding_dim * 4 -> embedding_dim
         fc2_shape = (1, 1, embedding_dim, embedding_dim * 4)
         fc2_np = np.random.normal(0.0, 0.02, size=fc2_shape).astype(ml_dtypes.bfloat16)
-        fc2_tensor = ttml.autograd.Tensor.from_numpy(fc2_np, layout=ttml.Layout.TILE)
+        fc2_tensor = ttml.autograd.Tensor.from_numpy(fc2_np, layout=ttnn.Layout.TILE)
         self.fc2 = Parameter(fc2_tensor)
 
     # train() and eval() are inherited from AbstractModuleBase

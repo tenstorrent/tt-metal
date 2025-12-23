@@ -31,6 +31,7 @@ import numpy as np
 import ml_dtypes
 import yaml
 
+import ttnn
 import ttml
 from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from ttml.modules import Parameter
@@ -245,7 +246,7 @@ def create_mask(sequence_length: int, device) -> ttml.autograd.Tensor:
     # Use TILE layout and BFLOAT16 to match C++ implementation
     mask = mask.reshape(1, 1, sequence_length, sequence_length)
     mask_tensor = ttml.autograd.Tensor.from_numpy(
-        mask, layout=ttml.Layout.TILE, new_type=ttml.autograd.DataType.BFLOAT16
+        mask, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
     return mask_tensor
 
@@ -268,10 +269,10 @@ def collate_fn(
     targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, sequence_length)
 
     data_tensor = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttml.Layout.ROW_MAJOR, new_type=ttml.autograd.DataType.UINT32
+        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
     targets_tensor = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttml.Layout.ROW_MAJOR, new_type=ttml.autograd.DataType.UINT32
+        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
 
     return data_tensor, targets_tensor
@@ -290,7 +291,7 @@ def get_loss_value(loss: ttml.autograd.Tensor) -> float:
     Returns:
         Loss value as float
     """
-    loss_np = loss.to_numpy(ttml.autograd.DataType.FLOAT32)
+    loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
 
     # Handle scalar or multi-element tensor
     if loss_np.size == 1:
@@ -369,9 +370,7 @@ def train_step(
 
         # Apply learning rate scheduler if provided (matching C++: scheduler->step())
         if scheduler_fn is not None:
-            lr_scale = scheduler_fn(scheduler_step)
-            # Update optimizer learning rate
-            # Note: ttml optimizer may need different API for LR update
+            scheduler_fn(scheduler_step)
 
     step_time = (time.time() - start_time) * 1000  # Convert to ms
     return loss_float, step_time, should_step
@@ -521,7 +520,7 @@ def sample_greedy(
             1, 1, 1, sequence_length
         )
         input_tensor = ttml.autograd.Tensor.from_numpy(
-            inp, layout=ttml.Layout.ROW_MAJOR, new_type=ttml.autograd.DataType.UINT32
+            inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
 
         # Forward pass with causal mask (matching C++ model call)
@@ -529,7 +528,7 @@ def sample_greedy(
 
         # Get logits for last position
         # Model returns shape [B, 1, seq_len, vocab_size] or [B, 1, 1, seq_len, vocab_size]
-        logits_np = logits.to_numpy(ttml.autograd.DataType.FLOAT32)
+        logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
         logits_shape = logits_np.shape
 
         # Handle different possible shapes
@@ -572,7 +571,8 @@ def sample_greedy(
                 :, 0:1
             ]
             indices_to_remove = last_logits < threshold
-            last_logits[indices_to_remove] = -1e9  # Use large negative instead of -inf
+            # Use large negative instead of -inf
+            last_logits[indices_to_remove] = -1e9
 
         # Convert to probabilities using softmax (numerically stable)
         max_logits = np.max(last_logits, axis=-1, keepdims=True)
@@ -656,10 +656,10 @@ def save_checkpoint(
         try:
             layout = tensor.get_layout()
         except:
-            layout = ttml.Layout.TILE  # Default for weights
+            layout = ttnn.Layout.TILE  # Default for weights
 
         # Convert tensor to numpy for serialization
-        numpy_array = tensor.to_numpy(ttml.autograd.DataType.FLOAT32)
+        numpy_array = tensor.to_numpy(ttnn.DataType.FLOAT32)
         model_state[name] = {
             "data": numpy_array,
             "layout": layout.value if hasattr(layout, "value") else str(layout),
@@ -742,9 +742,9 @@ def load_model_from_checkpoint(
 
         # Determine layout
         if layout_str == "ROW_MAJOR" or "ROW_MAJOR" in str(layout_str):
-            layout = ttml.Layout.ROW_MAJOR
+            layout = ttnn.Layout.ROW_MAJOR
         else:
-            layout = ttml.Layout.TILE  # Default for weights
+            layout = ttnn.Layout.TILE  # Default for weights
 
         # Convert numpy back to ttml tensor
         # Use bfloat16 for weights (matching initialization)
@@ -752,7 +752,7 @@ def load_model_from_checkpoint(
             numpy_array = numpy_array.astype(np.float32)
         numpy_bfloat16 = numpy_array.astype(ml_dtypes.bfloat16)
         restored_tensor = ttml.autograd.Tensor.from_numpy(
-            numpy_bfloat16, layout=layout, new_type=ttml.autograd.DataType.BFLOAT16
+            numpy_bfloat16, layout=layout, new_type=ttnn.DataType.BFLOAT16
         )
 
         # Update the parameter in the model
@@ -1127,7 +1127,7 @@ def main():
 
         # Count parameters
         total_params = sum(
-            p.tensor.to_numpy(ttml.autograd.DataType.FLOAT32).size
+            p.tensor.to_numpy(ttnn.DataType.FLOAT32).size
             for p in model.parameters().values()
             if isinstance(p, Parameter) and hasattr(p, "tensor")
         )

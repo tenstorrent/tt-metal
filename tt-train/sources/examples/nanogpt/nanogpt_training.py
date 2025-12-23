@@ -17,6 +17,7 @@ import os
 import numpy as np
 from typing import Tuple, Optional
 
+import ttnn
 import ttml
 from ttml.models import NanoGPT, NanoGPTConfig, create_nanogpt
 
@@ -188,8 +189,8 @@ def train_step(
     # Input: [B, seq_len] -> [B, 1, 1, seq_len] (UINT32)
     input_tensor = ttml.autograd.Tensor.from_numpy(
         input_tokens.reshape(batch_size, 1, 1, seq_len),
-        layout=ttml.Layout.ROW_MAJOR,
-        new_type=ttml.autograd.DataType.UINT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        new_type=ttnn.DataType.UINT32,
     )
 
     # Forward pass
@@ -199,7 +200,7 @@ def train_step(
 
     # Reshape logits for loss computation if needed
     # C++ implementation expects: logits [B, 1, seq_len, vocab_size], targets [B, seq_len]
-    logits_np = logits.to_numpy(ttml.autograd.DataType.FLOAT32)
+    logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
     if len(logits_np.shape) == 5:
         # Reshape from [B, 1, 1, seq_len, vocab_size] to [B, 1, seq_len, vocab_size]
         logits_reshaped = logits_np.reshape(batch_size, 1, seq_len, logits_np.shape[-1])
@@ -212,8 +213,8 @@ def train_step(
     # Target: [B, seq_len] (UINT32) - matching C++ implementation
     target_tensor = ttml.autograd.Tensor.from_numpy(
         target_tokens,
-        layout=ttml.Layout.ROW_MAJOR,
-        new_type=ttml.autograd.DataType.UINT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        new_type=ttnn.DataType.UINT32,
     )
 
     # Compute loss (matching C++: ttml::ops::cross_entropy_loss(output, target))
@@ -231,7 +232,7 @@ def train_step(
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
     # Get loss value
-    loss_val = float(loss.to_numpy(ttml.autograd.DataType.FLOAT32))
+    loss_val = float(loss.to_numpy(ttnn.DataType.FLOAT32))
     return loss_val
 
 
@@ -295,12 +296,12 @@ def train(
             batch_size_val = val_input.shape[0]
             val_input_tensor = ttml.autograd.Tensor.from_numpy(
                 val_input.reshape(batch_size_val, 1, 1, seq_len),
-                layout=ttml.Layout.ROW_MAJOR,
-                new_type=ttml.autograd.DataType.UINT32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                new_type=ttnn.DataType.UINT32,
             )
 
             val_logits = model(val_input_tensor)
-            val_logits_np = val_logits.to_numpy(ttml.autograd.DataType.FLOAT32)
+            val_logits_np = val_logits.to_numpy(ttnn.DataType.FLOAT32)
             val_logits_reshaped = val_logits_np.reshape(
                 batch_size_val, 1, seq_len, val_logits_np.shape[-1]
             )
@@ -310,14 +311,14 @@ def train(
 
             val_target_tensor = ttml.autograd.Tensor.from_numpy(
                 val_target,
-                layout=ttml.Layout.ROW_MAJOR,
-                new_type=ttml.autograd.DataType.UINT32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                new_type=ttnn.DataType.UINT32,
             )
 
             val_loss = ttml.ops.loss.cross_entropy_loss(
                 val_logits_tensor, val_target_tensor, reduce=ttml.ops.ReduceType.MEAN
             )
-            val_loss_val = float(val_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
+            val_loss_val = float(val_loss.to_numpy(ttnn.DataType.FLOAT32))
             val_losses.append(val_loss_val)
 
             print(f"  Validation loss: {val_loss_val:.4f}")
@@ -363,8 +364,7 @@ def main():
     # Count parameters
     params = model.parameters()
     total_params = sum(
-        np.prod(p.to_numpy(ttml.autograd.DataType.FLOAT32).shape)
-        for p in params.values()
+        np.prod(p.to_numpy(ttnn.DataType.FLOAT32).shape) for p in params.values()
     )
     print(f"   - Total parameters: {total_params:,}")
 

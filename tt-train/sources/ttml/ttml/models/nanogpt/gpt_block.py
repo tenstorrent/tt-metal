@@ -9,6 +9,7 @@ from typing import Optional
 import numpy as np
 import ml_dtypes
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
@@ -45,14 +46,14 @@ class GPTBlock(AbstractModuleBase):
         ln_shape = (1, 1, 1, embedding_dim)
         gamma1_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
         gamma1_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma1_np, layout=ttml.Layout.TILE
+            gamma1_np, layout=ttnn.Layout.TILE
         )
         self.ln1_gamma = Parameter(gamma1_tensor)
 
         if bias:
             beta1_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
             beta1_tensor = ttml.autograd.Tensor.from_numpy(
-                beta1_np, layout=ttml.Layout.TILE
+                beta1_np, layout=ttnn.Layout.TILE
             )
             self.ln1_beta = Parameter(beta1_tensor)
         else:
@@ -60,14 +61,14 @@ class GPTBlock(AbstractModuleBase):
 
         gamma2_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
         gamma2_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma2_np, layout=ttml.Layout.TILE
+            gamma2_np, layout=ttnn.Layout.TILE
         )
         self.ln2_gamma = Parameter(gamma2_tensor)
 
         if bias:
             beta2_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
             beta2_tensor = ttml.autograd.Tensor.from_numpy(
-                beta2_np, layout=ttml.Layout.TILE
+                beta2_np, layout=ttnn.Layout.TILE
             )
             self.ln2_beta = Parameter(beta2_tensor)
         else:

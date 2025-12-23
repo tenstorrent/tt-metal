@@ -10,6 +10,7 @@ from typing import Optional
 import numpy as np
 import ml_dtypes  # Used for bfloat16 type in fallback initialization
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
@@ -55,13 +56,13 @@ class MultiHeadAttention(AbstractModuleBase):
         # Linear weights must be in TILE layout
         qkv_shape = (1, 1, embedding_dim * 3, embedding_dim)
         qkv_np = np.random.normal(0.0, 0.02, size=qkv_shape).astype(ml_dtypes.bfloat16)
-        qkv_tensor = ttml.autograd.Tensor.from_numpy(qkv_np, layout=ttml.Layout.TILE)
+        qkv_tensor = ttml.autograd.Tensor.from_numpy(qkv_np, layout=ttnn.Layout.TILE)
         self.qkv = Parameter(qkv_tensor)
 
         # Output projection: embedding_dim -> embedding_dim
         out_shape = (1, 1, embedding_dim, embedding_dim)
         out_np = np.random.normal(0.0, 0.02, size=out_shape).astype(ml_dtypes.bfloat16)
-        out_tensor = ttml.autograd.Tensor.from_numpy(out_np, layout=ttml.Layout.TILE)
+        out_tensor = ttml.autograd.Tensor.from_numpy(out_np, layout=ttnn.Layout.TILE)
         self.out_proj = Parameter(out_tensor)
 
     # train() and eval() are inherited from AbstractModuleBase

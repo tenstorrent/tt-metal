@@ -109,9 +109,6 @@ def test_python_override_precedence():
 
 def test_conditional_import_no_overwrite():
     """Test that existing Python symbols are not overwritten."""
-    # Create a test attribute before import
-    test_value = "test_python_override"
-
     # Check that Python implementations in modules weren't overwritten
     from ttml.modules.module_base import AbstractModuleBase as PyAbstractModuleBase
     from ttml.modules.parameter import Parameter as PyParameter
@@ -351,5 +348,8 @@ def test_submodule_imported(submodule_name):
     assert _ttml_attrs
     # At least some public symbols should be available
     imported_attrs = [attr for attr in _ttml_attrs if hasattr(ttml_submodule, attr)]
-    # We don't require all symbols to be imported (some might be filtered)
-    # but the submodule should exist and be accessible
+
+    assert imported_attrs, (
+        f"Expected ttml.{submodule_name} to import at least one public symbol from "
+        f"_ttml.{submodule_name}"
+    )

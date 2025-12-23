@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import ml_dtypes
 
+import ttnn
 import ttml
 from ttml.models import NanoGPT, NanoGPTConfig, create_nanogpt
 from ttml.modules import Parameter
@@ -63,7 +64,8 @@ class TrainingConfig:
     min_lr_factor: float = 0.1  # Minimum LR as fraction of base LR
 
     # Data configuration
-    data_path: Optional[str] = None  # Path to text file, or None for Shakespeare
+    # Path to text file, or None for Shakespeare
+    data_path: Optional[str] = None
     train_split: float = 0.9
 
     # Checkpointing
@@ -82,8 +84,10 @@ class TrainingConfig:
         presets = {
             "tiny": {"n_embd": 128, "n_layer": 2, "n_head": 2},
             "small": {"n_embd": 256, "n_layer": 4, "n_head": 4},
-            "medium": {"n_embd": 384, "n_layer": 6, "n_head": 6},  # NanoGPT default
-            "large": {"n_embd": 768, "n_layer": 12, "n_head": 12},  # GPT-2 small
+            # NanoGPT default
+            "medium": {"n_embd": 384, "n_layer": 6, "n_head": 6},
+            # GPT-2 small
+            "large": {"n_embd": 768, "n_layer": 12, "n_head": 12},
         }
 
         if self.model_size not in presets:
@@ -292,7 +296,7 @@ def save_checkpoint(
         try:
             layout = tensor.get_layout()
         except:
-            layout = ttml.Layout.TILE  # Default for weights
+            layout = ttnn.Layout.TILE  # Default for weights
 
         # Convert tensor to numpy for serialization
         numpy_array = tensor.to_numpy()
@@ -383,9 +387,9 @@ def load_checkpoint(
 
             # Determine layout
             if layout_str == "ROW_MAJOR" or "ROW_MAJOR" in str(layout_str):
-                layout = ttml.Layout.ROW_MAJOR
+                layout = ttnn.Layout.ROW_MAJOR
             else:
-                layout = ttml.Layout.TILE  # Default for weights
+                layout = ttnn.Layout.TILE  # Default for weights
 
             # Convert numpy back to ttml tensor
             # Use bfloat16 for weights (matching initialization)
@@ -444,8 +448,8 @@ def train_step(
     # Convert to ttml tensors
     input_tensor = ttml.autograd.Tensor.from_numpy(
         input_tokens.reshape(batch_size, 1, 1, seq_len),
-        layout=ttml.Layout.ROW_MAJOR,
-        new_type=ttml.autograd.DataType.UINT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        new_type=ttnn.DataType.UINT32,
     )
 
     # Forward pass
@@ -453,17 +457,6 @@ def train_step(
 
     # Model should now output [B, 1, seq_len, vocab_size] directly (reshaped in model.forward)
     logits_shape = logits.shape()
-
-    # Debug: print shapes on first few steps
-    if not hasattr(train_step, "_debug_count"):
-        train_step._debug_count = 0
-    train_step._debug_count += 1
-
-    if train_step._debug_count <= 3:
-        print(f"  [DEBUG Step {train_step._debug_count}] logits shape: {logits_shape}")
-        print(
-            f"  [DEBUG Step {train_step._debug_count}] target shape: {target_tokens.shape}"
-        )
 
     # Model should already output correct 4D shape [B, 1, seq_len, vocab_size]
     # Use logits directly - model.forward already handles reshaping
@@ -473,51 +466,17 @@ def train_step(
     # target_tokens is already [B, seq_len] from get_batch, convert to ttml tensor
     target_tensor = ttml.autograd.Tensor.from_numpy(
         target_tokens,
-        layout=ttml.Layout.ROW_MAJOR,
-        new_type=ttml.autograd.DataType.UINT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        new_type=ttnn.DataType.UINT32,
     )
-
-    if train_step._debug_count <= 3:
-        target_shape = target_tensor.shape()
-        logits_final_shape = logits_tensor.shape()
-        print(
-            f"  [DEBUG Step {train_step._debug_count}] logits_tensor final: {logits_final_shape}"
-        )
-        print(
-            f"  [DEBUG Step {train_step._debug_count}] target_tensor final: {target_shape}"
-        )
 
     # Compute loss
     loss = ttml.ops.loss.cross_entropy_loss(
         logits_tensor, target_tensor, reduce=ttml.ops.ReduceType.MEAN
     )
 
-    if train_step._debug_count <= 3:
-        loss_val_before = float(
-            loss.to_numpy().item()
-            if hasattr(loss.to_numpy(), "item")
-            else loss.to_numpy()
-        )
-        print(f"  DEBUG: loss before backward: {loss_val_before:.4f}")
-
     # Backward pass
     loss.backward(False)
-
-    # Check if gradients are flowing
-    if train_step._debug_count <= 3:
-        has_grads = False
-        grad_count = 0
-        for name, param in model.parameters().items():
-            if isinstance(param, Parameter):
-                tensor = param.tensor
-            else:
-                tensor = param
-            if tensor.is_grad_initialized():
-                has_grads = True
-                grad_count += 1
-        print(
-            f"  DEBUG: Parameters with gradients: {grad_count}/{len(model.parameters())}"
-        )
 
     # Optimizer step
     optimizer.step()
@@ -593,8 +552,8 @@ def train(
             batch_size_val = val_input.shape[0]
             val_input_tensor = ttml.autograd.Tensor.from_numpy(
                 val_input.reshape(batch_size_val, 1, 1, config.seq_len),
-                layout=ttml.Layout.ROW_MAJOR,
-                new_type=ttml.autograd.DataType.UINT32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                new_type=ttnn.DataType.UINT32,
             )
 
             val_logits = model(val_input_tensor)
@@ -609,8 +568,8 @@ def train(
 
             val_target_tensor = ttml.autograd.Tensor.from_numpy(
                 val_target,
-                layout=ttml.Layout.ROW_MAJOR,
-                new_type=ttml.autograd.DataType.UINT32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                new_type=ttnn.DataType.UINT32,
             )
 
             val_loss = ttml.ops.loss.cross_entropy_loss(

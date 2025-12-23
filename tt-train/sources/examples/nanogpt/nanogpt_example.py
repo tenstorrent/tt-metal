@@ -13,6 +13,7 @@ This example shows how to:
 
 import numpy as np
 
+import ttnn
 import ttml
 from ttml.models import NanoGPT, NanoGPTConfig, create_nanogpt
 
@@ -64,7 +65,7 @@ def main():
     # Count total parameters (approximate)
     total_params = 0
     for name, param in params.items():
-        param_shape = param.to_numpy(ttml.autograd.DataType.FLOAT32).shape
+        param_shape = param.to_numpy(ttnn.DataType.FLOAT32).shape
         param_count = np.prod(param_shape)
         total_params += param_count
         if (
@@ -96,8 +97,8 @@ def main():
     # Convert to ttml tensor with UINT32 dtype (required by embedding operation)
     input_tensor = ttml.autograd.Tensor.from_numpy(
         token_indices,
-        layout=ttml.Layout.ROW_MAJOR,
-        new_type=ttml.autograd.DataType.UINT32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        new_type=ttnn.DataType.UINT32,
     )
     print(f"   - Input tensor created: {type(input_tensor).__name__}")
     print(f"   - Input tensor dtype: UINT32 (required for embedding)")
@@ -109,7 +110,7 @@ def main():
         logits = model(input_tensor)
 
         # Get output shape (convert to float32 for NumPy operations)
-        logits_np = logits.to_numpy(ttml.autograd.DataType.FLOAT32)
+        logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
         print(f"   - Forward pass successful!")
         print(f"   - Output logits shape: {logits_np.shape}")
         print(
@@ -154,8 +155,8 @@ def main():
         )
         target_tensor = ttml.autograd.Tensor.from_numpy(
             target_tokens,
-            layout=ttml.Layout.ROW_MAJOR,
-            new_type=ttml.autograd.DataType.UINT32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            new_type=ttnn.DataType.UINT32,
         )
 
         # Convert to ttml tensors for loss computation
@@ -169,7 +170,7 @@ def main():
             logits_tensor, target_tensor, reduce=ttml.ops.ReduceType.MEAN
         )
 
-        loss_np = loss.to_numpy(ttml.autograd.DataType.FLOAT32)
+        loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
         print(f"   - Loss computed successfully!")
         print(f"   - Cross-entropy loss: {loss_np.item():.4f}")
         print(
@@ -193,7 +194,7 @@ def main():
     try:
         # Access token embedding weight
         wte_weight = model.wte.weight.tensor
-        wte_weight_np = wte_weight.to_numpy(ttml.autograd.DataType.FLOAT32)
+        wte_weight_np = wte_weight.to_numpy(ttnn.DataType.FLOAT32)
         print(f"   - Token embedding weight shape: {wte_weight_np.shape}")
         print(
             f"   - Token embedding weight stats: mean={wte_weight_np.mean():.4f}, std={wte_weight_np.std():.4f}"
@@ -203,7 +204,7 @@ def main():
         first_block = model.blocks[0]
         if hasattr(first_block.attention, "qkv"):
             qkv_weight = first_block.attention.qkv.tensor
-            qkv_weight_np = qkv_weight.to_numpy(ttml.autograd.DataType.FLOAT32)
+            qkv_weight_np = qkv_weight.to_numpy(ttnn.DataType.FLOAT32)
             print(f"   - First block QKV weight shape: {qkv_weight_np.shape}")
     except Exception as e:
         print(f"   - Parameter access note: {e}")

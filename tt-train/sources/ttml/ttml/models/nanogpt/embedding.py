@@ -7,6 +7,7 @@
 import numpy as np
 import ml_dtypes
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
 
@@ -31,7 +32,7 @@ class Embedding(AbstractModuleBase):
             ml_dtypes.bfloat16
         )
         weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttml.Layout.TILE
+            weight_np, layout=ttnn.Layout.TILE
         )
         self.weight = Parameter(weight_tensor)
 

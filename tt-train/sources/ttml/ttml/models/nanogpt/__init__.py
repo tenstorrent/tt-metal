@@ -14,6 +14,7 @@ from typing import Optional
 import numpy as np
 import ml_dtypes
 
+import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
@@ -68,14 +69,14 @@ class NanoGPT(AbstractModuleBase):
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)
         gamma_f_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_f_np, layout=ttml.Layout.TILE
+            gamma_f_np, layout=ttnn.Layout.TILE
         )
         self.ln_f_gamma = Parameter(gamma_f_tensor)
 
         if config.bias:
             beta_f_np = np.zeros(ln_f_shape, dtype=ml_dtypes.bfloat16)
             beta_f_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_f_np, layout=ttml.Layout.TILE
+                beta_f_np, layout=ttnn.Layout.TILE
             )
             self.ln_f_beta = Parameter(beta_f_tensor)
         else:
@@ -107,11 +108,11 @@ class NanoGPT(AbstractModuleBase):
 
         # Create position indices
         # Get sequence length from input
-        idx_np = idx.to_numpy(ttml.autograd.DataType.UINT32)
+        idx_np = idx.to_numpy(ttnn.DataType.UINT32)
         seq_len = idx_np.shape[-1]
         pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
         pos = ttml.autograd.Tensor.from_numpy(
-            pos_np, layout=ttml.Layout.ROW_MAJOR, new_type=ttml.autograd.DataType.UINT32
+            pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
         pos_emb = self.wpe(pos)
 

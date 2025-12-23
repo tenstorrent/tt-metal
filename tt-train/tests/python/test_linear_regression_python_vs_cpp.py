@@ -11,6 +11,7 @@ equivalent results to the C++ implementation from _ttml.
 import numpy as np
 import pytest
 
+import ttnn
 import ttml  # noqa: E402
 
 
@@ -88,8 +89,8 @@ def test_forward_pass_shape(sample_data):
     py_output = py_model(tt_x)
 
     # Check shapes
-    cpp_shape = cpp_output.to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    py_shape = py_output.to_numpy(ttml.autograd.DataType.FLOAT32).shape
+    cpp_shape = cpp_output.to_numpy(ttnn.DataType.FLOAT32).shape
+    py_shape = py_output.to_numpy(ttnn.DataType.FLOAT32).shape
 
     assert (
         cpp_shape == py_shape
@@ -130,18 +131,10 @@ def test_parameter_structure(sample_data):
     py_weight_key = [k for k in py_params.keys() if "weight" in k.lower()][0]
     py_bias_key = [k for k in py_params.keys() if "bias" in k.lower()][0]
 
-    cpp_weight_shape = (
-        cpp_params[cpp_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    )
-    cpp_bias_shape = (
-        cpp_params[cpp_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    )
-    py_weight_shape = (
-        py_params[py_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    )
-    py_bias_shape = (
-        py_params[py_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    )
+    cpp_weight_shape = cpp_params[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32).shape
+    cpp_bias_shape = cpp_params[cpp_bias_key].to_numpy(ttnn.DataType.FLOAT32).shape
+    py_weight_shape = py_params[py_weight_key].to_numpy(ttnn.DataType.FLOAT32).shape
+    py_bias_shape = py_params[py_bias_key].to_numpy(ttnn.DataType.FLOAT32).shape
 
     assert (
         cpp_weight_shape == py_weight_shape
@@ -205,8 +198,8 @@ def test_training_loop(sample_data):
         py_opt.step()
 
         # Both should produce valid losses
-        cpp_loss_val = float(cpp_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
-        py_loss_val = float(py_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
+        cpp_loss_val = float(cpp_loss.to_numpy(ttnn.DataType.FLOAT32))
+        py_loss_val = float(py_loss.to_numpy(ttnn.DataType.FLOAT32))
 
         assert np.isfinite(cpp_loss_val), f"C++ loss is not finite at step {step}"
         assert np.isfinite(py_loss_val), f"Python loss is not finite at step {step}"
@@ -275,8 +268,8 @@ def test_inference_consistency(sample_data):
     cpp_output = cpp_model(tt_x_test)
     py_output = py_model(tt_x_test)
 
-    cpp_pred_np = cpp_output.to_numpy(ttml.autograd.DataType.FLOAT32).reshape(-1)
-    py_pred_np = py_output.to_numpy(ttml.autograd.DataType.FLOAT32).reshape(-1)
+    cpp_pred_np = cpp_output.to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
+    py_pred_np = py_output.to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
 
     # Both should produce predictions
     assert len(cpp_pred_np) == batch_size
@@ -308,10 +301,10 @@ def test_parameter_access(sample_data):
     py_bias_key = [k for k in py_params.keys() if "bias" in k.lower()][0]
 
     # Extract parameter values
-    cpp_weight = cpp_params[cpp_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32)
-    cpp_bias = cpp_params[cpp_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32)
-    py_weight = py_params[py_weight_key].to_numpy(ttml.autograd.DataType.FLOAT32)
-    py_bias = py_params[py_bias_key].to_numpy(ttml.autograd.DataType.FLOAT32)
+    cpp_weight = cpp_params[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32)
+    cpp_bias = cpp_params[cpp_bias_key].to_numpy(ttnn.DataType.FLOAT32)
+    py_weight = py_params[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
+    py_bias = py_params[py_bias_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Check shapes match
     assert cpp_weight.shape == py_weight.shape
@@ -382,8 +375,8 @@ def test_different_feature_sizes(n_features, out_features):
     cpp_output = cpp_model(tt_x)
     py_output = py_model(tt_x)
 
-    cpp_shape = cpp_output.to_numpy(ttml.autograd.DataType.FLOAT32).shape
-    py_shape = py_output.to_numpy(ttml.autograd.DataType.FLOAT32).shape
+    cpp_shape = cpp_output.to_numpy(ttnn.DataType.FLOAT32).shape
+    py_shape = py_output.to_numpy(ttnn.DataType.FLOAT32).shape
 
     assert cpp_shape == py_shape
     assert cpp_shape == (batch_size, 1, 1, out_features)
@@ -411,11 +404,9 @@ def test_gradient_flow(sample_data):
     cpp_weight_key = [k for k in cpp_params_before.keys() if "weight" in k.lower()][0]
     py_weight_key = [k for k in py_params_before.keys() if "weight" in k.lower()][0]
     cpp_weight_before = cpp_params_before[cpp_weight_key].to_numpy(
-        ttml.autograd.DataType.FLOAT32
+        ttnn.DataType.FLOAT32
     )
-    py_weight_before = py_params_before[py_weight_key].to_numpy(
-        ttml.autograd.DataType.FLOAT32
-    )
+    py_weight_before = py_params_before[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Train one step
     lr = 0.1
@@ -451,12 +442,8 @@ def test_gradient_flow(sample_data):
     cpp_params_after = cpp_model.parameters()
     py_params_after = py_model.parameters()
 
-    cpp_weight_after = cpp_params_after[cpp_weight_key].to_numpy(
-        ttml.autograd.DataType.FLOAT32
-    )
-    py_weight_after = py_params_after[py_weight_key].to_numpy(
-        ttml.autograd.DataType.FLOAT32
-    )
+    cpp_weight_after = cpp_params_after[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32)
+    py_weight_after = py_params_after[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Parameters should have changed
     assert not np.allclose(

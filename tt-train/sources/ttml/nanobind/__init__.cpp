@@ -32,7 +32,11 @@ NB_MODULE(_ttml, m) {
     // Bind NamedParameters as a proper map type at the top level
     nb::bind_map<ttml::serialization::NamedParameters>(m, "NamedParameters");
 
-    ttml::nanobind::util::export_enum<tt::tt_metal::Layout>(m);
+    // NOTE: Layout enum is NOT exported here.
+    // ttnn's C++ library (which _ttml links against) already exports Layout.
+    // Python code should use: from ttnn import Layout
+    // See ttml/__init__.py which imports Layout from ttnn.
+
     auto m_autograd = m.def_submodule("autograd", "autograd");
     auto m_models = m.def_submodule("models", "models");
     auto m_modules = m.def_submodule("modules", "modules");

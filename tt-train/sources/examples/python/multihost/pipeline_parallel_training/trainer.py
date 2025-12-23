@@ -6,11 +6,14 @@
 from time import time
 
 import numpy as np
+import ttnn
 import ttml
 from data import get_batch, build_causal_mask
 
 
-def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
+def get_batch_ttml(
+    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
+):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -30,18 +33,22 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttml.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
+        )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttml.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        )
     return tt_x, tt_y
 
 
@@ -61,13 +68,23 @@ class PerformanceMeter:
         if time_window == 0:
             return 0, 0
 
-        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
+        samples = (
+            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
+        )
         samples_per_second = samples / time_window
         tokens_per_second = samples * self.cfg.seq_len / time_window
         return samples_per_second, tokens_per_second
 
 
-def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
+def train(
+    cfg,
+    model,
+    optim,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    use_ddp: bool = False,
+    use_tp: bool = False,
+):
     """Execute pipeline parallel training loop.
 
     In pipeline parallelism:
@@ -92,7 +109,9 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     reduce = ttml.ops.ReduceType.MEAN
 
     causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
+    tt_mask = ttml.autograd.Tensor.from_numpy(
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -105,7 +124,9 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     is_first_stage = rank == 0
     is_final_stage = rank == world_size - 1
 
-    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
+    assert (
+        world_size > 1
+    ), f"Pipeline parallel requires world_size > 1, got {world_size}"
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None
