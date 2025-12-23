@@ -351,6 +351,7 @@ class MLP2DConfig:
             f"Got cluster_shape={self.cluster_shape}. For 1D meshes, use MLP1D instead."
         )
 
+    # todo)) make the configs flatter --> one click away! --> this is what killed deepseek code
     # Sub-configs - override these factory methods in subclasses
     @cached_property
     def decode_config(self) -> MLP2DDecodeConfigs:
@@ -439,17 +440,17 @@ class MLP2DConfig:
     @cached_property
     def w1(self) -> ttnn.Tensor:
         """w1 weight: (dim, hidden_dim) 2D-sharded."""
-        return self.lazy_w1.get_weight()
+        return self.lazy_w1.get_device_weight()
 
     @cached_property
     def w2(self) -> ttnn.Tensor:
         """w2 weight: (hidden_dim, dim) 2D-sharded."""
-        return self.lazy_w2.get_weight()
+        return self.lazy_w2.get_device_weight()
 
     @cached_property
     def w3(self) -> ttnn.Tensor:
         """w3 weight: (dim, hidden_dim) 2D-sharded."""
-        return self.lazy_w3.get_weight()
+        return self.lazy_w3.get_device_weight()
 
 
 # =============================================================================
@@ -652,7 +653,9 @@ class MLP2D(LightweightModule):
                 source=make_weight_source(name, pad_dim),
                 dtype=dtype_fn(),
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=args.cluster_shape),
+                mesh_mapper_config=ttnn.MeshMapperConfig(
+                    placements=list(shard_dims), mesh_shape_override=ttnn.MeshShape(cluster_shape)
+                ),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem_cfg_fn(),
                 cache_dir=cache_dir,
@@ -733,102 +736,41 @@ class MLP2D(LightweightModule):
         if not sharded:
             input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-        if not use_composite:
-            # IMPORTANT:
-            # `all_gather_async` increases the gathered dimension by the number of devices on `cluster_axis`.
-            # If we request a sharded output memory_config here (or implicitly inherit the input sharding),
-            # we can end up with "num_shards > num_cores" during TensorSpec creation.
-            #
-            # So for the gather step, always materialize an INTERLEAVED tensor (DRAM),
-            # then do the local reduce, and finally (optionally) reshard to the requested memory_config.
-            gather_output_memcfg = ttnn.DRAM_MEMORY_CONFIG
-            gathered_tensor = ttnn.experimental.all_gather_async(
-                input_tensor,
-                persistent_output_buffer=None,
-                dim=dim,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=self.config.num_all_gather_links,
-                cluster_axis=cluster_axis,
-                topology=self.ccl_topology,
-                memory_config=gather_output_memcfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+        input_mem_cfg = input_tensor.memory_config()
+        # In composite all-reduce (RS + AG), the RS output memcfg can be different from the final desired memcfg.
+        # If not provided, fall back to the input tensor's memory config (this guarantees shard height matches).
+        rs_mem_cfg = ttnn.DRAM_MEMORY_CONFIG if not sharded else (reduce_scatter_memory_config or input_mem_cfg)
 
-            if sharded:
-                gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
+        reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor,
+            persistent_output_buffers=None,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=self.config.num_reduce_scatter_links,
+            cluster_axis=cluster_axis,
+            memory_config=rs_mem_cfg,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
 
-            # IMPORTANT: fast_reduce_nc is keepdim=true (it sets reduced dim size to 1).
-            # For all-reduce implemented via all-gather, we must reduce across the *device* axis,
-            # not across the logical tensor axis that was concatenated.
-            #
-            # - If we all-gather along dim=3 (W), the gathered tensor is [1,1,H,W*D].
-            #   We reshape it to [1,D,H,W] and reduce along dim=1 to get [1,1,H,W].
-            # - For dim!=3 (e.g. dim=0 when N==1), reducing along `dim` is OK because the original
-            #   dimension is size 1 and only the gather expanded it.
-            if dim == 3:
-                # Number of devices participating in this all-reduce along the selected mesh axis.
-                num_devices_axis = self.config.cluster_shape[cluster_axis]
-                h = input_tensor.shape[-2]
-                w = input_tensor.shape[-1]
-                gathered_tensor = ttnn.reshape(gathered_tensor, (1, num_devices_axis, h, w))
-                reduced_tensor = ttnn.experimental.fast_reduce_nc(
-                    gathered_tensor,
-                    dims=[1],
-                    output=None,
-                    compute_kernel_config=None,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
-                )
-                gathered_tensor.deallocate(True)
-                reduced_tensor = ttnn.reshape(reduced_tensor, (1, 1, h, w))
-            else:
-                reduced_tensor = ttnn.experimental.fast_reduce_nc(
-                    gathered_tensor,
-                    dims=[dim],
-                    output=None,
-                    compute_kernel_config=None,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
-                )
-                gathered_tensor.deallocate(True)
-
-        else:
-            input_mem_cfg = input_tensor.memory_config()
-            # In composite all-reduce (RS + AG), the RS output memcfg can be different from the final desired memcfg.
-            # If not provided, fall back to the input tensor's memory config (this guarantees shard height matches).
-            rs_mem_cfg = ttnn.DRAM_MEMORY_CONFIG if not sharded else (reduce_scatter_memory_config or input_mem_cfg)
-
-            reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-                input_tensor,
-                persistent_output_buffers=None,
-                dim=dim,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                num_links=self.config.num_reduce_scatter_links,
-                cluster_axis=cluster_axis,
-                memory_config=rs_mem_cfg,
-                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
-            reduced_tensor = ttnn.experimental.all_gather_async(
-                reduced_tensor,
-                persistent_output_buffer=None,
-                dim=dim,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=self.config.num_all_gather_links,
-                cluster_axis=cluster_axis,
-                topology=self.ccl_topology,
-                memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+        reduced_tensor = ttnn.experimental.all_gather_async(
+            reduced_tensor,
+            persistent_output_buffer=None,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=self.config.num_all_gather_links,
+            cluster_axis=cluster_axis,
+            topology=self.ccl_topology,
+            memory_config=input_mem_cfg,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
 
         reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
         # Preserve requested sharding on the final output (when provided).
@@ -903,35 +845,10 @@ class MLP2D(LightweightModule):
         ttnn.deallocate(x)
 
         # --- STAGE 2: CCL after W1/W3 (dim-dependent path) ---
-        if self.dim >= 8192:
-            # Path A: reduce_scatter (for large dim)
-            input_mem_cfg = w1_out.memory_config()
+        input_mem_cfg = w1_out.memory_config()
 
-            w1_out = self._reduce_scatter_axis1(w1_out, self.ff1_out_reduce_scatter_memcfg)
-            w3_out = self._reduce_scatter_axis1(w3_out, self.ff1_out_reduce_scatter_memcfg)
-            use_all_gather = True
-        else:
-            # Path B: all_reduce (for smaller dim)
-            w1_out = self._all_reduce_tg(
-                w1_out,
-                cluster_axis=1,
-                dim=3,  # Not used for all_reduce when sharded
-                sharded=True,
-                memory_config=self.ff1_out_gathered_memcfg,
-                reduce_scatter_memory_config=self.ff1_out_reduce_scatter_memcfg,
-                # Use composite RS+AG here; it's robust/correct for summing partials from 2D K-fracturing.
-                use_composite=True,
-            )
-            w3_out = self._all_reduce_tg(
-                w3_out,
-                cluster_axis=1,
-                dim=3,
-                sharded=True,
-                memory_config=self.ff1_out_gathered_memcfg,
-                reduce_scatter_memory_config=self.ff1_out_reduce_scatter_memcfg,
-                use_composite=True,
-            )
-            use_all_gather = False
+        w1_out = self._reduce_scatter_axis1(w1_out, self.ff1_out_reduce_scatter_memcfg)
+        w3_out = self._reduce_scatter_axis1(w3_out, self.ff1_out_reduce_scatter_memcfg)
 
         # --- STAGE 3: Activation + Multiply ---
         w2_in = ttnn.mul(
@@ -946,9 +863,8 @@ class MLP2D(LightweightModule):
         ttnn.deallocate(w1_out)
 
         # --- STAGE 4: All-gather before W2 (if we used reduce_scatter) ---
-        if use_all_gather:
-            w2_in = self._all_gather_axis1(w2_in, input_mem_cfg)
-            w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+        w2_in = self._all_gather_axis1(w2_in, input_mem_cfg)
+        w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         # --- STAGE 5: W2 Linear ---
         w2_out = ttnn.linear(

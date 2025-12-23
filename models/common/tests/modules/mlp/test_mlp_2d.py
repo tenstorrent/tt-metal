@@ -501,12 +501,14 @@ def test_mlp_2d_vs_reference(
     mesh_ctx = MeshContext2D(mesh_device=ttnn_mesh_device, tt_ccl=TT_CCL(ttnn_mesh_device))
 
     # Create LazyWeight instances
-    def make_lazy_weight(tensor: torch.Tensor, shard_dims: tuple[int, int]) -> LazyWeight:
+    def make_lazy_weight(tensor: torch.Tensor, shard_dims: tuple) -> LazyWeight:
         return LazyWeight(
             source=tensor,
             dtype=dtype,
             device=ttnn_mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+            mesh_mapper_config=ttnn.MeshMapperConfig(
+                placements=list(shard_dims), mesh_shape_override=ttnn.MeshShape(cluster_shape)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -515,15 +517,15 @@ def test_mlp_2d_vs_reference(
     class TestMLP2DConfig(MLP2DConfig):
         @property
         def lazy_w1(self) -> LazyWeight:
-            return make_lazy_weight(w1_torch, self.w1_shard_dims)
+            return make_lazy_weight(w1_torch, (ttnn.PlacementShard(-1), ttnn.PlacementShard(-2)))
 
         @cached_property
         def lazy_w2(self) -> LazyWeight:
-            return make_lazy_weight(w2_torch, self.w2_shard_dims)
+            return make_lazy_weight(w2_torch, (ttnn.PlacementShard(-2), ttnn.PlacementShard(-1)))
 
         @cached_property
         def lazy_w3(self) -> LazyWeight:
-            return make_lazy_weight(w3_torch, self.w1_shard_dims)
+            return make_lazy_weight(w3_torch, (ttnn.PlacementShard(-1), ttnn.PlacementShard(-2)))
 
     mlp_config = TestMLP2DConfig(
         dim=dim,
@@ -531,10 +533,6 @@ def test_mlp_2d_vs_reference(
         mesh_ctx=mesh_ctx,
         max_batch_size=batch_size,
     )
-
-    mlp_config.lazy_w1 = make_lazy_weight(w1_torch, mlp_config.w1_shard_dims)
-    mlp_config.lazy_w2 = make_lazy_weight(w2_torch, mlp_config.w2_shard_dims)
-    mlp_config.lazy_w3 = make_lazy_weight(w3_torch, mlp_config.w1_shard_dims)
 
     # Create MLP2D directly with config
     tt_model = MLP2D(mlp_config)
@@ -650,7 +648,9 @@ def test_mlp_2d_dim_ge_8192_paths(
             source=tensor,
             dtype=dtype,
             device=ttnn_mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=shard_dims, mesh_shape=cluster_shape),
+            mesh_mapper_config=ttnn.MeshMapperConfig(
+                row_dim=shard_dims[0], col_dim=shard_dims[1], mesh_shape_override=ttnn.MeshShape(cluster_shape)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
