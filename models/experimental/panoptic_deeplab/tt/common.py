@@ -852,47 +852,47 @@ def create_visualization_from_outputs(
 
 
 def validate_outputs_with_pcc(
-    pytorch_semantic: torch.Tensor,
-    ttnn_semantic: ttnn.Tensor,
     ttnn_model,
     model_category: str,
+    pytorch_semantic: torch.Tensor,
+    ttnn_semantic: ttnn.Tensor,
+    semantic_exp_pcc: float,
+    semantic_exp_abs_err: float,
+    semantic_exp_rel_err: float,
     pytorch_center: Optional[torch.Tensor] = None,
     ttnn_center: Optional[ttnn.Tensor] = None,
+    center_exp_pcc: Optional[float] = None,
+    center_exp_abs_err: Optional[float] = None,
+    center_exp_rel_err: Optional[float] = None,
     pytorch_offset: Optional[torch.Tensor] = None,
     ttnn_offset: Optional[ttnn.Tensor] = None,
+    offset_exp_pcc: Optional[float] = None,
+    offset_exp_abs_err: Optional[float] = None,
+    offset_exp_rel_err: Optional[float] = None,
     layer_name_prefix: str = "",
-    semantic_exp_pcc: float = 0.951,
-    semantic_exp_abs_err: float = 1.952,
-    semantic_exp_rel_err: float = 0.180,
-    center_exp_pcc: float = 0.949,
-    center_exp_abs_err: float = 0.008,
-    center_exp_rel_err: float = 22.349,
-    offset_exp_pcc: float = 0.966,
-    offset_exp_abs_err: float = 12.160,
-    offset_exp_rel_err: float = 2.405,
 ) -> List[bool]:
     """
     Validate TTNN outputs against PyTorch reference using PCC and relative error checks.
 
     Args:
-        pytorch_semantic: PyTorch semantic logits
-        ttnn_semantic: TTNN semantic logits
         ttnn_model: TTNN model instance
         model_category: Model category (PANOPTIC_DEEPLAB or DEEPLAB_V3_PLUS)
+        pytorch_semantic: PyTorch semantic logits
+        ttnn_semantic: TTNN semantic logits
+        semantic_exp_pcc: Expected PCC for semantic output (required)
+        semantic_exp_abs_err: Expected absolute error for semantic output (required)
+        semantic_exp_rel_err: Expected relative error for semantic output (required)
         pytorch_center: Optional PyTorch center logits
         ttnn_center: Optional TTNN center logits
+        center_exp_pcc: Expected PCC for center output (required if model_category is PANOPTIC_DEEPLAB)
+        center_exp_abs_err: Expected absolute error for center output (required if model_category is PANOPTIC_DEEPLAB)
+        center_exp_rel_err: Expected relative error for center output (required if model_category is PANOPTIC_DEEPLAB)
         pytorch_offset: Optional PyTorch offset logits
         ttnn_offset: Optional TTNN offset logits
+        offset_exp_pcc: Expected PCC for offset output (required if model_category is PANOPTIC_DEEPLAB)
+        offset_exp_abs_err: Expected absolute error for offset output (required if model_category is PANOPTIC_DEEPLAB)
+        offset_exp_rel_err: Expected relative error for offset output (required if model_category is PANOPTIC_DEEPLAB)
         layer_name_prefix: Prefix for layer names in validation messages
-        semantic_exp_pcc: Expected PCC for semantic output
-        semantic_exp_abs_err: Expected absolute error for semantic output
-        semantic_exp_rel_err: Expected relative error for semantic output
-        center_exp_pcc: Expected PCC for center output
-        center_exp_abs_err: Expected absolute error for center output
-        center_exp_rel_err: Expected relative error for center output
-        offset_exp_pcc: Expected PCC for offset output
-        offset_exp_abs_err: Expected absolute error for offset output
-        offset_exp_rel_err: Expected relative error for offset output
 
     Returns:
         List of boolean results for each validation check
@@ -917,6 +917,10 @@ def validate_outputs_with_pcc(
     # Check instance outputs (only for PANOPTIC_DEEPLAB)
     if model_category == PANOPTIC_DEEPLAB:
         if pytorch_center is not None and ttnn_center is not None:
+            if center_exp_pcc is None or center_exp_abs_err is None or center_exp_rel_err is None:
+                raise ValueError(
+                    "center_exp_pcc, center_exp_abs_err, and center_exp_rel_err must be provided for PANOPTIC_DEEPLAB model"
+                )
             passed_center = check_ttnn_output(
                 layer_name=f"{layer_name_prefix}center",
                 pytorch_output=pytorch_center,
@@ -930,6 +934,10 @@ def validate_outputs_with_pcc(
             all_passed.append(passed_center)
 
         if pytorch_offset is not None and ttnn_offset is not None:
+            if offset_exp_pcc is None or offset_exp_abs_err is None or offset_exp_rel_err is None:
+                raise ValueError(
+                    "offset_exp_pcc, offset_exp_abs_err, and offset_exp_rel_err must be provided for PANOPTIC_DEEPLAB model"
+                )
             passed_offset = check_ttnn_output(
                 layer_name=f"{layer_name_prefix}offset",
                 pytorch_output=pytorch_offset,
