@@ -141,7 +141,7 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
 
     logger.info("Run TtConv1x1 forward (Conv3d mode)")
     tt_output = tt_model(tt_input)
-    logger.info("End TtResBlock forward")
+    logger.info("End TtConv1x1 forward (Conv3d mode)")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor

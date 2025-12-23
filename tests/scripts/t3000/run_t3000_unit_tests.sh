@@ -603,6 +603,47 @@ run_t3000_ccl_tests() {
   fi
 }
 
+run_t3000_tt_dit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_tt_dit_tests"
+
+  #T5 Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder[wormhole_b0-device_params0-Topology.Linear-1x4-t3k-large-True] ; fail+=$?
+
+  #Clip Encoder
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
+
+  #Image DiTs VAE with one iteration pcc and perf test
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
+
+  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
+
+  #DITs Wan2.2 VAE
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
+
+  #DITs Wan2.2 Transformer
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-no_load_cache-short_seq-2x4sp0tp1-True] ; fail+=$?
+
+  #Mochi Transformer
+  DIT_UNIT_TEST=1 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
+
+  #Mochi VAE main component
+  FAKE_DEVICE=T3K pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py::test_tt_resblock_forward[wormhole_b0-mesh_device0-device_params0-1link-l768] ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_tt_dit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
@@ -651,6 +692,9 @@ run_t3000_tests() {
 
   # Run unet shallow tests
   run_t3000_unet_shallow_tests
+
+  # Run tt_dit tests
+  run_t3000_tt_dit_tests
 }
 
 fail=0

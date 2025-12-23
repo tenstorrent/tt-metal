@@ -8,10 +8,11 @@ from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
 from ...utils.padding import pad_weight_tensor
+from ...layers.module import Module
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class SD35JointAttention:
+class SD35JointAttention(Module):
     def __init__(
         self,
         query_dim,
@@ -27,6 +28,8 @@ class SD35JointAttention:
         parallel_config=None,
         padding_config=None,
     ):
+        super().__init__()
+
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.heads = heads
@@ -165,7 +168,7 @@ class SD35JointAttention:
         if self.context_pre_only is not None and not self.context_pre_only:
             self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _merge_tensors(q, k, v):
@@ -220,7 +223,7 @@ class SD35JointAttention:
         self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
         self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
-    def __call__(self, spatial_1BND, prompt_1BLD, N):
+    def forward(self, spatial_1BND, prompt_1BLD, N):
         """
         Inputs are replicated
         Outputs are width-fractured
