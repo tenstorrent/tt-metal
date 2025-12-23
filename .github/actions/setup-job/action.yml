@@ -112,4 +112,5 @@ runs:
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
         echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py 1>&2" >> $GITHUB_ENV
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.slow-dispatch-timeout }}" >> $GITHUB_ENV
+        echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
       shell: bash
