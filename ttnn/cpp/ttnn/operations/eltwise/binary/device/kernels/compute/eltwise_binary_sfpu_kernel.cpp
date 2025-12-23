@@ -18,6 +18,7 @@
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
+#include "compute_kernel_api/remainder_int32.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
