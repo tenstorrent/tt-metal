@@ -286,7 +286,8 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint) {
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<MeshDevice>& peer_device) {
     auto* mesh_device = config_buffer->device();
     const auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
@@ -346,15 +347,23 @@ void write_socket_configs(
                     MeshCoordinate recv_device_coord = connection.receiver_core.device_coord;
                     auto recv_virtual_core =
                         mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
-                    auto recv_fabric_node_id = tt_fabric::FabricNodeId(
-                        tt_fabric::MeshId{recv_mesh_id},
-                        mesh_graph.coordinate_to_chip(tt_fabric::MeshId{recv_mesh_id}, recv_device_coord));
+                    tt_fabric::FabricNodeId recv_fabric_node_id =
+                        tt_fabric::FabricNodeId(tt_fabric::MeshId{recv_mesh_id}, 0);
+                    if (peer_device) {
+                        recv_fabric_node_id = peer_device->get_fabric_node_id(recv_device_coord);
+                    } else {
+                        recv_fabric_node_id = tt_fabric::FabricNodeId(
+                            tt_fabric::MeshId{recv_mesh_id},
+                            mesh_graph.coordinate_to_chip(tt_fabric::MeshId{recv_mesh_id}, recv_device_coord));
+                    }
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
                         recv_fabric_node_id,
                         fabric_config,
                         SocketEndpoint::SENDER);
+                    std::cout << "SENDER CORE DEVICE COORD: " << sender_core.device_coord << std::endl;
+                    std::cout << "RECV CORE DEVICE COORD: " << recv_device_coord << std::endl;
                     std::cout << "DOWNSTREAM MESH ID: " << *downstream_mesh_id
                               << " DOWNSTREAM CHIP ID: " << downstream_chip_id << std::endl;
                     // Write to the correct slot based on receiver ID
@@ -386,8 +395,14 @@ void write_socket_configs(
                 MeshCoordinate sender_device_coord = connection.sender_core.device_coord;
                 auto sender_virtual_core =
                     mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
-                auto sender_fabric_node_id = tt_fabric::FabricNodeId(
-                    sender_mesh_id, mesh_graph.coordinate_to_chip(sender_mesh_id, sender_device_coord));
+                tt_fabric::FabricNodeId sender_fabric_node_id =
+                    tt_fabric::FabricNodeId(tt_fabric::MeshId{sender_mesh_id}, 0);
+                if (peer_device) {
+                    sender_fabric_node_id = peer_device->get_fabric_node_id(sender_device_coord);
+                } else {
+                    sender_fabric_node_id = tt_fabric::FabricNodeId(
+                        sender_mesh_id, mesh_graph.coordinate_to_chip(sender_mesh_id, sender_device_coord));
+                }
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
@@ -586,22 +601,37 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
 }
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
-    const SocketConfig& config) {
+    const SocketConfig& config,
+    const std::shared_ptr<MeshDevice>& sender_device,
+    const std::shared_ptr<MeshDevice>& receiver_device) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
     const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
 
     for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
         const auto& connection = config.socket_connection_config[i];
-        fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
-            connection.sender_core.device_coord,
-            tt::tt_fabric::FabricNodeId(
-                config.sender_mesh_id.value(),
-                mesh_graph.coordinate_to_chip(config.sender_mesh_id.value(), connection.sender_core.device_coord)));
-        fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
-            connection.receiver_core.device_coord,
-            tt::tt_fabric::FabricNodeId(
-                config.receiver_mesh_id.value(),
-                mesh_graph.coordinate_to_chip(config.receiver_mesh_id.value(), connection.receiver_core.device_coord)));
+        if (sender_device) {
+            fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
+                connection.sender_core.device_coord,
+                sender_device->get_fabric_node_id(connection.sender_core.device_coord));
+        } else {
+            fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
+                connection.sender_core.device_coord,
+                tt::tt_fabric::FabricNodeId(
+                    config.sender_mesh_id.value(),
+                    mesh_graph.coordinate_to_chip(config.sender_mesh_id.value(), connection.sender_core.device_coord)));
+        }
+        if (receiver_device) {
+            fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
+                connection.receiver_core.device_coord,
+                receiver_device->get_fabric_node_id(connection.receiver_core.device_coord));
+        } else {
+            fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
+                connection.receiver_core.device_coord,
+                tt::tt_fabric::FabricNodeId(
+                    config.receiver_mesh_id.value(),
+                    mesh_graph.coordinate_to_chip(
+                        config.receiver_mesh_id.value(), connection.receiver_core.device_coord)));
+        }
     }
     return fabric_node_id_map;
 }

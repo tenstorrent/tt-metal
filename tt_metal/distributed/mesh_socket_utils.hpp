@@ -39,7 +39,8 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint);
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<MeshDevice>& peer_device = nullptr);
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
@@ -57,6 +58,8 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
-    const SocketConfig& config);
+    const SocketConfig& config,
+    const std::shared_ptr<MeshDevice>& sender_device = nullptr,
+    const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
 
 }  // namespace tt::tt_metal::distributed
