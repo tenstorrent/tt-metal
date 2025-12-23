@@ -9,7 +9,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/matmul.h"
-#include "debug/dprint_tensix.h"
+#include "api/debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -19,12 +19,12 @@ namespace NAMESPACE {
 
 void math_main() {
     int __outer_loop_iter;
-    llk_math_matmul_init<MATH_FIDELITY, 0>(0, 0, false, 1, 2, 1);
+    llk_math_matmul_init<MATH_FIDELITY, 0>(0, 0, 0, 1, 2);
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
     llk_math_hw_configure_disaggregated(0, 0);
     llk_math_wait_for_dest_available();
     // asm volatile("ebreak");
-    llk_math_matmul<MATH_FIDELITY, 0>(0, false, 1, 2, 1);
+    llk_math_matmul<MATH_FIDELITY, 0>(0, 1, 2);
     llk_math_dest_section_done<DST_ACCUM_MODE>();
 }
 #endif
@@ -67,7 +67,7 @@ void pack_main() {
 void unpack_main() {
     int __outer_loop_iter;
     llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(0, 0);
-    llk_unpack_AB_matmul_init(0, 0, false, 1, 2, 1);
+    llk_unpack_AB_matmul_init(0, 0, 0, 1, 2, 1);
     llk_wait_tiles(0, 2);
     // asm volatile("ebreak");
     // volatile uint16_t *data_ptr = reinterpret_cast<uint16_t*>(get_local_cb_interface(0).fifo_rd_ptr << 4);

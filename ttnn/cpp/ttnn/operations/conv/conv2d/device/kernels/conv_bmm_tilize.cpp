@@ -12,8 +12,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
-#include "debug/dprint_tensix.h"
-#include "debug/dprint_tensix_unpack.h"
+// #include "debug/dprint_tensix.h"
+// #include "debug/dprint_tensix_unpack.h"
 
 // #include "api/debug/dprint.h"
 
