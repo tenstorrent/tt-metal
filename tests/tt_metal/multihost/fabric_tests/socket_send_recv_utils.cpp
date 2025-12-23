@@ -135,12 +135,10 @@ bool test_socket_send_recv(
         const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
         for (int i = 0; i < num_txns; i++) {
-            std::cout << "Set up Sender workload: " << i << std::endl;
             std::stringstream ss;
             for (const auto& core : sender_core_range) {
                 ss << core.start_coord.x << "," << core.start_coord.y << " ";
             }
-            std::cout << "Sender core range: " << ss.str() << std::endl;
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
@@ -161,7 +159,6 @@ bool test_socket_send_recv(
                 }
                 mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
-                std::cout << "Write data to device coord: " << connection.sender_core.device_coord << std::endl;
                 WriteShard(
                     mesh_device->mesh_command_queue(),
                     sender_data_buffer,
@@ -171,8 +168,6 @@ bool test_socket_send_recv(
                 auto sender_fabric_node_id = mesh_device->get_fabric_node_id(connection.sender_core.device_coord);
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
-                std::cout << "Sender fabric node id: " << sender_fabric_node_id
-                          << " Receiver fabric node id: " << recv_fabric_node_id << std::endl;
 
                 auto sender_program = CreateProgram();
                 auto sender_kernel = CreateKernel(
@@ -201,14 +196,11 @@ bool test_socket_send_recv(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
-                std::cout << "Add program to workload: " << connection.sender_core.device_coord << std::endl;
                 sender_mesh_workload.add_program(
                     MeshCoordinateRange(connection.sender_core.device_coord), std::move(sender_program));
             }
-            std::cout << "Enqueue sender workload" << std::endl;
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device->mesh_command_queue());
-            std::cout << "Finish sender workload" << std::endl;
         }
 
     } else {
@@ -218,14 +210,12 @@ bool test_socket_send_recv(
         }
         auto recv_core_range_set = CoreRangeSet(recv_core_range);
         for (int i = 0; i < num_txns; i++) {
-            std::cout << "Set up Receiver workload: " << i << std::endl;
             auto recv_data_shard_params = ShardSpecBuffer(
                 recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
             std::stringstream ss;
             for (const auto& core : recv_core_range) {
                 ss << core.start_coord.x << "," << core.start_coord.y << " ";
             }
-            std::cout << "Receiver core range: " << ss.str() << std::endl;
             const DeviceLocalBufferConfig recv_device_local_config{
                 .page_size = data_size,
                 .buffer_type = BufferType::L1,
@@ -241,8 +231,6 @@ bool test_socket_send_recv(
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
                 auto recv_fabric_node_id = mesh_device->get_fabric_node_id(connection.receiver_core.device_coord);
-                std::cout << "Receiver fabric node id: " << recv_fabric_node_id
-                          << " Sender fabric node id: " << sender_fabric_node_id << std::endl;
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
@@ -266,11 +254,9 @@ bool test_socket_send_recv(
                 tt_fabric::append_fabric_connection_rt_args(
                     recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
-                std::cout << "Add program to workload: " << connection.receiver_core.device_coord << std::endl;
                 recv_mesh_workload.add_program(
                     MeshCoordinateRange(connection.receiver_core.device_coord), std::move(recv_program));
             }
-            std::cout << "Enqueue receiver workload" << std::endl;
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), recv_mesh_workload, false);
             const auto& core_to_core_id =
                 recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
@@ -290,7 +276,6 @@ bool test_socket_send_recv(
                     EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
                 }
             }
-            std::cout << "Finish receiver workload" << std::endl;
         }
     }
     return is_data_match;
@@ -332,34 +317,32 @@ void test_multi_mesh_single_conn_bwd(
 
     SocketMemoryConfig socket_mem_config(tt_metal::BufferType::L1, socket_fifo_size);
 
-    constexpr uint32_t sender_rank = 1;
+    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
+    auto local_mesh_id = local_mesh_binding[0];
+    constexpr tt::tt_fabric::MeshId sender_mesh_id = tt::tt_fabric::MeshId{1};
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == sender_rank) {
-        std::unordered_map<uint32_t, MeshSocket> sockets;
-        std::vector<uint32_t> recv_node_ranks = get_neighbor_host_ranks(system_config);
+    if (local_mesh_id == sender_mesh_id) {
+        std::unordered_map<tt::tt_fabric::MeshId, MeshSocket> sockets;
+        std::vector<tt::tt_fabric::MeshId> recv_mesh_ids = {tt::tt_fabric::MeshId{0}};  // get_neighbor_mesh_ids();
+        // std::vector<uint32_t> recv_node_ranks = get_neighbor_host_ranks(system_config);
 
-        for (const auto& recv_rank : recv_node_ranks) {
-            SocketConfig socket_config = SocketConfig(
-                {socket_connection},
-                socket_mem_config,
-                distributed_context->rank(),
-                tt::tt_metal::distributed::multihost::Rank{recv_rank});
-            sockets.emplace(recv_rank, MeshSocket(mesh_device, socket_config));
+        for (const auto& recv_mesh_id : recv_mesh_ids) {
+            SocketConfig socket_config =
+                SocketConfig({socket_connection}, socket_mem_config, local_mesh_id, recv_mesh_id);
+            sockets.emplace(recv_mesh_id, MeshSocket(mesh_device, socket_config));
         }
 
         for (int i = 0; i < num_iterations; i++) {
-            for (auto& [recv_node, socket] : sockets) {
+            for (auto& [recv_mesh_id, socket] : sockets) {
                 test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
             }
         }
 
     } else {
-        SocketConfig socket_config = SocketConfig(
-            {socket_connection},
-            socket_mem_config,
-            tt::tt_metal::distributed::multihost::Rank{sender_rank},
-            distributed_context->rank());
+        SocketConfig socket_config =
+            SocketConfig({socket_connection}, socket_mem_config, sender_mesh_id, local_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -388,20 +371,20 @@ void test_multi_mesh_single_conn_fwd(
         MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord));
     SocketMemoryConfig socket_mem_config(tt_metal::BufferType::L1, socket_fifo_size);
 
-    constexpr uint32_t recv_rank = 1;
+    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
+    auto local_mesh_id = local_mesh_binding[0];
+    constexpr tt::tt_fabric::MeshId recv_mesh_id = tt::tt_fabric::MeshId{1};
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == recv_rank) {
-        std::unordered_map<uint32_t, MeshSocket> sockets;
-        std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
+    if (local_mesh_id == recv_mesh_id) {
+        std::unordered_map<tt::tt_fabric::MeshId, MeshSocket> sockets;
+        std::vector<tt::tt_fabric::MeshId> sender_mesh_ids = {tt::tt_fabric::MeshId{0}};  // get_neighbor_mesh_ids();
 
-        for (const auto& sender_rank : sender_node_ranks) {
-            SocketConfig socket_config = SocketConfig(
-                {socket_connection},
-                socket_mem_config,
-                tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                distributed_context->rank());
-            sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
+        for (const auto& sender_mesh_id : sender_mesh_ids) {
+            SocketConfig socket_config =
+                SocketConfig({socket_connection}, socket_mem_config, sender_mesh_id, local_mesh_id);
+            sockets.emplace(sender_mesh_id, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
             for (auto& [sender_node, socket] : sockets) {
@@ -409,11 +392,7 @@ void test_multi_mesh_single_conn_fwd(
             }
         }
     } else {
-        SocketConfig socket_config = SocketConfig(
-            {socket_connection},
-            socket_mem_config,
-            distributed_context->rank(),
-            tt::tt_metal::distributed::multihost::Rank{recv_rank});
+        SocketConfig socket_config = SocketConfig({socket_connection}, socket_mem_config, local_mesh_id, recv_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -433,7 +412,6 @@ void test_multi_mesh_multi_conn_fwd(
     using namespace tt_metal;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    std::unordered_map<uint32_t, MeshSocket> sockets;
     std::vector<SocketConnection> socket_connections;
     auto sender_logical_core = CoreCoord(0, 0);
     auto recv_logical_core = CoreCoord(0, 0);
@@ -444,20 +422,20 @@ void test_multi_mesh_multi_conn_fwd(
     }
 
     SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
-    constexpr uint32_t recv_rank = 1;
+    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
+    auto local_mesh_id = local_mesh_binding[0];
+    constexpr tt::tt_fabric::MeshId recv_mesh_id = tt::tt_fabric::MeshId{1};
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == recv_rank) {
-        std::unordered_map<uint32_t, MeshSocket> sockets;
-        std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
+    if (local_mesh_id == recv_mesh_id) {
+        std::unordered_map<tt::tt_fabric::MeshId, MeshSocket> sockets;
+        std::vector<tt::tt_fabric::MeshId> sender_mesh_ids = {tt::tt_fabric::MeshId{0}};  // get_neighbor_mesh_ids();
 
-        for (const auto& sender_rank : sender_node_ranks) {
-            SocketConfig socket_config = SocketConfig(
-                {socket_connections},
-                socket_mem_config,
-                tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                distributed_context->rank());
-            sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
+        for (const auto& sender_mesh_id : sender_mesh_ids) {
+            SocketConfig socket_config =
+                SocketConfig({socket_connections}, socket_mem_config, sender_mesh_id, local_mesh_id);
+            sockets.emplace(sender_mesh_id, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
             for (auto& [sender_node, socket] : sockets) {
@@ -465,11 +443,7 @@ void test_multi_mesh_multi_conn_fwd(
             }
         }
     } else {
-        SocketConfig socket_config = SocketConfig(
-            {socket_connections},
-            socket_mem_config,
-            distributed_context->rank(),
-            tt::tt_metal::distributed::multihost::Rank{recv_rank});
+        SocketConfig socket_config = SocketConfig({socket_connections}, socket_mem_config, local_mesh_id, recv_mesh_id);
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -501,28 +475,26 @@ void test_multi_mesh_multi_conn_bidirectional(
     }
 
     SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
-    constexpr uint32_t aggregator_rank = 1;
+    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
+    auto local_mesh_id = local_mesh_binding[0];
+    constexpr tt::tt_fabric::MeshId aggregator_mesh_id = tt::tt_fabric::MeshId{1};
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == aggregator_rank) {
-        std::unordered_map<uint32_t, MeshSocket> forward_sockets;
-        std::unordered_map<uint32_t, MeshSocket> backward_sockets;
-        std::vector<uint32_t> compute_node_ranks = get_neighbor_host_ranks(system_config);
+    if (local_mesh_id == aggregator_mesh_id) {
+        std::unordered_map<tt::tt_fabric::MeshId, MeshSocket> forward_sockets;
+        std::unordered_map<tt::tt_fabric::MeshId, MeshSocket> backward_sockets;
+        std::vector<tt::tt_fabric::MeshId> compute_mesh_ids = {
+            tt::tt_fabric::MeshId{0}};  // get_neighbor_host_ranks(system_config);
 
-        for (const auto& compute_rank : compute_node_ranks) {
-            SocketConfig forward_socket_config = SocketConfig(
-                {socket_connections},
-                socket_mem_config,
-                tt::tt_metal::distributed::multihost::Rank{compute_rank},
-                distributed_context->rank());
-            forward_sockets.emplace(compute_rank, MeshSocket(mesh_device, forward_socket_config));
+        for (const auto& compute_mesh_id : compute_mesh_ids) {
+            SocketConfig forward_socket_config =
+                SocketConfig({socket_connections}, socket_mem_config, compute_mesh_id, local_mesh_id);
+            forward_sockets.emplace(compute_mesh_id, MeshSocket(mesh_device, forward_socket_config));
 
-            SocketConfig backward_socket_config = SocketConfig(
-                {socket_connections},
-                socket_mem_config,
-                distributed_context->rank(),
-                tt::tt_metal::distributed::multihost::Rank{compute_rank});
-            backward_sockets.emplace(compute_rank, MeshSocket(mesh_device, backward_socket_config));
+            SocketConfig backward_socket_config =
+                SocketConfig({socket_connections}, socket_mem_config, local_mesh_id, compute_mesh_id);
+            backward_sockets.emplace(compute_mesh_id, MeshSocket(mesh_device, backward_socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
             for (auto& [compute_node, forward_socket] : forward_sockets) {
@@ -543,18 +515,12 @@ void test_multi_mesh_multi_conn_bidirectional(
             }
         }
     } else {
-        SocketConfig forward_socket_config = SocketConfig(
-            {socket_connections},
-            socket_mem_config,
-            distributed_context->rank(),
-            tt::tt_metal::distributed::multihost::Rank{aggregator_rank});
+        SocketConfig forward_socket_config =
+            SocketConfig({socket_connections}, socket_mem_config, local_mesh_id, aggregator_mesh_id);
         auto forward_socket = MeshSocket(mesh_device, forward_socket_config);
 
-        SocketConfig backward_socket_config = SocketConfig(
-            {socket_connections},
-            socket_mem_config,
-            tt::tt_metal::distributed::multihost::Rank{aggregator_rank},
-            distributed_context->rank());
+        SocketConfig backward_socket_config =
+            SocketConfig({socket_connections}, socket_mem_config, aggregator_mesh_id, local_mesh_id);
         auto backward_socket = MeshSocket(mesh_device, backward_socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
