@@ -3407,6 +3407,9 @@ class SmolVLAForActionPrediction(nn.Module):
             projected_features = torch.zeros(1, 1, self.config.text_hidden_size)
         CHECKPOINTS.checkpoint("end_VISIONFORWARD")
 
+        # Uncomment to flush device profiler buffers (prevents "markers dropped" warnings)
+        # ttnn.ReadDeviceProfiler(self.ttnn_device)
+
         # ========================================
         # Compute VLM K/V Cache for Expert Cross-Attention
         # ========================================
@@ -3484,6 +3487,9 @@ class SmolVLAForActionPrediction(nn.Module):
                 logger.warning("No VLM K/V cache computed, using fallback")
 
         CHECKPOINTS.checkpoint("end_VLMKVCOMPUTE")
+
+        # Uncomment to flush device profiler buffers (prevents "markers dropped" warnings)
+        # ttnn.ReadDeviceProfiler(self.ttnn_device)
 
         # ========================================
         # Flow Matching Inference Loop
@@ -3615,6 +3621,9 @@ class SmolVLAForActionPrediction(nn.Module):
                     noisy_actions = noisy_actions + velocity * dt
 
         CHECKPOINTS.checkpoint("end_FLOWMATCHING")
+
+        # Uncomment to flush device profiler buffers (prevents "markers dropped" warnings)
+        # ttnn.ReadDeviceProfiler(self.ttnn_device)
 
         # Extract final actions (trim to actual action_dim)
         actions = noisy_actions[:, :, :action_dim]
