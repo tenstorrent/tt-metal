@@ -24,7 +24,7 @@ PYTHON_CP_VERSION="$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{
 DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v$REF/tt_exalens-$REF-$PYTHON_CP_VERSION-$PYTHON_CP_VERSION-linux_x86_64.whl"
 
 # Check if download link exists
-if ! curl -sSfL -r 0-0 "$DOWNLOAD_LINK" -o /dev/null; then
+if ! curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then
   echo "Prebuilt wheel not found for version $REF. Installing from source."
   python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@v$REF"
 else
