@@ -485,7 +485,7 @@ Node build_node(
         template_node.boards.emplace(tray_id, create_board(board_type));
     }
 
-    // Now actually create the connections and mark ports as used
+    // Add inter-board connections and validate/mark ports
     for (const auto& [port_type_str, port_connections] : node_descriptor.port_type_connections()) {
         auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
         if (!port_type.has_value()) {
@@ -620,7 +620,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
                 }
             }
 
-            // Find node descriptor and build node, store in this graph instance
+            // Find node descriptor and build node
             resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
 
         } else if (child_def.has_graph_ref()) {
@@ -971,8 +971,6 @@ static void merge_resolved_graph_instances(
                     }
                 }
             }
-            // Note: We don't recreate nodes from templates here because recreate_nodes_from_templates()
-            // will do that for all nodes after merging is complete
         } else {
             // Node exists in source but not in target
             throw std::runtime_error(fmt::format(
