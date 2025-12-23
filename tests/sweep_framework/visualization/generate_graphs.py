@@ -13,7 +13,7 @@ import sys
 import matplotlib.pyplot as plt
 
 from dataclasses import dataclass
-from tests.sweep_framework.permutations import *
+from tests.sweep_framework.framework.permutations import permutations
 
 # TODO: currently axes can only handle individual numbers. However, more complex
 # structures will need to be handled. E.g. batch_sizes: '(1,)'.

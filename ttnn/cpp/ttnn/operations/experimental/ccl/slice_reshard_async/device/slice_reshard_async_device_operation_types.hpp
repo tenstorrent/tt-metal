@@ -4,38 +4,38 @@
 
 #pragma once
 
+#include <utility>
 #include <cstdint>
+#include <vector>
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include <tt-metalium/global_semaphore.hpp>
-#include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/run_operation.hpp"
+namespace ttnn::operations::experimental::ccl::slice_reshard_async {
 
-#include <optional>
-#include <vector>
-
-namespace ttnn {
-
-struct SliceReshardAsync {
+struct operation_attributes_t {
     std::vector<IDevice*> devices;
-    const uint32_t dim;
-    const uint32_t output_dim_offset;
-    const uint32_t output_dim_shape;
-    const uint32_t cluster_axis;
-    const GlobalSemaphore& final_semaphore;
-    const GlobalSemaphore& barrier_semaphore;
-    const uint32_t num_links;
-    const MemoryConfig output_mem_config;
-    const ccl::Topology topology;
-    const uint32_t ring_size;
+    uint32_t dim;
+    uint32_t output_dim_offset;
+    uint32_t output_dim_shape;
+    uint32_t cluster_axis;
+    GlobalSemaphore final_semaphore;
+    GlobalSemaphore barrier_semaphore;
+    uint32_t num_links;
+    MemoryConfig output_mem_config;
+    ttnn::ccl::Topology topology;
+    uint32_t ring_size;
 
-    SliceReshardAsync(
+    // Constructor required because GlobalSemaphore is not default constructible
+    operation_attributes_t(
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t output_dim_offset,
@@ -45,7 +45,7 @@ struct SliceReshardAsync {
         const GlobalSemaphore& barrier_semaphore,
         uint32_t num_links,
         MemoryConfig output_mem_config,
-        ccl::Topology topology,
+        ttnn::ccl::Topology topology,
         uint32_t ring_size) :
         devices(std::move(devices)),
         dim(dim),
@@ -76,22 +76,14 @@ struct SliceReshardAsync {
         attrs.emplace_back("ring_size", ring_size);
         return attrs;
     }
-
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-}  // namespace ttnn
+struct tensor_args_t {
+    Tensor input;
+};
+
+using tensor_return_value_t = Tensor;
+
+using spec_return_value_t = TensorSpec;
+
+}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
