@@ -33,9 +33,9 @@ void MAIN {
     add_tiles_init(cb_in0, cb_in1);
 
     // Loop over all the tiles and perform the computation.
-    // it's important to keep in mind that compute kernel runs on three different RISC cores.
+    // it's important to keep in mind that compute kernel runs on three different RISC-V processors.
     // One for unpacking, one for computing, and one for packing.
-    // The compiler automatically compiles the same compute kernel code for all three cores,
+    // The compiler automatically compiles the same compute kernel code for all three processors,
     // relieving programmer from having to write different code for each core.
     for (uint32_t i = 0; i < n_tiles; i++) {
         // Wait until there is a tile in each of the input circular buffers.

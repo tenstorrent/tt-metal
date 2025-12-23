@@ -132,7 +132,7 @@ Tiled Version
                    some_computation(row, col);
 
 
-Tiled Matrix Multiplication
+Exercies 1: Tiled Matrix Multiplication
 ===========================
 
 In this part of the lab, you will implement two versions of matrix multiplication: a straightforward triply-nested loop, and a tiled version.
@@ -413,7 +413,7 @@ Kernel Creation and Configuration
 
 The function `eltwise_add_tensix` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
 At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
-one compute kernel, and three circular buffers to pass data between the kernels.
+one compute kernel, and three circular buffers to pass data between the kernels, and then triggers kernel execution on the device.
 
 The function creates three Tensor objects of shape MxN using the tile layout described earlier.
 These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
@@ -467,45 +467,168 @@ Dataflow kernels take the base addresses of the input and output buffers in devi
 as runtime arguments.
 
 Compute kernel takes the number of tiles to process as a compile-time argument and doesn't take any runtime arguments.
-At first, it may seem like an odd choice to pass the number of tiles as a compile-time argument to the compute kernel, but a runtime argument to dataflow kernels.
+At first, it may seem like an odd choice to pass the number of tiles as a compile-time argument to the compute kernel,
+but as a runtime argument to dataflow kernels.
+Since using compile-time arguments enables various compiler optimizations, it is particularly suitable to use them for compute kernels, which are compute bound.
+While passing the number of tiles as a compile-time argument to dataflow kernels would also work, they may not benefit much since their performance is memory bound.
+At the same time, using compile-time arguments for dataflow kernels would cause them to be recompiled for each different number of tiles.
+since the performance benefit of using compile-time arguments is not significant for dataflow kernels,
+we optimize for code reuse and avoid recompilation by using runtime arguments for dataflow kernels.
+This distinction will become more apparent in subsequent labs when we start working with multiple Tensix cores.
+
+Creating kernels registers the kernels with the program object, so that they can be executed later.
+
+Finally, the function executes the kernels by adding the program to the workload and enqueuing it for execution, which triggers kernel JIT compilation
+followed by kernel execution on the device. It is useful to remind ourselves that unitl this point, all the code we discussed executed on the host,
+not on the device.
+We will examine kernel code next.
+
+Reader Kernel Code
+------------------
+
+The function can be summarized by the following pseudo-code:
+```cpp
+read_runtime_arguments()
+read_compile_time_arguments()
+create_address_generators()
+for (i in range (0 .. n_tiles) {
+    transfer_tile_from_dram_to_circular_buffer(in0, i)
+    transfer_tile_from_dram_to_circular_buffer(in1, i)
+}
+```
+
+The reader kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp`` is responsible for transferring data
+from device DRAM into circular buffers located in internal device SRAM, where it can be efficiently accessed by the compute kernel.
+The kernel reads the base addresses of the two input tensors in DRAM and the total number of tiles to process as runtime arguments.
+
+The kernel uses two circular buffers (``c_0`` and ``c_1``) as destination buffers for the two input tensors.
+It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
+
+``TensorAccessorArgs`` objects whose information was placed into compile-time arguments vector by the host program, is
+now reassembled into device-side ``TensorAccessorArgs`` objects that describe the tensor's layout in memory
+These objects are then combined with the runtime base addresses to create address generator objects (``TensorAccessor``).
+These address generators abstract away the complexity of physical memory layout, such as data distribution among DRAM banks
+by automatically computing the physical DRAM address for any given tile index.
+
+The main processing loop iterates over all tiles, implementing a producer-consumer pattern with the compute kernel.
+For each tile, the kernel first reserves space in both circular buffers using blocking calls to ``cb_reserve_back``
+to ensure that space is available before attempting to write.
+Once space is reserved, the kernel obtains write pointers to the circular buffers and initiates two non-blocking asynchronous
+read operations using ``noc_async_read_tile``. Observe that this call takes in the index of the tile being read and address generator,
+along with the circular buffer address to write the tile to. Address generator automatically maps the logical tile index to the correct physical
+DRAM address based on the specific memory layout.
+
+Because ``noc_async_read_tile`` is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
+the circular buffers simultaneously. After both reads are initiated, the kernel calls ``noc_async_read_barrier`` to wait
+for both transfers to complete. This is important because the kernel should not signal that the tiles are ready for consumption
+until data is actually available.
+
+The reader kernel repeats this process for all tiles. Given that circular buffers were created with two tiles each, the reader kernel can
+read a new tile while the compute kernel is processing the previous one.
+
+Compute Kernel Code
+-------------------
+
+The compute kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
+
+The function can be summarized by the following pseudo-code:
+```cpp
+read_compile_time_arguments()
+initialize_tensix_engine_for_elementwise_addition()
+for (i in range (0 .. n_tiles) {
+    add_tiles_in_input_circular_buffers()
+    write_result_to_output_circular_buffer()
+}
+```
+
+The kernel reads the number of tiles to process as a compile-time argument, enabling compiler optimizations such as loop unrolling.
+
+An important architectural detail is that the compute kernel actually runs on three different RISC-V processors within the Tensix core:
+unpacker, compute, and a packer.
+The compiler automatically generates appropriate code for each of these three processors from the same source code, relieving the programmer
+from having to write different code for each processor.
+The unpacker handles reading data from circular buffers, the compute processor performs the actual arithmetic operations using the
+Floating Point Unit (FPU) of the Tensix engine, and the packer writes results back to circular buffers.
+It is worth repeating that these RISC-V processors don't perform actual computations or packing/unpacking operations.
+They simply issue commands to the Tensix engine to perform the actual computations and packing/unpacking operations.
+
+The compute kernel uses circular buffers ``c_0`` and ``c_1`` for the two input tensors and ``c_16`` for the output tensor.
+There are 32 circular buffers in total (0-31), and the exact indices used are up to programmer's discretion, provided they are used consistently
+(i.e. reader and writer kernels must use the corresponding indices as the compute kernel).
+
+The kernel initializes the FPU for elementwise binary operations, first calling ``binary_op_init_common``
+to set up the general binary operation infrastructure, followed by ``add_tiles_init`` to configure the FPU specifically for addition.
+This initialization only needs to be done once before the main loop, since all tiles use the same operation.
+
+The main processing loop iterates over all tiles.
+For each tile, the kernel first waits for one tile to become available in each input circular buffer using blocking calls to ``cb_wait_front``.
+These blocking calls ensure that the reader kernel has finished transferring the data before the compute kernel attempts to use it.
+The kernel then acquires access to the destination register array using ``tile_regs_acquire`` and calls ``add_tiles`` to perform the elementwise addition.
+The destination register array is a special storage area in the FPU that can hold multiple tiles and serves as the temporary
+output location for FPU computations. The acquire operation also initializes all tiles in the destination register array to zero,
+which is not important for our example, but is useful for operations like matrix multiplication where results accumulate.
+
+After the computation completes, the kernel marks the input tiles as consumed using ``cb_pop_front`` to free space in the circular buffers,
+then releases the destination register to signal that the compute core has finished writing, which allows packer to read the result.
+
+The packer core for its part waits for the destination register to be ready using ``tile_regs_wait``,
+ensures there is space in the output circular buffer, and then copies the result from the destination register to the output circular buffer using ``pack_tile``.
+Finally, it marks the output tile as ready using ``cb_push_back`` and releases the destination register using ``tile_regs_release``.
+
+While it may seem like some of these operations are redundant (e.g. waiting on the destination register when it has seemingly just been released),
+it is important to remember that compute kernel code is executed on three different RISC-V processors.
+This synchronization mechanism using acquire, commit, wait, and release ensures that the three RISC processors coordinate properly,
+with the compute processor writing results and the packer processor reading them without conflicts.
+
+
+Writer Kernel Code
+------------------
+
+The function can be summarized by the following pseudo-code:
+```cpp
+write_tiles(c_16, n_tiles);
+```
+
+The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring computed results from circular buffers in internal device SRAM back to device DRAM, where they can eventually be read back to the host.
+The kernel reads two runtime arguments: the base address of the output tensor in DRAM and the total number of tiles to write.
+These runtime arguments enable the same compiled kernel to work with different output tensor locations without recompilation.
+
+The kernel uses circular buffer ``c_16`` as the source buffer containing the computed results produced by the compute kernel.
+It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
+Similar to the reader kernel, the writer kernel creates an address generator object using ``TensorAccessor`` to determine where each tile should be written in DRAM.
+The address generator is constructed by extracting tensor layout parameters from compile-time arguments using ``TensorAccessorArgs``, then combining them with the runtime base address.
+This allows the address generator to automatically compute the correct physical DRAM address for any given tile index, abstracting away the complexity of the tiled memory layout and data distribution.
+
+The main processing loop iterates over all tiles, implementing a consumer pattern that complements the compute kernel's producer role.
+For each tile, the kernel first waits for a tile to become available in the circular buffer using the blocking call ``cb_wait_front``.
+This ensures that the compute kernel has finished producing the tile before the writer attempts to read it.
+Once a tile is available, the kernel obtains a read pointer to the circular buffer and initiates a non-blocking asynchronous write operation using ``noc_async_write_tile``.
+This call takes the tile index, the address generator (which maps the logical index to the physical DRAM address), and the circular buffer read address.
+After initiating the write, the kernel calls ``noc_async_write_barrier``, which is a blocking call that waits until the write operation completes.
+This synchronization is critical to ensure that data has actually been written to DRAM before the kernel proceeds.
+Finally, the kernel marks the tile in the circular buffer as consumed by calling ``cb_pop_front``, which frees up space in the circular buffer for the compute kernel to produce the next tile.
+This coordination between the compute and writer kernels enables pipelined execution, where computation and data movement can overlap.
 
 
 
-To configure the kernels, the function extracts MeshBuffer pointers from the tensors, which hold information about how tensor data is distributed
-across physical DRAM banks.
 
-While programmers don't need to understand the internals of this distribution, this information must be passed to the kernels.
-The `TensorAccessorArgs` utility packages these data distribution details from the MeshBuffer objects into a format that kernels can understand,
-and this information is pushed into compile-time arguments.
+TODO: Have a diagram which shows what resides where (device, host, CBs, DRAM,...)
 
+Kernel Compilation and Execution
+--------------------------------
 
-Notably, the compute kernel does not require runtime arguments because everything it needs, including the number of tiles, has been provided
-at compile time, illustrating how compile-time arguments can eliminate the need for runtime parameter passing in some cases.
-
-Finally, the function executes the kernels by adding the program to the workload and enqueuing it for execution, waiting for completion.
-Since the input data was already transferred to the device when the tensors were created, the kernels can begin processing immediately.
-Once execution completes, the results are read back from the device using `Tensor::to_vector`, transferring the computed output from device DRAM
-back to host memory.
+As mentioned earlier, kernels are JIT compiled and executed on the device. This presents both advantages and disadvantages during development.
+On the one hand, if one updates only kernel code, there is no need to rebuild before running the program to test that the changes had desired effect.
+On the other hand, it also means that errors in the kernel code will not be caught at host-code compile time, but only at time of host code execution,
+when JIT compilation is triggerred.
 
 
+Exercise 2: Debugging Tensix Kernels
+====================================
 
-Kerneel code
+Introduce the following bugs:
 
-
-, and ac  On Tenstorrent, these are the values accessed with functions like ``get_compile_time_arg_val(...)`` inside the kernel and
-
-
-The first step is to create a program object. A program is a collection of kernels that are executed on the device.
-Kernels will be specified later.
-
-Next, the program creates a circular buffer for the input and output data.
-Circular buffers are a type of memory that is used to store data that is being transferred between the host and the device.
-They are a key feature of the Tensix programming model and are used to manage data movement between the host and the device.
-
-
-
-Have a diagram which shows what resides where (device, host, CBs, DRAM,...)
-
+Introduce a syntax error in the kernel code and rerun the program to see how JIT compilation errors are reported.
 
 
 Scrap Heap
