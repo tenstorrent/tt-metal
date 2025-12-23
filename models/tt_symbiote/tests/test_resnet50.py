@@ -16,7 +16,7 @@ from models.tt_symbiote.utils.module_replacement import register_module_replacem
 def test_resnet(device):
     """Test Resnet model with TTNN acceleration."""
 
-    model = resnet50(pretrained=True)
+    model = resnet50(pretrained=True).to(torch.bfloat16)
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
         Bottleneck: TTNNBottleneck,
@@ -25,5 +25,5 @@ def test_resnet(device):
     set_device(model, device)
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
-    result = model(torch.randn(1, 3, 224, 224))
+    result = model(torch.randn(1, 3, 224, 224, dtype=torch.bfloat16))
     print(result)
