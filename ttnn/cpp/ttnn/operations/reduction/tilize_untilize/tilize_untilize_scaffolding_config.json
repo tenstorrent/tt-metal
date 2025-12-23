@@ -1,0 +1,77 @@
+{
+  "operation_name": "tilize_untilize",
+  "operation_name_pascal": "TilizeUntilize",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/tilize_untilize",
+  "parameters": [
+    {
+      "name": "output_memory_config",
+      "cpp_type": "std::optional<MemoryConfig>",
+      "py_type": "Optional[ttnn.MemoryConfig]",
+      "default": "std::nullopt",
+      "description": "Memory configuration for output tensor"
+    },
+    {
+      "name": "output_dtype",
+      "cpp_type": "std::optional<DataType>",
+      "py_type": "Optional[ttnn.DataType]",
+      "default": "std::nullopt",
+      "description": "Output data type (defaults to input dtype)"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 4,
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() == 4",
+      "error_message": "Input tensor must be 4D (NCHW), got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout, got {}",
+      "error_args": ["input.layout()"]
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be interleaved (not sharded)",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be allocated on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype {}, expected BFLOAT16 or FLOAT32",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.logical_shape()[-2] % 32 == 0",
+      "error_message": "Height must be multiple of TILE_HEIGHT (32), got {}",
+      "error_args": ["input.logical_shape()[-2]"]
+    },
+    {
+      "condition": "input.logical_shape()[-1] % 32 == 0",
+      "error_message": "Width must be multiple of TILE_WIDTH (32), got {}",
+      "error_args": ["input.logical_shape()[-1]"]
+    }
+  ],
+  "output_shape": {
+    "formula": "Same as input shape",
+    "cpp_code": "input.logical_shape()",
+    "cpp_code_padded": "input.logical_shape()"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Tilize-Untilize operation that serves as a template for compute operations.\n\nThis operation converts row-major input to tiled format, performs computation\n(identity in this template), and converts back to row-major output.\n\nArgs:\n    input_tensor: Input tensor in ROW_MAJOR layout (4D, NCHW format)\n    output_memory_config: Memory configuration for output (default: DRAM)\n    output_dtype: Output data type (default: same as input)\n\nReturns:\n    Output tensor with same shape as input in ROW_MAJOR layout\n\nConstraints:\n    - Input must be 4D tensor\n    - Input must be in ROW_MAJOR layout\n    - Input must be interleaved (not sharded)\n    - Input must be on device\n    - Height and width must be multiples of 32\n    - Supported dtypes: BFLOAT16, FLOAT32"
+}
