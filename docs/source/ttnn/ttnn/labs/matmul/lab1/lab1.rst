@@ -802,12 +802,14 @@ The environment variable ``TT_METAL_PROFILE_CORES`` specifies which cores the ho
 and whether this environment variable is defined determines whether profiling is enabled during kernel compilation.
 
 The solution was to:
-Have Python environment active
-Have WATCHER disabled
-Have DPRINT disabled
 
+- Have Python environment active
+- Have WATCHER disabled
+- Have DPRINT disabled
 
-unset TT_METAL_DPRINT_CORES
+To disable DPRINT, use::
+
+   unset TT_METAL_DPRINT_CORES
 
 
 
