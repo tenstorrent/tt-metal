@@ -107,7 +107,9 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  * | idst            | The index of the tile in DST register buffer to perform the stochastic round on     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void stochastic_round_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_stochastic_round<APPROX>(idst))); }
+ALWI void stochastic_round_tile(uint32_t idst) {
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_stochastic_round_, APPROX, 8, idst, (int)VectorMode::RC));
+}
 
 // clang-format off
 /**
