@@ -162,6 +162,9 @@ public:
     // Get the number of active channels the user has requested between specific logical devices across meshes
     const RequestedIntermeshPorts& get_requested_intermesh_ports() const;
 
+    // Check if a connection between two meshes should use Z direction
+    bool should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const;
+
     // Query the mapping of logical ports to logical device ids per mesh
     const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
 
@@ -200,6 +203,9 @@ private:
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
+
+    // Track which mesh pairs should use Z direction (dev/testing feature)
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> mesh_pairs_assign_z_direction_;
 
     // Switch tracking (switches use MeshId as their identifier)
     std::vector<MeshId> switch_ids_;

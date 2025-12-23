@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/waypoint.h"
-#include "debug/ring_buffer.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/ring_buffer.h"
 
 // Helper function to sync execution by forcing other riscs to wait for brisc, which in turn waits
 // for a set number of cycles.

@@ -25,7 +25,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -73,16 +73,16 @@ struct TargetSelection {
 };
 
 struct WatcherSettings {
-    bool enabled = false;
-    bool dump_all = false;
-    bool append = false;
-    bool auto_unpause = false;
-    bool noinline = false;
+    std::atomic<bool> enabled = false;
+    std::atomic<bool> dump_all = false;
+    std::atomic<bool> append = false;
+    std::atomic<bool> auto_unpause = false;
+    std::atomic<bool> noinline = false;
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
     bool noc_sanitize_linked_transaction = false;
-    int interval_ms = 0;
+    std::atomic<int> interval_ms = 0;
 };
 
 struct InspectorSettings {
@@ -161,7 +161,7 @@ class RunTimeOptions {
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
-    bool test_mode_enabled = false;
+    std::atomic<bool> test_mode_enabled = false;
 
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
@@ -313,21 +313,25 @@ public:
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    bool get_watcher_enabled() const { return watcher_settings.enabled; }
-    void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
+    void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
     // Return a hash of which watcher features are enabled
     uint32_t get_watcher_hash() const;
-    int get_watcher_interval() const { return watcher_settings.interval_ms; }
-    void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
-    int get_watcher_dump_all() const { return watcher_settings.dump_all; }
-    void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
-    int get_watcher_append() const { return watcher_settings.append; }
-    void set_watcher_append(bool append) { watcher_settings.append = append; }
-    int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
-    void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
-    int get_watcher_noinline() const { return watcher_settings.noinline; }
-    void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
-    int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
+    void set_watcher_interval(int interval_ms) {
+        watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
+    }
+    bool get_watcher_dump_all() const { return watcher_settings.dump_all.load(std::memory_order_relaxed); }
+    void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all.store(dump_all, std::memory_order_relaxed); }
+    bool get_watcher_append() const { return watcher_settings.append.load(std::memory_order_relaxed); }
+    void set_watcher_append(bool append) { watcher_settings.append.store(append, std::memory_order_relaxed); }
+    bool get_watcher_auto_unpause() const { return watcher_settings.auto_unpause.load(std::memory_order_relaxed); }
+    void set_watcher_auto_unpause(bool auto_unpause) {
+        watcher_settings.auto_unpause.store(auto_unpause, std::memory_order_relaxed);
+    }
+    bool get_watcher_noinline() const { return watcher_settings.noinline.load(std::memory_order_relaxed); }
+    void set_watcher_noinline(bool noinline) { watcher_settings.noinline.store(noinline, std::memory_order_relaxed); }
+    bool get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
     void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
     bool get_watcher_text_start() const { return watcher_settings.text_start; }
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
@@ -487,8 +491,8 @@ public:
     // (test mode = false). We need to catch for gtesting, since an unhandled exception will kill
     // the gtest (and can't catch an exception from the server thread in main thread), but by
     // default we should throw so that the user can see the exception as soon as it happens.
-    bool get_test_mode_enabled() const { return test_mode_enabled; }
-    void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
+    bool get_test_mode_enabled() const { return test_mode_enabled.load(std::memory_order_relaxed); }
+    void set_test_mode_enabled(bool enable) { test_mode_enabled.store(enable, std::memory_order_relaxed); }
 
     bool get_profiler_enabled() const { return profiler_enabled; }
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }

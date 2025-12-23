@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal::distributed {
 // Utility functions to serialize and deserialize SocketPeerDescriptor to/from bytes.
-std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_md);
+std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_desc);
 SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data);
 
 }  // namespace tt::tt_metal::distributed

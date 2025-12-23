@@ -705,7 +705,7 @@ def load_dit(
         cache_dict = load_cache_dict(cache_path)
         transformer.from_cached_state_dict(cache_dict)
     else:
-        transformer.load_state_dict(torch_transformer.state_dict())
+        transformer.load_torch_state_dict(torch_transformer.state_dict())
 
     return transformer
 
