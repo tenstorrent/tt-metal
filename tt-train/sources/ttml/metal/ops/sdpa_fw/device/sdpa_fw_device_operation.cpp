@@ -233,13 +233,10 @@ SDPAForwardDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& mask,  // attention mask
     const float dropout_probability,          // default value
     const bool return_intermediates,
-    const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     operation_attributes_t operation_attributes{
-        .return_intermediates = return_intermediates,
-        .dropout_probability = dropout_probability,
-        .fp32_dest_acc_en = fp32_dest_acc_en};
+        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
     tensor_args_t tensor_args{
         .query = query_tensor,
         .key = key_tensor,

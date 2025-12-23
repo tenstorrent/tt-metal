@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Constexpr
@@ -25,19 +25,21 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
 
+    experimental::CircularBuffer cb(cb_id_out0);
+    experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+
     for (uint32_t i = 0; i < num_sticks / 32; i++) {
         // We reserve back an entire tile row and issue a bunch of reads
-        cb_wait_front(cb_id_out0, num_tiles_c);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb.wait_front(num_tiles_c);
+        uint32_t cb_read_offset = 0;
         for (uint32_t j = 0; j < 32; j++) {
-            uint64_t dst_noc_addr = get_noc_addr(stick_id, s);
-
-            uint32_t bank_id = stick_id & (num_dram_channels - 1);
-            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-            l1_read_addr += stick_size;
+            noc.async_write(cb, s, stick_size, {.offset_bytes = cb_read_offset}, {.page_id = stick_id});
+            cb_read_offset += stick_size;
             stick_id++;
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_c);
+
+        noc.async_write_barrier();
+        cb.pop_front(num_tiles_c);
     }
 }

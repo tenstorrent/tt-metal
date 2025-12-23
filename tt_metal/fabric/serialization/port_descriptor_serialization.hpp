@@ -5,7 +5,7 @@
 #pragma once
 
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_fabric {
 

@@ -4,7 +4,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
-    ethernet/test_ethernet_hop_latencies_no_edm.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
@@ -69,9 +68,13 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/tt_fabric_test_config.cpp
                 routing/tt_fabric_test_results.cpp
                 routing/tt_fabric_test_context.cpp
+                routing/tt_fabric_test_bandwidth_profiler.cpp
+                routing/tt_fabric_test_latency_manager.cpp
                 routing/tt_fabric_test_device_setup.cpp
                 routing/tt_fabric_test_progress_monitor.cpp
                 routing/tt_fabric_test_eth_readback.cpp
+                routing/tt_fabric_test_code_profiler.cpp
+                routing/tt_fabric_telemetry_manager.cpp
         )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
@@ -83,6 +86,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(

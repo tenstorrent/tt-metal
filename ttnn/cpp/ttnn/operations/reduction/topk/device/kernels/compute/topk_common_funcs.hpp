@@ -19,34 +19,39 @@ void process_and_sort_tiles(
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
         // local sort into k groups
-        cb_wait_front(input_cb_index, 2);
-        cb_wait_front(index_cb_index, 2);
+        // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
+        uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
+        cb_wait_front(input_cb_index, tiles_to_wait);
+        cb_wait_front(index_cb_index, tiles_to_wait);
 
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
         transpose_wh_tile(input_cb_index, 0, 0);
-        transpose_wh_tile(input_cb_index, 1, 1);
-
+        if (tiles_to_wait == 2) {
+            transpose_wh_tile(input_cb_index, 1, 1);
+        }
         reconfig_data_format_srca(index_cb_index);
         transpose_wh_init_short(index_cb_index);
         transpose_wh_tile(index_cb_index, 0, 2);
-        transpose_wh_tile(index_cb_index, 1, 3);
-
+        if (tiles_to_wait == 2) {
+            transpose_wh_tile(index_cb_index, 1, 3);
+        }
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
-
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
         pack_tile(0, input_transposed_cb_index);
-        pack_tile(1, input_transposed_cb_index);
-
+        if (tiles_to_wait == 2) {
+            pack_tile(1, input_transposed_cb_index);
+        }
         // pack index tiles into cb_intermed1
         pack_reconfig_data_format(index_transposed_cb_index);
         pack_tile(2, index_transposed_cb_index);
-        pack_tile(3, index_transposed_cb_index);
-
-        cb_pop_front(input_cb_index, 2);
-        cb_pop_front(index_cb_index, 2);
+        if (tiles_to_wait == 2) {
+            pack_tile(3, index_transposed_cb_index);
+        }
+        cb_pop_front(input_cb_index, tiles_to_wait);
+        cb_pop_front(index_cb_index, tiles_to_wait);
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }

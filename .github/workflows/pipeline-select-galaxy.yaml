@@ -9,7 +9,8 @@ on:
         type: choice
         options:
           - manual
-          - model-pr
+          - models-mandatory
+          - models-extended
           - op-pr
           - nightly
           - hw-self-test
@@ -33,9 +34,20 @@ on:
         type: boolean
         default: false
       galaxy-unit:
+        description: 'Unit tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - unit
+          - fabric
+          - multiprocess
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
+        default: 'disabled'
       galaxy-demo:
         description: 'Demo tests: Select all, specific model, or disabled'
         required: false
@@ -50,11 +62,15 @@ on:
           - llama3_70b_dp
           - falcon7b
           - sentence_bert
+          - whisper
           - sd35
           - flux1
           - gpt-oss
+          - motif
           - wan22
           - mochi
+          - qwen3_32b
+          - qwen3_32b_long_context
         default: 'disabled'
       galaxy-frequent:
         description: 'Frequent tests: Select all, specific model, or disabled'
@@ -70,23 +86,25 @@ on:
           - wan22
           - mochi
           - flux1
+          - motif
         default: 'disabled'
       galaxy-model-perf:
-        description: 'Model perf tests (needs tracy): Select all, specific model, or disabled'
+        description: 'Model perf tests: Select all, specific model, or disabled'
         required: false
         type: choice
         options:
           - disabled
           - all
-#          - cnn
-#          - llama70b
-#          - llama_unit_tests
-#          - llama70b_prefill
+        #  - llama70b
+        #  - llama_unit_tests
+        #  - llama70b_prefill
+          - cnn
           - sd35
           - flux1-dev
+          - motif
           - sentence_bert
-#          - wan2-2
-#          - mochi
+          - wan2-2
+          - mochi
         default: 'disabled'
 run-name: ${{ inputs.description }}
 jobs:
@@ -107,15 +125,22 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.galaxy-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.galaxy-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               ;;
-            "model-pr")
+            "models-mandatory")
               echo "run-quick=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              ;;
+            "models-extended")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-model-perf=true" >> $GITHUB_OUTPUT
               ;;
@@ -170,7 +195,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-6u: true
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -181,6 +205,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: 'topology-6u'
   galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}

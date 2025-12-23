@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_ema_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         ``ttnn.ema(input: ttnn.Tensor, alpha: float, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
 
@@ -56,25 +56,15 @@ void bind_reduction_ema_operation(py::module& module) {
                  - TILE
                  - 4
 
+            The output tensor will be in TILE layout and BFLOAT16.
+
         Memory Support:
             - Interleaved: DRAM and L1
 
         Limitations:
+            - Tensors should be on the device.
             - Preallocated output must have the same shape as the input
 
-        Example:
-            .. code-block:: python
-
-                # Create tensor
-                tensor_input = ttnn.rand((1, 2, 64, 128), device=device, layout=ttnn.TILE_LAYOUT)
-
-                # Apply ttnn.ema() with alpha=0.99
-                tensor_output = ttnn.ema(tensor_input, 0.99)
-
-                # With preallocated output
-                preallocated_output = ttnn.rand([1, 2, 64, 128], dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
-                tensor_output = ttnn.ema(tensor_input, 0.99, out=preallocated_output)
 
         )doc";
 

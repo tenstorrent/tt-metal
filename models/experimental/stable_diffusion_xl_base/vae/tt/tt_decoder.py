@@ -195,6 +195,20 @@ class TtDecoder(LightweightModule):
             return_weights_and_bias=True,
             dtype=self.conv_output_dtype,
         )
+
+        # Move output to [1, 1, C, N*H*W]
+        compute_grid_size = self.device.compute_with_storage_grid_size()
+        height_sharded_mem_config = ttnn.create_sharded_memory_config(
+            shape=hidden_states.padded_shape,
+            core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, height_sharded_mem_config)
+        hidden_states = ttnn.experimental.convert_to_chw(hidden_states, dtype=ttnn.bfloat16)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
         C = self.conv_out_params["output_channels"]
         if not self.debug_mode:
             self.tt_conv_out_weights = tt_conv_out_weights

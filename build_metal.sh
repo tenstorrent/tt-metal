@@ -20,7 +20,7 @@ show_help() {
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
     echo "  --install-prefix                 Where to install build artifacts."
@@ -51,11 +51,12 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --bindings                       Set bindings type: 'nanobind' (EXPERIMENTAL_NANOBIND_BINDINGS=ON) or 'pybind' (EXPERIMENTAL_NANOBIND_BINDINGS=OFF)."
 }
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_ASanCoverage build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_CodeCoverage* build_ASanCoverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -97,6 +98,7 @@ configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
+bindings=""
 
 declare -a cmake_args
 
@@ -136,6 +138,7 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+bindings:
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -199,6 +202,8 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
+        --bindings)
+            bindings="$2";shift;;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -239,21 +244,27 @@ if [ "$disable_profiler" = "ON" ]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "ASanCoverage")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "CodeCoverage" "ASanCoverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are ${VALID_BUILD_TYPES[*]}."
     show_help
     exit 1
+fi
+
+# Disable unity builds for CodeCoverage builds to get accurate per-file coverage
+if [[ "$build_type" == "CodeCoverage" || "$build_type" == "ASanCoverage" ]]; then
+    unity_builds="OFF"
 fi
 
 # If build-dir is not specified
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    # Create and link the build directory
-    mkdir -p $build_dir
-    ln -nsf $build_dir build
 fi
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
 
 install_prefix_default=$build_dir
 cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
@@ -399,6 +410,20 @@ if [ "$enable_fake_kernels_target" = "ON" ]; then
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
 else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
+fi
+
+if [ "$bindings" != "" ]; then
+    if [ "$bindings" = "nanobind" ]; then
+        echo "INFO: Bindings: nanobind"
+        cmake_args+=("-DEXPERIMENTAL_NANOBIND_BINDINGS=ON")
+    elif [ "$bindings" = "pybind" ]; then
+        echo "INFO: Bindings: pybind"
+        cmake_args+=("-DEXPERIMENTAL_NANOBIND_BINDINGS=OFF")
+    else
+        echo "ERROR: Invalid bindings type '$bindings'. Allowed values are 'nanobind' or 'pybind'."
+        show_help
+        exit 1
+    fi
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

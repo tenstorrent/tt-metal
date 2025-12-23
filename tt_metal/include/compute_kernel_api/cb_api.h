@@ -34,10 +34,10 @@ namespace ckernel {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
- // clang-format on
+// clang-format on
 ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
 
 // clang-format off
@@ -66,10 +66,10 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(cbid, ntiles))); }
 
 // clang-format off
@@ -83,10 +83,10 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(c
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
     PACK((llk_wait_for_free_tiles<false, false, false>(cbid, ntiles)));
 }
@@ -117,53 +117,80 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) { PACK((llk_push_tiles<false, false>(cbid, ntiles))); }
 
 // clang-format off
 /**
- * Sends the pointer to the given tile index of the specified CB from the UNPACK
- * thread to the MATH and PACK threads, using mailbox writes. Also posts UNPACK_OPERAND_SYNC
- * semaphore for each of these threads.
+ * Gets the L1 address of a tile in the specified circular buffer using mailbox-based
+ * synchronization to ensure all compute threads (UNPACK, MATH, PACK) receive the same address.
  *
- * Return value: None
+ * The UNPACK thread reads the tile address and distributes it to MATH and PACK threads
+ * via mailbox, ensuring consistent values across all threads.
  *
- * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
- * | index     | The tile index within the CB         | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     | 
- * | p_tile    | The pointer that will be populated   | void*    | N/A                                                                                               | True     |
+ * Return value: The L1 address of the tile (same value on all threads)
+ *
+ * | Argument    | Description                          | Type     | Valid Range | Required |
+ * |-------------|--------------------------------------|----------|-------------|----------|
+ * | cb_id       | The index of the circular buffer (CB)| uint32_t | 0 to 31     | True     |
+ * | tile_index  | The tile index within the CB         | uint32_t | 0 to CB size| True     |
  */
- // clang-format on
-ALWI void cb_get_tile(uint32_t cb_id, uint32_t index, volatile void* p_tile) {
-    UNPACK(llk_unpack_get_tile(cb_id, index, (uint32_t*)p_tile));
+// clang-format on
+ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
+    uint32_t address = 0;
 
-    MATH(llk_math_get_tile(cb_id, index, (uint32_t*)p_tile));
+    UNPACK({
+        uint32_t operand_id = get_operand_id(cb_id);
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+        address = (base_address + offset_address) << 4;  // Convert to byte address
 
-    PACK(llk_pack_get_tile(cb_id, index, (uint32_t*)p_tile));
+        mailbox_write(ckernel::ThreadId::MathThreadId, address);
+        mailbox_write(ckernel::ThreadId::PackThreadId, address);
+    })
+
+    MATH(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+
+    return address;
 }
 
 // clang-format off
 /**
- * Blocks UNPACK thread on UNPACK_OPERAND_SYNC semaphore being decremented by
- * MATH and PACK threads.
+ * Reads a uint32_t value from a tile in the specified circular buffer at a given element offset.
+ * Uses mailbox-based synchronization to ensure all compute threads receive the same value.
  *
- * Return value: None
+ * Return value: The uint32_t value at the specified offset (same value on all threads)
  *
- * | Argument  | Description                          | Type     | Valid Range | Required |
- * |-----------|--------------------------------------|----------|-------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | Argument       | Description                                | Type     | Valid Range | Required |
+ * |----------------|--------------------------------------------|----------|-------------|----------|
+ * | cb_id          | The index of the circular buffer (CB)      | uint32_t | 0 to 31     | True     |
+ * | tile_index     | The tile index within the CB               | uint32_t | 0 to CB size| True     |
+ * | element_offset | The uint32_t element offset within the tile| uint32_t | >= 0        | True     |
  */
- // clang-format on
-ALWI void cb_release_tile(uint32_t cb_id) {
-    UNPACK(llk_unpack_release_tile(cb_id));
+// clang-format on
+ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
+    uint32_t value = 0;
 
-    MATH(llk_math_release_tile(cb_id));
+    UNPACK({
+        uint32_t operand_id = get_operand_id(cb_id);
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+        uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
 
-    PACK(llk_pack_release_tile(cb_id));
+        value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
+
+        mailbox_write(ckernel::ThreadId::MathThreadId, value);
+        mailbox_write(ckernel::ThreadId::PackThreadId, value);
+    })
+
+    MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+
+    return value;
 }
 
 }  // namespace ckernel

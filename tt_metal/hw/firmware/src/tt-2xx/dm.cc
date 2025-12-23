@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 // #include "risc_common.h"
-#include "risc_attribs.h"
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/risc_attribs.h"
+#include "internal/debug/watcher_common.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
 
@@ -52,7 +52,9 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_DONE;
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
 inline void run_triscs(uint32_t enables) {
@@ -69,25 +71,33 @@ inline void run_triscs(uint32_t enables) {
 }
 
 inline void start_subordinate_kernel_run_early(uint32_t enables) {
-    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+    for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
+        if (enables & (1u << i)) {
+            *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + i - 1) = RUN_SYNC_MSG_GO;
+        }
     }
 }
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (mailboxes->subordinate_sync.allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE);
     WAYPOINT("NTD");
 }
 
 inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-int main() {
+extern "C" uint32_t _start1() {
     configure_csr();
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    if (hartid == 0) {
+        extern uint32_t __ldm_data_start[];
+        do_crt1(__ldm_data_start);
+    }
+    extern uint32_t __ldm_tdata_init[];
+    do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-    // clear bss
+
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -99,10 +109,12 @@ int main() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-        trigger_sync_register_init();
+        // trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
@@ -156,13 +168,12 @@ int main() {
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;
                 // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
-                if (enables &
-                    (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-                    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
-                }
+                // if (enables &
+                //     (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1)))
+                //     { mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
-                uint32_t kernel_config_base =
-                    firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
+                uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -174,7 +185,7 @@ int main() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-
+                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -238,9 +249,9 @@ int main() {
 
                 wait_subordinates();
 
-                trigger_sync_register_init();
+                // trigger_sync_register_init();
 
-                if constexpr (WATCHER_ASSERT_ENABLED) {
+                if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {
                         WAYPOINT("NKFW");
                         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
@@ -286,7 +297,46 @@ int main() {
     }
     // Subordinates run this
     while (1) {
-        WAYPOINT("GW");
+        // WAYPOINT("GW");
+        WAYPOINT("W1");
+        while (true) {
+            if (*((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
+                *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+                break;
+            }
+            asm("nop; nop; nop; nop; nop");
+        }
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+        uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+        int index = hartid;
+
+        uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+
+        // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
+        // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        // NOC argument is unused
+        // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
+        my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+        WAYPOINT("R1");
+        while (*((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
+            asm("nop; nop; nop; nop; nop");
+        }
+        asm("FENCE.i");
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+
+        record_stack_usage(stack_free);
+        WAYPOINT("D1");
+
+        *((volatile uint8_t*)&(mailboxes->subordinate_sync.dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
 
     return 0;

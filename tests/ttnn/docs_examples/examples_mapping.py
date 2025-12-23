@@ -9,6 +9,13 @@ from . import test_matrix_multiplication_examples as matrix_multiplication
 from . import test_eltwise_unary_examples as eltwise_unary
 from . import test_complex_unary_examples as complex_unary
 from . import test_backward_examples as backward
+from . import test_pointwise_binary_examples as pointwise_binary
+from . import test_pointwise_ternary_examples as pointwise_ternary
+from . import test_losses_examples as losses
+from . import test_reduction_examples as reduction
+from . import test_normalization_examples as normalization
+from . import test_embedding_examples as embedding
+from . import test_pooling_examples as pooling
 
 FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Core
@@ -38,7 +45,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,
-    # "ttnn.matmul_batched_weights": matrix_multiplication.test_matmul_batched_weights, # Lack of example
     "ttnn.addmm": matrix_multiplication.test_addmm,
     "ttnn.sparse_matmul": matrix_multiplication.test_sparse_matmul,
     # Pointwise Unary
@@ -49,6 +55,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.asinh": eltwise_unary.test_asinh,
     "ttnn.atan": eltwise_unary.test_atan,
     "ttnn.atanh": eltwise_unary.test_atanh,
+    "ttnn.bitcast": eltwise_unary.test_bitcast,
     "ttnn.bitwise_not": eltwise_unary.test_bitwise_not,
     "ttnn.bitwise_left_shift": eltwise_unary.test_bitwise_left_shift,
     "ttnn.bitwise_right_shift": eltwise_unary.test_bitwise_right_shift,
@@ -233,9 +240,108 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.angle_bw": backward.test_angle_bw,
     "ttnn.conj_bw": backward.test_conj_bw,
     # Pointwise Binary
+    "ttnn.add": pointwise_binary.test_add,
+    "ttnn.addalpha": pointwise_binary.test_addalpha,
+    "ttnn.subalpha": pointwise_binary.test_subalpha,
+    "ttnn.multiply": pointwise_binary.test_multiply,
+    "ttnn.subtract": pointwise_binary.test_subtract,
+    "ttnn.div": pointwise_binary.test_div,
+    "ttnn.div_no_nan": pointwise_binary.test_div_no_nan,
+    "ttnn.floor_div": pointwise_binary.test_floor_div,
+    "ttnn.remainder": pointwise_binary.test_remainder,
+    "ttnn.fmod": pointwise_binary.test_fmod,
+    "ttnn.gcd": pointwise_binary.test_gcd,
+    "ttnn.lcm": pointwise_binary.test_lcm,
+    "ttnn.logical_and_": pointwise_binary.test_logical_and_,
+    "ttnn.logical_or_": pointwise_binary.test_logical_or_,
+    "ttnn.logical_xor_": pointwise_binary.test_logical_xor_,
+    "ttnn.rpow": pointwise_binary.test_rpow,
+    "ttnn.rsub": pointwise_binary.test_rsub,
+    "ttnn.ldexp": pointwise_binary.test_ldexp,
+    "ttnn.logical_and": pointwise_binary.test_logical_and,
+    "ttnn.logical_or": pointwise_binary.test_logical_or,
+    "ttnn.logical_xor": pointwise_binary.test_logical_xor,
+    "ttnn.bitwise_and": pointwise_binary.test_bitwise_and,
+    "ttnn.bitwise_or": pointwise_binary.test_bitwise_or,
+    "ttnn.bitwise_xor": pointwise_binary.test_bitwise_xor,
+    "ttnn.logaddexp": pointwise_binary.test_logaddexp,
+    "ttnn.logaddexp2": pointwise_binary.test_logaddexp2,
+    "ttnn.hypot": pointwise_binary.test_hypot,
+    "ttnn.xlogy": pointwise_binary.test_xlogy,
+    "ttnn.squared_difference": pointwise_binary.test_squared_difference,
+    "ttnn.gt": pointwise_binary.test_gt,
+    "ttnn.gt_": pointwise_binary.test_gt_,
+    "ttnn.lt_": pointwise_binary.test_lt_,
+    "ttnn.ge_": pointwise_binary.test_ge_,
+    "ttnn.le_": pointwise_binary.test_le_,
+    "ttnn.eq_": pointwise_binary.test_eq_,
+    "ttnn.ne_": pointwise_binary.test_ne_,
+    "ttnn.ge": pointwise_binary.test_ge,
+    "ttnn.lt": pointwise_binary.test_lt,
+    "ttnn.le": pointwise_binary.test_le,
+    "ttnn.eq": pointwise_binary.test_eq,
+    "ttnn.ne": pointwise_binary.test_ne,
+    "ttnn.isclose": pointwise_binary.test_isclose,
+    "ttnn.nextafter": pointwise_binary.test_nextafter,
+    "ttnn.maximum": pointwise_binary.test_maximum,
+    "ttnn.minimum": pointwise_binary.test_minimum,
+    "ttnn.outer": pointwise_binary.test_outer,
+    "ttnn.pow": pointwise_binary.test_pow,
+    "ttnn.polyval": pointwise_binary.test_polyval,
+    "ttnn.scatter": pointwise_binary.test_scatter,
+    "ttnn.atan2": pointwise_binary.test_atan2,
+    # Pointwise Binary Backward
+    "ttnn.add_bw": pointwise_binary.test_add_bw,
+    "ttnn.assign_bw": pointwise_binary.test_assign_bw,
+    "ttnn.atan2_bw": pointwise_binary.test_atan2_bw,
+    "ttnn.bias_gelu_bw": pointwise_binary.test_bias_gelu_bw,
+    "ttnn.div_bw": pointwise_binary.test_div_bw,
+    "ttnn.embedding_bw": pointwise_binary.test_embedding_bw,
+    "ttnn.fmod_bw": pointwise_binary.test_fmod_bw,
+    "ttnn.remainder_bw": pointwise_binary.test_remainder_bw,
+    "ttnn.addalpha_bw": pointwise_binary.test_addalpha_bw,
+    "ttnn.subalpha_bw": pointwise_binary.test_subalpha_bw,
+    "ttnn.xlogy_bw": pointwise_binary.test_xlogy_bw,
+    "ttnn.hypot_bw": pointwise_binary.test_hypot_bw,
+    "ttnn.ldexp_bw": pointwise_binary.test_ldexp_bw,
+    "ttnn.logaddexp_bw": pointwise_binary.test_logaddexp_bw,
+    "ttnn.logaddexp2_bw": pointwise_binary.test_logaddexp2_bw,
+    "ttnn.mul_bw": pointwise_binary.test_mul_bw,
+    "ttnn.sub_bw": pointwise_binary.test_sub_bw,
+    "ttnn.squared_difference_bw": pointwise_binary.test_squared_difference_bw,
+    "ttnn.concat_bw": pointwise_binary.test_concat_bw,
+    "ttnn.rsub_bw": pointwise_binary.test_rsub_bw,
+    "ttnn.min_bw": pointwise_binary.test_min_bw,
+    "ttnn.max_bw": pointwise_binary.test_max_bw,
     # Pointwise Ternary
+    "ttnn.addcdiv": pointwise_ternary.test_addcdiv,
+    "ttnn.addcmul": pointwise_ternary.test_addcmul,
+    "ttnn.mac": pointwise_ternary.test_mac,
+    "ttnn.where": pointwise_ternary.test_where,
+    "ttnn.lerp": pointwise_ternary.test_lerp,
+    # Pointwise Ternary Backward
+    "ttnn.addcmul_bw": pointwise_ternary.test_addcmul_bw,
+    "ttnn.addcdiv_bw": pointwise_ternary.test_addcdiv_bw,
+    "ttnn.where_bw": pointwise_ternary.test_where_bw,
+    "ttnn.lerp_bw": pointwise_ternary.test_lerp_bw,
     # Losses
+    "ttnn.l1_loss": losses.test_l1_loss,
+    "ttnn.mse_loss": losses.test_mse_loss,
     # Reduction
+    "ttnn.cumprod": reduction.test_cumprod,
+    "ttnn.max": reduction.test_max,
+    "ttnn.mean": reduction.test_mean,
+    "ttnn.min": reduction.test_min,
+    "ttnn.std": reduction.test_std,
+    "ttnn.sum": reduction.test_sum,
+    "ttnn.var": reduction.test_var,
+    "ttnn.argmax": reduction.test_argmax,
+    "ttnn.prod": reduction.test_prod,
+    "ttnn.topk": reduction.test_topk,
+    "ttnn.cumsum": reduction.test_cumsum,
+    "ttnn.ema": reduction.test_ema,
+    "ttnn.moe": reduction.test_moe,
+    "ttnn.manual_seed": reduction.test_manual_seed,
     # Data movement
     "ttnn.concat": data_movement.test_concat,
     "ttnn.nonzero": data_movement.test_nonzero,
@@ -255,13 +361,52 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.gather": data_movement.test_gather,
     "ttnn.sort": data_movement.test_sort,
     # Normalization
+    "ttnn.group_norm": normalization.test_group_norm,
+    "ttnn.layer_norm": normalization.test_layer_norm,
+    "ttnn.layer_norm_pre_all_gather": normalization.test_layernorm_distributed,
+    "ttnn.layer_norm_post_all_gather": normalization.test_layernorm_distributed,
+    "ttnn.rms_norm": normalization.test_rms_norm,
+    "ttnn.rms_norm_pre_all_gather": normalization.test_rms_norm_distributed,
+    "ttnn.rms_norm_post_all_gather": normalization.test_rms_norm_distributed,
+    "ttnn.batch_norm": normalization.test_batch_norm,
+    "ttnn.softmax": normalization.test_softmax,
+    "ttnn.scale_mask_softmax": normalization.test_scale_mask_softmax,
+    "ttnn.softmax_in_place": normalization.test_softmax_in_place,
+    "ttnn.scale_mask_softmax_in_place": normalization.test_scale_mask_softmax_in_place,
+    "ttnn.scale_causal_mask_hw_dims_softmax_in_place": normalization.test_scale_causal_mask_hw_dims_softmax_in_place,
     # Normalization Program Configs
-    # Moreh Operations
+    "ttnn.SoftmaxDefaultProgramConfig": normalization.test_softmax_default_program_config,
+    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_scale_mask_softmax_in_place,
     # Transformers
+    # "ttnn.transformer.split_query_key_value_and_split_heads": transformer.test_split_query_key_value_and_split_heads, # Lack of example
+    # "ttnn.transformer.concatenate_heads": transformer.test_concatenate_heads, # Lack of example
+    # "ttnn.transformer.attention_softmax": transformer.test_attention_softmax, # Lack of example
+    # "ttnn.transformer.attention_softmax_": transformer.test_attention_softmax_, # Lack of example
+    # "ttnn.experimental.rotary_embedding": transformer.test_rotary_embedding, # Lack of example
+    # "ttnn.transformer.scaled_dot_product_attention": transformer.test_scaled_dot_product_attention, # Lack of example
+    # "ttnn.transformer.scaled_dot_product_attention_decode": transformer.test_scaled_dot_product_attention_decode, # Lack of example
     # CCL
+    # "ttnn.all_gather": ccl.test_all_gather, # Non-working example
+    # "ttnn.reduce_scatter": ccl.test_reduce_scatter, # Non-working example
+    # "ttnn.all_reduce": ccl.test_all_reduce, # Non-working example
     # Embedding
+    "ttnn.embedding": embedding.test_embedding,
     # Convolution
+    # "ttnn.conv1d": convolution.test_conv1d, # Lack of example
+    # "ttnn.conv2d": convolution.test_conv2d, # Lack of example
+    # "ttnn.experimental.conv3d": convolution.test_conv3d, # Lack of example
+    # "ttnn.conv_transpose2d": convolution.test_conv_transpose2d, # Lack of example
+    # "ttnn.prepare_conv_weights": convolution.test_prepare_conv_weights, # Lack of example
+    # "ttnn.prepare_conv_bias": convolution.test_prepare_conv_bias, # Lack of example
+    # "ttnn.prepare_conv_transpose2d_weights": convolution.test_prepare_conv_transpose2d_weights, # Lack of example
+    # "ttnn.prepare_conv_transpose2d_bias": convolution.test_prepare_conv_transpose2d_bias, # Lack of example
     # Pooling
+    "ttnn.global_avg_pool2d": pooling.test_global_avg_pool2d,
+    "ttnn.max_pool2d": pooling.test_max_pool2d,
+    "ttnn.avg_pool2d": pooling.test_avg_pool2d,
     # Vision
+    # "ttnn.upsample": vision.test_upsample, # Lack of example
     # KV Cache
+    # "ttnn.kv_cache.fill_cache_for_user_":kv_cache.test_fill_cache_for_user_, # Lack of example
+    # "ttnn.kv_cache.update_cache_for_token_":kv_cache.test_update_cache_for_token_, # Lack of example
 }

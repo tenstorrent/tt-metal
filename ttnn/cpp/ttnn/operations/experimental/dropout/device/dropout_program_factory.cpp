@@ -208,11 +208,11 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto src_buffer = input.buffer();
+    auto* src_buffer = input.buffer();
     std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
 
-    auto dst_buffer = output.buffer();
+    auto* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_args);
 
@@ -306,8 +306,8 @@ void DropoutProgramFactory::override_runtime_arguments(
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Only seed/address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, dropout_reader_kernel);

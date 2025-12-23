@@ -45,7 +45,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         std::vector<FlatBufferType> vec;
         for (size_t i = 0; i < array.size(); i++) {
             if (array[i]) {
-                vec.push_back(FlatBufferType{i, to_flatbuffer(*array[i])});
+                vec.push_back(FlatBufferType{static_cast<uint32_t>(i), to_flatbuffer(*array[i])});
             }
         }
         return builder.CreateVectorOfStructs(vec);
