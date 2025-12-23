@@ -103,14 +103,6 @@ def run(
         q_heads_torch = torch_input_tensor_a[:, :, :batch, : head_dim * num_heads].view(
             seq_len, batch, num_heads, head_dim
         )
-        # K heads: next num_kv_heads * head_dim elements
-        k_heads_torch = torch_input_tensor_a[
-            :, :, :batch, head_dim * num_heads : head_dim * (num_heads + num_kv_heads)
-        ].view(seq_len, batch, num_kv_heads, head_dim)
-        # V heads: last num_kv_heads * head_dim elements
-        v_heads_torch = torch_input_tensor_a[:, :, :batch, head_dim * (num_heads + num_kv_heads) :].view(
-            seq_len, batch, num_kv_heads, head_dim
-        )
 
         torch_output_tensor = q_heads_torch
     else:

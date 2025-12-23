@@ -95,15 +95,13 @@ def run(
 
     # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
     # Split input into Q, K, V components
-    (ref_q, ref_k, ref_v) = torch.split(
+    (ref_q, _, _) = torch.split(
         torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
     )
 
     # Reshape and transpose to get proper head dimensions
     # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]
     ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
-    ref_k = torch.reshape(ref_k, [batch_size, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
-    ref_v = torch.reshape(ref_v, [batch_size, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
 
     # Use Q heads as reference for PCC check (operation returns tuple of Q, K, V)
     torch_output_tensor = ref_q
