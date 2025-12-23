@@ -308,7 +308,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {2, 2, 2, 2}     // Option 4
         },
         // BLACKHOLE
-        {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
+        {
+            {32, 32, 0, 0},  // Option 1
+            {16, 32, 0, 0},  // Option 2
+            {16, 16, 0, 0},  // Option 3
+            {8, 16, 0, 0},   // Option 4
+            {8, 8, 0, 0}     // Option 5
+        }};
 
     auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
         // Architecture-specific buffer slot configurations per VC
@@ -340,11 +346,15 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             }};
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
-            {
-                {8, 16, 0, 0}  // Only VC0 for non-mesh topologies
-            },
+            {{16, 16, 0, 0},  // Only VC0 for non-mesh topologies.
+             {8, 16, 0, 0}},
             // BLACKHOLE
-            {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}, {4, 8, 0, 0}}};
+            {{32, 32, 0, 0},  // Only VC0 for non-mesh topologies.
+             {16, 32, 0, 0},
+             {16, 16, 0, 0},
+             {8, 16, 0, 0},
+             {8, 8, 0, 0},
+             {4, 8, 0, 0}}};
 
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
