@@ -10,8 +10,6 @@ into the ttml Python package, with Python implementations taking precedence.
 
 import inspect
 import pytest
-import sys
-import types
 
 import ttml  # noqa: E402
 import ttml._ttml  # noqa: E402

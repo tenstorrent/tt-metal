@@ -650,10 +650,7 @@ def save_checkpoint(
             tensor = param
 
         # Get tensor metadata
-        try:
-            layout = tensor.get_layout()
-        except:
-            layout = ttnn.Layout.TILE  # Default for weights
+        layout = tensor.get_value().get_layout()
 
         # Convert tensor to numpy for serialization
         numpy_array = tensor.to_numpy(ttnn.DataType.FLOAT32)
