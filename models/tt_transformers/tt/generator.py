@@ -294,6 +294,9 @@ class Generator:
         self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
+        print("BATCH SIZE", batch_size)
+        print("BATCH SEQ LEN", batch_seq_len)
+        print("EMPTY SLOTS", empty_slots)
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Each model expected to run the same model, safe to use 1st vocab size
@@ -311,6 +314,7 @@ class Generator:
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            print("GROUP USER ID", group_user_id, "max_batch_size_per_model", max_batch_size_per_model)
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
@@ -356,9 +360,28 @@ class Generator:
 
             # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
-                enable_trace_current_prompt = False
                 sampling_module = getattr(self.model[model_id], "sampling_prefill", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+                print("ORIGINAL FORMATTED SAMPLING PARAMS", formatted_sampling_params)
+                group_user_id_sampling = user_id % max_batch_size_per_model
+                print("GROUP USER ID SAMPLING", group_user_id_sampling)
+                print("INDEX", idx)
+                formatted_sampling_params.top_k[group_user_id_sampling] = formatted_sampling_params.top_k[idx]
+                formatted_sampling_params.temperature[group_user_id_sampling] = formatted_sampling_params.temperature[
+                    idx
+                ]
+                formatted_sampling_params.top_p[group_user_id_sampling] = formatted_sampling_params.top_p[idx]
+                formatted_sampling_params.presence_penalty[
+                    group_user_id_sampling
+                ] = formatted_sampling_params.presence_penalty[idx]
+                formatted_sampling_params.frequency_penalty[
+                    group_user_id_sampling
+                ] = formatted_sampling_params.frequency_penalty[idx]
+                formatted_sampling_params.repetition_penalty[
+                    group_user_id_sampling
+                ] = formatted_sampling_params.repetition_penalty[idx]
+                formatted_sampling_params.seed[group_user_id_sampling] = formatted_sampling_params.seed[idx]
+                print("FORMATTED SAMPLING PARAMS", formatted_sampling_params)
                 sampling_module.reset_sampling_params(formatted_sampling_params)
                 sampling_module.reset_seed(formatted_sampling_params.seed)
                 sampling_module.reset_prompt_tokens(prefill_ids[:, :seq_len].repeat(32, 1))
