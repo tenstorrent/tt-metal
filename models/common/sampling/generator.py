@@ -169,7 +169,7 @@ class SamplingGenerator:
         Capture a trace of the sampling pipeline for the given configuration.
         """
         penalties_on = self._penalties_active
-        log_probs_on = self._log_probs_active
+        log_probs_on = False  # self._log_probs_active
 
         key, slot = self._trace_slot(penalties_on, log_probs_on)
 
@@ -181,7 +181,7 @@ class SamplingGenerator:
         )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-        sampled = self._run_sampling(
+        sampled, _ = self._run_sampling(
             logits,
             penalties_on=penalties_on,
             tt_out_tok=tt_out_tok,
@@ -228,11 +228,11 @@ class SamplingGenerator:
         """
 
         penalties_on = self._penalties_active
-        log_probs_on = self._log_probs_active
+        log_probs_on = False  # self._log_probs_active
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
-            tt_out = self._run_sampling(
+            tt_out, tt_log_probs = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
@@ -246,14 +246,14 @@ class SamplingGenerator:
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
-            tt_out = self._execute_trace(key)
+            tt_out, tt_log_probs = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
             if isinstance(tt_out, tuple):
                 self.tt_penalties.update_output_tokens(tt_out[0])
             else:
                 self.tt_penalties.update_output_tokens(tt_out)
-        return tt_out
+        return tt_out, tt_log_probs
 
     def reset_seed(self, seed):
         for i, s in enumerate(seed):

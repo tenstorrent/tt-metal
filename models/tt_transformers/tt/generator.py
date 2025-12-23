@@ -604,7 +604,10 @@ class Generator:
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         sampling_params_list = None
-        if sampling_params is not None:
+        if (
+            sampling_params is not None
+            and not getattr(self.model[0], "sampling", None).tt_sampling._force_argmax_sampling
+        ):
             # Fall back to dataclass defaults when optional fields are omitted
             chunked_fields = {}
             for field in SAMPLING_PARAM_FIELDS:
@@ -649,6 +652,7 @@ class Generator:
             "kv_cache": kv_cache,
             "sampling_on_device": sampling_on_device,
         }
+
         if enable_trace:
             tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
