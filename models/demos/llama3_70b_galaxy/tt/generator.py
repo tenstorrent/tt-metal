@@ -176,7 +176,7 @@ class Generator:
             and tt_out_logits_all_users is None
             and not return_logits
         ):
-            use_batched_prefill = False
+            use_batched_prefill = True
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
