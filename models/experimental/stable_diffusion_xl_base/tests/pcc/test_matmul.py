@@ -155,6 +155,66 @@ def test_matmul_base_2d(device):
     )
 
 
+def test_matmul_base_1d(device):
+    in0_shape = [1, 1, 1024, 18432]
+    in1_shape = [1, 1, 18432, 4608]
+
+    in0_torch = torch.randn(in0_shape).bfloat16().float()
+    in1_torch = torch.randn(in1_shape).bfloat16().float()
+
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    in0_tt = ttnn.from_torch(
+        in0_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    in1_tt = ttnn.from_torch(
+        in1_torch,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    grid_size = (8, 6)
+    per_core_M = (1024 // 32) // 1  # = 32 / 8 = 4
+    per_core_N = (4608 // 32) // (grid_size[0] * grid_size[1])  # = 144 / 8 = 18
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 6),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+    out = ttnn.matmul(
+        in0_tt,
+        in1_tt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+    )
+
+
 # in0_block_w parameter is used to control how many number of "partial" matmuls are we going to have.
 # It is expressed in tiles.
 # K must be divsible by in0_block_w
@@ -181,7 +241,14 @@ def test_matmul_base_2d(device):
 # in0_block_w also affects data movement performance.
 # Task: experiment with different in0_block_w values and see perf:
 # 18 is the biggest value that fits in our case, giving us: 2378019ns of perf
-def test_matmul_2d_in0_block_w(device):
+import pytest
+
+
+@pytest.mark.parametrize(
+    "in0_block_w",
+    [1, 2, 3, 4, 6, 8, 9, 12, 16, 18],  # ... divisors of 576 [K tiles]
+)
+def test_matmul_2d_in0_block_w(device, in0_block_w):
     in0_shape = [1, 1, 1024, 18432]
     in1_shape = [1, 1, 18432, 4608]
 
@@ -221,7 +288,7 @@ def test_matmul_2d_in0_block_w(device):
     per_core_N = (4608 // 32) // grid_size[1]  # = 144 / 8 = 18
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
-        in0_block_w=18,
+        in0_block_w=in0_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         out_subblock_h=1,
@@ -262,7 +329,18 @@ def test_matmul_2d_in0_block_w(device):
 # I've picked the (1, 6) subblock size, giving us the: 1251439ns duration.
 # Experiment: when pickes the best subblock combo, sweep fidelites and see perf.
 # At this point, matmul is: 1251439ns duration which is >50% util.
-def test_matmul_subblocks(device):
+@pytest.mark.parametrize(
+    "out_subblock_h",
+    [1, 2, 4],
+)
+@pytest.mark.parametrize(
+    "out_subblock_w",
+    [1, 2, 3, 6],
+)
+def test_matmul_subblocks(device, out_subblock_h, out_subblock_w):
+    if out_subblock_h * out_subblock_w > 8:
+        pytest.skip("out_subblock_h * out_subblock_w must be <= 8")
+
     in0_shape = [1, 1, 1024, 18432]
     in1_shape = [1, 1, 18432, 4608]
 
@@ -305,8 +383,8 @@ def test_matmul_subblocks(device):
         in0_block_w=18,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        out_subblock_h=1,
-        out_subblock_w=6,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
         transpose_mcast=False,
         fused_activation=None,  # gelu goes here
     )
