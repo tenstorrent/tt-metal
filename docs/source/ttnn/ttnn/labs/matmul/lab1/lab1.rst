@@ -789,7 +789,79 @@ Modify the input data to the program to not use random numbers for the first thr
 results are as expected.
 Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
 
+Debugging Hangs with Watcher
+============================
 
+The **Watcher** tool in TT-Metalium is a debug facility that both instruments firmware / kernels and runs a monitoring
+thread on the host to catch common programming errors and record device state when something hangs.
+When a fatal error is detected, Watcher stops the program and reports a clear message;
+when the program simply stops making forward progress, the Watcher log shows which kernels and cores were active at the time of the hang.
+
+Watcher can be enabled by setting an environment variable before running your program::
+
+    # Enable Watcher with a 10 second polling interval
+    export TT_METAL_WATCHER=10
+
+The numeric value is the interval, in seconds, between Watcher status dumps. Small values like `1` give very frequent snapshots and
+are convenient while you are developing or chasing a hang, at the cost of extra overhead.
+Larger values like `60` or `120` are less intrusive and are better when you only want a periodic heartbeat.
+
+When enabled, Watcher will print messages such as "Watcher checking device 0" to the terminal and write a log file
+(typically `generated/watcher/watcher.log`) that summarizes the kernel IDs that were running, as well as the last **waypoint** string
+hit on each RISC-V. Waypoints are short markers you can insert into kernel code to tag key positions like "entered main loop" or "finished writing".
+
+Exercise 5: Using Watcher to Debug a Hang
+===========================================
+
+To illustrate how watcher can be used to debug a hang, we will use the `lab_eltwise_binary` example program.
+You can introduce a very simple artificial hang you can introduce is by commenting out the calls to `cb_pop_front`
+(as if you accidentally forgot them) in the compute kernel in
+`tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`.
+
+With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks trying to write the next tile,
+and the compute kernel waits on `cb_wait_front` forever, which from the host side looks like a hang.
+Because Watcher is enabled, it continuously records for each core which kernel is running and the last waypoint reached.
+
+To help pinpoint the problem, you can add simple waypoints around the suspicious loop in the compute kernel.
+For example:
+
+  ::
+
+      #include "debug/waypoint.h"
+
+      void MAIN {
+          // ...
+          WAYPOINT("LOP0");
+          for (uint32_t i = 0; i < n_tiles; i++) {
+              WAYPOINT("LOP1");
+              cb_wait_front(cb_in0, 1);
+              cb_wait_front(cb_in1, 1);
+              // math and writes
+              WAYPOINT("LOP2");
+              // (buggy code: missing pops)
+          }
+          WAYPOINT("DONE");
+      }
+
+These waypoints are optimized away when Watcher is off, but become visible in the Watcher log when it is on.
+
+Add waypoints as shown above and run the example with Watcher enabled:
+
+.. code-block:: bash
+
+   export TT_METAL_WATCHER=5
+   ./build/programming_examples/metal_example_lab_eltwise_binary
+
+When it becomes apparent that the progam has been running for a long time without indication of progress, terminate it from the host
+(for example with Ctrl+C) and open `generated/watcher/watcher.log` to see the last waypoint before the hang.
+The waypoint field for the compute RISC-V processor should show something like `LOP2`, indicating that execution reached inside
+the main loop but never got as far as `DONE`.
+That strongly suggests a problem in the loop body, such as a missing `cb_pop_front` that prevents progress.
+
+Watcher adds extra checking and bookkeeping code, so it has a nonzero performance and code-size cost.
+Therefore Watcher should be disabled when doing performance benchmarking or production runs.
+
+For more information about the Watcher, refer to https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
 
 
 Profiling
