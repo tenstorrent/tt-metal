@@ -40,6 +40,8 @@ def unwrap_to_torch(func):
             res = e.to_torch
         elif isinstance(e, torch.Tensor):
             res = e
+        elif isinstance(e, ttnn.Tensor):
+            res = TorchTTNNTensor(e).to_torch
         return res
 
     return _unwrap_to_torch
@@ -146,6 +148,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
             if isinstance(item, TorchTTNNTensor):
                 torch_output_tensors.append(item.to_torch)
     if isinstance(ttnn_output, TorchTTNNTensor):
+        ttnn_output.elem = None
         ttnn_output_tensors.append(ttnn_output.to_torch)
         assert isinstance(torch_output, TorchTTNNTensor), "Mismatched output types between TTNN and Torch."
     elif isinstance(ttnn_output, (list, tuple)):
@@ -156,6 +159,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
                 assert isinstance(
                     torch_output[index], TorchTTNNTensor
                 ), "Mismatched output types between TTNN and Torch."
+                item.elem = None
                 ttnn_output_tensors.append(item.to_torch)
 
     passed = True
@@ -166,7 +170,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
-        if pcc < 0.99 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
+        if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "
@@ -417,7 +421,7 @@ class SELRun(NormalRun):
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
             # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, args, self.__class__.__name__)
+            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
             # Compare outputs
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output)
@@ -444,7 +448,9 @@ class DPLRun(NormalRun):
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        pass
+        assert (
+            self.torch_layer is not None
+        ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
 
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
@@ -464,7 +470,7 @@ class DPLRun(NormalRun):
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
             # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, args, self.__class__.__name__)
+            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
             # Compare outputs
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
@@ -501,13 +507,15 @@ class DPLRunNoErrorProp(NormalRun):
             # Compare outputs
             compare_fn_outputs(result, ttnn_output, func.name())
             result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
+            print(f"DPLNoErrorPropRun: Done Executing {func.name()}")
         return result
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        pass
+        assert (
+            self.torch_layer is not None
+        ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
 
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
         func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
@@ -527,10 +535,13 @@ class DPLRunNoErrorProp(NormalRun):
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
             # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, ttnn_no_error_prop_args, self.__class__.__name__)
+            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
             # Compare outputs
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
+            print(
+                f"DPLNoErrorPropRun: Done Executing {self.__class__.__name__} from {self.module_name} on device {self.device}"
+            )
         return result
 
 
