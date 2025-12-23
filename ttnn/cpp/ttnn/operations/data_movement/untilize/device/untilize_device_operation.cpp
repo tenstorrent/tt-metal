@@ -14,6 +14,7 @@
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/common/constants.hpp"
 
 using namespace tt::tt_metal;
 
