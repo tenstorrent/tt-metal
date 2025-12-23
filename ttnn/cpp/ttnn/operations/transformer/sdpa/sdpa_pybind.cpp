@@ -99,7 +99,6 @@ void py_bind_sdpa(py::module& module) {
             input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
             page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
             chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
-                Must be a multiple of program_config.q_chunk_size.
 
         Keyword args:
             scale (float, optional): Defaults to `None`.
@@ -420,7 +419,6 @@ void py_bind_sdpa(py::module& module) {
             input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
             page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
             chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
-                Must be a multiple of program_config.q_chunk_size.
             head_dim_v (uint32_t): the head dimension of V.
 
         Keyword args:
