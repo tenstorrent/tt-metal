@@ -1,0 +1,449 @@
+# TTNN Operation Creation - Subagent Breakdown
+
+This document outlines the strategy for splitting TTNN operation creation into multiple subagents to preserve context and enable efficient development.
+
+## Problem Statement
+
+Creating a new TTNN operation is a complex, multi-stage task that includes:
+- Analyzing an existing reference operation
+- Planning the new operation's design
+- Scaffolding the operation registration
+- Building the program factory
+- Implementing reader, compute, and writer kernels
+- Debugging and integration testing
+
+When done in a single session, context fills up during build-test-debug loops, requiring manual intervention.
+
+## Design Principles
+
+### 1. Explicit Artifact Boundaries
+Each agent produces well-defined outputs that serve as inputs to subsequent agents:
+```
+analyzer_output.md → planner → spec.md + tdd_plan.md
+spec.md → scaffolder → registered_operation/
+spec.md + scaffolded_op → factory_builder → program_factory.cpp
+spec.md + factory → kernel_reader → reader_kernel.cpp
+...
+```
+
+### 2. Fresh Context for Debugging
+The debugger agent is stateless and can be invoked repeatedly. It reads the current state from files, not from conversation history. This prevents context exhaustion.
+
+### 3. Validation Gates Between Phases
+Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
+
+### 4. Model Selection by Task Type
+- **Opus**: Planning, design, complex reasoning, debugging (Phases 1-2, 4-5)
+- **Sonnet**: Implementation (Phases 3, 6)
+- **Haiku**: Mechanical scaffolding if faster/cheaper execution is preferred (Phase 3)
+
+---
+
+## Phase 1: Analysis
+
+**Agent**: `ttnn-operation-analyzer` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Deep architectural analysis of an existing TTNN operation to serve as a reference.
+
+**Input**: Path to existing reference operation's program factory
+
+**Output**: `{operation_name}_analysis.md` containing:
+- Work unit definition
+- Data flow pattern
+- Circular buffer configuration
+- Index calculations
+- Memory access patterns
+- Core distribution strategy
+- Compile-time and runtime arguments
+- Kernel implementations detail
+
+**Location**: `.claude/agents/ttnn-operation-analyzer.md`
+
+---
+
+## Phase 2: Design & Planning
+
+**Agent**: `ttnn-operation-planner` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Design the new operation by comparing against the reference, producing a functional specification.
+
+**Input**:
+- Analyzer output (`{reference_operation}_analysis.md`)
+- New operation requirements (user-provided description)
+
+**Output**:
+- `{new_operation}_spec.md` - Functional specification including:
+  - Mathematical definition and API specification
+  - Input tensor requirements (with error message hints)
+  - Output tensor specification (shape formula)
+  - CB layout decisions
+  - Core distribution strategy
+  - Test criteria (what to test, not how)
+  - Implementation phases (which agents handle what)
+
+**Key Principle**: Planner defines WHAT to build. Implementation agents define HOW.
+
+**User Checkpoint**: Review and approve spec before proceeding to implementation.
+
+---
+
+## Phase 3: Incremental Operation Building (Stages 1-6)
+
+The TDD plan produced by the planner defines 6 incremental stages to build up the operation infrastructure before implementing actual kernel logic. Each stage has a dedicated test file in `test_dev/`.
+
+### Stage 1: API Existence
+**Agent**: `ttnn-operation-scaffolder` (Sonnet)
+
+**Input**: Reads spec's "API Specification > Parameters" section
+
+**Purpose**: Create minimal Python binding that is callable.
+
+**Output**:
+- `{operation_name}_pybind.hpp/cpp` with stub that throws `NotImplementedError`
+- Category pybind updated
+
+**Test**: `test_dev/test_stage1_api_exists.py`
+
+### Stage 2: Parameter Validation
+**Agent**: `ttnn-operation-scaffolder` (continues)
+
+**Input**: Reads spec's "Input Tensor Requirements" table (Property, Requirement, Error Message Hint)
+
+**Purpose**: Add host-side validation with meaningful error messages.
+
+**Output**:
+- `device/{operation_name}_device_operation.hpp/cpp`
+- `invoke()` with `TT_FATAL` validations matching spec's requirements
+
+**Test**: `test_dev/test_stage2_validation.py` - one test per row in spec's table
+
+### Stage 3: TTNN Registration
+**Agent**: `ttnn-operation-scaffolder` (continues)
+
+**Input**: Reads spec's "Output Tensor Specification" table for shape formula
+
+**Purpose**: Properly register operation with TTNN infrastructure.
+
+**Output**:
+- `{operation_name}.hpp` with `register_operation`
+- `bind_registered_operation` in pybind
+- `compute_output_specs()` implementing shape formula from spec
+
+**Test**: `test_dev/test_stage3_registration.py`
+
+**Key Principle**: Scaffolder knows HOW (official TTNN patterns). Spec defines WHAT (requirements).
+
+### Stage 4: Device Operation
+**Agent**: `ttnn-factory-builder` (Opus) ✅
+
+**Input**: Spec already processed by scaffolder; device op structure exists
+
+**Purpose**: Complete device operation validation methods.
+
+**Output**:
+- Complete `validate_on_program_cache_miss()` and `validate_on_program_cache_hit()`
+- `select_program_factory()` implementation
+
+**Test**: `test_dev/test_stage4_device_op.py`
+- Error mentions "program" or "kernel", not validation
+
+### Stage 5: Program Factory Structure
+**Agent**: `ttnn-factory-builder` (continues)
+
+**Input**: Reads spec's "Circular Buffer Requirements" and "Work Distribution" sections
+
+**Purpose**: Create program factory with CBs and work distribution.
+
+**Output**:
+- `{operation_name}_program_factory.hpp/cpp`
+- Core grid setup from spec's "Parallelization Strategy"
+- CB allocation from spec's "Circular Buffer Requirements"
+- Throws before `CreateKernel` calls
+
+**Test**: `test_dev/test_stage5_program_factory.py`
+- Error mentions "kernel" not "circular buffer"
+
+### Stage 6: Kernel Compilation
+**Agent**: `ttnn-factory-builder` (continues)
+
+**Input**: Reads spec's "Kernel Data Movement" and "Memory Access Patterns" sections
+
+**Purpose**: Create stub kernels that compile and pass data through.
+
+**Output**:
+- Stub kernel files (RISCV_1, RISCV_0, compute)
+- `CreateKernel` calls in factory
+- Runtime argument setup
+
+Note: Kernel naming (reader/writer) reflects RISC-V core assignment, not function.
+"Writer" kernels may read data (split reader pattern, auxiliary inputs).
+
+**Test**: `test_dev/test_stage6_kernel_compilation.py`
+- Kernels compile successfully
+- Program executes without hanging
+- Output has correct shape/dtype
+
+**User Checkpoint**: Review factory and stub kernels before implementing real kernel logic.
+
+**Key Principle**: Factory-builder knows HOW (CB patterns, work split). Spec defines WHAT (sizes, grid).
+
+---
+
+## Phase 4: Kernel Implementation
+
+Split into three separate agents to contain scope and prevent context exhaustion.
+
+**Important**: Kernel naming (reader/writer) reflects RISC-V core assignment convention, not actual function:
+- "Reader" runs on RISCV_0 (BRISC), typically uses NOC0
+- "Writer" runs on RISCV_1 (NCRISC), typically uses NOC1
+- **Both can read AND write data** - see spec's "Kernel Data Movement" table for actual functions
+
+### Phase 4a: RISCV_0 Data Movement Kernel (Reader)
+
+**Agent**: `ttnn-kernel-dataflow` (Sonnet)
+
+**Status**: 🔲 To be implemented
+
+**Purpose**: Implement the RISCV_0 (BRISC) kernel based on spec's "RISCV_0 Access" pattern.
+Typically the "reader" - fetches data into L1 CBs via NOC0.
+
+**Input**:
+- Operation spec ("Kernel Data Movement" and "RISCV_0 Access" sections)
+- Factory code
+- Reference operation's corresponding kernel
+
+**Output**: Working RISCV_0 kernel
+
+**Validation Gate**: Data reaches compute CBs correctly (verified via DPRINT or test)
+
+### Phase 4b: Compute Kernel
+
+**Agent**: `ttnn-kernel-compute` (Sonnet)
+
+**Status**: 🔲 To be implemented
+
+**Purpose**: Implement the compute kernel that performs the actual operation.
+
+**Input**:
+- Operation spec ("Compute Access" section)
+- Factory code
+- Working RISCV_0 kernel
+- Reference operation's compute kernel
+
+**Output**: Working compute kernel
+
+**Validation Gate**: Compute output CBs have correct values for simple test cases
+
+### Phase 4c: RISCV_1 Data Movement Kernel (Writer)
+
+**Agent**: `ttnn-kernel-dataflow` (Sonnet)
+
+**Status**: 🔲 To be implemented
+
+**Purpose**: Implement the RISCV_1 (NCRISC) kernel based on spec's "RISCV_1 Access" pattern.
+Typically the "writer" - sends data from L1 CBs to DRAM via NOC1.
+Note: May also READ auxiliary data (masks, indices) in addition to writing output.
+
+**Input**:
+- Operation spec ("Kernel Data Movement" and "RISCV_1 Access" sections)
+- Factory code
+- Working compute kernel
+- Reference operation's corresponding kernel
+
+**Output**: Working RISCV_1 kernel
+
+**Validation Gate**: E2E test passes
+
+---
+
+## Phase 5: Debug/Integration
+
+**Agent**: `ttnn-riscv-debugger` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Systematic debugging of TTNN kernel hangs and CB synchronization issues using hypothesis-driven methodology.
+
+**Input**:
+- Journal (JSON): Debug state and history (initialized by orchestrator)
+- Symptom: Problem description
+- Operation analysis: Path to `*_analysis.md` from ttnn-operation-analyzer
+
+**Output**:
+- Journal proposal with observations, hypotheses, experiments
+- Proposed fix (if hypothesis confidence >= 0.8)
+- Code changes shown in diffs (all changes reverted before returning)
+
+**Key Features**:
+- Hypothesis → Falsifier → Experiment → Update methodology
+- Watcher log interpretation for hang diagnosis
+- CB deadlock debugging (producer-consumer synchronization)
+- Strategic DPRINT placement for counter/state monitoring
+- Always reverts code changes before returning
+- Stateless design with structured journal for anti-looping
+
+**When to Use**:
+- Kernel hangs (CB deadlocks, semaphore issues)
+- Device errors or assertions
+- Need systematic debugging with hypothesis tracking
+- Runtime errors in kernel execution
+
+**Current Limitations**:
+- Primarily focused on hang diagnosis via watcher
+- Kernel correctness debugging (wrong outputs) is planned but not yet robust
+
+**Location**: `.claude/agents/ttnn-riscv-debugger.md`
+
+---
+
+## Phase 6: Performance Analysis
+
+**Agent**: `ttnn-pipeline-analyzer` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Deep analysis of pipeline execution behavior to understand blocking, overlap, and performance characteristics.
+
+**Input**:
+- Path to program factory (`{operation}_program_factory.cpp`)
+- OR existing analysis file (`{operation}_analysis.md` from ttnn-operation-analyzer)
+
+**Output**: `{operation_name}_pipeline_analysis.md` containing:
+- CB inventory with capacity/block ratios and lifetimes
+- Blocking point analysis for each CB (when/why producer/consumer blocks)
+- Execution simulation with CB state tracking
+- Timeline visualization (Gantt chart)
+- Performance calculations (throughput, efficiency, bottleneck identification)
+- Optimization recommendations
+
+**Key Features**:
+- Determines whether kernels can overlap (Reader/Compute/Writer)
+- Identifies single vs double buffering patterns
+- Calculates theoretical vs actual throughput
+- Provides concrete optimization recommendations
+
+**When to Use**:
+- Operation seems slower than expected
+- Verifying if double-buffering actually achieves overlap
+- Understanding CB synchronization behavior
+- Identifying performance bottlenecks
+- Planning optimizations
+
+**Key Principle**: "Never assume parallelism. Always verify through careful analysis."
+
+**Reference**: `.claude/references/ttnn-pipeline-analysis-methodology.md`
+
+**Location**: `.claude/agents/ttnn-pipeline-analyzer.md`
+
+---
+
+## Alternative: Checkpoint-Based Single Kernel Agent
+
+If splitting kernels feels too granular, use a single agent with explicit checkpoints:
+
+```
+ttnn-kernel-builder (single agent)
+├── Checkpoint 1: Reader kernel compiles
+├── Checkpoint 2: Reader kernel passes unit test
+├── Checkpoint 3: Compute kernel compiles
+├── Checkpoint 4: Compute kernel passes unit test
+├── Checkpoint 5: Writer kernel compiles
+├── Checkpoint 6: E2E test passes
+```
+
+If context fills, restart from the last checkpoint with a fresh agent that reads current file state.
+
+---
+
+## Workflow Summary
+
+```
+┌─────────────────────┐
+│  User provides:     │
+│  - Reference op     │
+│  - New op reqs      │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Phase 1: Analyzer   │ ──► {ref_op}_analysis.md
+│ (Opus)              │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Phase 2: Planner    │ ──► {new_op}_spec.md
+│ (Opus)              │     (WHAT to build)
+└──────────┬──────────┘
+           │
+           ▼ [USER REVIEW SPEC]
+           │
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 3: Incremental Building (6 Stages)                    │
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │ Stage 1:     │    │ Stage 2:     │    │ Stage 3:     │  │
+│  │ API Exists   │───►│ Validation   │───►│ Registration │  │
+│  │ (pybind)     │    │ (TT_FATAL)   │    │ (register_op)│  │
+│  └──────────────┘    └──────────────┘    └──────────────┘  │
+│         │                                       │           │
+│         ▼ test_stage1                           ▼           │
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │ Stage 4:     │    │ Stage 5:     │    │ Stage 6:     │  │
+│  │ Device Op    │───►│ Program      │───►│ Stub Kernels │  │
+│  │ (shape comp) │    │ Factory (CBs)│    │ (passthrough)│  │
+│  └──────────────┘    └──────────────┘    └──────────────┘  │
+│                                                  │          │
+│                                    test_stage6 ──┘          │
+└──────────────────────────────────────────────────┬──────────┘
+                                                   │
+                                     ▼ [USER REVIEW FACTORY]
+                                                   │
+┌─────────────────────┐                            │
+│ Phase 4a: RISCV_0   │◄───────────────────────────┘
+│ (reader/BRISC)      │ ──► dataflow kernel
+└──────────┬──────────┘
+           │
+           ▼ [TEST: data in compute CBs]
+           │
+┌─────────────────────┐
+│ Phase 4b: Compute   │ ──► compute_kernel.cpp
+│ (Sonnet)            │
+└──────────┬──────────┘
+           │
+           ▼ [TEST: correct compute output]
+           │
+┌─────────────────────┐
+│ Phase 4c: RISCV_1   │ ──► dataflow kernel
+│ (writer/NCRISC)     │     (may read too!)
+└──────────┬──────────┘
+           │
+           ▼ [TEST: E2E passes]
+           │
+┌─────────────────────┐
+│ Done!               │
+└─────────────────────┘
+
+     ┌──────────────────────────┐
+     │ Phase 5: RISCV Debugger  │ ◄── Can be invoked at any
+     │ (Opus, hypothesis-       │     phase when kernel hangs
+     │  driven, reverts code)   │     or CB issues arise
+     └──────────────────────────┘
+```
+
+---
+
+## Implementation Priority
+
+1. **`ttnn-operation-planner`** ✅ - Produces the spec (WHAT to build)
+2. **`ttnn-operation-scaffolder`** ✅ - Stages 1-3, knows HOW (official TTNN patterns)
+3. **`ttnn-factory-builder`** ✅ - Stages 4-6, knows HOW (CB patterns, work split)
+4. **`ttnn-riscv-debugger`** ✅ - Debug kernel hangs and CB synchronization issues
+5. **`ttnn-pipeline-analyzer`** ✅ - Analyze pipeline blocking and performance
+6. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
+7. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation
