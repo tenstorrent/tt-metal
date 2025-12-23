@@ -103,7 +103,6 @@ class PositionEmbeddingCoordsSine(nn.Module):
         orig_xyz = xyz
         xyz = orig_xyz.clone()
 
-        ncoords = xyz.shape[1]
         if self.normalize:
             xyz = shift_scale_points(xyz, src_range=input_range)
 
