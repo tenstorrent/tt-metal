@@ -1,2 +1,2 @@
-gunicorn==21.2.0
-streamlit==1.40.1
+gunicorn==23.0.0
+streamlit==1.52.2

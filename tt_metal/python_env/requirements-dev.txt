@@ -3,24 +3,21 @@
 # and wheel before installing this requirements.txt file.
 
 # Make it match pyproject.toml
-loguru==0.6.0
+loguru==0.7.3
 
 tt-smi==3.0.38; platform_machine == "x86_64"
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
 
-# During dep resolution, black may install platformdirs >=4.0.0, which is
-# a breaking dependency for virtualenv installed by pre-commit. virtualenv
-# requires <4.0.0 platformdirs, so we're pinning platformdirs here
-platformdirs<4.0.0
-pre-commit==3.5.0
-black==24.3.0
-clang-format==19.1.4
-build==0.10.0
-twine==4.0.2
-yamllint==1.32.0
-mypy==1.9.0
+platformdirs==4.5.1
+pre-commit==4.5.1
+black==25.12.0
+clang-format==21.1.8
+build==1.3.0
+twine==6.2.0
+yamllint==1.37.1
+mypy==1.19.1
 
 # For docs
 -r ../../docs/requirements-docs.txt
@@ -32,78 +29,75 @@ mypy==1.9.0
 git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 
 # For Mistral-7B-v0.3 demo tests
-protobuf==3.20.2
+protobuf==6.33.2
 
 # For TT-Transformers Qwen3 support
-transformers == 4.53.0
-huggingface-hub >= 0.30.0
+transformers==4.57.3
+huggingface-hub==0.36.0
 
 # testing
-pytest==8.4.2
-pytest-timeout==2.4.0
-pytest-split==0.10.0
-pytest-xdist==3.8.0
-pytest-benchmark==5.1.0
-jsbeautifier==1.14.7
-datasets==2.9.0
-pyarrow==20.0.0
-torch==2.7.1 ; platform_machine == 'aarch64'
-networkx==3.1
-torchvision==0.22.1 ; platform_machine == 'aarch64'
-torchmetrics==1.3.1
-torch-fidelity==0.3.0
-xlsxwriter==3.0.8
-tiktoken==0.7.0
-tqdm==4.66.3
-enlighten==1.12.4
-sentencepiece==0.2.0
-numba>=0.58.1
-librosa==0.10.0
-timm>=1.0.0
-opencv-python-headless==4.8.1.78
-diffusers==0.35.1
-accelerate==1.7.0
-ftfy==6.1.1
-gitpython==3.1.41
-einops==0.6.1
-# Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
-# transitive dep, which uses dill >=0.3.7, however many packages require
-# dill < 0.3.7
-multiprocess==0.70.14
-evaluate==0.4.0
-bert-score==0.3.12
-fsspec==2023.9.2 # Temporary pin to 2023.9.2: https://github.com/tenstorrent/tt-metal/issues/3314
+accelerate==1.12.0
+bert-score==0.3.13
+blobfile==3.1.0
+datasets==4.4.2
+diffusers==0.36.0
 docopt==0.6.2
+einops==0.8.1
+enlighten==1.14.1
+evaluate==0.4.6
+fiftyone==1.11.0
+fsspec==2025.10.0
+ftfy==6.3.1
+gitpython==3.1.45
+jiwer==4.0.0
+jsbeautifier==1.15.4
+librosa==0.11.0
+multiprocess==0.70.18
+networkx==3.4.2
+numba>=0.63.1
+numpy==2.2.6
+open_clip_torch==3.2.0
+opencv-python-headless==4.12.0.88
+pyarrow==22.0.0
+pydantic==2.12.5
+pytest==8.4.2
+pytest-benchmark==5.2.3
+pytest-split==0.10.0
+pytest-timeout==2.4.0
+pytest-xdist==3.8.0
+sentencepiece==0.2.1
 tabulate==0.9.0
-blobfile==2.1.1 # Required for llama3
-numpy>=1.24.4,<2
-pydantic==2.9.2 # Required for Superset benchmarking
-fiftyone==0.25.2 # Required for Yolo benchmarking
-jiwer==3.0.5 # Required for speech recognition evaluation
-toolz==0.12.0 # Required for Save environment data step
-open_clip_torch==2.32.0 # Required for SDXL accuracy evaluation
+tiktoken==0.12.0
+timm>=1.0.22
+toolz==1.1.0
+torch==2.9.1 ; platform_machine == 'aarch64'
+torch-fidelity==0.3.0
+torchmetrics==1.8.2
+torchvision==0.24.1 ; platform_machine == 'aarch64'
+tqdm==4.67.1
+xlsxwriter==3.2.9
 
 # Suff that used to be in pyproject.toml
 # Needed for various tests
-pyyaml>=5.4
-matplotlib
-Pillow==10.3.0
-jupyterlab==4.2.5
-ipywidgets==8.1.1
-bokeh==3.1.1
-click==8.1.7
-dash==2.15.0
-pandas==2.0.3
-plotly==5.18.0
-seaborn==0.13.2
-medpy==0.5.2 # Required for vanilla unet
-kagglehub==0.2.9
+pillow==12.0.0
+bokeh==3.8.1
+casadi==3.7.2
+click==8.3.1
+dash==3.3.0
 efficientnet-pytorch==0.7.1
-mmcv==2.2.0 # Required for UniAD model
-casadi==3.7.1 # Required for UniAD model
-mmcv-full==1.7.2 #Required for UniAD model
+ipywidgets==8.1.8
+jupyterlab==4.5.1
+kagglehub==0.3.13
+matplotlib==3.10.8
+medpy==0.5.2
+mmcv==2.2.0
+mmcv-full==1.7.2
+pandas==2.3.3
+plotly==6.5.0
+pyyaml==6.0.3
+seaborn==0.13.2
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1 ; platform_machine == 'x86_64'
-torchvision==0.22.1 ; platform_machine == 'x86_64'
+torch==2.9.1 ; platform_machine == 'x86_64'
+torchvision==0.24.1 ; platform_machine == 'x86_64'

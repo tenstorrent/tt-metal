@@ -1,8 +1,8 @@
-ansible
-ansible-lint
+ansible==10.7.0
+ansible-lint==6.17.0
 check-copyright @ git+https://github.com/espressif/check-copyright.git@master
-loguru
-pydantic
-toolz
-defusedxml
-pytest
+loguru==0.7.3
+pydantic==2.12.5
+toolz==1.1.0
+defusedxml==0.7.1
+pytest==8.4.2
