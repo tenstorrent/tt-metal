@@ -178,6 +178,7 @@ jobs:
               "owner_id": "U08E1JCDVNX" # Pavle Petrovic
             },
             {
+              #Uses random weights for corresponding model initialization. Does not depend on MLPerf
               "name": "t3k DiTs Image and Video Generation",
               "model": "dits",
               "arch": "wormhole_b0",
