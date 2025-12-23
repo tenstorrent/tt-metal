@@ -77,7 +77,7 @@ KvCache::KvCache(
     m_kv_cache.clear();
     m_kv_cache.reserve(num_layers);
 
-    // Create cache tensors in DRAM for persistence across operations
+    // Create cache tensors in DRAM
     // Shape: [batch_size, num_groups, max_seq_len, head_dim]
     const auto dram_memory_config = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
@@ -117,8 +117,6 @@ const uint32_t KvCache::update_prefill(
     const auto kv_shape = key_tensor.logical_shape();
     TT_FATAL(
         new_tokens <= key_tensor.logical_shape()[-2], "New tokens must be less than or equal to the sequence length");
-    TT_FATAL(
-        key_tensor.logical_shape() == value_tensor.logical_shape(), "Key and value tensors must have the same shape");
     const auto cache_shape = k_cache.logical_shape();
 
     const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -175,7 +173,6 @@ const uint32_t KvCache::update(
     auto& [k_cache, v_cache] = m_kv_cache[layer_idx];
     const auto kv_shape = key_states.logical_shape();
 
-    // Unified interface: handle both prefill and decode
     // - If cache_position == 0: prefill mode (write starting at position 0)
     uint32_t new_position;
     if (m_cache_position == 0U) {
@@ -183,12 +180,10 @@ const uint32_t KvCache::update(
         new_position = update_prefill(key_states, value_states, k_cache, v_cache, new_tokens);
     } else {
         // Decode mode: write new tokens starting at current cache position
-        // In decode mode, we always process exactly 1 token, so hardcode new_tokens=1
-        // update_decode will slice the key/value tensors to this length
         new_position = update_decode(key_states, value_states, k_cache, v_cache, m_cache_position, new_tokens);
     }
 
-    // Update cache position only on first layer to ensure consistency across layers
+    // Update cache position only on last layer to ensure consistency across layers
     if (layer_idx == m_kv_cache.size() - 1) {
         m_cache_position = new_position;
     }

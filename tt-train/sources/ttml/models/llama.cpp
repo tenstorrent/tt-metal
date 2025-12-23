@@ -188,7 +188,7 @@ ttml::autograd::TensorPtr Llama::operator()(
     const ttml::autograd::TensorPtr& x,
     const ttml::autograd::TensorPtr& mask,
     std::shared_ptr<common::transformer::KvCache> kv_cache,
-    uint32_t new_tokens) {
+    const uint32_t new_tokens) {
     // Pad input tokens to nearest multiple of 32 before embedding
     constexpr uint32_t TILE_SIZE = 32;
     auto x_shape = x->get_value().logical_shape();
