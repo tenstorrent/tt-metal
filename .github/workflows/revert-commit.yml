@@ -1,0 +1,203 @@
+name: 🔄 Revert Commit
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Commit hash to revert (full SHA)'
+        required: true
+        type: string
+      base_branch:
+        description: 'Base branch to create revert PR against'
+        required: false
+        type: string
+        default: 'main'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  revert-commit:
+    name: "Revert commit and create PR"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.base_branch }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all commits
+        run: |
+          git fetch --all --tags
+
+      - name: Verify commit exists
+        id: verify-commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_HASH="${{ inputs.commit_hash }}"
+          if ! git cat-file -e "$COMMIT_HASH^{commit}" 2>/dev/null; then
+            echo "❌ Commit $COMMIT_HASH does not exist in this repository"
+            exit 1
+          fi
+
+          COMMIT_MESSAGE=$(git log -1 --format="%s" "$COMMIT_HASH")
+          COMMIT_AUTHOR=$(git log -1 --format="%an" "$COMMIT_HASH")
+          COMMIT_DATE=$(git log -1 --format="%ad" --date=short "$COMMIT_HASH")
+
+          echo "✅ Found commit: $COMMIT_HASH"
+          echo "   Message: $COMMIT_MESSAGE"
+          echo "   Author: $COMMIT_AUTHOR"
+          echo "   Date: $COMMIT_DATE"
+          echo "commit-message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "commit-author=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+          echo "commit-date=$COMMIT_DATE" >> $GITHUB_OUTPUT
+
+      - name: Check if branch already exists
+        id: check-branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_HASH="${{ inputs.commit_hash }}"
+          BRANCH_NAME="revert-commit/$COMMIT_HASH"
+
+          if gh api "repos/${{ github.repository }}/git/ref/heads/$BRANCH_NAME" &>/dev/null; then
+            echo "⚠️ Branch $BRANCH_NAME already exists"
+            echo "branch-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Branch $BRANCH_NAME does not exist, will create it"
+            echo "branch-exists=false" >> $GITHUB_OUTPUT
+          fi
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Checkout existing branch or create new one
+        run: |
+          BRANCH_NAME="${{ steps.check-branch.outputs.branch-name }}"
+          if [ "${{ steps.check-branch.outputs.branch-exists }}" = "true" ]; then
+            echo "📥 Checking out existing branch: $BRANCH_NAME"
+            git fetch origin "$BRANCH_NAME"
+            git checkout "$BRANCH_NAME"
+            git reset --hard "origin/${{ inputs.base_branch }}"
+          else
+            echo "🆕 Creating new branch: $BRANCH_NAME"
+            git checkout -b "$BRANCH_NAME"
+          fi
+
+      - name: Revert commit
+        id: revert
+        run: |
+          COMMIT_HASH="${{ inputs.commit_hash }}"
+          if ! git revert --no-edit "$COMMIT_HASH"; then
+            echo "❌ Failed to revert commit $COMMIT_HASH"
+            echo "   Common causes:"
+            echo "     - The revert introduced merge conflicts that must be resolved manually."
+            echo "     - The commit (or its changes) may already have been reverted."
+            echo ""
+            echo "🔎 Suggested next steps:"
+            echo "  1) Reproduce locally:"
+            echo "       git fetch origin \"${{ inputs.base_branch }}\""
+            echo "       git checkout \"${{ inputs.base_branch }}\""
+            echo "       git revert $COMMIT_HASH"
+            echo "       # Resolve any conflicts, then:"
+            echo "       git commit"
+            echo "       git push origin \"${{ inputs.base_branch }}\""
+            echo ""
+            echo "  2) Check if the commit was already reverted:"
+            echo "       git log --oneline | grep \"$COMMIT_HASH\" || true"
+            echo "       # or search for a prior \"Revert\" commit that references this change."
+            echo ""
+            echo "   After resolving the issue, you can re-run this workflow if needed."
+            exit 1
+          fi
+          echo "✅ Successfully reverted commit $COMMIT_HASH"
+
+      - name: Push branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="${{ steps.check-branch.outputs.branch-name }}"
+          git push --force-with-lease origin "$BRANCH_NAME"
+          echo "✅ Pushed branch: $BRANCH_NAME"
+
+      - name: Check if PR already exists
+        id: check-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="${{ steps.check-branch.outputs.branch-name }}"
+          BASE_BRANCH="${{ inputs.base_branch }}"
+
+          EXISTING_PR=$(gh pr list \
+            --head "$BRANCH_NAME" \
+            --base "$BASE_BRANCH" \
+            --repo "${{ github.repository }}" \
+            --json number,url,state \
+            --jq '.[0]' 2>/dev/null || echo "")
+
+          if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+            PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
+            PR_URL=$(echo "$EXISTING_PR" | jq -r '.url')
+            PR_STATE=$(echo "$EXISTING_PR" | jq -r '.state')
+            echo "⚠️ PR already exists: #$PR_NUMBER ($PR_STATE)"
+            echo "pr-exists=true" >> $GITHUB_OUTPUT
+            echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
+            echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "pr-state=$PR_STATE" >> $GITHUB_OUTPUT
+          else
+            echo "✅ No existing PR found, will create new one"
+            echo "pr-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        id: create-pr
+        if: steps.check-pr.outputs.pr-exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_HASH="${{ inputs.commit_hash }}"
+          COMMIT_MESSAGE="${{ steps.verify-commit.outputs.commit-message }}"
+          COMMIT_AUTHOR="${{ steps.verify-commit.outputs.commit-author }}"
+          COMMIT_DATE="${{ steps.verify-commit.outputs.commit-date }}"
+          BRANCH_NAME="${{ steps.check-branch.outputs.branch-name }}"
+          BASE_BRANCH="${{ inputs.base_branch }}"
+
+          PR_TITLE="Revert \"$COMMIT_MESSAGE\""
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/$COMMIT_HASH"
+          WORKFLOW_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR_BODY=$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s\n- %s\n- %s\n- %s\n\n%s' \
+            "This PR reverts commit [\`$COMMIT_HASH\`]($COMMIT_URL)." \
+            "**Original commit message:**" \
+            "\`\`\`" \
+            "$COMMIT_MESSAGE" \
+            "\`\`\`" \
+            "**Original commit details:**" \
+            "**Commit:** \`$COMMIT_HASH\`" \
+            "**Author:** $COMMIT_AUTHOR" \
+            "**Date:** $COMMIT_DATE" \
+            "Created automatically by workflow run: $WORKFLOW_RUN_URL")
+
+          PR_URL=$(gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH_NAME" \
+            --repo "${{ github.repository }}")
+
+          echo "✅ Created PR: $PR_URL"
+          echo "pr-url=$PR_URL" >> $GITHUB_OUTPUT
+
+      - name: Output PR information
+        run: |
+          if [ "${{ steps.check-pr.outputs.pr-exists }}" = "true" ]; then
+            echo "📋 Existing PR: ${{ steps.check-pr.outputs.pr-url }}"
+            echo "   State: ${{ steps.check-pr.outputs.pr-state }}"
+          else
+            echo "📋 New PR created: ${{ steps.create-pr.outputs.pr-url }}"
+          fi
