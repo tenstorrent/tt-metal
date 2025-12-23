@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_test_weight_config,
     run_module_forward,
@@ -98,6 +97,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    test_cache_manager,  # Unified cache fixture
 ):
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
@@ -105,15 +105,21 @@ def test_forward_pass(
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
     sparsity = torch.ones(1, 1, even_int_div(seq_len, SPARSITY_BLOCK_SIZE), num_experts_per_device)
-    if weight_type == "random":
+
+    # Use test_cache_manager.use_random_weights if weight_type is "random"
+    if test_cache_manager.use_random_weights or weight_type == "random":
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
         )
-
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        combined_state_dict = create_combined_state_dict(module_path, model_path, state_dict)
+        # Use cached dequantized weights
+        dequantized_state_dict = test_cache_manager.get_dequantized_state_dict(
+            module_path, combined_state_dict, hf_config
+        )
+        reference_model.load_state_dict(dequantized_state_dict)
+        state_dict = combined_state_dict
     reference_output = reference_model(torch_input)
 
     # Generate module configs and state
@@ -122,7 +128,8 @@ def test_forward_pass(
     )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
-    run_config = create_run_config(model_config, weight_config, model_state)
+    cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+    run_config = create_run_config(model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights)
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(

@@ -14,11 +14,10 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -58,17 +57,21 @@ def generate_reference_io(
     batch_size: int,
     mode: str,
     state_dict: dict[str, torch.Tensor],
+    test_cache_manager,  # TestCacheManager from conftest
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    if module_path is None:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+    # Fast path: random weights or no module_path
+    if test_cache_manager.use_random_weights or module_path is None:
+        cache_key = f"DeepseekV3Attention:{layer_idx}:random"
+        reference_model = test_cache_manager.get_reference_model(DeepseekV3Attention, hf_config, None, cache_key)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        state_dict = sub_state_dict(state_dict, module_path + ".")
-        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        # Real weights path: use cached dequantized weights
+        cache_key = f"DeepseekV3Attention:{layer_idx}:{module_path}"
+        reference_model = test_cache_manager.get_reference_model(DeepseekV3Attention, hf_config, module_path, cache_key)
+        dequantized_state_dict = test_cache_manager.get_dequantized_state_dict(module_path, state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
@@ -169,7 +172,11 @@ def run_test_forward_pass_mla1d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    test_timer=None,
+    test_cache_manager=None,
 ):
+    from models.demos.deepseek_v3.conftest import timed_section
+
     # Check params
     if mode == "prefill":
         assert batch_size == 1, "Prefill only supports a batch size of 1"
@@ -177,81 +184,107 @@ def run_test_forward_pass_mla1d(
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
 
     # Get reference IO
-    logger.info("Setting up reference IO")
-    state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
-    )
+    with test_timer.time("1. generate_reference_io") if test_timer else timed_section("1. generate_reference_io"):
+        logger.info("Setting up reference IO")
+        state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
+            model_path,
+            module_path,
+            hf_config_short,
+            layer_idx,
+            seq_len,
+            batch_size,
+            mode,
+            state_dict,
+            test_cache_manager,
+        )
 
     # Set up page config
-    logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
-    paged_input_cache, torch_page_table = paged_cache_from_torch(
-        input_cache, (1, mesh_device.shape[1]), paged_config, user_id
-    )
+    with test_timer.time("2. paged_config_setup") if test_timer else timed_section("2. paged_config_setup"):
+        logger.info("Setting up model configs")
+        user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
+        paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+        paged_input_cache, torch_page_table = paged_cache_from_torch(
+            input_cache, (1, mesh_device.shape[1]), paged_config, user_id
+        )
 
     # Set up model config
-    weight_config = get_test_weight_config(
-        MLA1D,
-        hf_config_short,
-        (state_dict,) * mesh_device.shape[0],
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-    )
-    model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
-    model_state = MLA1D.create_state(
-        hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]
-    )
-    run_config = create_run_config(model_config, weight_config, model_state)
+    with test_timer.time("3. get_test_weight_config") if test_timer else timed_section("3. get_test_weight_config"):
+        weight_config = get_test_weight_config(
+            MLA1D,
+            hf_config_short,
+            (state_dict,) * mesh_device.shape[0],
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+        )
+
+    with test_timer.time("4. get_model_config") if test_timer else timed_section("4. get_model_config"):
+        model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
+
+    with test_timer.time("5. create_state") if test_timer else timed_section("5. create_state"):
+        model_state = MLA1D.create_state(
+            hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]
+        )
+
+    with test_timer.time("6. create_run_config") if test_timer else timed_section("6. create_run_config"):
+        cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+        run_config = create_run_config(
+            model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights
+        )
 
     # Set up ttnn inputs
-    logger.info("Setting up model inputs")
+    with test_timer.time("7. ttnn_input_setup") if test_timer else timed_section("7. ttnn_input_setup"):
+        logger.info("Setting up model inputs")
 
-    tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(0),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_device.shape),
-        dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    position_ids_tensor = (
-        ttnn.from_torch(
-            position_ids,
+        tt_input = ttnn.from_torch(
+            torch_input.unsqueeze(0),
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_device.shape),
-            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_device.shape),
+            dtype=ttnn.bfloat16,
+            memory_config=run_config["input_memory_config"],
+            layout=ttnn.TILE_LAYOUT,
         )
-        if mode == "decode"
-        else None
-    )
 
-    tt_page_table = MLA1D.create_page_table(
-        page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
-    )
-    tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size, seq_len, position_ids, mesh_device)
+        position_ids_tensor = (
+            ttnn.from_torch(
+                position_ids,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_device.shape),
+                dtype=ttnn.int32,
+            )
+            if mode == "decode"
+            else None
+        )
+
+        tt_page_table = MLA1D.create_page_table(
+            page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
+        )
+        tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size, seq_len, position_ids, mesh_device)
 
     # Forward pass
-    logger.info("Running TTNN forward pass")
+    with test_timer.time("8. ttnn_forward") if test_timer else timed_section("8. ttnn_forward"):
+        logger.info("Running TTNN forward pass")
 
-    cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
-    if mode == "prefill":
-        tt_output = MLA1D.forward_prefill(tt_input, user_id, cur_row_idx, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA1D.forward_decode(
-            tt_input, position_ids_tensor, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
-        )
+        cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
+        if mode == "prefill":
+            tt_output = MLA1D.forward_prefill(
+                tt_input, user_id, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
+            )
+        else:
+            tt_output = MLA1D.forward_decode(
+                tt_input, position_ids_tensor, cur_row_idx, run_config, tt_rope_tensors, tt_page_table
+            )
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    )[cur_row_idx]
+    with test_timer.time("9. ttnn_to_torch") if test_timer else timed_section("9. ttnn_to_torch"):
+        tt_output_torch = ttnn.to_torch(
+            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
+        )[cur_row_idx]
 
     # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["kvpe_cache"], mesh_device), torch_page_table, mesh_device.get_num_devices()
-    )
+    with test_timer.time("10. pcc_check") if test_timer else timed_section("10. pcc_check"):
+        tt_cache = torch_cache_from_paged(
+            get_cache_on_host(run_config["kvpe_cache"], mesh_device), torch_page_table, mesh_device.get_num_devices()
+        )
     if mode == "prefill":
         batch_id = user_id + cur_row_idx * USERS_PER_ROW
         assert (
@@ -300,7 +333,11 @@ def run_test_forward_pass_mla2d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    test_timer=None,
+    test_cache_manager=None,
 ):
+    from models.demos.deepseek_v3.conftest import timed_section
+
     # Check params
     if mode == "prefill":
         assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
@@ -310,79 +347,103 @@ def run_test_forward_pass_mla2d(
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Get reference IO
-    logger.info("Setting up reference IO")
-    state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
-    )
+    with test_timer.time("1. generate_reference_io") if test_timer else timed_section("1. generate_reference_io"):
+        logger.info("Setting up reference IO")
+        state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
+            model_path,
+            module_path,
+            hf_config_short,
+            layer_idx,
+            seq_len,
+            batch_size,
+            mode,
+            state_dict,
+            test_cache_manager,
+        )
 
     # Set up page config
-    logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
-    paged_input_cache, torch_page_table = paged_cache_from_torch(
-        input_cache, tuple(mesh_device.shape), paged_config, user_id
-    )
+    with test_timer.time("2. paged_config_setup") if test_timer else timed_section("2. paged_config_setup"):
+        logger.info("Setting up model configs")
+        user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
+        paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+        paged_input_cache, torch_page_table = paged_cache_from_torch(
+            input_cache, tuple(mesh_device.shape), paged_config, user_id
+        )
 
     # Set up model config
-    weight_config = get_test_weight_config(
-        MLA2D,
-        hf_config_short,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-    )
-    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
-    model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
-    run_config = create_run_config(model_config, weight_config, model_state)
+    with test_timer.time("3. get_test_weight_config") if test_timer else timed_section("3. get_test_weight_config"):
+        weight_config = get_test_weight_config(
+            MLA2D,
+            hf_config_short,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+        )
+
+    with test_timer.time("4. get_model_config") if test_timer else timed_section("4. get_model_config"):
+        model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
+
+    with test_timer.time("5. create_state") if test_timer else timed_section("5. create_state"):
+        model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
+
+    with test_timer.time("6. create_run_config") if test_timer else timed_section("6. create_run_config"):
+        cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+        run_config = create_run_config(
+            model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights
+        )
 
     # Set up ttnn inputs
-    logger.info("Setting up model inputs")
-    tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(0),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-        dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    position_ids_tensor = (
-        ttnn.from_torch(
-            position_ids,
+    with test_timer.time("7. ttnn_input_setup") if test_timer else timed_section("7. ttnn_input_setup"):
+        logger.info("Setting up model inputs")
+        tt_input = ttnn.from_torch(
+            torch_input.unsqueeze(0),
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            dtype=ttnn.bfloat16,
+            memory_config=run_config["input_memory_config"],
+            layout=ttnn.TILE_LAYOUT,
         )
-        if mode == "decode"
-        else None
-    )
 
-    tt_page_table = MLA2D.create_page_table(
-        page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
-    )
-    tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+        position_ids_tensor = (
+            ttnn.from_torch(
+                position_ids,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+                dtype=ttnn.int32,
+            )
+            if mode == "decode"
+            else None
+        )
+
+        tt_page_table = MLA2D.create_page_table(
+            page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
+        )
+        tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
 
     # Forward pass
-    logger.info("Running TTNN forward pass")
+    with test_timer.time("8. ttnn_forward") if test_timer else timed_section("8. ttnn_forward"):
+        logger.info("Running TTNN forward pass")
 
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
-    else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    ).reshape(
-        -1, seq_len, hf_config_short.hidden_size
-    )  # Concatenate all batches together
+    with test_timer.time("9. ttnn_to_torch") if test_timer else timed_section("9. ttnn_to_torch"):
+        tt_output_torch = ttnn.to_torch(
+            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
+        ).reshape(
+            -1, seq_len, hf_config_short.hidden_size
+        )  # Concatenate all batches together
 
     # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
-        torch_page_table,
-        mesh_device.get_num_devices(),
-    )
+    with test_timer.time("10. pcc_check") if test_timer else timed_section("10. pcc_check"):
+        tt_cache = torch_cache_from_paged(
+            get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
+            torch_page_table,
+            mesh_device.get_num_devices(),
+        )
     if mode == "prefill":
         assert (
             check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
@@ -446,6 +507,8 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    test_timer,  # Added timing fixture
+    test_cache_manager,  # Unified cache fixture
 ):
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
@@ -463,6 +526,8 @@ def test_forward_pass(
         module_path,
         force_recalculate_weight_config,
         state_dict,
+        test_timer,  # Pass timer to closure
+        test_cache_manager,  # Pass unified cache to closure
     )
 
 

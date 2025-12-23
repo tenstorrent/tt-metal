@@ -19,7 +19,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -83,6 +83,24 @@ def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
             dequantized_state_dict[name] = tensor.to(dtype)
 
     return dequantized_state_dict
+
+
+def get_dequantized_state_dict_cached(
+    module_path: str,
+    state_dict: dict[str, torch.Tensor],
+    hf_config: PretrainedConfig,
+    cache: dict[str, dict[str, torch.Tensor]],
+) -> dict[str, torch.Tensor]:
+    """Get dequantized state dict with session-level caching."""
+    if module_path in cache:
+        logger.info(f"Cache hit for dequantized weights: {module_path}")
+        return cache[module_path]
+
+    logger.info(f"Cache miss - dequantizing weights for: {module_path}")
+    sub_dict = sub_state_dict(state_dict, module_path + ".")
+    dequantized = dequantize_state_dict(sub_dict, hf_config)
+    cache[module_path] = dequantized
+    return dequantized
 
 
 def add_inv_scale_to_state_dict(

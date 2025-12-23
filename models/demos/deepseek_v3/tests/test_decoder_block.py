@@ -19,12 +19,11 @@ from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDe
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -43,18 +42,26 @@ def generate_reference_io(
     batch_size: int,
     mode: str,
     state_dict: dict[str, torch.Tensor],
+    test_cache_manager,  # TestCacheManager from conftest
 ):
-    reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-    if module_path is not None:
-        state_dict = sub_state_dict(state_dict, module_path + ".")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
-    else:
+    # Fast path: random weights or no module_path
+    if test_cache_manager.use_random_weights or module_path is None:
+        cache_key = f"DeepseekV3DecoderLayer:{layer_idx}:random"
+        reference_model = test_cache_manager.get_reference_model(DeepseekV3DecoderLayer, hf_config, None, cache_key)
         # This needs to be disabled as deterministic way to quantize weights is not supported
         torch.use_deterministic_algorithms(False)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
+    else:
+        # Real weights path: use cached dequantized weights
+        cache_key = f"DeepseekV3DecoderLayer:{layer_idx}:{module_path}"
+        reference_model = test_cache_manager.get_reference_model(
+            DeepseekV3DecoderLayer, hf_config, module_path, cache_key
+        )
+        dequantized_state_dict = test_cache_manager.get_dequantized_state_dict(module_path, state_dict, hf_config)
+        reference_model.load_state_dict(dequantized_state_dict)
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None
@@ -87,6 +94,7 @@ def run_test_forward_pass_decoder1d(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    test_cache_manager=None,
 ):
     # Check params
     if mode == "prefill":
@@ -103,6 +111,7 @@ def run_test_forward_pass_decoder1d(
         batch_size,
         mode,
         state_dict,
+        test_cache_manager,
     )
 
     # Set up page config
@@ -132,7 +141,10 @@ def run_test_forward_pass_decoder1d(
         mla_caches=(paged_input_cache,) * mesh_device.shape[0],
     )
     model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
-    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+    cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+    run_config = create_run_config(
+        model_config, weight_config, model_state, model_shared_state, cached_ttnn_weights=cached_ttnn_weights
+    )
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
@@ -197,6 +209,7 @@ def run_test_forward_pass_decoder2d(
     ccl,
     force_recalculate_weight_config,
     state_dict,
+    test_cache_manager=None,
 ):
     # Check params
     if mode == "prefill":
@@ -215,6 +228,7 @@ def run_test_forward_pass_decoder2d(
         batch_size,
         mode,
         state_dict,
+        test_cache_manager,
     )
 
     # Set up page config
@@ -243,7 +257,10 @@ def run_test_forward_pass_decoder2d(
         mla_cache=paged_input_cache,
     )
     model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
-    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+    cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+    run_config = create_run_config(
+        model_config, weight_config, model_state, model_shared_state, cached_ttnn_weights=cached_ttnn_weights
+    )
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
@@ -335,6 +352,7 @@ def test_forward_pass(
     test_closure,
     set_deterministic_env,
     state_dict,
+    test_cache_manager,
 ):
     test_closure(
         DecoderBlockClass,
@@ -350,6 +368,7 @@ def test_forward_pass(
         ccl,
         force_recalculate_weight_config,
         state_dict,
+        test_cache_manager,
     )
 
 

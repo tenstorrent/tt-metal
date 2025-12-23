@@ -59,78 +59,98 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    test_timer,  # Added timing fixture
+    test_cache_manager,  # Unified cache fixture
 ):
     num_module_layers, _ = mesh_device.shape
 
     # Get the hidden_size of the norm
     hidden_size = getattr(hf_config, hf_config_size_attr)
 
-    # Get the reference inputs and outputs
-    reference_model = DeepseekV3RMSNorm(
-        hidden_size=hidden_size,
-        eps=hf_config.rms_norm_eps,
-    ).eval()
+    with test_timer.time("1. reference_model_creation"):
+        # Get the reference inputs and outputs
+        reference_model = DeepseekV3RMSNorm(
+            hidden_size=hidden_size,
+            eps=hf_config.rms_norm_eps,
+        ).eval()
 
-    if reference_layernorm_path is not None:
-        # Use real weights from the model
-        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
-        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
-        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
-    else:
-        state_dict = reference_model.to(torch.bfloat16).state_dict()
+    with test_timer.time("2. state_dict_processing"):
+        if reference_layernorm_path is not None:
+            # Use real weights from the model
+            state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+            reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
+            state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+        else:
+            state_dict = reference_model.to(torch.bfloat16).state_dict()
 
-    torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
-    reference_model = reference_model.to(torch.float32)
-    reference_output = reference_model(torch_input)
+    with test_timer.time("3. reference_forward"):
+        torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+        reference_model = reference_model.to(torch.float32)
+        reference_output = reference_model(torch_input)
 
-    # Generate module configs and state
-    weight_config = get_test_weight_config(
-        RMSNormClass,
-        hf_config,
-        [state_dict] * num_module_layers,
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-    )
-    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
-    )
-    run_config = create_run_config(model_config, weight_config, model_state)
+    with test_timer.time("4. get_test_weight_config"):
+        # Generate module configs and state
+        weight_config = get_test_weight_config(
+            RMSNormClass,
+            hf_config,
+            [state_dict] * num_module_layers,
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+        )
 
-    # Convert the input to TTNN tensor
-    if RMSNormClass is not DistributedRMSNorm:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
-    else:
-        memory_config = run_config["input_memory_config"]
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
-        ),
-        dtype=ttnn.bfloat16,
-        memory_config=memory_config,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    with test_timer.time("5. get_model_config"):
+        model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
 
-    # Run TTNN forward pass
-    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+    with test_timer.time("6. create_state"):
+        model_state = RMSNormClass.create_state(
+            hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
+        )
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
-    )
-    if RMSNormClass is RMSNorm:
-        tt_output_torch = tt_output_torch[..., :hidden_size]
+    with test_timer.time("7. create_run_config"):
+        cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+        run_config = create_run_config(
+            model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights
+        )
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+    with test_timer.time("8. ttnn_from_torch"):
+        # Convert the input to TTNN tensor
+        if RMSNormClass is not DistributedRMSNorm:
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            memory_config = run_config["input_memory_config"]
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
+            ),
+            dtype=ttnn.bfloat16,
+            memory_config=memory_config,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+    with test_timer.time("9. ttnn_forward"):
+        # Run TTNN forward pass
+        tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+
+    with test_timer.time("10. ttnn_to_torch"):
+        # Convert output back to torch
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
+        )
+        if RMSNormClass is RMSNorm:
+            tt_output_torch = tt_output_torch[..., :hidden_size]
+
+    with test_timer.time("11. cleanup"):
+        # Cleanup
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
+
+    with test_timer.time("12. pcc_check"):
+        # Check PCC
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

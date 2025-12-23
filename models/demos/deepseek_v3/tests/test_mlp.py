@@ -141,63 +141,91 @@ def test_forward_pass(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict,
+    test_timer,  # Added timing fixture
+    test_cache_manager,  # Unified cache fixture
 ):
     num_module_layers, _ = mesh_device.shape
 
-    # Get the reference IO
-    if not issubclass(MLPClass, MLPDequant):
-        reference_model = DeepseekV3MLP(hf_config).eval()
-        state_dict = reference_model.to(torch.bfloat16).state_dict()
-        torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
+    with test_timer.time("1. reference_io_setup"):
+        # Get the reference IO
+        if test_cache_manager.use_random_weights or not issubclass(MLPClass, MLPDequant):
+            # Fast path: random weights (cached)
+            cache_key = f"DeepseekV3MLP:random"
+            reference_model = test_cache_manager.get_reference_model(DeepseekV3MLP, hf_config, None, cache_key)
+            state_dict = reference_model.to(torch.bfloat16).state_dict()
+            torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
 
-        reference_model = reference_model.to(torch.float32)
-        reference_output = reference_model(torch_input)
-    else:
-        state_dict = sub_state_dict(state_dict, module_path + ".")
-        torch_input, reference_output = load_reference_io_tensors_for_module(
-            mode, module_path, seq_len, num_module_layers
+            reference_model = reference_model.to(torch.float32)
+            reference_output = reference_model(torch_input)
+        else:
+            # Real weights path: use cached dequantized weights
+            dequantized = test_cache_manager.get_dequantized_state_dict(module_path, state_dict, hf_config)
+            torch_input, reference_output = load_reference_io_tensors_for_module(
+                mode, module_path, seq_len, num_module_layers
+            )
+            state_dict = dequantized
+
+    with test_timer.time("2. get_test_weight_config"):
+        # Generate module configs and state
+        weight_config = get_test_weight_config(
+            MLPClass,
+            hf_config,
+            (state_dict,) * num_module_layers,
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
         )
 
-    # Generate module configs and state
-    weight_config = get_test_weight_config(
-        MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
-    )
-    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
-    model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
-    run_config = create_run_config(model_config, weight_config, model_state)
+    with test_timer.time("3. get_model_config"):
+        model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
 
-    # Convert input to TTNN
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    with test_timer.time("4. create_state"):
+        model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
 
-    # TTNN forward pass
-    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
+    with test_timer.time("5. create_run_config"):
+        cached_ttnn_weights = test_cache_manager.ttnn_weight_tensors if test_cache_manager else None
+        run_config = create_run_config(
+            model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights
+        )
 
-    # Verify output memory config matches expected
-    expected_output_memory_config = run_config["output_memory_config"]
-    actual_output_memory_config = tt_output.memory_config()
-    assert (
-        actual_output_memory_config == expected_output_memory_config
-    ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
+    with test_timer.time("6. ttnn_from_torch"):
+        # Convert input to TTNN
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
-    )
+    with test_timer.time("7. ttnn_forward"):
+        # TTNN forward pass
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+    with test_timer.time("8. verify_memory_config"):
+        # Verify output memory config matches expected
+        expected_output_memory_config = run_config["output_memory_config"]
+        actual_output_memory_config = tt_output.memory_config()
+        assert (
+            actual_output_memory_config == expected_output_memory_config
+        ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
+    with test_timer.time("9. ttnn_to_torch"):
+        # Convert output back to torch
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
+        )
+
+    with test_timer.time("10. cleanup"):
+        # Cleanup
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
+
+    with test_timer.time("11. pcc_check"):
+        # Check PCC
+        assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
 
 
 if __name__ == "__main__":
