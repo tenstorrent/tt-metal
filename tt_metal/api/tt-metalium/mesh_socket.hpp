@@ -148,7 +148,7 @@ public:
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
-        const SocketConfig& config);
+        const SocketConfig& base_config);
     // Access the data-buffer associated with the socket on the reciver mesh. Can only be queried for receiver sockets.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
@@ -177,6 +177,10 @@ private:
         socket_endpoint_type_(socket_endpoint_type) {}
     void initialize_from_host_ranks();
     void initialize_from_mesh_ids();
+    static SocketConfig populate_mesh_ids(
+        const std::shared_ptr<MeshDevice>& sender,
+        const std::shared_ptr<MeshDevice>& receiver,
+        const SocketConfig& base_config);
     void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;
