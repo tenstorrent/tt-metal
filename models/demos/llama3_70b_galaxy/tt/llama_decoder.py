@@ -134,7 +134,6 @@ class TtTransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
-        residual_dtype = ttnn.bfloat16
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
             x.memory_config() == skip_mem_cfg
@@ -151,7 +150,7 @@ class TtTransformerBlock(LightweightModule):
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             if self.unfuse_res_add:
-                h = ttnn.add(x, h, dtype=residual_dtype)
+                h = ttnn.add(x, h)
                 attn_in_sharded, _ = self.attention_norm(h, None, mode)
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
@@ -174,7 +173,7 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
             if self.unfuse_res_add:
-                h = ttnn.add(attn_out, h, dtype=residual_dtype)
+                h = ttnn.add(attn_out, h)
                 ff_in_sharded, _ = self.ff_norm(h, None, mode)
             else:
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
