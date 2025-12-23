@@ -2,12 +2,6 @@ name: Parallel Refactoring - Device Operations
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - 'ay/**'
-    paths:
-      - '.github/workflows/parallel-refactor.yml'
-      - 'batch_mapping.json'
 
 jobs:
   generate-matrix:
