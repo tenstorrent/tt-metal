@@ -52,7 +52,7 @@ public:
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
-  
+
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
