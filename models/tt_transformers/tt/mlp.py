@@ -170,6 +170,7 @@ class MLP(LightweightModule):
             act_out = ttnn.mul(
                 relu_out, relu_out, dtype=activation_dtype or ttnn.bfloat8_b, memory_config=w3_out.memory_config()
             )
+            ttnn.deallocate(relu_out)
         else:
             act_out = ttnn.unary(w3_out, self.activation_type)
 
