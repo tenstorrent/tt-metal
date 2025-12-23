@@ -18,7 +18,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/untilize.h"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 namespace NAMESPACE {
 void MAIN {
