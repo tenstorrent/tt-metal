@@ -239,6 +239,8 @@ from ttnn.types import (
     DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
+    RuntimeArgs,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
     cb_descriptor_from_sharded_tensor,

@@ -75,10 +75,8 @@ def test_eltwise_exp(device, num_tiles):
     writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_compile_time_args = [work_per_core1, 1]
 
-    num_x_cores = max_core.x + 1
-    num_y_cores = max_core.y + 1
-    reader_rt_args = [[[] for _ in range(num_y_cores)] for _ in range(num_x_cores)]
-    writer_rt_args = [[[] for _ in range(num_y_cores)] for _ in range(num_x_cores)]
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
     current_tile = 0
     for core_range in core_group_1.ranges():
         for x in range(core_range.start.x, core_range.end.x + 1):
@@ -111,7 +109,7 @@ def test_eltwise_exp(device, num_tiles):
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,
         defines=sfpu_defines,
-        runtime_args=[[[]]],
+        runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(),
     )
 
