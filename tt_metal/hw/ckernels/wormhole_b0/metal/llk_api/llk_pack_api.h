@@ -275,20 +275,6 @@ inline void llk_matmul_pack(
  * LLK PACK FAST TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en>
-inline void llk_pack_fast_tilize_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-
-    _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(pack_src_format[output_id], pack_dst_format[output_id]);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t pack_output) {
-    const llk_pack_params_t llk_pack_params = {.pack_output = pack_output};
-
-    llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
-}
-
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t input_id = get_output_id(input_operand);
