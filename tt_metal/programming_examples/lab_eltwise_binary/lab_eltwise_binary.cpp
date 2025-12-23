@@ -21,7 +21,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace ttnn;
 
-// Define prefix path for kernel files if not set in the makefile.
+// Define prefix path for kernel files to be an ampty string if not set in the makefile.
+// this prefix enables overriding the default kernel path with a custom path, so that the
+// example works in both development environment and when installed.
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
@@ -178,7 +180,7 @@ void eltwise_add_tensix(
     TensorSpec t_spec(Shape({M, N}), tile_layout);
 
     // Create device tensors from input data.
-    // This creates the tensors and transfers data to device in one step.
+    // This creates the tensors and queues transfer of data to device in one step.
     Tensor src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), t_spec, prog_state.mesh_device.get());
     Tensor src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), t_spec, prog_state.mesh_device.get());
     // Allocate output tensor on device (no initialization needed - kernel will write into it).
@@ -217,14 +219,17 @@ void eltwise_add_tensix(
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
     std::vector<uint32_t> reader_compile_time_args;
-    // TensorAccessorArgs just packages data distribution details from MeshBuffer object into a format that can be
-    // understood by the kernel, and that data is pushed into compile-time arguments.
+    // TensorAccessorArgs just extracts data distribution details from MeshBuffer object into
+    // the vector of uint32_t so it can be pushed into compile-time arguments.
     TensorAccessorArgs(*src0_mesh_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_mesh_buffer).append_to(reader_compile_time_args);
 
-    // There are two data movement RISCV processors in each Tensix core. We pick one to read data from DRAM into
-    // circular buffers and the other to write result from circular buffer to DRAM. Which one is used for
-    // reading vs writing  doesn't impact functionality or performance.
+    // There are two data movement RISCV processors in each Tensix core:
+    // DataMovementProcessor::RISCV_0 and DataMovementProcessor::RISCV_1, corresponding to
+    // "RISC-V 0" and "RISC-V 4" in the Tensix core diagram in the documentation.
+    // We pick one to read data from DRAM into circular buffers and the other to write result
+    // from circular buffer to DRAM. Which one is used for reading vs writing doesn't impact
+    // functionality or performance.
     KernelHandle reader_id = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/dataflow/read_tiles.cpp",
@@ -271,7 +276,8 @@ void eltwise_add_tensix(
 
     // Execute the kernels (data is already on device from Tensor::from_vector)
     prog_state.workload.add_program(prog_state.device_range, std::move(prog_state.program));
-    distributed::EnqueueMeshWorkload(prog_state.cq, prog_state.workload, true);  // Wait for workload to complete
+    // Last argument is set to true to wait for the workload to complete (blocking call).
+    tt_metal::distributed::EnqueueMeshWorkload(prog_state.cq, prog_state.workload, true);
 
     // Read the result back from device using Tensor::to_vector
     output = dst_tensor.to_vector<bfloat16>();
