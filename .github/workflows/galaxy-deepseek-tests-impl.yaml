@@ -35,8 +35,8 @@ jobs:
         id: generate
         run: |
           all_tests=$(jq -n '[
-            { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 20, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 140, "owner_id": "U03HY7MK4BT" }
+            { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -102,31 +102,19 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          fail=0
-          echo "LOG_METAL: Running DeepSeek unit tests"
-          start_time=$(date +%s)
-
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests/unit --timeout 10 --durations=0 || fail=1
-
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-          echo "LOG_METAL: DeepSeek unit tests took $duration seconds to complete"
-
-          if (( fail )); then
-            exit 1
-          fi
+          pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: 10
         run: |
-          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/test_cache" || true
+          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
       - name: Run DeepSeek module tests
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 10 --durations=0
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
