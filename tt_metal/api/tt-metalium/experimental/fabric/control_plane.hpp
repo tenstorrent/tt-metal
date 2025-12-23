@@ -274,7 +274,7 @@ private:
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
-        chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
+        chan_id_t src_routing_plane_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
@@ -314,7 +314,7 @@ private:
     // UDM-specific helper to write per-worker connection info to each worker core's L1
     void write_udm_fabric_connections_to_tensix_cores(
         ChipId physical_chip_id,
-        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_worker_connections,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_mux_connections,
         const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const;
 
     void assign_direction_to_fabric_eth_chan(

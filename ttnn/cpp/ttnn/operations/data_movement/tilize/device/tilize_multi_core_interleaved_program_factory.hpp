@@ -17,12 +17,12 @@ struct TilizeMultiCoreInterleavedProgramFactory {
     static cached_program_t create(
         const tilize::operation_attributes_t& operation_attributes,
         const tilize::tensor_args_t& tensor_args,
-        const tilize::tensor_return_value_t& output);
+        const tilize::tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const tilize::operation_attributes_t& operation_attributes,
         const tilize::tensor_args_t& tensor_args,
-        const tilize::tensor_return_value_t& output);
+        const tilize::tensor_return_value_t& tensor_return_value);
 };
 }  // namespace ttnn::operations::data_movement::program
