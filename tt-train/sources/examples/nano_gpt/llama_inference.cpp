@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
 #include "utils.hpp"
 
@@ -25,23 +26,22 @@ struct InferenceConfig {
     bool use_kv_cache = true;
 };
 
-constexpr uint32_t TILE_SIZE = 32;
-
 // Create a causal attention mask for autoregressive generation
 TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t query_seq_len, uint32_t prompt_len = 0) {
-    const uint32_t padded_query_seq_len = ((query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-    const uint32_t padded_whole_seq_len = ((prompt_len + query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-
     // Mask shape: [padded_seq_len, padded_whole_seq_len] - query_len x key_len
-    std::vector<float> mask_data(padded_query_seq_len * padded_whole_seq_len, 0.0f);
+    const uint32_t whole_seq_len = prompt_len + query_seq_len;
+    const uint32_t padded_query_len = round_up_to_tile(query_seq_len);
+    const uint32_t padded_whole_len = round_up_to_tile(whole_seq_len);
+
+    std::vector<float> mask_data(padded_query_len * padded_whole_len, 0.0f);
 
     for (uint32_t i = 0; i < query_seq_len; ++i) {
-        for (uint32_t j = 0; j <= prompt_len + i; ++j) {
-            mask_data[i * padded_whole_seq_len + j] = 1.0f;
+        for (uint32_t j = 0; j <= i + prompt_len; ++j) {
+            mask_data[i * padded_whole_len + j] = 1.0f;
         }
     }
 
-    const auto shape = ttnn::Shape({1, 1, padded_query_seq_len, padded_whole_seq_len});
+    const auto shape = ttnn::Shape({1, 1, padded_query_len, padded_whole_len});
     const auto mask_tensor = ttml::core::from_vector(mask_data, shape, device);
 
     return ttml::autograd::create_tensor(mask_tensor);
@@ -62,14 +62,14 @@ const uint32_t sample_token(const TensorPtr& logits, int position) {
     return static_cast<uint32_t>(std::distance(start_it, max_it));
 }
 
-// Create tensor from token IDs (no padding to max_seq_len)
+// Create tensor from token IDs with padding to nearest multiple of 32
 TensorPtr tokens_to_tensor(const std::vector<uint32_t>& tokens, ttnn::distributed::MeshDevice* device) {
     const uint32_t actual_len = tokens.size();
-    // Pad to actual length to nearest tile boundary (32, 64, 96, ...)
-    const uint32_t padded_len = ((actual_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    const uint32_t padded_len = round_up_to_tile(actual_len);
 
-    std::vector<uint32_t> padded_tokens(tokens.begin(), tokens.end());
-    padded_tokens.resize(padded_len, 0U);
+    // Pad tokens with zeros to reach padded length
+    std::vector<uint32_t> padded_tokens(padded_len, 0);
+    std::copy(tokens.begin(), tokens.end(), padded_tokens.begin());
 
     const auto shape = ttnn::Shape({1, 1, 1, padded_len});
     auto tokens_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -84,11 +84,19 @@ void run_inference_with_kv_cache(
     const InferenceConfig& inference_config,
     const uint32_t vocab_size,
     const uint32_t max_seq_len,
+    const ttml::models::llama::LlamaConfig& llama_config,
     ttnn::distributed::MeshDevice* device) {
     fmt::print("Running Inference with KV Cache\n");
 
+    // Create KV cache using config
+    const uint32_t batch_size = 1;
+    const uint32_t head_dim = llama_config.embedding_dim / llama_config.num_heads;
+    const ttml::models::common::transformer::KvCacheConfig kv_cache_config(
+        llama_config.num_blocks, batch_size, llama_config.num_groups, llama_config.max_sequence_length, head_dim);
+    auto kv_cache = std::make_shared<ttml::models::common::transformer::KvCache>(kv_cache_config);
+
     // Reset KV cache for new sequence
-    model->reset_cache();
+    kv_cache->reset();
 
     std::vector<uint32_t> generated_tokens = prompt_tokens;
     generated_tokens.reserve(
@@ -118,7 +126,7 @@ void run_inference_with_kv_cache(
         std::vector<uint32_t> input_tokens;
         uint32_t processed_tokens = 0;
 
-        if (model->get_inference_mode() == ttml::modules::InferenceMode::PREFILL) {
+        if (kv_cache->get_cache_position() == 0) {
             // Prefill: process entire prompt
             input_tokens = generated_tokens;
         } else {
@@ -133,21 +141,22 @@ void run_inference_with_kv_cache(
         // For prefill: query_len = prompt_len, key_len = prompt_len
         // For decode: query_len = 1, key_len = cache_position + 1
         const auto mask = create_causal_mask(device, input_tokens.size(), processed_tokens);
-        const auto logits = (*model)(token_tensor, mask, /*use_cache=*/true);
+        const uint32_t new_tokens = input_tokens.size();
+        const auto logits = (*model)(token_tensor, mask, kv_cache, /* new_tokens_to_process */ new_tokens);
 
         // Sample next token from the last position
         const uint32_t next_token = sample_token(logits, input_tokens.size());
         generated_tokens.push_back(next_token);
 
         if (step % 10 == 0) {
-            fmt::print("Step {}: token={}, processed_tokens={}\n", step, next_token, processed_tokens);
+            fmt::print("Step {}: token={}, cache_position={}\n", step, next_token, kv_cache->get_cache_position());
         }
     }
 
     const auto end_timer = std::chrono::high_resolution_clock::now();
     const auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
 
-    model->reset_cache();
+    kv_cache->reset();
     // ============================================================================
     // Summary
     // ============================================================================
@@ -356,7 +365,13 @@ int main(int argc, char** argv) {
 
     if (inference_config.use_kv_cache) {
         run_inference_with_kv_cache(
-            model, prompt_tokens, inference_config, llama_config.vocab_size, llama_config.max_sequence_length, device);
+            model,
+            prompt_tokens,
+            inference_config,
+            llama_config.vocab_size,
+            llama_config.max_sequence_length,
+            llama_config,
+            device);
     } else {
         run_inference_no_cache(
             model, prompt_tokens, inference_config, llama_config.vocab_size, llama_config.max_sequence_length, device);
