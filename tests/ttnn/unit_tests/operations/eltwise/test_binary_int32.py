@@ -1063,3 +1063,114 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "logical_op",
+    [
+        ttnn.remainder,
+    ],
+)
+def test_binary_remainder_int32_edge_cases(logical_op, device):
+    torch_input_tensor_a = torch.tensor(
+        [0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896]
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(
+        [2, 1, -1, 1, -1, 2147483647, -2147483647, 65535, -2147483647, 1073872896, -1073872896]
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(logical_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = logical_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+def test_binary_remainder_int32_full_range(input_shapes, device):
+    value_ranges_a = [
+        (-300, 300),
+        (-500, 500),
+        (-1000, 1000),
+        (-1e4, 1e4),
+        (-1e5, 1e5),
+        (-1e7, 1e7),
+        (2e9, 2077000000),  # large positive input
+        (-2147483647, -2e9),  # large negative input
+        (-2147483647, 2147483647),  # full range
+        (-2147483647, 2147483647),  # large numerator
+        (-10, 10),  # small numerator
+    ]
+
+    value_ranges_b = [
+        (-250, 250),
+        (-750, 750),
+        (-500, 1000),
+        (-5e3, 5e3),
+        (-5e4, 5e4),
+        (-1e6, 1e6),
+        (2e9, 2147483647),  # large positive input
+        (-2077000000, -2e9),  # large negative input
+        (-2147483647, 2147483647),  # full range
+        (-10, 10),  # small denominator
+        (-2147483647, 2147483647),  # large denominator
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
+    )
+
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+    print(output_tensor)
+    print(torch_output_tensor)
+
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+    # assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2.0)
+    assert torch.equal(output_tensor, torch_output_tensor)

@@ -2604,7 +2604,7 @@ void py_module(nb::module_& mod) {
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation(
         mod,
