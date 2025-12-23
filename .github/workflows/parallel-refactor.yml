@@ -64,7 +64,9 @@ jobs:
           FILES_JSON='${{ toJson(matrix.files) }}'
           echo "$FILES_JSON" | jq -r '.[]' > files_to_refactor.txt
           FILES_LIST=$(cat files_to_refactor.txt | tr '\n' ' ')
+          FILES_COUNT=$(cat files_to_refactor.txt | wc -l)
           echo "files_list=$FILES_LIST" >> $GITHUB_OUTPUT
+          echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
           echo "Files to refactor (batch ${{ matrix.batch_id }}):"
           cat files_to_refactor.txt
 
@@ -113,7 +115,7 @@ jobs:
           script: |
             const branchName = '${{ steps.create-branch.outputs.branch }}';
             const batchId = '${{ matrix.batch_id }}';
-            const filesCount = '${{ length(matrix.files) }}';
+            const filesCount = '${{ steps.prepare-files.outputs.files_count }}';
 
             // Check if PR already exists
             const { data: existingPRs } = await github.rest.pulls.list({
