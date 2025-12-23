@@ -21,18 +21,18 @@ from ....utils.diagnostic_timing import DiagnosticTimingCollector
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        # [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4sp2tp4",
-        # "4x8cfg1sp0tp1",
+        # "2x4sp2tp4",
+        "4x8sp4tp4",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 40000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 47000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -286,9 +286,9 @@ def test_qwenimage_pipeline_performance(
             "clip_encoding_time": 0.25,
             "t5_encoding_time": 0.18,
             "total_encoding_time": 0.7,
-            "denoising_steps_time": 6.0,
-            "vae_decoding_time": 1.5,
-            "total_time": 8.5,
+            "denoising_steps_time": 36.0,
+            "vae_decoding_time": 2.1,
+            "total_time": 38.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
