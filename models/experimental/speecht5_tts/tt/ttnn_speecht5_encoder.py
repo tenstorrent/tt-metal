@@ -354,9 +354,7 @@ class TTNNSpeechT5EncoderBlock:
         # Attention - rely on internal L1 memory configs
         hidden_states = self.attention(hidden_states, position_bias=position_bias)
 
-        # Dropout (skip in inference)
-        # if self.training:
-        #     hidden_states = ttnn.dropout(hidden_states, p=self.config.dropout)
+        # Dropout intentionally omitted in this TTNN encoder implementation
 
         # Residual connection
         hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
