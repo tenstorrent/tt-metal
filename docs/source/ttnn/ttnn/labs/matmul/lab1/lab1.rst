@@ -133,7 +133,7 @@ Tiled Version
 
 
 Exercies 1: Tiled Matrix Multiplication
-===========================
+========================================
 
 In this part of the lab, you will implement two versions of matrix multiplication: a straightforward triply-nested loop, and a tiled version.
 The triply-nested loop version is simply a reference implementation provided at the beginning of the lab.
