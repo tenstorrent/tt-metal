@@ -230,9 +230,17 @@ def from_torch_fast(
     return tensor
 
 
-def preprocess_nchw_input_tensor(device, torch_input):
+def preprocess_nchw_input_tensor(device, torch_input, move_to_device: bool = True):
     """
     Pad (if needed) and reshape to [1,1,N*H*W,C] for downstream convolution
+
+    Args:
+        device: TTNN device (required for memory config calculation, even if move_to_device=False)
+        torch_input: Input tensor in NCHW format [N, C, H, W]
+        move_to_device: If True, create device tensor. If False, create host tensor.
+
+    Returns:
+        TTNN tensor (device or host depending on move_to_device flag)
     """
 
     assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
@@ -260,9 +268,10 @@ def preprocess_nchw_input_tensor(device, torch_input):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
     return ttnn.from_torch(
         torch_input,
-        device=device,
+        device=device if move_to_device else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=sharded_memory_config,
@@ -566,65 +575,24 @@ def create_host_input_tensors_from_torch(
     dram_memory_config = None
     l1_memory_config = None
 
-    SHARD_WIDTH = 8
-
     for i, torch_input in enumerate(torch_inputs):
-        assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
+        # Use preprocess_nchw_input_tensor with move_to_device=False to create host tensors
+        host_input = preprocess_nchw_input_tensor(device, torch_input, move_to_device=False)
+        host_inputs.append(host_input)
 
-        C = torch_input.shape[1]
-        H = torch_input.shape[2]
-        W = torch_input.shape[3]
-        HW = H * W
-
-        # Pad channels to SHARD_WIDTH (8) if needed
-        # Padding format: (pad_left, pad_right, pad_top, pad_bottom, pad_front, pad_back)
-        # For channel dimension (dim=1), we pad at the end: pad_front=0, pad_back=SHARD_WIDTH-C
-        torch_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, SHARD_WIDTH - C), mode="constant", value=0)
-
-        # Convert to channel last (NHWC): [1, H, W, SHARD_WIDTH]
-        torch_input = torch_input.permute(0, 2, 3, 1)
-
-        # Create memory configs on first iteration
+        # Extract memory config from first tensor and set buffer type to L1
+        # If we don't do this manually there will be an error later when transferring to device
         if i == 0:
             # CustomTracedModelExecutor doesn't use DRAM memory config - it transfers directly to L1
             dram_memory_config = None
 
-            # Create L1 sharded memory config (height sharding across full grid)
-            core_range_set = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1),
-                    )
-                }
-            )
-            num_cores = device.core_grid.x * device.core_grid.y
-            shard_height = (1 * HW + num_cores - 1) // num_cores
-
-            sharded_memory_config = ttnn.create_sharded_memory_config_(
-                shape=(shard_height, SHARD_WIDTH),
-                core_grid=core_range_set,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            # Use the L1 sharding config for the pipeline
+            # Extract memory config from host tensor and set buffer type to L1
+            sharded_memory_config = host_input.memory_config()
             l1_memory_config = ttnn.MemoryConfig(
                 sharded_memory_config.memory_layout,
                 ttnn.BufferType.L1,
                 sharded_memory_config.shard_spec,
             )
-
-        # Convert to TTNN host tensor (not on device)
-        # Use ROW_MAJOR_LAYOUT and bfloat16 dtype to match the original preprocessing
-        host_input = ttnn.from_torch(
-            torch_input,
-            device=None,  # Host tensor, not on device
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        host_inputs.append(host_input)
 
     return host_inputs, dram_memory_config, l1_memory_config
 
