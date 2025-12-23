@@ -1,20 +1,22 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "non_zero_indices.hpp"
-#include "device/non_zero_indices_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices.hpp"
 
-using namespace tt::tt_metal;
+#include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::nonzero {
 
-std::vector<ttnn::Tensor> NonZeroIndicesOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config_arg) {
-    auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-    return operation::run(NonZeroIndices{memory_config}, {input_tensor}, {}, {});
+std::vector<Tensor> ExecuteNonZeroIndices::invoke(
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto [output_0, output_1] = ttnn::prim::nonzero(input_tensor, input_memory_config);
+    std::vector<Tensor> output_tensor_vec;
+    output_tensor_vec.reserve(2);
+    output_tensor_vec.push_back(std::move(output_0));
+    output_tensor_vec.push_back(std::move(output_1));
+    return output_tensor_vec;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::nonzero

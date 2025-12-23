@@ -5,23 +5,50 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "reshape_device_operation_types.hpp"
+#include "reshape_tile_program_factory.hpp"
+#include "reshape_rm_program_factory.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 struct ReshapeDeviceOperation {
-    const ttnn::Shape logical_output_shape;
-    const ttnn::Shape padded_output_shape;
-    const tt::tt_metal::MemoryConfig output_mem_config;
+    using operation_attributes_t = reshape_on_device::operation_attributes_t;
+    using tensor_args_t = reshape_on_device::tensor_args_t;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = reshape_on_device::tensor_return_value_t;
+    using program_factory_t =
+        std::variant<reshape_on_device::ReshapeTileProgramFactory, reshape_on_device::ReshapeRMProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const tt::tt_metal::Shape& logical_output_shape,
+        const tt::tt_metal::Shape& padded_output_shape,
+        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshape_on_device
+
+namespace ttnn::prim {
+constexpr auto reshape_on_device = ttnn::register_operation<
+    "ttnn::prim::reshape_on_device",
+    ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation>();
+}

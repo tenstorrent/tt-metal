@@ -13,21 +13,43 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    check_ttnn_output,
+    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_20_cores,
+)
 
 
+@pytest.mark.parametrize(
+    "pcc_values, skip_check",
+    [
+        (
+            {"pcc": 0.99, "abs_err": 0.03, "rel_err": 0.4},
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            {"pcc": 0.998, "abs_err": 0.04, "rel_err": 0.5},
+            skip_if_not_blackhole_130_cores,
+        ),
+    ],
+    ids=["20_cores", "130_cores"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_aspp(device, model_location_generator):
+def test_ttnn_aspp(device, pcc_values, skip_check, model_location_generator):
     """Test ASPP component using the full model with real weights."""
 
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -114,10 +136,19 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
     ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
-    pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.99)
+    # Extract PCC thresholds from parameters
+    passed = check_ttnn_output(
+        "aspp_output",
+        pytorch_aspp_output,
+        ttnn_aspp_output,
+        to_channel_first=True,
+        output_shape=(1, 256, 32, 64),
+        exp_pcc=pcc_values["pcc"],
+        exp_abs_err=pcc_values["abs_err"],
+        exp_rel_err=pcc_values["rel_err"],
+    )
 
-    logger.info(f"ASPP PCC: {pcc_message}")
-    assert pcc_passed, f"ASPP PCC test failed: {pcc_message}"
+    assert passed, f"ASPP PCC and tolerance test failed"
     assert (
         pytorch_aspp_output.shape == ttnn_aspp_output_torch.shape
     ), f"Shape mismatch: {pytorch_aspp_output.shape} vs {ttnn_aspp_output_torch.shape}"

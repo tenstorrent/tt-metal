@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -58,8 +62,13 @@ jobs:
        shell: bash
        working-directory: /work # https://github.com/actions/runner/issues/878
    steps:
+     - name: 🧬 Checkout Repository
+       uses: actions/checkout@v4
+       with:
+         submodules: recursive
+         path: docker-job
      - name: ⬇️  Setup Job
-       uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+       uses: ./docker-job/.github/actions/setup-job
        timeout-minutes: 10
        with:
          build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -72,19 +81,53 @@ jobs:
      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
        if: always()
 
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate test matrix
+        id: generate
+        run: |
+          # Owners for the following tests:
+          # Galaxy unit tests: None, see issue #29677
+          # Fabric tests: Allan Liu
+          # Multi-Process tests: Aditya Saigal
+          # Llama3-70b unit tests: Djordje Ivanovic
+          # DRAM Prefetcher unit tests: Johanna Rock, Yu Gao
+          # Distributed ops tests: Johanna Rock
+          # GPT-OSS unit tests: Stuti Raizada
+
+          all_tests=$(jq -n '[
+            { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 30, "owner_id": "XXXXX" },
+            { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 25, "owner_id": "UJ45FEC7M" },
+            { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 5, "owner_id": "U03NG0A5ND7" },
+            # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
+            # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
+            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" },
+            # { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true }
+          ]')
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            matrix="$all_tests"
+          else
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+          fi
+
+          # Fail fast if the matrix is empty (invalid model selected)
+          if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
+            echo "Error: Invalid model selected: '${{ inputs.model }}'"
+            exit 1
+          fi
+          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
+
   galaxy-unit-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "Galaxy unit tests", arch: wormhole_b0, model: unit, timeout: 45, owner_id: XXXXX},  # Add owner #See issue #29677
-          { name: "Galaxy Fabric tests", arch: wormhole_b0, model: fabric, timeout: 40, owner_id: UJ45FEC7M},  # Allan Liu
-          { name: "Galaxy Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 30, owner_id: U053W15B6JF, mlperf: true}, # Djordje Ivanovic
-          { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U044T8U8DEF}, # Johanna Rock, Yu Gao
-          { name: "Galaxy distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
-          { name: "Galaxy GPT-OSS unit tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A, mlperf: true},  # Stuti Raizada
-          #{ name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7}, # Aditya Saigal #See issue #26105
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -109,18 +152,86 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Run unit regression tests
+      - name: Run unit tests
+        if: ${{ matrix.test-group.model == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
+          ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
+          TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
+
+      - name: Run fabric tests
+        if: ${{ matrix.test-group.model == 'fabric' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+
+      - name: Run Multi-Process tests
+        if: ${{ matrix.test-group.model == 'multiprocess' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml
+      - name: Run Llama3-70b unit tests
+        if: ${{ matrix.test-group.model == 'llama3-70b' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+          TT_METAL_ENABLE_ERISC_IRAM: 1
+          FAKE_DEVICE: TG
+        run: |
+          mkdir -p generated/test_reports
+          pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests
+
+      - name: Run prefetcher unit tests
+        if: ${{ matrix.test-group.model == 'prefetcher' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600
+
+      - name: Run distributed ops tests
+        if: ${{ matrix.test-group.model == 'distributed-ops' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
+
+      - name: Run GPT-OSS unit tests
+        if: ${{ matrix.test-group.model == 'gpt-oss' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          mkdir -p generated/test_reports
+          pip install -r models/demos/gpt_oss/requirements.txt
+
+          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
+            pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
+
+          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
+            pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

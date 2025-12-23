@@ -46,8 +46,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
 
     IDevice* device{input_tensor.device()};
 
-    auto src_buffer{input_tensor.buffer()};
-    auto dst_buffer{output_tensor.buffer()};
+    auto* src_buffer{input_tensor.buffer()};
+    auto* dst_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
     const bool fp32_dest_acc_en{

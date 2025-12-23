@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& dims = operation_attributes.dims;
+    const auto& dims = operation_attributes.dims;
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         // If the last dimension is not permuted, we can use the row-invariant kernel
         if (dims.back() == tensor_args.input_tensor.logical_shape().rank() - 1) {

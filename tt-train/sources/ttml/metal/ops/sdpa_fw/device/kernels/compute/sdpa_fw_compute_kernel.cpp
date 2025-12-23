@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include "api/debug/dprint.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/common.h"
@@ -27,7 +28,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "debug/dprint.h"
 #include "sdpa_compute_utils.hpp"
 namespace NAMESPACE {
 
@@ -60,8 +60,6 @@ constexpr uint32_t cb_prev_mm_out = tt::CBIndex::c_13;   // used for holding pre
 constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding current matmul output
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
-
-constexpr uint32_t cb_mm_result_holder = tt::CBIndex::c_16;  // used for holding current matmul output
 
 const uint32_t onetile = 1U;
 
@@ -96,8 +94,7 @@ void MAIN {
                     cb_key,
                     /* tile_idx */ tile_idx,
                     /* tile_idx */ tile_idx,
-                    /* dst_reg_idx*/ matmul_accum_reg,
-                    /* transpose */ 1);  // accumulate in dest_reg 0
+                    /* dst_reg_idx*/ matmul_accum_reg);
             }
 
 #ifdef USE_ATTN_MASK
@@ -159,12 +156,8 @@ void MAIN {
                 cb_pop_front(alias_cb_prev_sum_exp, onetile);
 
                 // update previous matmul output with exp_max_diff and add it to current matmul output
-#ifndef FP32_DEST_ACC_EN
                 update_cur_mm_out(qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
-#else
-                update_cur_mm_out(
-                    qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
-#endif
+
                 cb_pop_front(cb_exp_max_diff, onetile);
                 cb_pop_front(alias_cb_prev_mm_out, qWt);
             }

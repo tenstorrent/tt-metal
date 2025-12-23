@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 #include <cstdint>
 
@@ -18,6 +18,7 @@ void kernel_main() {
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(1);
     const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
+    const uint32_t core_id = get_arg_val<uint32_t>(3);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -45,8 +46,7 @@ void kernel_main() {
     const auto output_tensor_dram =
         TensorAccessor(output_tensor_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
 
-    const auto start_tile_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
-    uint32_t current_index_tile_id = start_tile_id;
+    uint32_t current_index_tile_id = core_id;
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

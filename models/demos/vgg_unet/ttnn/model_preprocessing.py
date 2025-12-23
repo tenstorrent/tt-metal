@@ -323,7 +323,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv2["padding"] = (1, 1)
     parameters.conv_args.d3.conv_block.conv2["do_sharded_to_interleaved"] = False
 
-    parameters.conv_args.d4.up["act_block_h"] = None
+    parameters.conv_args.d4.up["act_block_h"] = 32 * 8
     parameters.conv_args.d4.up["enable_act_double_buffer"] = True
     parameters.conv_args.d4.up["deallocate_activation"] = True
     parameters.conv_args.d4.up["reshard_if_not_optimal"] = True

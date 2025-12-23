@@ -10,6 +10,7 @@ target_sources(
         dispatch_event/test_events.cpp
         dispatch_program/test_dispatch_stress.cpp
         dispatch_program/test_sub_device.cpp
+        dispatch_program/test_kernel_config_buffer.cpp
         dispatch_util/test_device_command.cpp
         dispatch_util/test_dispatch_settings.cpp
 )
@@ -32,6 +33,7 @@ target_sources(
     unit_tests_dispatch_basic
     PRIVATE
         dispatch_buffer/test_sub_device.cpp
+        dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
         dispatch_trace/test_sub_device.cpp

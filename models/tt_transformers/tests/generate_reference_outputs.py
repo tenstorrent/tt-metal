@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 def generate_reference_outputs(total_length, output_file, hf_model_name=None):
@@ -37,45 +37,11 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         tokenizer = model_args.tokenizer
         assert tokenizer is not None, "Tokenizer must be provided for non-dummy weights"
 
-    # Special-case Hf models as they can load directly from the safetensors much more efficiently
-    if model_args.checkpoint_type == CheckpointType.Meta:
-        # Load the model state dict
-        state_dict = model_args.load_state_dict()
-
-        # Initialize the reference model
-        state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in [
-                            "tok_embeddings.weight",
-                            "learnable_embedding.weight",
-                            "norm.weight",
-                            "output.weight",
-                        ]
-                    ]
-                )
-            )
-        }
-        reference_model = model_args.reference_transformer()
-        reference_model.to(device)  # Move model to device
-        reference_model.eval()  # Set to evaluation mode
-        reference_model.load_state_dict(reference_state_dict)
-
-        embd = model_args.reference_embedding(reference_model)
-        embd.to(device)  # Move embedding to device
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
-    else:
-        reference_model = model_args.reference_transformer(load_checkpoint=True, wrap=False)
-        reference_model.to(device)  # Move model to device
-        reference_model.eval()  # Set to evaluation mode
-        embd = reference_model.model.embed_tokens
-        embd.to(device)  # Move embedding to device
+    reference_model = model_args.reference_transformer(load_checkpoint=True, wrap=False)
+    reference_model.to(device)  # Move model to device
+    reference_model.eval()  # Set to evaluation mode
+    embd = reference_model.model.embed_tokens
+    embd.to(device)  # Move embedding to device
 
     # Load the book text and encode tokens
     current_file_path = os.path.abspath(__file__)

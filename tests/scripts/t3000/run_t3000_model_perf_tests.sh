@@ -133,6 +133,10 @@ run_t3000_gemma3_tests() {
   fi
 }
 
+run_t3000_gemma3_tests_op_to_op() {
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
+}
+
 run_t3000_wan22_tests() {
   # Record the start time
   fail=0
@@ -141,7 +145,6 @@ run_t3000_wan22_tests() {
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "2x4sp0tp1"
   pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x4sp0tp1 and resolution_480p"; fail+=$?
 
   # Record the end time
@@ -161,8 +164,7 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
-  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1 and yes_use_cache" --timeout 1800; fail+=$?
+  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1" --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -178,7 +180,11 @@ run_t3000_stable_diffusion_35_large_tests() {
 }
 
 run_t3000_flux1_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py"
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k 2x4sp0tp1"
+}
+
+run_t3000_motif_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_performance_motif.py"
 }
 
 run_t3000_model_perf_tests() {

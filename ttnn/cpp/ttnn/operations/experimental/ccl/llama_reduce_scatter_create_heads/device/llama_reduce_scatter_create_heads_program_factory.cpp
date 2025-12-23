@@ -7,8 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -16,12 +14,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-namespace rs_heads_fusion {
+namespace detail::rs_heads_fusion {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
@@ -259,8 +256,7 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
     return worker_cores;
 }
 
-}  // namespace rs_heads_fusion
-}  // namespace detail
+}  // namespace detail::rs_heads_fusion
 
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cached_mesh_workload_t
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::create_mesh_workload(
@@ -296,13 +292,13 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t num_links = operation_attributes.num_links;
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t ring_devices =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto target_device = mesh_device->get_device(mesh_coordinate);
+    auto* target_device = mesh_device->get_device(mesh_coordinate);
 
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
@@ -364,7 +360,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t output_cores_per_device = ncores_output;
 
-    auto input_tensor_buffer = input_tensor.buffer();
+    auto* input_tensor_buffer = input_tensor.buffer();
 
     uint32_t q_base_addr = q_output_tensor.buffer()->address();
     uint32_t k_base_addr = k_output_tensor.buffer()->address();
@@ -389,7 +385,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         k_num_cores,
         v_num_cores);
 
-    auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
+    auto* packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
@@ -703,7 +699,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         fabric_receiver_cb_index, output_cb_index, num_devices, 1, num_blocks_per_packet};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/compute/"
         "reduction.cpp";
     const auto compute_kernel_id = tt_metal::CreateKernel(
@@ -865,8 +861,8 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
-        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+        const auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+        const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
 
         const auto& input_tensor = tensor_args.input_tensor;
         const auto& intermediate_packet_buffer = tensor_args.intermediate_packet_buffer;
@@ -879,10 +875,10 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         uint32_t k_base_addr = output_tensor_k.buffer()->address();
         uint32_t v_base_addr = output_tensor_v.buffer()->address();
 
-        auto input_tensor_buffer = input_tensor.buffer();
-        auto packet_buffer = intermediate_packet_buffer.buffer();
+        auto* input_tensor_buffer = input_tensor.buffer();
+        auto* packet_buffer = intermediate_packet_buffer.buffer();
 
-        auto& all_cores_grid = shared_variables.core_range;
+        const auto& all_cores_grid = shared_variables.core_range;
 
         auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
 

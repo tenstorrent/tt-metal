@@ -14,7 +14,6 @@ Tests:
   - name: "FiveGalaxySingleSenderMultiReceiver"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
 
     top_level_iterations: 3
@@ -45,7 +44,6 @@ Tests:
   - name: "FiveGalaxyMultiSenderSingleReceiver"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
 
     top_level_iterations: 3
@@ -80,7 +78,6 @@ Tests:
   - name: "FiveGalaxyHubAndSpoke"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
 
     top_level_iterations: 3
@@ -126,7 +123,6 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
       mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.textproto"
 
     parametrization_params:

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define HAL_BUILD tt::tt_metal::quasar::tensix
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::quasar::tensix;
 
 #include <cstdint>
@@ -25,6 +26,10 @@ namespace tt::tt_metal::quasar {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace tensix_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace tensix_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_tensix_mem_map() {
@@ -52,11 +57,9 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SCRATCH;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH)] =
         MEM_LOGICAL_TO_VIRTUAL_SCRATCH;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = MEM_TENSIX_ROUTING_PATH_BASE_1D;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = MEM_TENSIX_ROUTING_PATH_BASE_2D;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
@@ -76,11 +79,9 @@ HalCoreInfoType create_tensix_mem_map() {
         MEM_TRISC_LOCAL_SIZE;  // TRISC, BRISC, or NCRISC?
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH)] = MEM_LOGICAL_TO_VIRTUAL_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = ROUTING_PATH_SIZE_1D;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = COMPRESSED_ROUTING_PATH_SIZE_2D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
@@ -91,7 +92,42 @@ HalCoreInfoType create_tensix_mem_map() {
         // DM
         {
             {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
              .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = UINT32_MAX,  // not used
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
@@ -154,7 +190,8 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(processor_classes_names),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
-        tensix_dev_msgs::create_factory()};
+        tensix_dev_msgs::create_factory(),
+        tensix_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

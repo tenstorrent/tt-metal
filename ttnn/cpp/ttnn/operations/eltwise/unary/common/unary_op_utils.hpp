@@ -69,6 +69,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GE:
         case UnaryOpType::UNARY_LE:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITCAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_AND:
         case UnaryOpType::BITWISE_OR:
@@ -95,6 +96,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW: return true;
         default: return false;
     }
@@ -103,8 +105,11 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
-std::string get_compute_kernel_path(
-    UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
+std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils

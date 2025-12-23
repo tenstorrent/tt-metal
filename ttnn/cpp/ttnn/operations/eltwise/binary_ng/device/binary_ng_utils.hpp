@@ -49,6 +49,8 @@ struct OpConfig {
         SUB,
         MUL,
         DIV,
+        DIV_FLOOR,
+        DIV_TRUNC,
         POWER,
         RSUB,
         GCD,

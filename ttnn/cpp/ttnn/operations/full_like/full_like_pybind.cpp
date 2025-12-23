@@ -15,7 +15,7 @@
 namespace ttnn::operations::full_like {
 
 void bind_full_like_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(full_like(tensor: Tensor, fill_value: float or value, dtype: DataType, layout: Layout, memory_config: MemoryConfig) -> Tensor
 
     Create a tensor with the same shape of the given tensor and filled with given fill_value, with the specified `memory_config` and converting its data type to `dtype`.

@@ -64,34 +64,13 @@ void bind_batch_norm_operation(py::module& module) {
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
 
+            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+
         Memory Support:
             - Interleaved: DRAM and L1
 
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
-
-        Example:
-            .. code-block:: python
-
-                N, C, H, W = 2, 3, 4, 5
-
-                input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                running_mean = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                running_var = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                weight = ttnn.rand([1, C, 1, 1], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                bias = ttnn.from_torch(torch.rand([1, C, 1, 1], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-
-                output = ttnn.batch_norm(
-                    input_tensor,
-                    running_mean = running_mean,
-                    running_var = running_var,
-                    weight = weight,
-                    bias = bias,
-                    eps = 1e-05,
-                    momentum = 0.1,
-                    training = True
-                )
-
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input"),
