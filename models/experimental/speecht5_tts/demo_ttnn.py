@@ -461,7 +461,8 @@ def main():
             print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
             print("   TTNN will optimize operations for the decoder, postnet, and memory management")
 
-        warmup_text = "Hi there. How are you? What are you doing? How Can I help you? Do you need any help? Hi there. How are you? What are you doing? How Can I help you? Do you need any help?Hi there. How are you? What are you doing? How Can I help you? Do you need any help?"
+        # Use the first input text for warm-up to ensure encoder processes the actual input
+        warmup_text = args.texts[0]
         warmup_speech = generate_speech_ttnn(
             warmup_text,
             speaker_embeddings,
