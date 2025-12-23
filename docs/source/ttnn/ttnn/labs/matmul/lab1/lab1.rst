@@ -487,15 +487,16 @@ Reader Kernel Code
 ------------------
 
 The function can be summarized by the following pseudo-code:
-```cpp
-read_runtime_arguments()
-read_compile_time_arguments()
-create_address_generators()
-for (i in range (0 .. n_tiles) {
-    transfer_tile_from_dram_to_circular_buffer(in0, i)
-    transfer_tile_from_dram_to_circular_buffer(in1, i)
-}
-```
+
+.. code-block:: cpp
+
+   read_runtime_arguments()
+   read_compile_time_arguments()
+   create_address_generators()
+   for (i in range (0 .. n_tiles) {
+       transfer_tile_from_dram_to_circular_buffer(in0, i)
+       transfer_tile_from_dram_to_circular_buffer(in1, i)
+   }
 
 The reader kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp`` is responsible for transferring data
 from device DRAM into circular buffers located in internal device SRAM, where it can be efficiently accessed by the compute kernel.
@@ -532,14 +533,15 @@ Compute Kernel Code
 The compute kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
 
 The function can be summarized by the following pseudo-code:
-```cpp
-read_compile_time_arguments()
-initialize_tensix_engine_for_elementwise_addition()
-for (i in range (0 .. n_tiles) {
-    add_tiles_in_input_circular_buffers()
-    write_result_to_output_circular_buffer()
-}
-```
+
+.. code-block:: cpp
+
+   read_compile_time_arguments()
+   initialize_tensix_engine_for_elementwise_addition()
+   for (i in range (0 .. n_tiles) {
+       add_tiles_in_input_circular_buffers()
+       write_result_to_output_circular_buffer()
+   }
 
 The kernel reads the number of tiles to process as a compile-time argument, enabling compiler optimizations such as loop unrolling.
 
@@ -585,9 +587,10 @@ Writer Kernel Code
 ------------------
 
 The function can be summarized by the following pseudo-code:
-```cpp
-write_tiles(c_16, n_tiles);
-```
+
+.. code-block:: cpp
+
+   write_tiles(c_16, n_tiles);
 
 The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring computed results from circular buffers in internal device SRAM back to device DRAM, where they can eventually be read back to the host.
 The kernel reads two runtime arguments: the base address of the output tensor in DRAM and the total number of tiles to write.
