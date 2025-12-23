@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <string>
+#include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -28,8 +30,22 @@
 namespace tt::tt_metal {
 namespace {
 
-void safe_fwrite(const void* buffer, size_t size, size_t count, FILE* file) {
-    TT_FATAL(fwrite(buffer, size, count, file) == count, "Failed to write tensor data: file write failed");
+void safe_fwrite_bytes(
+    const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
+    TT_FATAL(bytes > 0, "Expected to write > 0 bytes to file");
+
+    // Use byte-wise fwrite so we can detect partial writes
+    const size_t written = fwrite(buffer, /*size=*/1, /*count=*/bytes, file);
+    TT_FATAL(
+        written == bytes,
+        "Failed to write {} to \"{}\": wrote {}/{} bytes (ferror={}, errno={} \"{}\")",
+        what,
+        filename,
+        written,
+        bytes,
+        ferror(file),
+        errno,
+        strerror(errno));
 }
 
 constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
@@ -47,10 +63,15 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
     const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         FILE* output_file = fopen(file_name.c_str(), "wb");
-        TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
-        auto cleanup = ttsl::make_cleanup([f = output_file]() {
+        TT_FATAL(
+            output_file != nullptr,
+            "Cannot open \"{}\" for writing: errno={} \"{}\"",
+            file_name,
+            errno,
+            strerror(errno));
+        auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
             if (f && fclose(f) != 0) {
-                log_warning(tt::LogAlways, "Failed to close file");
+                log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
             }
         });
 
@@ -63,26 +84,31 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
         builder.Align(kFlatbufferAlignment);
         builder.Finish(tensor_offset);
 
-        uint64_t header_size = builder.GetSize();
-        safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
-        safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
+        const uint64_t header_size = builder.GetSize();
+        safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
+        safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
 
         for (const auto& buffer : buffers) {
             auto buffer_view = buffer.view_bytes();
-            safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+            TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
+            safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
         }
+
+        TT_FATAL(
+            fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     }
     ctx->barrier();
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
-    TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
+    TT_FATAL(fd != -1, "Cannot open \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
 
     struct stat file_stat{};
     TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
     size_t file_size = file_stat.st_size;
+    TT_FATAL(file_size >= sizeof(uint64_t), "Tensor file \"{}\" is too small to be valid", file_name);
 
     // Mmap the file to read tensor data lazily.
     void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -94,6 +120,12 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
     auto* file_data = static_cast<std::byte*>(mmap_addr);
     uint64_t header_size = 0;
     std::memcpy(&header_size, file_data, sizeof(header_size));
+    TT_FATAL(
+        sizeof(header_size) + header_size <= file_size,
+        "Tensor file \"{}\" is truncated or corrupt (header_size={}, file_size={})",
+        file_name,
+        header_size,
+        file_size);
 
     const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
     TT_FATAL(
