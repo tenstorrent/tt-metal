@@ -1908,6 +1908,21 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         ),
         (
             1,
+            2,
+            4096,
+            32,
+            256,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(4, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=8,
+                per_core_N=8,
+            ),
+        ),
+        (
+            1,
             1,
             1024,
             64,
