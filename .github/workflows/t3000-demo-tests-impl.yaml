@@ -53,10 +53,24 @@ jobs:
               "owner_id": "U053W15B6JF" # Djordje Ivanovic
             },
             {
-              "name": "t3k_llama3_tests",
-              "model": "llama3",
+              "name": "t3k_llama3_1b_test",
+              "model": "llama3_1b",
               "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_tests",
+              "cmd": "run_t3000_llama3_1b_test",
+              "timeout": 60,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+              "name": "t3k_llama3_3b_test",
+              "model": "llama3_3b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_3b_test",
+              "timeout": 60,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+              "name": "t3k_llama3_8b_test",
+              "model": "llama3_8b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_8b_test",
               "timeout": 60,
               "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
             },

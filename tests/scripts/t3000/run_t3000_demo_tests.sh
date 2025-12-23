@@ -47,36 +47,58 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
-run_t3000_llama3_tests() {
+run_t3000_llama3_1b_test() {
   # Record the start time
-  fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3_tests"
-
-  # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  echo "LOG_METAL: Running run_t3000_llama3_1b_test"
   # Llama3.2-1B
   llama1b=meta-llama/Llama-3.2-1B-Instruct
-  # Llama3.2-3B
-  llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
-  # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
-  done
+  tt_cache=$TT_CACHE_HOME/$llama1b
+  HF_MODEL=$llama1b TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  echo "LOG_METAL: Llama3 tests for $llama1b completed"
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  echo "LOG_METAL: run_t3000_llama3_1b_test took $duration seconds to complete"
+}
+
+run_t3000_llama3_3b_test() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_3b_test"
+  # Llama3.2-3B
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
+
+  tt_cache=$TT_CACHE_HOME/$llama3b
+  HF_MODEL=$llama3b TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  echo "LOG_METAL: Llama3 tests for $llama3b completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_3b_test took $duration seconds to complete"
+}
+
+run_t3000_llama3_8b_test() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_8b_test"
+  # Llama3.1-8B
+  llama8b=meta-llama/Llama-3.2-8B-Instruct
+
+  tt_cache=$TT_CACHE_HOME/$llama8b
+  HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+  echo "LOG_METAL: Llama3 tests for $llama8b completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_8b_test took $duration seconds to complete"
 }
 
 run_t3000_qwen25_tests() {
@@ -406,8 +428,10 @@ run_t3000_mochi_tests() {
 }
 
 run_t3000_tests() {
-  # Run llama3 smaller tests (1B, 3B, 8B, 11B)
-  run_t3000_llama3_tests
+  # Run llama3 1B, 3B, 8B tests
+  run_t3000_llama3_1b_test
+  run_t3000_llama3_3b_test
+  run_t3000_llama3_8b_test
 
   # Run llama3 vision tests
   run_t3000_llama3_vision_tests

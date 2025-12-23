@@ -6,7 +6,9 @@ Note that token accuracy parses the below to determine expected values +- 0.5. I
 
 Also note that all the performance metrics below were taken for a maximum generation of 200 tokens, i.e., 200 decode iterations.
 
-## Performance
+Performance only tests were done using [demo/simple_text_demo.py](demo/simple_text_demo.py) script with the `ci-1` and `ci-32` test cases using both `performance` and `accuracy` settings.
+
+## Performance-ci-token-matching
 
 This configuration uses bfp4 MLP and bfp8 attention weights for all models except:
 * Qwen-2.5-7B, which uses bfp8 MLP and bfp16 attention weights in all decoder layers
@@ -14,86 +16,165 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
-| Llama-3.2-1B      | N150        | 79        | 97        | 87.8          | 26        |
-| Llama-3.2-1B      | N300        | 79        | 97        | 105.9         | 22        |
-| Llama-3.2-1B      | T3K         | 80        | 97        | 119.8         | 32        |
-| Llama-3.2-1B      | TG          | 77        | 96        | 51.0          |           |
-| Llama-3.2-3B      | N150        | 89        | 98        | 54.0          | 55        |
-| Llama-3.2-3B      | N300        | 89        | 98        | 68.0          | 39        |
-| Llama-3.2-3B      | T3K         | 91        | 99        | 68.5          | 52        |
-| Llama-3.2-3B      | TG          | 87        | 97        | 33.5          |           |
-| Llama-3.1-8B      | N150        | 90        | 97        | 28.3          | 104       |
-| Llama-3.1-8B      | N300        | 90        | 97        | 44.2          | 67        |
-| Llama-3.1-8B      | P100        | 90        | 98        | 29.5          | 84        |
-| Llama-3.1-8B      | P150        | 90        | 98        | 33.6          | 76        |
-| Llama-3.1-8B      | T3K         | 90        | 98        | 64.3          | 53        |
-| Llama-3.1-8B      | T3K  (DP=4) |           |           | 39.6          | 58        |
-| Llama-3.1-8B      | T3K  (DP=8) |           |           | 24.9          | 86        |
-| Llama-3.1-8B      | TG          | 88        | 97        | 29.5          |           |
-| Llama-3.2-11B     | N150        | 90        | 98        | 55.5          | 58        |
-| Llama-3.2-11B     | N300        | 90        | 98        | 44.1          | 67        |
-| Llama-3.2-11B     | T3K         | 90        | 98        | 62.7          | 47        |
-| Llama-3.2-11B     | TG          | 87        | 97        | 29.5          |           |
-| Llama-3.1-70B     | T3K         | 96        | 100       | 16.6          | 164       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
-| Llama-3.1-70B     | TG   (DP=4) |           |           | 14.8          | 189       |
-| Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
-| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
-| Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
-| Qwen2.5-Coder-32B | T3K         | 96        | 99        | 22.4          | 190       |
-| Qwen3-32B         | T3K         | 89        | 97        | 22.9          | 123       |
-| Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
-| Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
-| Phi3.5-mini       | T3K         |           |           | 48.8          | 51        |
-| Mistral-7B        | N150        | 95        | 99        | 29.75         | 100.24    |
-| Mistral-7B        | N300        | 95        | 100       | 47.01         | 65.95     |
-| Mistral-7B        | T3K         | 95        | 100       | 67.82         | 53.93     |
-| Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
-| Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
-| Phi-4 | N300 | 97 | 100 | 37.34 | 123.33 |
-| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Llama-3.2-1B      | N150        | 79        | 97        | 17.9          | 56        |
+| Llama-3.2-1B      | N300        | 79        | 97        | 19.7          | 52        |
+| Llama-3.2-1B      | T3K         | 80        | 97        | 24.3          | 33        |
+| Llama-3.2-3B      | N150        | 89        | 98        | 14.4          | 143       |
+| Llama-3.2-3B      | N300        | 89        | 98        | 13.6          | 133       |
+| Llama-3.2-3B      | T3K         | 91        | 99        | 14.4          | 78        |
+| Llama-3.1-8B      | N150        | 90        | 97        | 12.7          | 295       |
+| Llama-3.1-8B      | N300        | 90        | 97        | 12.3          | 224       |
+| Llama-3.1-8B      | T3K         | 90        | 98        | 13.6          | 116       |
+| Llama-3.1-70B     | T3K         | 96        | 100       | 5.7           | 593       |
+| Qwen2.5-7B        | N300        | 84        | 96        | 12.7          | 308       |
+| Qwen2.5-72B       | T3K         | 99        | 100       | 5.0           | 603       |
+| Qwen2.5-Coder-32B | T3K         | 96        | 99        | 6.7           | 325       |
+| Qwen3-32B         | T3K         | 89        | 97        | -             | -         |
+| Phi3.5-mini       | N150        | -         | -         | 20.0          | 211       |
+| Phi3.5-mini       | N300        | -         | -         | 14.0          | 166       |
+| Phi3.5-mini       | T3K         | -         | -         | 13.7          | 89        |
+| Mistral-7B        | N150        | 95        | 99        | 21.3          | 287       |
+| Mistral-7B        | N300        | 95        | 100       | 14.5          | 233       |
+| Mistral-7B        | T3K         | 95        | 100       | 14.3          | 114       |
+| Phi-3-mini-128k-instruct | N150 | 89        | 99        | 20.4          | 190       |
+| Phi-3-mini-128k-instruct | N300 | 89        | 99        | 14.0          | 156       |
+| Phi-4             | N300        | 97        | 100       | 11.8          | 429       |
+| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 12.7          | 313       |
 
 
-## Accuracy
+## Accuracy-ci-token-matching
 
 This configuration uses bfp8 MLP and BF16 attention weights (70B+ models use bfp8 attention and bfp4 MLP).
 Llama 3 models test as insensitive to attention precision and so we use bfp8 attention and kv-cache for them even in accuracy mode.
 
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
-| Llama-3.2-1B      | N150        | 87        | 99        | 84.7          | 29        |
-| Llama-3.2-1B      | N300        | 87        | 98        | 102.8         | 21        |
-| Llama-3.2-1B      | T3K         | 88        | 99        | 120.5         | 28        |
-| Llama-3.2-1B      | TG          | 85        | 98        | 48.4          |           |
-| Llama-3.2-3B      | N150        | 96        | 100       | 47.6          | 63        |
-| Llama-3.2-3B      | N300        | 96        | 100       | 63.5          | 41        |
-| Llama-3.2-3B      | T3K         | 96        | 100       | 67.9          | 69        |
-| Llama-3.2-3B      | TG          | 92        | 99        | 33.6          |           |
-| Llama-3.1-8B      | N150        | 96        | 100       | 25.2          | 138       |
-| Llama-3.1-8B      | N300        | 96        | 100       | 38.8          | 79        |
-| Llama-3.1-8B      | T3K         | 97        | 100       | 60.8          | 81        |
-| Llama-3.1-8B      | TG          | 95        | 100       | 29.5          |           |
-| Llama-3.2-11B     | N150        | 95        | 100       | 56.7          | 62        |
-| Llama-3.2-11B     | N300        | 95        | 100       | 38.3          | 78        |
-| Llama-3.2-11B     | T3K         | 96        | 100       | 61.4          | 53        |
-| Llama-3.2-11B     | TG          | 94        | 100       | 29.5          |           |
-| Llama-3.1-70B     | T3K         | 96        | 100       | 16.5          | 168       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
-| Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5600      |
-| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
-| Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
-| Qwen2.5-Coder-32B | T3K         | 95        | 99        | 19.7          | 183       |
-| Qwen3-32B         | T3K         | 95        | 100       | 19.6          | 119       |
-| Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
-| Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
-| Phi3.5-mini       | T3K         |           |           | 48.6          | 53        |
-| Mistral-7B        | N150        | 96        | 100       | 29.75         | 100.24    |
-| Mistral-7B        | N300        | 97        | 100       | 47.01         | 65.95     |
-| Mistral-7B        | T3K         | 98        | 100       | 67.82         | 53.93     |
-| Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
-| Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
-| Phi-4 | N300 | 99 | 100 | 20.48 | 146.32 |
-| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| Llama-3.2-1B      | N150        | 79        | 97        | 17.9          | 60        |
+| Llama-3.2-1B      | N300        | 79        | 97        | 19.7          | 53        |
+| Llama-3.2-1B      | T3K         | 80        | 97        | 24.4          | 33        |
+| Llama-3.2-3B      | N150        | 89        | 98        | 14.4          | 167       |
+| Llama-3.2-3B      | N300        | 89        | 98        | 13.6          | 143       |
+| Llama-3.2-3B      | T3K         | 91        | 99        | 14.5          | 78        |
+| Llama-3.1-8B      | N150        | 90        | 97        | 12.7          | 353       |
+| Llama-3.1-8B      | N300        | 90        | 97        | 12.2          | 253       |
+| Llama-3.1-8B      | T3K         | 90        | 98        | 13.5          | 123       |
+| Llama-3.1-70B     | T3K         | 96        | 100       | 5.7           | 589       |
+| Qwen2.5-7B        | N300        | 84        | 96        | 12.7          | 312       |
+| Qwen2.5-72B       | T3K         | 99        | 100       | 5.0           | 604       |
+| Qwen2.5-Coder-32B | T3K         | 96        | 99        | 6.7           | 360       |
+| Qwen3-32B         | T3K         | 89        | 97        | -             | -         |
+| Phi3.5-mini       | N300        | -         | -         | 14.0          | 183       |
+| Phi3.5-mini       | T3K         | -         | -         | 13.6          | 94        |
+| Mistral-7B        | N150        | 95        | 99        | 21.3          | 349       |
+| Mistral-7B        | N300        | 95        | 100       | 14.7          | 249       |
+| Mistral-7B        | T3K         | 95        | 100       | 14.3          | 116       |
+| Phi-3-mini-128k-instruct | N150 | 89        | 99        | 20.2          | 194       |
+| Phi-3-mini-128k-instruct | N300 | 89        | 99        | 14.0          | 163       |
+| Phi-4             | N300        | 97        | 100       | 11.8          | 454       |
+| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 12.6          | 314       |
+
+## Performance-ci-1
+
+| Model             | Device      | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|---------------|-----------|
+| Llama-3.2-1B      | N150        | 24.3          | 27        |
+| Llama-3.2-1B      | N300        | 39.9          | 18        |
+| Llama-3.2-1B      | T3K         | 85.2          | 13        |
+| Llama-3.2-3B      | N150        | 20.4          | 51        |
+| Llama-3.2-3B      | N300        | 32.3          | 41        |
+| Llama-3.2-3B      | T3K         | 55.6          | 27        |
+| Llama-3.1-8B      | N150        | 15.1          | 105       |
+| Llama-3.1-8B      | N300        | 25.7          | 74        |
+| Llama-3.1-8B      | T3K         | 50.6          | 39        |
+| Llama-3.1-70B     | T3K         | 15.4          | 163       |
+| Qwen2.5-7B        | N300        | 28.9          | 74        |
+| Qwen2.5-72B       | T3K         | 14.2          | 177       |
+| Qwen2.5-Coder-32B | T3K         | 21.5          | 92        |
+| Qwen3-32B         | T3K         | 22.5          | 98        |
+| Phi3.5-mini       | N300        | 44.5          | 48        |
+| Phi3.5-mini       | T3K         | 58.8          | 30        |
+| Mistral-7B        | N150        | 17.6          | 292       |
+| Mistral-7B        | N300        | 44.0          | 66        |
+| Mistral-7B        | T3K         | 59.9          | 35        |
+| Phi-3-mini-128k-instruct | N150 | 31.0          | 68        |
+| Phi-3-mini-128k-instruct | N300 | 44.6          | 53        |
+| Phi-4             | N300        | 25.9          | 121       |
+| Mixtral-8x7B-v0.1 | T3K         | 23.4          | 121       |
+
+## Accuracy-ci-1
+
+| Model             | Device      | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|---------------|-----------|
+| Llama-3.2-1B      | N150        | 24.1          | 25        |
+| Llama-3.2-1B      | N300        | 39.7          | 20        |
+| Llama-3.2-1B      | T3K         | 85.1          | 15        |
+| Llama-3.2-3B      | N150        | 19.5          | 63        |
+| Llama-3.2-3B      | N300        | 31.3          | 43        |
+| Llama-3.2-3B      | T3K         | 55.5          | 27        |
+| Llama-3.1-8B      | N150        | 14.2          | 135       |
+| Llama-3.1-8B      | N300        | 23.6          | 79        |
+| Llama-3.1-8B      | T3K         | 39.7          | 47        |
+| Llama-3.1-70B     | T3K         | 15.4          | 166       |
+| Qwen2.5-7B        | N300        | 28.6          | 75        |
+| Qwen2.5-72B       | T3K         | 14.2          | 177       |
+| Qwen2.5-Coder-32B | T3K         | 19.0          | 107       |
+| Qwen3-32B         | T3K         | 19.3          | 116       |
+| Phi3.5-mini       | N300        | 36.8          | 58        |
+| Phi3.5-mini       | T3K         | 55.9          | 32        |
+| Mistral-7B        | N150        | 17.0          | 348       |
+| Mistral-7B        | N300        | 38.0          | 76        |
+| Mistral-7B        | T3K         | 57.6          | 38        |
+| Phi-3-mini-128k-instruct | N150 | 28.7          | 77        |
+| Phi-3-mini-128k-instruct | N300 | 42.4          | 50        |
+| Phi-4             | N300        | 21.6          | 139       |
+| Mixtral-8x7B-v0.1 | T3K         | 23.2          | 120       |
+
+## Performance-ci-32
+
+| Model             | Device      | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|---------------|-----------|
+| Llama-3.2-1B      | N150        | 23.6          | 21        |
+| Llama-3.2-1B      | N300        | 38.9          | 15        |
+| Llama-3.2-1B      | T3K         | 85.0          | 11        |
+| Llama-3.2-3B      | N150        | 18.5          | 52        |
+| Llama-3.2-3B      | N300        | 30.0          | 38        |
+| Llama-3.2-3B      | T3K         | 54.5          | 22        |
+| Llama-3.1-8B      | N150        | 13.9          | 104       |
+| Llama-3.1-8B      | N300        | 23.9          | 66        |
+| Llama-3.1-8B      | T3K         | 49.5          | 34        |
+| Llama-3.1-70B     | T3K         | 15.3          | 161       |
+| Qwen2.5-7B        | N300        | 25.7          | 72        |
+| Qwen2.5-72B       | T3K         | 14.0          | 173       |
+| Qwen2.5-Coder-32B | T3K         | 21.1          | 87        |
+| Phi3.5-mini       | N300        | 27.5          | 47        |
+| Phi3.5-mini       | T3K         | 48.0          | 26        |
+| Mistral-7B        | N150        | 17.6          | 292       |
+| Mistral-7B        | N300        | 44.0          | 66        |
+| Mistral-7B        | T3K         | 59.9          | 35        |
+| Phi-3-mini-128k-instruct | N300 | 27.6          | 43        |
+| Mixtral-8x7B-v0.1 | T3K         | 23.1          | 118       |
+
+## Accuracy-ci-32
+
+| Model             | Device      | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|---------------|-----------|
+| Llama-3.2-1B      | N150        | 23.4          | 26        |
+| Llama-3.2-1B      | N300        | 38.6          | 17        |
+| Llama-3.2-1B      | T3K         | 85.0          | 11        |
+| Llama-3.2-3B      | N150        | 17.8          | 58        |
+| Llama-3.2-3B      | N300        | 29.2          | 42        |
+| Llama-3.2-3B      | T3K         | 55.0          | 23        |
+| Llama-3.1-8B      | N300        | 22.1          | 78        |
+| Llama-3.1-8B      | T3K         | 48.2          | 36        |
+| Llama-3.1-70B     | T3K         | 15.3          | 161       |
+| Qwen2.5-7B        | N300        | 25.3          | 72        |
+| Qwen2.5-72B       | T3K         | 14.1          | 175       |
+| Qwen2.5-Coder-32B | T3K         | 18.1          | 105       |
+| Phi3.5-mini       | T3K         | 39.6          | 27        |
+| Mistral-7B        | N300        | 34.2          | 75        |
+| Mistral-7B        | T3K         | 55.2          | 36        |
+| Phi-3-mini-128k-instruct | N300 | 26.7          | 48        |
+| Mixtral-8x7B-v0.1 | T3K         | 22.5          | 118       |
 
 ##  Long-context (64K Tokens)
 

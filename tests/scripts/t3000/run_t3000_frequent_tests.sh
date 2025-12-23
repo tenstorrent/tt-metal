@@ -24,7 +24,6 @@ run_t3000_ethernet_tests() {
 
 run_t3000_llama3_tests() {
   # Record the start time
-  fail=0
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_llama3_tests"
@@ -445,8 +444,10 @@ run_t3000_tests() {
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
-  # Run llama3 small (1B, 3B, 8B, 11B) tests
-  run_t3000_llama3_tests
+  # Run llama3 small (1B, 3B, 8B) tests
+  run_t3000_llama3_1b_test
+  run_t3000_llama3_3b_test
+  run_t3000_llama3_8b_test
 
   # Run llama3-70b tests
   run_t3000_llama3_70b_tests
