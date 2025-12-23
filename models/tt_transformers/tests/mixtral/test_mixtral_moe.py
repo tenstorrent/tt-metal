@@ -129,7 +129,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
             .view(seqlen, batch, -1)
         )
         # Reference Model Output
-        logger.info(f"Starting Reeference MOE {mode}")
+        logger.info(f"Starting Reference MOE {mode}")
         ref_output, _ = reference_model(pt_decode_input)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
