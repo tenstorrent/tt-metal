@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+#include <optional>
+
+namespace ttnn::operations::reduction::ema {
+
+struct operation_attributes_t {
+    float alpha{};
+    CoreCoord grid_size;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+};
+
+struct tensor_args_t {
+    Tensor input;
+    std::optional<Tensor> optional_output_tensor;
+};
+
+using tensor_return_value_t = Tensor;
+using spec_return_value_t = TensorSpec;
+
+}  // namespace ttnn::operations::reduction::ema
