@@ -340,16 +340,20 @@ std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowCon
 
     uint32_t i = 0;
 
+    // Bilinear upsampling determines the value of an output pixel based on the output pixels coordinates
+    // The output pixel coordinates map to input pixel coordinates with the formula
+    // input_coord = (output_coord + 0.5) * scale_inv - 0.5
+    // However, since one pixel of padding is included at all sides (to avoid negative indices), the offset
+    // calculation is adjusted to: input_coord = (output_coord + 0.5) * scale_inv + 0.5
+    // The +0.5 comes from -0.5 (from the formula) + 1.0 (accounts for padding) and results in +0.5.
+    const float bilinear_starting_offset = 0.5f;
+
     for (uint32_t b = 0; b < config.batch_size; ++b) {
-        float h_offset = (0.5f * scale_h_inv) + 0.5f;
+        float h_offset = (0.5f * scale_h_inv) + bilinear_starting_offset;
         for (uint32_t h = 0; h < output_shape[1]; ++h) {
-            // Bilinear upsampling determines the value of an output pixel based on the output pixels coordinates
-            // The output pixel coordinates map to input pixel coordinates with the formula
-            // input_coord = (output_coord + 0.5) * scale_inv - 0.5
-            // However, since one pixel of padding is included at all sides (to avoid negative indices), the offset
-            // calculation is adjusted to: input_coord = (output_coord + 0.5) * scale_inv + 0.5 After that, the top-left
-            // input pixel is determined by flooring the input coordinates
-            float w_offset = (0.5f * scale_w_inv) + 0.5f;
+            // After calculating the input coordinate, the top-left input pixel is determined by flooring the input
+            // coordinates
+            float w_offset = (0.5f * scale_w_inv) + bilinear_starting_offset;
             for (uint32_t w = 0; w < output_shape[2]; ++w) {
                 // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
                 const uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));

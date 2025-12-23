@@ -61,32 +61,20 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
 }
 
 static MemoryConfig compute_bilinear_autoshard_memory_config(const ttnn::Tensor& input_tensor) {
-    /*
-    Calculates the sharding spec required for bilinear transform
-    Currently, the operation only supports height sharded input tensors
-    with row major shard orientation
-    */
     const auto& input_shape = input_tensor.logical_shape();
-    const auto batch_size = input_shape[0];
-    const auto input_h = input_shape[1];
-    const auto input_w = input_shape[2];
-    const auto num_channels = input_shape[3];
     const auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    const auto memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-    const auto buffer_type = BufferType::L1;
+
+    const uint32_t total_input_sticks = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-    const uint32_t max_num_shards = batch_size * input_h * input_w;
-    uint32_t num_shards = std::min(max_num_cores, max_num_shards);
-    // Calculate input shard with padding (like pool2d)
-    uint32_t total_input_sticks = batch_size * input_h * input_w;
-    uint32_t input_sticks_padded = tt::round_up(total_input_sticks, num_shards);
-    const uint32_t shard_height = input_sticks_padded / num_shards;
-    const uint32_t num_cores = num_shards;
-    const CoreRangeSet core_range_set = num_cores_to_corerangeset(num_cores, compute_grid_size, true);
-    const uint32_t shard_width = num_channels;
-    const auto shard_orientation = ShardOrientation::ROW_MAJOR;
-    const auto shard_spec = ShardSpec(core_range_set, {shard_height, shard_width}, shard_orientation);
-    return MemoryConfig(memory_layout, buffer_type, shard_spec);
+    const uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
+    const uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
+
+    const auto shard_spec = ShardSpec(
+        num_cores_to_corerangeset(num_shards, compute_grid_size, true),
+        {shard_height, input_shape[3]},
+        ShardOrientation::ROW_MAJOR);
+
+    return MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
 }
 
 ttnn::Tensor ExecuteUpSample::invoke(
