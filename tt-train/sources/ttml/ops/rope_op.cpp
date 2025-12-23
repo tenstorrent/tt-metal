@@ -181,14 +181,6 @@ autograd::TensorPtr rope(
     auto links = autograd::get_links(input);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
 
-    // Deallocate temporary sliced caches if they were created
-    if (token_position > 0U) {
-        ttnn::deallocate(cos_cache_to_use);
-        ttnn::deallocate(sin_cache_to_use);
-        ttnn::deallocate(neg_cos_cache_to_use);
-        ttnn::deallocate(neg_sin_cache_to_use);
-    }
-
     return out;
 }
 
