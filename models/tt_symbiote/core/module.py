@@ -2,10 +2,9 @@
 
 import functools
 
-import torch
-from torch.utils._pytree import tree_map
+from models.tt_symbiote.core.run_config import get_tensor_run_implementation
 
-import ttnn
+TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
 
 class TTNNModule:
@@ -24,52 +23,7 @@ class TTNNModule:
         self._model_config = model_config if model_config is not None else {}
 
     def __call__(self, *args, **kwds):
-        from models.tt_symbiote.core.tensor import TorchTTNNTensor
-
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-
-        def wrap(e):
-            result = TorchTTNNTensor(e) if isinstance(e, torch.Tensor) and not isinstance(e, TorchTTNNTensor) else e
-            if not isinstance(e, TorchTTNNTensor) and isinstance(e, ttnn.Tensor):
-                result = TorchTTNNTensor(e)
-            return result
-
-        def to_ttnn_wrap(e):
-            if isinstance(e, TorchTTNNTensor):
-                e = e.to_ttnn
-            return e
-
-        def set_device_wrap(e):
-            if isinstance(e, ttnn.Tensor) and self.device is not None and e.device() != self.device:
-                e = ttnn.to_device(e, self.device)
-            return e
-
-        result = None
-        if self.device is not None:
-            func_args = tree_map(wrap, args)
-            func_kwargs = tree_map(wrap, kwds)
-            func_args = tree_map(to_ttnn_wrap, func_args)
-            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-            func_args = tree_map(set_device_wrap, func_args)
-            func_kwargs = tree_map(set_device_wrap, func_kwargs)
-            self.preprocess_weights()
-            self.move_weights_to_device()
-            try:
-                result = self.forward(*func_args, **func_kwargs)
-                result = tree_map(wrap, result)
-            except Exception as e:
-                print(f"Error {e} in {self.__class__.__name__} forward, falling back to torch")
-                assert (
-                    self.torch_layer is not None
-                ), f"torch_layer must be set for fallback, {self} does not have torch_layer set."
-                result = self.torch_layer(*args, **kwds)
-        else:
-            print("Device not set, falling back to torch")
-            assert (
-                self.torch_layer is not None
-            ), f"torch_layer must be set for fallback, {self} does not have torch_layer set."
-            result = self.torch_layer(*args, **kwds)
-        return result
+        return TENSOR_RUN_IMPLEMENTATION.module_run(self, *args, **kwds)
 
     def preprocess_weights(self):
         """Preprocess weights (called once before first use)."""
