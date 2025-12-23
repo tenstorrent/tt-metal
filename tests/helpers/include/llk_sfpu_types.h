@@ -105,4 +105,5 @@ enum class SfpuType
     acosh,
     reduce,
     add_top_row,
+    typecast,
 };
