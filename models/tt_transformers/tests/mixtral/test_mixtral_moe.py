@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import pytest
 import torch
 from loguru import logger
-from transformers.models.mixtral.configuration_mixtral import MixtralConfig
+from transformers import AutoConfig
 from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 import ttnn
@@ -15,6 +17,13 @@ from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+
+
+def load_hf_mixtral_config():
+    hf_model = os.getenv("HF_MODEL")
+    assert hf_model is not None, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
+    return config
 
 
 def convert2ref(state_dict):
@@ -41,9 +50,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
     model_args.n_layers = 1
     layer_num = 0
 
-    hf_config = MixtralConfig(
-        hidden_size=model_args.dim, intermediate_size=model_args.hidden_dim, num_local_experts=8, num_experts_per_tok=2
-    )
+    hf_config = load_hf_mixtral_config()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
