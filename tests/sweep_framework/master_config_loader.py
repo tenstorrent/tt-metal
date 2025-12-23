@@ -541,6 +541,17 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
+            elif operation_name in [
+                "experimental::paged_update_cache",
+                "ttnn::experimental::paged_update_cache",
+                "paged_update_cache",
+            ]:
+                print(
+                    f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
+                )
+                return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
 
             # Detect the number of tensor inputs
             tensor_count = self._count_tensor_inputs(configs)
