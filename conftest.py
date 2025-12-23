@@ -306,7 +306,12 @@ def device_params(request):
 def _device_module_impl(request):
     """
     Internal module-scoped device fixture.
-    Do not use directly - use `device` fixture with @pytest.mark.use_module_device marker.
+
+    Do not request this fixture directly in test function signatures. Instead, use the
+    `device` fixture with @pytest.mark.use_module_device marker. When the marker is
+    present, the `device` fixture automatically delegates to this fixture via
+    request.getfixturevalue(), providing a module-scoped device while keeping test
+    signatures unchanged.
 
     This optimization is intended for test modules where all tests share the same
     device configuration. The device is created once per module and reused across
@@ -328,14 +333,56 @@ def _device_module_impl(request):
     Tests with multiple device configurations via parametrized device_params require
     a fresh device for each parameter set and should continue using the default
     function-scoped `device` fixture.
+
+    STATE SHARING CONSIDERATIONS:
+
+    Since the device is shared across all tests in a module, tests can affect each
+    other through accumulated device state:
+
+    - Program cache: Cached programs from earlier tests may be reused by later tests.
+      If tests require different program configurations (e.g., broadcast vs non-broadcast),
+      this can cause incorrect results. Call device.disable_and_clear_program_cache()
+      at the start of tests that are sensitive to cache state.
+
+    - Memory allocations: Tensors allocated on device persist until explicitly
+      deallocated or garbage collected. For highly parameterized tests, this can
+      exhaust device resources (TLBs, L1 memory). Tests should avoid holding
+      references to device tensors beyond what's needed.
+
+    - Device configuration: Any device configuration changes persist across tests.
+
+    WHEN TO USE MODULE SCOPE:
+
+    Module-scoped devices work best for:
+    - Tests that are stateless or don't depend on program cache state
+    - Tests that properly clean up device state when needed
+    - Test modules with many parameterized test cases (biggest time savings)
+
+    Avoid module scope for:
+    - Tests that assert on program cache entry counts
+    - Tests that require specific device initialization state
+    - Tests that use mesh_device or other multi-device fixtures
+
+    FAILURE HANDLING:
+
+    If a test fails or crashes, subsequent tests in the module will still run with
+    the same device. The device generally remains usable, but may have stale state.
+    For test isolation after failures, prefer function-scoped devices.
     """
     import ttnn
 
     device_id = request.config.getoption("device_id")
 
-    # Get device_params from marker: @pytest.mark.use_module_device({"param": value})
+    # Get device_params from marker - supports both patterns:
+    #   @pytest.mark.use_module_device({"param": value})  # positional
+    #   @pytest.mark.use_module_device(device_params={"param": value})  # keyword
     marker = request.node.get_closest_marker("use_module_device")
-    device_params = marker.args[0] if marker and marker.args else {}
+    if marker and marker.args:
+        device_params = marker.args[0]
+    elif marker and marker.kwargs:
+        device_params = marker.kwargs.get("device_params", {})
+    else:
+        device_params = {}
 
     # When initializing a single device on a TG system, we want to
     # target the first user exposed device, not device 0 (one of the
@@ -360,10 +407,26 @@ def _device_module_impl(request):
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
+    """
+    Primary device fixture - delegates to module-scoped or function-scoped implementation.
+
+    The device_params parameter is required even for the module-scoped path to detect
+    conflicting usage with @pytest.mark.parametrize("device_params", ...).
+    """
     import ttnn
 
     # Check if file/test wants module-scoped device
     if request.node.get_closest_marker("use_module_device"):
+        # device_params will be non-empty if test uses parametrized device_params,
+        # which conflicts with module-scoped device (can't vary device config per test)
+        if device_params:
+            raise ValueError(
+                "Cannot use @pytest.mark.use_module_device with "
+                "@pytest.mark.parametrize('device_params', ...). "
+                "Module-scoped devices are created once per module and cannot "
+                "vary per test. Either remove the marker to use function-scoped "
+                "device, or split tests with different device_params into separate files."
+            )
         yield request.getfixturevalue("_device_module_impl")
         return
 
@@ -984,8 +1047,14 @@ def pytest_runtest_teardown(item, nextitem):
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
-            logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
-            reset_tensix(set(item.pci_ids))
+            # pci_ids may be on the test item (function-scoped device) or on the
+            # parent module node (module-scoped device via use_module_device marker)
+            pci_ids = getattr(item, "pci_ids", None)
+            if pci_ids is None and item.parent is not None:
+                pci_ids = getattr(item.parent, "pci_ids", None)
+            if pci_ids is not None:
+                logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
+                reset_tensix(set(pci_ids))
 
 
 # Session-scoped watchdog IPC keys
