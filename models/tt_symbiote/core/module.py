@@ -69,6 +69,9 @@ class TTNNModule:
     def to_device(self, device):
         """Set the device for this module."""
         self._device = device
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.to_device(device)
         return self
 
     @property
