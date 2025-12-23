@@ -931,9 +931,11 @@ struct LowLatencyMeshRoutingFields {
 #define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 32
 
 // TODO: https://github.com/tenstorrent/tt-metal/issues/32237
-struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
+// Primary template for 2D routing headers with variable route buffer size
+template <int RouteBufferSize = 32>
+struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
     LowLatencyMeshRoutingFields routing_fields;
-    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
+    uint8_t route_buffer[RouteBufferSize];
     union {
         struct {
             uint16_t dst_start_chip_id;
@@ -952,8 +954,23 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
-} __attribute__((packed));
-static_assert(sizeof(HybridMeshPacketHeader) == 96, "sizeof(HybridMeshPacketHeader) is not equal to 96B");
+} __attribute__((packed, aligned(16)));
+
+// Validate expected sizes for all discrete route buffer sizes
+static_assert(sizeof(HybridMeshPacketHeaderT<32>) == 96, "32B buffer must result in 96B header");
+static_assert(sizeof(HybridMeshPacketHeaderT<24>) == 96, "24B buffer must result in 96B header");
+static_assert(sizeof(HybridMeshPacketHeaderT<16>) == 80, "16B buffer must result in 80B header");
+static_assert(sizeof(HybridMeshPacketHeaderT<8>) == 80, "8B buffer must result in 80B header");
+static_assert(alignof(HybridMeshPacketHeaderT<32>) == 16, "2D headers must have 16-byte alignment");
+static_assert(alignof(HybridMeshPacketHeaderT<8>) == 16, "2D headers must have 16-byte alignment");
+
+// Conditional type selection based on injected define
+#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
+#else
+// Default: backward compatibility (96B header with 32B route buffer)
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<32>;
+#endif
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
@@ -962,8 +979,10 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
-} __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 112, "sizeof(UDMHybridMeshPacketHeader) is not equal to 112B");
+} __attribute__((packed, aligned(16)));
+static_assert(
+    sizeof(UDMHybridMeshPacketHeader) == sizeof(HybridMeshPacketHeader) + sizeof(UDMControlFields),
+    "UDMHybridMeshPacketHeader size must equal base + UDMControlFields");
 // NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
