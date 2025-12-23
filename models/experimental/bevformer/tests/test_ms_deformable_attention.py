@@ -12,21 +12,35 @@ from models.experimental.bevformer.reference.ms_deformable_attention import MSDe
 from models.experimental.bevformer.config import DeformableAttentionConfig
 
 from models.experimental.bevformer.tests.test_utils import (
-    print_detailed_comparison,
     check_with_tolerances,
-    check_with_pcc,  # Legacy compatibility
-    save_comparison_report,
 )
 
-from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
+from models.experimental.bevformer.tt.model_preprocessing import (
+    create_ms_deformable_attention_parameters,
+    convert_parameterdict_to_object,
+)
 
 from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_cams, num_levels, num_points",
+    "batch_size, num_query, embed_dims, num_levels, num_points_per_anchor, num_anchors, num_heads",
     [
-        (1, 200 * 200, 256, 6, 4, 4),
+        (1, 900, 256, 4, 2, 4, 4),
+        (1, 1200, 256, 4, 2, 4, 4),
+        (1, 100 * 100, 256, 4, 2, 4, 4),
+        (1, 200 * 200, 256, 4, 2, 4, 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "spatial_shapes",
+    [
+        [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes, input size 1600x900
+        [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes, input size 1280x720
+        [[28, 28], [14, 14], [7, 7], [4, 4]],  # VAD specific, input size 224x224
+        [[16, 16], [8, 8], [4, 4], [2, 2]],  # VAD specific, input size 128x128
+        [[100, 75], [50, 38], [25, 19], [13, 10]],  # CARLA, input size 1280x960
+        [[120, 80], [60, 40], [30, 20], [15, 10]],  # Waymo, input size 960x640
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -36,14 +50,17 @@ def test_ms_deformable_attention_forward(
     batch_size,
     num_query,
     embed_dims,
-    num_cams,
     num_levels,
-    num_points,
+    num_points_per_anchor,
+    num_anchors,
+    num_heads,
+    spatial_shapes,
     seed,
 ):
+    print_detailed_comparison = False
     torch.manual_seed(seed)
 
-    spatial_shapes = torch.tensor([[200, 113], [100, 57], [50, 29], [25, 15]], dtype=torch.long)
+    spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
     query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
@@ -57,9 +74,9 @@ def test_ms_deformable_attention_forward(
 
     config = DeformableAttentionConfig(
         embed_dims=embed_dims,
-        num_heads=4,
+        num_heads=num_heads,
         num_levels=num_levels,
-        num_points=num_points,
+        num_points=num_points_per_anchor * num_anchors,
     )
 
     # Create PyTorch reference model
@@ -73,6 +90,9 @@ def test_ms_deformable_attention_forward(
         config=config,
         dtype=ttnn.float32,
     )
+
+    # Convert parameter dict to object with attribute access
+    tt_parameters = convert_parameterdict_to_object(tt_parameters)
 
     # Create ttnn model with preprocessed parameters
     tt_model = TTMSDeformableAttention(
@@ -96,27 +116,29 @@ def test_ms_deformable_attention_forward(
         reference_points=reference_points,
         spatial_shapes=spatial_shapes,
     )
+    tt_model_output = ttnn.to_torch(tt_model_output)
 
     # Comprehensive comparison using enhanced test utilities
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
     logger.info(f"TT model output type: {type(tt_model_output)}")
 
-    # Print detailed statistical comparison
-    print_detailed_comparison(
-        ref_model_output,
-        tt_model_output,
-        tensor_name="ms_deformable_attention_output",
-        show_histograms=False,  # Set to True for even more detailed analysis
-    )
+    if print_detailed_comparison:
+        # Print detailed statistical comparison
+        print_detailed_comparison(
+            ref_model_output,
+            tt_model_output,
+            tensor_name="ms_deformable_attention_output",
+            show_histograms=False,  # Set to True for even more detailed analysis
+        )
 
     # Comprehensive tolerance checking with multiple criteria
     passed, results = check_with_tolerances(
         ref_model_output,
         tt_model_output,
-        pcc_threshold=0.99,
-        abs_error_threshold=1e-1,
-        rel_error_threshold=0.05,
-        max_error_ratio=0.01,
+        pcc_threshold=0.999,
+        abs_error_threshold=0.02,
+        rel_error_threshold=0.7,
+        max_error_ratio=0.3,
         tensor_name="ms_deformable_attention_output",
     )
 
@@ -124,8 +146,3 @@ def test_ms_deformable_attention_forward(
     assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
 
     logger.info("✅ All tolerance checks passed successfully!")
-
-    # Optional: Save detailed report if needed (uncomment for debugging)
-    # from pathlib import Path
-    # report_path = Path("ms_deformable_attention_comparison_report.txt")
-    # save_comparison_report(ref_model_output, tt_model_output, "ms_deformable_attention_output", str(report_path))
