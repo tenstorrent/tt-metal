@@ -470,7 +470,7 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
-@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k128", "k256"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     ([1, 8, 8, 128, 128],),
