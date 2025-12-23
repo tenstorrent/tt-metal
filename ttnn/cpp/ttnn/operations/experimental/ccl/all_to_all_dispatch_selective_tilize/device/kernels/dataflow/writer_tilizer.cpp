@@ -55,17 +55,37 @@ void print_tile_rows(
     DPRINT << "++++++" << ENDL();
 }
 
-void zero_buffer_async(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
+template <typename DataType>
+FORCE_INLINE DataType* tile_row_offset(DataType* indices_address, uint32_t row) {
+    constexpr uint32_t num_face_width = 2;
+    constexpr uint32_t num_face_height = 2;
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    constexpr uint32_t TileHeight = 32;
+    constexpr uint32_t TileWidth = 32;
+    uint32_t offset = 0;
+    uint32_t local_row = row;
+    if (row >= FaceHeight) {
+        offset += num_face_width * FaceHeight * FaceWidth;  // if it was generic, multiply by row/FaceHeight
+        local_row -= FaceHeight;
     }
+    offset += local_row * FaceWidth;
+    return (DataType*)(indices_address + offset);
 }
 
-void zero_buffer_barrier() { noc_async_read_barrier(); }
+template <typename DataType>
+FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) {
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    uint32_t offset = 0;
+    uint32_t local_col = col;
+    if (col >= FaceWidth) {
+        offset += FaceHeight * FaceWidth;  // if it was generic, multiply by col/FaceWidth
+        local_col -= FaceWidth;
+    }
+    offset += local_col;
+    return (DataType*)(indices_address + offset);
+}
 
 // DEBUG: Print E-D table contents
 template <uint32_t ExpertsPerDevice, uint32_t DispatchDevices, uint32_t EntriesPerL1Alignment>
@@ -147,6 +167,8 @@ void kernel_main() {
     constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
     constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
 
+    constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
+
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
 
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
@@ -155,74 +177,73 @@ void kernel_main() {
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
-    zero_buffer_async(ed_addr, 2 * experts_per_device * dispatch_devices * l1_alignment * sizeof(uint32_t));
-    size_t rt_args_idx = 0;
+    uint32_t rt_args_idx = 0;
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);           // 0
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 1
     uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
     uint32_t indices_sent_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 3
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 4
     bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);         // 5
-    zero_buffer_barrier();
-
-    // DEBUG: Print E-D table right after zeroing to verify it's actually zeroed
-    constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
-    volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_addr);
-    // print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
-    //     ed_table, linearized_mesh_coord, "after zero");
-
-    // Signal all sender cores that E-D buffer has been zeroed
-    // Set local semaphore to 1, then multicast write to all sender cores
-    if (is_drain_tilizer_core) {
-        uint32_t ed_ready_sem_addr = get_semaphore(ed_buffer_ready_semaphore_id);
-        volatile tt_l1_ptr uint32_t* ed_ready_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_ready_sem_addr);
-        noc_semaphore_set(ed_ready_sem_ptr, 1);
-
-        // Use safe multicast address that handles NOC 0 vs NOC 1 coordinate ordering
-        uint64_t sender_mcast_noc_addr = get_safe_multicast_noc_addr(
-            sender_mcast_start_x, sender_mcast_start_y, sender_mcast_end_x, sender_mcast_end_y, ed_ready_sem_addr);
-
-        // Multicast write the semaphore value (1) to all sender cores
-        // Sender cores wait for value 1 to know E-D buffer is ready
-        noc_semaphore_set_multicast(ed_ready_sem_addr, sender_mcast_noc_addr, num_sender_cores);
-        noc_async_write_barrier();
-    }
 
     constexpr auto output_args = TensorAccessorArgs<0>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto output_scores_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<output_scores_args.next_compile_time_args_offset()>();
 
     const auto output_tensor_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
     const auto metadata_tensor_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
     // scores and indices tensors use same page size
     const auto output_scores_tensor_addr_gen =
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+    const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
 
-    // Wait for all fabric writer cores to signal that indices/scores have been sent
-    // This ensures the metadata all-gather is complete before post-processing
-    // Only drain_tilizer_cores receive the atomic increments, so only they need to wait
-    if (is_drain_tilizer_core) {
-        noc_semaphore_wait((uint32_t*)indices_sent_semaphore_address, dispatch_devices - 1);
-        noc_semaphore_set((uint32_t*)indices_sent_semaphore_address, 0);
+    // read in the mapping tensor
+    for (uint32_t mapping_page = 0; mapping_page < mapping_pages; mapping_page++) {
+        cb_reserve_back(mapping_tensor_cb_id, 1);
+        noc_async_read_page(mapping_page, mapping_tensor_addr_gen, get_write_ptr(mapping_tensor_cb_id));
+        noc_async_read_barrier();
+        cb_push_back(mapping_tensor_cb_id, 1);
     }
+
+    uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
 
     // POST-PROCESSING STAGE:
     // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the E-D
-    // buffer
-    uint32_t base_ed_table_offset = experts_per_device * dispatch_devices * l1_alignment;
+    // buffer. We iterate through all source devices' metadata, counting how many tokens will arrive at each
+    // local expert from each source device.
+    constexpr uint32_t tile_height = 32;
+    uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
+    volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
+
     for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
-        for (uint32_t indices_page = 0; indices_page < indices_pages; indices_page++) {
-            uint32_t metadata_page = device_id * indices_pages + indices_page;
-            cb_reserve_back(indices_tensor_cb_id, 1);
-            noc_async_read_page(metadata_page, metadata_tensor_addr_gen, get_write_ptr(indices_tensor_cb_id));
-            noc_async_read_barrier();
-            cb_push_back(indices_tensor_cb_id, 1);
-            // update the ground truth E-D table offset into the second half of the E-D buffer
+        uint32_t tokens_processed = 0;
+        uint32_t indices_page = 0;
+
+        while (tokens_processed < tokens_per_device) {
+            cb_wait_front(indices_tensor_cb_id, 1);
+            uint16_t* indices_ptr = (uint16_t*)get_read_ptr(indices_tensor_cb_id);
+
+            // Process tokens within this tile, but don't exceed tokens_per_device
+            uint32_t tile_row = 0;
+            while (tile_row < tile_height && tokens_processed < tokens_per_device) {
+                uint16_t* token_ptr = tile_row_offset(indices_ptr, tile_row);
+                for (uint32_t k = 0; k < selected_experts_k; k++) {
+                    uint16_t expert_chosen = tile_col_offset(token_ptr, k)[0];
+                    uint16_t d = devices_for_experts[expert_chosen];
+                    if (d == dispatch_index) {
+                        uint32_t local_expert = expert_chosen % experts_per_device;
+                        ed_table[local_expert * dispatch_devices + device_id]++;
+                    }
+                }
+                tile_row++;
+                tokens_processed++;
+            }
+
+            cb_pop_front(indices_tensor_cb_id, 1);
+            indices_page++;
         }
     }
-
-    // DEBUG: Polling loop to verify E-D buffer semaphore increments are landing
-    // poll_ed_table_loop<experts_per_device, dispatch_devices, entries_per_l1_alignment>(ed_table,
-    // linearized_mesh_coord);
+    constexpr uint32_t entries_per_l1_alignment = l1_alignment / sizeof(uint32_t);
+    print_ed_table<experts_per_device, dispatch_devices, entries_per_l1_alignment>(
+        ed_table, linearized_mesh_coord, "ground truth E-D table");
 }

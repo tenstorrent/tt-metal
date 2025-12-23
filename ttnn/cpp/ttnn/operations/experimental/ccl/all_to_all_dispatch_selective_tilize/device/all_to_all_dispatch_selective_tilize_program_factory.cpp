@@ -350,8 +350,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_d_buffer_id,
         program,
         full_grid,
-        2 * experts_per_device * dispatch_devices * l1_alignment,  // ground truth table and semaphore table
-        1,
+        experts_per_device * dispatch_devices * l1_alignment,  // ground truth table and semaphore table
+        2,
         tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
                                   // 16B aligned
 
@@ -445,6 +445,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(selective_tilize_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(selective_tilize_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_scores_tensor.buffer()).append_to(selective_tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(selective_tilize_compile_time_args);
 
     tt::tt_metal::KernelHandle selective_tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -452,6 +453,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         "reader_tilizer.cpp",
         selective_tilize_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(selective_tilize_compile_time_args, {}, named_compile_time_args));
+
+    tt::tt_metal::KernelHandle writer_tilizer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
+        "writer_tilizer.cpp",
+        selective_tilize_core_range_set,
+        tt::tt_metal::WriterDataMovementConfig(selective_tilize_compile_time_args, {}, named_compile_time_args));
 
     std::map<std::string, std::string> reader_defines = {};
 
@@ -485,6 +493,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         metadata_tensor.buffer()->address(),         // 1
         output_scores_tensor.buffer()->address(),    // 2
         (uint32_t)indices_sent_semaphore.address(),  // 3
+        mapping_tensor.buffer()->address(),          // 4
     };
 
     uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
@@ -501,6 +510,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         }
         tt::tt_metal::SetRuntimeArgs(
             program, selective_tilize_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(
+            program, writer_tilizer_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
     }
 
     std::vector<uint32_t> reader_runtime_args = {
