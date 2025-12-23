@@ -1660,6 +1660,19 @@ private:
         return MeshCoordinateRange(start, end);
     }
 
+    void adjust_hops_for_toroidal_links(std::unordered_map<RoutingDirection, uint32_t>& hops, uint32_t dim) const {
+        RoutingDirection forward_direction = (dim == EW_DIM) ? RoutingDirection::E : RoutingDirection::S;
+        RoutingDirection backward_direction = (dim == EW_DIM) ? RoutingDirection::W : RoutingDirection::N;
+
+        if (hops[forward_direction] > mesh_shape_[dim] / 2) {
+            hops[backward_direction] = mesh_shape_[dim] - hops[forward_direction];
+            hops[forward_direction] = 0;
+        } else if (hops[backward_direction] > mesh_shape_[dim] / 2) {
+            hops[forward_direction] = mesh_shape_[dim] - hops[backward_direction];
+            hops[backward_direction] = 0;
+        }
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_hops_from_displacement(
         const MeshCoordinate& displacement) const {
         std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -1680,6 +1693,24 @@ private:
             hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - displacement[NS_DIM] + 1;
         } else {
             hops[RoutingDirection::S] = displacement[NS_DIM];
+        }
+
+        // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
+        // over the wraparound link is faster
+        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
+        // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
+        if (fabric_type == tt::tt_fabric::FabricType::MESH) {
+            return hops;
+        }
+
+        // Wraparound links in the X dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, EW_DIM);
+        }
+
+        // Wraparound links in the Y dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_Y || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, NS_DIM);
         }
 
         return hops;
@@ -1897,7 +1928,7 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
-        if (topology_ == Topology::Ring || topology_ == Topology::Torus) {
+        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
             auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
             switch (fabric_type) {
                 case tt::tt_fabric::FabricType::TORUS_X:
