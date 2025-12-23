@@ -308,15 +308,26 @@ def _device_module_impl(request):
     Internal module-scoped device fixture.
     Do not use directly - use `device` fixture with @pytest.mark.use_module_device marker.
 
+    This optimization is intended for test modules where all tests share the same
+    device configuration. The device is created once per module and reused across
+    all tests, reducing setup/teardown overhead.
+
     Usage in test files:
         # Module scope, no special params:
         pytestmark = pytest.mark.use_module_device
 
-        # Module scope WITH device_params:
+        # Module scope WITH a single device configuration:
         pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
 
         def test_something(device):  # Just use 'device' as normal
             ...
+
+    IMPORTANT: Do NOT use this marker in test files that use parametrized device_params:
+        @pytest.mark.parametrize("device_params", [...], indirect=True)
+
+    Tests with multiple device configurations via parametrized device_params require
+    a fresh device for each parameter set and should continue using the default
+    function-scoped `device` fixture.
     """
     import ttnn
 
@@ -332,6 +343,9 @@ def _device_module_impl(request):
     if is_tg_cluster() and not device_id:
         device_id = first_available_tg_device()
 
+    # Preserve original default device to restore on teardown
+    original_default_device = ttnn.GetDefaultDevice()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
@@ -339,7 +353,8 @@ def _device_module_impl(request):
 
     yield device
 
-    ttnn.SetDefaultDevice(None)
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
 
 
