@@ -81,7 +81,10 @@ struct InternalReceiverChannelMapping {
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
-        Topology topology, bool has_tensix_extension, RouterVariant variant, const IntermeshVCConfig* intermesh_config);
+        Topology topology,
+        bool downstream_is_tensix_builder,
+        RouterVariant variant,
+        const IntermeshVCConfig* intermesh_config);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
