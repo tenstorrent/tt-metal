@@ -335,7 +335,22 @@ Example Metalium Program
 
 We will now present a simple example Metalium program that performs an elementwise addition of two tensors of shape MxN.
 This program will be used to illustrate the Metalium programming model, different types of kernels, and how they map to the underlying architecture.
-Key points will be highlighted in this text. Detailed comments are provided in the C++ code in this and other files to help with code understanding.
+Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.
+
+Exercise 2: Running the Example Program
+========================================
+
+If you haven't already done so, clone appropriate releas of TT-Metalium repository from https://github.com/tenstorrent/tt-metal
+Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
+
+.. code-block:: bash
+
+   export TT_METAL_HOME=$PWD
+   ./build_metal.sh --build-programming-examples
+   ./build/programming_examples/metal_example_lab_eltwise_binary
+
+Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
+
 
 The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 First thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
@@ -601,6 +616,10 @@ The circular buffer the writer kernel reads from has capacity for two tiles, all
 kernel is reading from the previously produced tile.
 This coordination between the compute and writer kernels enables pipelined execution, where computation and data movement can overlap.
 
+
+Example Program Summary
+-----------------------
+
 It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
 division of tasks and data between host and device.
 The following diagram summarizes what code and data resides where (device, host, CBs, DRAM,...)
@@ -615,13 +634,188 @@ On the one hand, if one updates only kernel code, there is no need to rebuild be
 On the other hand, it also means that errors in the kernel code will not be caught at host-code compile time, but only at time of host code execution,
 when JIT compilation is triggerred.
 
+Exercise 3: Observing JIT Compile Errors
+========================================
 
-Exercise 2: Debugging Tensix Kernels
+Introduce a syntax error in the kernel code and rerun the program to see how JIT compilation errors are reported.
+After observing the error, fix the error and rerun the program to confirm that the program now runs correctly.
+
+
+Debug Facilities in Metalium
+=============================
+
+Metalium provides a number of facilities for debugging kernels.
+These facilities are particularly useful for debugging hangs and other issues that may not be apparent from the host-side code.
+
+
+Debug Print API
+---------------
+
+Since kernel code runs on the device, it is not possible to use the standard C++ functions to print debug information, since the device doesn't have a terminal.
+The Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
+to the host while it runs.  You can think of it as a constrained, lightweight alternative to ``printf`` that works inside kernels.
+It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
+numerical issues or hangs.
+
+The DPRINT API is controlled through environment variables on the host side.
+The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores DPRING information will be forwarded to the host terminal.
+If this environment variable is not set, calls to DPRINT APIS will have no effect (i.e. DPRINT statements will be ignored during kernel
+JIT compilation and will not become part of the compiled kernel binary).
+When debugging, it is common to set this variable to ``all`` to print from all cores (i.e. ``export TT_METAL_DPRINT_CORES=all``).
+When not debugging, you should unset this variable to disable printing (i.e. ``unset TT_METAL_DPRINT_CORES``).
+This is particularly important to do when evaluating performance.
+
+An alternative to printing to the host terminal is to print to a log file, which can be done by setting the ``TT_METAL_DPRINT_FILE`` environment variable,
+which can be used to specify a log file. The log file is stored in the ``generated/dprint`` directory, and is named after the device and core.
+
+To use DPRINT in a kernel, you include the debug header and use a C++ stream-like syntax:
+DPRINT supports printing integers, floats, and strings, but it does **not** directly support the C++ ``bool`` type.
+The common pattern is to cast booleans to an integer (for example, ``uint32_t``) before printing them.
+The following example shows a simple print of local kernel variables, including a Boolean flag:
+
+.. code-block:: c++
+
+   #include "api/debug/dprint.h"
+
+   void kernel_main() {
+       uint32_t iter = 5;
+       bool done = false;
+
+       // DPRINT uses a streaming syntax; ENDL() flushes the print buffer.
+       DPRINT << "iter = " << iter << ENDL();
+
+       // Booleans should be cast to an integer type before printing.
+       DPRINT << "done flag = " << static_cast<uint32_t>(done) << ENDL();
+   }
+
+Printing a tile in a writer (dataflow) kernel
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TT-Metal kernels often share data between threads using circular buffers (CBs) of tiles.
+DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
+
+The key rules are:
+
+- You can only safely sample a tile from a CB **between** the appropriate CB API calls:
+
+  - When reading from CBs (e.g. in writer kernels): between ``cb_wait_front()`` and ``cb_pop_front()``.
+  - When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
+
+- The math (compute) RISC cannot directly see CBs, so CB tile printing is most commonly done from data-movement RISCs (reader or writer kernels).
+
+Simplified example of printing a full tile from an output CB in a writer kernel is shown below.
+
+.. code-block:: c++
+
+   #include "api/dataflow/dataflow_api.h"
+   #include "api/debug/dprint.h"
+   #include "api/debug/dprint_tile.h"
+
+   void kernel_main() {
+       // Assume this circular buffer holds output tiles from a compute kernel.
+       constexpr uint32_t cb_out = tt::CBIndex::c_16;
+
+       // Number of tiles to consume and optionally print.
+       uint32_t n_tiles = get_arg_val<uint32_t>(0);
+
+       for (uint32_t t = 0; t < n_tiles; ++t) {
+            // Wait until one tile is available at the front of cb_out.
+            cb_wait_front(cb_out, 1);
+
+            DPRINT << "Output tile " << t << " from cb_out = " << cb_out << ENDL();
+
+            // Print each row of a tile.
+            // TileSlize has limited capacity, so we must print one row at a time.
+            for (uint32_t r = 0; r < TILE_HEIGHT; r++) {
+                  SliceRange sr = {
+                     .h0 = static_cast<uint8_t>(r),
+                     .h1 = static_cast<uint8_t>(r + 1),  // one row
+                     .hs = 1,                            // stride is 1
+                     .w0 = 0,
+                     .w1 = TILE_WIDTH,                   // full width
+                     .ws = 1                             // stride is 1
+                  };
+
+                  // TileSlice(cb_id, tile_idx, slice_range, endl_rows, print_untilized)
+                  DPRINT << r << ": "
+                        << TileSlice(
+                              cb_out,
+                              /* tile_idx = */ 0,
+                              sr,
+                              /* endl_rows = */ true,
+                              /* print_untilized = */ true)
+                        << ENDL();
+            }
+
+            // Mark this tile as consumed in the CB.
+            cb_pop_front(cb_out, 1);
+       }
+   }
+
+Note that setting the ``print_untilized`` flag to ``true`` is important to print the tile in human readable row-major format.
+
+
+Caveats and best practices
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A few important caveats to keep in mind when using DPRINT:
+
+- **Flushing behavior**
+
+  DPRINT output is only guaranteed to be flushed when you:
+
+  - Print an ``ENDL()`` token,
+  - Print a newline character ``'\n'``, or
+  - The device associated with that RISC is closed.
+
+  Therefore, always end each logical debug line with ``ENDL()`` when you want to see output promptly.
+
+- **Kernel size and string length**
+
+  Each distinct DPRINT call embeds a format string (and often the file name and line number) into the kernel binary.
+  Long or numerous debug strings increase kernel size and may cause it to not fit into available internal SRAM.
+  To avoid this, keep DPRINT messages short and remove or disable most DPRINTs once you have diagnosed the issue.
+
+Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without
+needing deep knowledge of the underlying Tenstorrent architecture, while still avoiding common pitfalls.
+
+
+Exercise 4: Using DPRINT to Debug a Kernel
+==========================================
+
+Add DPRINT statements to the writer kernel in our example program to print the values of iterator i and the contents of
+the resulting tile for the first three tiles processed by the kernel.
+Modify the input data to the program to not use random numbers for the first three tiles so you can verify that the
+results are as expected.
+since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it..
+
+
+
+
+Profiling
+---------
+
+The profiling API allows for profiling the execution of kernels running on the device.
+This is particularly useful for understanding the performance of the kernels and identifying bottlenecks.
+The profile API is controlled through environment variables on the host side.
+The environment variable ``TT_METAL_PROFILE_CORES`` specifies which cores the host-side will read profile data from,
+and whether this environment variable is defined determines whether profiling is enabled during kernel compilation.
+
+The solution was to:
+Have Python environment active
+Have WATCHER disabled
+Have DPRINT disabled
+
+
+unset TT_METAL_DPRINT_CORES
+
+
+
+Exercise 5: Debugging Metalium Kernels
 ====================================
 
 Introduce the following bugs:
 
-Introduce a syntax error in the kernel code and rerun the program to see how JIT compilation errors are reported.
 
 
 Scrap Heap
