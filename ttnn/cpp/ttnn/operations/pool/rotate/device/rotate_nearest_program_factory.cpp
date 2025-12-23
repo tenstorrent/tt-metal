@@ -6,7 +6,6 @@
 #include <ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
 #include <ttnn/operations/pool/pool_utils.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -107,24 +106,24 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const uint32_t max_sticks_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
 
-    // CB_0: Output CB for communication between reader and writer
+    uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
+
+    // Fill CB - single page to hold pre-filled stick
+    auto [fill_cb_index, fill_cb_handle] =
+        tt::tt_metal::create_cb(next_cb_index++, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+
+    // Output CB for communication between reader and writer
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
-        tt::CBIndex::c_0,
+        next_cb_index++,
         program,
         all_cores,
         output_cb_page_size,
         num_cb_pages * NEAREST_BUFFERING_FACTOR,
         output_cb_data_format);
 
-    // Check if fill value is zero (can use zero_out_page instead of fill CB)
+    // Check if fill value is zero
     const bool fill_is_zero = (fill_value_bf16 == 0);
-
-    // CB_1: Fill CB - single page to hold pre-filled stick for L1-to-L1 copy
-    uint32_t fill_cb_index = 0;
-    auto [cb_index, cb_handle] =
-        tt::tt_metal::create_cb(tt::CBIndex::c_1, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
-    fill_cb_index = cb_index;
     // Batch size is limited by available CB pages or MAX_BATCH_SIZE, whichever is smaller
     const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
