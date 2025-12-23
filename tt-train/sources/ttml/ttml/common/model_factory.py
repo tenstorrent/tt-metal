@@ -103,7 +103,6 @@ class TransformerModelFactory:
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        # intermediate_dim binding now handles Python int/None -> std::optional<unsigned int> conversion
         if self.transformer_config.intermediate_dim is not None:
             lcfg.intermediate_dim = self.transformer_config.intermediate_dim
         if self.transformer_config.theta is not None:
