@@ -6,6 +6,7 @@ on:
       - 'ay/**'
     paths:
       - '.github/workflows/parallel-refactor.yml'
+      - '.github/workflows/refactor-single-file.yml'
       - 'batch_mapping.json'
       - '.github/workflows/trigger-parallel-refactor.yml'
 
