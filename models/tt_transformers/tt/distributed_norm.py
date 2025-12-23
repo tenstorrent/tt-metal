@@ -86,8 +86,6 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-            # Synchronize device to ensure async all_gather completes before using the result
-            ttnn.synchronize_device(self.args.mesh_device)
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
@@ -108,7 +106,5 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-            # Synchronize device to ensure async all_gather completes before returning
-            ttnn.synchronize_device(self.args.mesh_device)
 
         return x
