@@ -151,10 +151,7 @@ class Generator:
                 tt_out_logits_all_users,
             )
 
-        if sampling_params is None:
-            return_logits = True
-        else:
-            return_logits = False
+        return_logits = sampling_params is None
 
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
@@ -174,7 +171,7 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch))
 
-        # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
+        # If batch is 32 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
         if (
             batch >= 16
@@ -189,17 +186,23 @@ class Generator:
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
+        # Prefill has two main modes:
+        # - return_logits=True: return logits to host (no on-device sampling)
+        # - return_logits=False: produce next-token ids; we only run on-device sampling when logits are not requested
+        save_logits_to_host = tt_out_logits_all_users is not None
+        do_device_sampling = (not return_logits) and (not save_logits_to_host)
+
+        # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
+        tt_logits_accumulated = [] if do_device_sampling else None
+
         all_users = [0] if use_batched_prefill else empty_slots
-
-        greedy_on_device = False  # TODO detect for faster path
-        nongreedy_device = not (return_logits or greedy_on_device)
-
-        # Accumulate logits for on-device sampling
-        tt_logits_accumulated = []
+        padded_batch = 32
 
         for id, user_id in enumerate(all_users):
             logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
+
             if use_batched_prefill:
+                # Batched prefill: all active requests are placed in their slot positions and padded to 32 users.
                 user_id = empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
@@ -209,12 +212,9 @@ class Generator:
                 last_token_idx = seq_len - 1
                 prefill_seq_len = prefill_seq_lens[id]
 
-                if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
-                    enable_trace = False
+            enable_trace_current = enable_trace and (prefill_seq_len in self.model.tt_ccl.support_seqlens)
 
-            padded_batch = 32
             if use_batched_prefill:
-                # Place each request at its corresponding slot and pad to 32 users
                 prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
                 padded_last_token_idx = [1] * padded_batch  # dummy idx for padded slots
                 for local_idx, slot in enumerate(empty_slots):
@@ -233,33 +233,41 @@ class Generator:
                 prefill_ids = torch.cat(
                     [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
                 )
+
+            page_table_user = None
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(
-                    page_table, kv_cache, prefill_seq_len, user_id, use_batched_prefill
-                )
-                # remove the first user from the page table
-                page_table = page_table[1:, :]
+                if use_batched_prefill:
+                    # Batched prefill needs the whole page_table to map each active request into its slot.
+                    page_table_user = self._get_prefill_user_page_table(
+                        page_table, kv_cache, prefill_seq_len, user_id, use_batched_prefill=True
+                    )
+                else:
+                    # Single-user prefill: pass only the current user's row (no mutation/slicing across iterations).
+                    page_table_user = self._get_prefill_user_page_table(
+                        page_table[id : id + 1, :], kv_cache, prefill_seq_len, user_id, use_batched_prefill=False
+                    )
 
             prefill_kwargs = {
                 "tokens": prefill_ids,
-                "page_table": page_table_user if page_table is not None else None,
+                "page_table": page_table_user,
                 "kv_cache": kv_cache,
                 "user_id": 0 if use_batched_prefill else user_id,
                 "last_token_idx": last_token_idx,
                 "batch_size": padded_batch if use_batched_prefill else 1,
             }
 
-            # If PCC check enabled or return_logits is True (we save output logits)
-            if tt_out_logits_all_users is not None or return_logits:
+            # Save output logits (PCC check / return_logits path)
+            tt_out_logits_saved = None
+            if save_logits_to_host:
                 tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
-            if enable_trace:
+            if enable_trace_current:
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
-            if not nongreedy_device:
+            if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
                     tt_tok, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
                 )
@@ -281,23 +289,21 @@ class Generator:
                     tt_logits_accumulated.extend(tt_logits_list)
                 else:
                     # Single user: logits list has 1 entry
-                    tt_logits_accumulated.append(tt_logits_list[0])
+                    tt_logits_accumulated.append(ttnn.clone(tt_logits_list[0]))
 
         # On-device sampling for prefill
-        if nongreedy_device and len(tt_logits_accumulated) > 0:
+        if do_device_sampling and tt_logits_accumulated:
             padded_batch = 32
 
             # lm_head output is a list [logits_tensor], extract the tensor
             logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in tt_logits_accumulated]
 
             if use_batched_prefill:
-                # Batched prefill: logits already have 32 entries (one per slot)
-                # Logits are ordered by slot position (slot 0's logits at index 0, etc.)
-                # sampling_params are also ordered by slot (0-31), so they match
+                # Batched prefill: logits already have 32 entries (one per slot), ordered by slot.
                 tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
             else:
-                # Non-batched prefill: we have `batch` logits, need to pad to 32
-                # Logits are in batch order (same as tokens and sampling_params)
+                # Non-batched prefill: we have `batch` logits, need to pad to 32.
+                # Logits are in batch order (same as tokens and sampling_params).
                 if len(logits_tensors) > 1:
                     tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
                 else:
@@ -307,11 +313,8 @@ class Generator:
                 num_users = len(logits_tensors)
                 if num_users < padded_batch:
                     padding_needed = padded_batch - num_users
-                    # Create padding by replicating the last logits
                     padding_tensors = [logits_tensors[-1]] * padding_needed
                     tt_logits_batch = ttnn.concat([tt_logits_batch] + padding_tensors, dim=2)
-
-            print(f"tt_logits_batch shape: {tt_logits_batch.shape}")
 
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
@@ -322,34 +325,28 @@ class Generator:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
-            if prompt_tokens is not None:  # Guard for warmup
-                sampling_module.reset_prompt_tokens(prompt_tokens)
-                sampling_module.reset_output_state(output_tokens)
-                sampling_module.reset_seed(sampling_params.seed)
-
+            # if prompt_tokens is not None:  # Guard for warmup
+            sampling_module.reset_prompt_tokens(prefill_ids)
+            sampling_module.reset_output_state()
+            sampling_module.reset_seed(sampling_params.seed)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
                 enable_trace=False,  # Don't trace prefill sampling
             )
             if isinstance(tt_sampled, tuple):
-                print(f"tt_sampled is tuple")
                 tt_sampled = tt_sampled[0]
             if isinstance(tt_sampled, list):
-                print(f"tt_sampled is list")
-                print(f"length: {len(tt_sampled)}")
                 tt_sampled = tt_sampled[0]
-            print(f"tt_sampled shape: {tt_sampled.shape}")
 
             sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
 
             if use_batched_prefill:
-                # Batched prefill: sampled_tokens has 32 entries ordered by slot
-                # Extract only the slots specified by empty_slots, like greedy path does
+                # Batched prefill: sampled_tokens has 32 entries ordered by slot.
                 sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
                 output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
             else:
-                # Non-batched prefill: first `batch` entries are our results in batch order
+                # Non-batched prefill: first `batch` entries are our results in batch order.
                 for i in range(batch):
                     output_toks[i] = sampled_tokens[0, 0, 0, i].item()
 

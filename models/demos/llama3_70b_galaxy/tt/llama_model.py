@@ -429,7 +429,6 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
@@ -454,21 +453,16 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            print(f"x shape before slice: {x.shape}")
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-            print(f"x shape after slice: {x.shape}")
             # lm_head returns logits in sharded format (same as decode before all-gather)
             tt_logits = self.lm_head(x, None, mode="prefill")
-            print(f"list length: {len(tt_logits)}")
-            print(f"shape after lm_head: {tt_logits[0].shape}")
             tt_logits = tt_logits[0]
             tt_logits = ttnn.reshape(
                 tt_logits,
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
-            print(f"shape after reshape: {tt_logits.shape}")
-            logits_list.append([tt_logits])
+            logits_list.append(tt_logits)
 
         return logits_list
 
@@ -492,9 +486,7 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-            print(f"x shape before lm_head: {x.shape}")
             tt_logits = self.lm_head(x, None, mode="prefill")
-            print(f"shape after lm_head: {tt_logits[0].shape}")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
