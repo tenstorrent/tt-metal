@@ -486,9 +486,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         uint32_t start_n_block = block_within_batch % n_blocks_per_batch;
 
         // Compute start tile IDs based on batch and block position
-        uint32_t in0_start_tile_id = start_batch * in0_batch_stride + start_m_block * in0_m_block_stride;
+        uint32_t in0_start_tile_id = (start_batch * in0_batch_stride) + (start_m_block * in0_m_block_stride);
         uint32_t in1_start_tile_id =
-            (bcast_batch ? 0 : start_batch * in1_batch_stride) + start_n_block * in1_n_block_stride;
+            (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
 
         // Write runtime args to device
         mm_reader_args[1] = in0_start_tile_id;           // in0_tensor_start_tile_id
