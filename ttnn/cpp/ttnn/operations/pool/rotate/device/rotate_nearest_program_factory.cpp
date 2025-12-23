@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
-#include <ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
+#include <ttnn/operations/pool/upsample/device/kernels/dataflow/fixed_point_arithmetic.hpp>
 #include <ttnn/operations/pool/pool_utils.hpp>
 
 #include <cmath>
@@ -181,14 +181,14 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
 
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(),                // rt_arg[0]: input_buffer_address
-            num_sticks,                                      // rt_arg[1]: num_sticks
-            sticks_processed,                                // rt_arg[2]: start_stick_id
-            static_cast<uint32_t>(float_to_q16(cos_angle)),  // rt_arg[3]: cos_angle (Q16.16)
-            static_cast<uint32_t>(float_to_q16(sin_angle)),  // rt_arg[4]: sin_angle (Q16.16)
-            static_cast<uint32_t>(float_to_q16(center_x)),   // rt_arg[5]: center_x (Q16.16)
-            static_cast<uint32_t>(float_to_q16(center_y)),   // rt_arg[6]: center_y (Q16.16)
-            static_cast<uint32_t>(fill_value_bf16)           // rt_arg[7]: fill_value (bfloat16)
+            input_tensor.buffer()->address(),                  // rt_arg[0]: input_buffer_address
+            num_sticks,                                        // rt_arg[1]: num_sticks
+            sticks_processed,                                  // rt_arg[2]: start_stick_id
+            static_cast<uint32_t>(float_to_fixed(cos_angle)),  // rt_arg[3]: cos_angle (Q16.16)
+            static_cast<uint32_t>(float_to_fixed(sin_angle)),  // rt_arg[4]: sin_angle (Q16.16)
+            static_cast<uint32_t>(float_to_fixed(center_x)),   // rt_arg[5]: center_x (Q16.16)
+            static_cast<uint32_t>(float_to_fixed(center_y)),   // rt_arg[6]: center_y (Q16.16)
+            static_cast<uint32_t>(fill_value_bf16)             // rt_arg[7]: fill_value (bfloat16)
         };
 
         // Writer runtime args
@@ -257,10 +257,10 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();                           // input_buffer_address
-            runtime_args[3] = static_cast<uint32_t>(float_to_q16(cos_angle));  // cos_angle (Q16.16)
-            runtime_args[4] = static_cast<uint32_t>(float_to_q16(sin_angle));  // sin_angle (Q16.16)
-            runtime_args[5] = static_cast<uint32_t>(float_to_q16(center_x));   // center_x (Q16.16)
-            runtime_args[6] = static_cast<uint32_t>(float_to_q16(center_y));   // center_y (Q16.16)
+            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));  // cos_angle (Q16.16)
+            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));  // sin_angle (Q16.16)
+            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));   // center_x (Q16.16)
+            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));   // center_y (Q16.16)
             runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);          // fill_value
         }
 

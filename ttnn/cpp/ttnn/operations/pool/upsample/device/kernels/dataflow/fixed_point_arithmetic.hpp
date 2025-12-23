@@ -30,3 +30,26 @@ ALWI uint16_t fixed_to_bfloat16(int32_t fixed) {
     float fval = (float)fixed / FIXED_ONE;
     return float_to_bfloat16_non_constexpr(fval);
 }
+
+// Convert integer to fixed-point
+ALWI constexpr int32_t int_to_fixed(int32_t i) { return i << FIXED_POINT_SHIFT; }
+
+// Convert float to fixed-point
+ALWI int32_t float_to_fixed(float f) { return static_cast<int32_t>(f * FIXED_ONE); }
+
+// Extract integer part with rounding
+ALWI constexpr int32_t fixed_to_int_round(int32_t fixed) { return (fixed + FIXED_HALF) >> FIXED_POINT_SHIFT; }
+
+// Compute (a*b - c*d) >> shift + e
+ALWI int32_t fixed_mul_sub_add(int32_t a, int32_t b, int32_t c, int32_t d, int32_t e) {
+    int64_t prod1 = static_cast<int64_t>(a) * static_cast<int64_t>(b);
+    int64_t prod2 = static_cast<int64_t>(c) * static_cast<int64_t>(d);
+    return static_cast<int32_t>(((prod1 - prod2) >> FIXED_POINT_SHIFT) + e);
+}
+
+// Compute (a*b + c*d) >> shift + e
+ALWI int32_t fixed_mul_add_add(int32_t a, int32_t b, int32_t c, int32_t d, int32_t e) {
+    int64_t prod1 = static_cast<int64_t>(a) * static_cast<int64_t>(b);
+    int64_t prod2 = static_cast<int64_t>(c) * static_cast<int64_t>(d);
+    return static_cast<int32_t>(((prod1 + prod2) >> FIXED_POINT_SHIFT) + e);
+}
