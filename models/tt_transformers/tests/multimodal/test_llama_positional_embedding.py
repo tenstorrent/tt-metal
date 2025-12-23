@@ -14,24 +14,10 @@ from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPosition
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-
-
-def load_partial_weights(weights_path, embedding_layer_prefix):
-    partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(
-        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-    )
-    weights = model.state_dict()
-    keys = weights.keys()
-    for key in keys:
-        if embedding_layer_prefix in key:
-            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
-            key_name = key[len("model.vision_model.gated_positional_embedding.") :]
-            partial_state_dict.update({key_name: weights[key]})
-    return partial_state_dict
 
 
 @pytest.mark.parametrize(
@@ -103,10 +89,13 @@ def test_positional_embedding_inference(
     tt_aspect_ratios = aspect_ratios.tolist()
 
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
-    config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
+    model_repo_name = os.getenv("HF_MODEL")
+    config = AutoConfig.from_pretrained(model_repo_name)
     reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), "gated_positional")
+    partial_state_dict = load_partial_weights(
+        AutoModelForVision2Seq, model_repo_name, "model.vision_model.gated_positional_embedding."
+    )
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
     aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 #include "kernel_common.hpp"
 
 //

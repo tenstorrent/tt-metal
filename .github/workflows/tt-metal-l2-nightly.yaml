@@ -5,48 +5,58 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
-      run_conv_tests:
-        description: 'Run TTNN nightly conv tests'
-        required: false
-        type: boolean
-        default: false
-      run_pool_tests:
-        description: 'Run TTNN nightly pool tests'
-        required: false
-        type: boolean
-        default: false
-      run_sdxl_tests:
-        description: 'Run TTNN nightly SDXL tests'
-        required: false
-        type: boolean
-        default: false
       run_didt_tests:
         description: 'Run DIDT tests'
         required: false
         type: boolean
         default: false
-      run_train_tests:
-        description: 'Run TTNN nightly train tests'
+      run_cpp_tests:
+        description: 'Run cpp-unit-tests'
         required: false
         type: boolean
         default: false
-      run_sdpa_stress_tests:
-        description: 'Run TTNN nightly SDPA stress tests'
+      run_fd_unit_tests:
+        description: 'Run Fast Dispatch Unit Tests'
         required: false
         type: boolean
         default: false
-      run_bos_tests:
-        description: 'Run TTNN BOS tests'
+      run_sd_unit_tests:
+        description: 'Run Slow Dispatch Unit Tests'
         required: false
         type: boolean
         default: false
-      run_APC_cpp_tests:
-        description: 'Run APC C++ tests'
+      run_metal_iommu_tests:
+        description: 'Run Metal IOMMU Unit Tests'
+        required: false
+        type: boolean
+        default: false
+      run_profiler_regression:
+        description: 'Run Profiler Regression'
+        required: false
+        type: boolean
+        default: false
+      run_tutorials_tests:
+        description: 'Run TTNN Tutorials'
+        required: false
+        type: boolean
+        default: false
+      run_tt_train_cpp_unit_tests:
+        description: 'Run tt-train-cpp-unit-tests'
+        required: false
+        type: boolean
+        default: false
+      run_models_unit_tests:
+        description: 'Run models-unit-tests'
+        required: false
+        type: boolean
+        default: false
+      run_tt_cnn_unit_tests:
+        description: 'Run tt-cnn-unit-tests'
         required: false
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., eltwise,matmul,experimental,docs_examples,misc)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,bos,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,data_movement,transformers)'
         required: false
         type: string
         default: ''
@@ -55,7 +65,6 @@ on:
         required: false
         type: number
         default: 150
-
 
 jobs:
   build-artifact:
@@ -89,21 +98,39 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # Test group selection - default to all enabled for scheduled runs
-      run_conv_tests: ${{ github.event_name == 'schedule' || inputs.run_conv_tests }}
+      run_conv_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',conv,') }}
       run_matmul_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',matmul,') }}
       run_docs_examples_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',docs_examples,') }}
       run_experimental_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',experimental,') }}
-      run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
-      run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
-      run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
-      run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || inputs.run_sdpa_stress_tests }}
-      run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || inputs.run_bos_tests) }}
+      run_pool_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',pool,') }}
+      run_sdxl_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdxl,') }}
+      run_train_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',train,') }}
+      run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdpa,') }}
+      run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',bos,')) }}
       run_eltwise_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',eltwise,') }}
       run_transformers_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',transformers,') }}
       run_moreh_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',moreh,') }}
       run_data_movement_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',data_movement,') }}
       run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
       run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
+  ttnn-ops-docs-check:
+    if: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-ops-docs-check.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 }
+        ]
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
@@ -127,7 +154,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -137,6 +164,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
           { arch: blackhole, runner-label: P150b },
+          { arch: blackhole, runner-label: P100a },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
@@ -148,7 +176,7 @@ jobs:
       nightly-run: true
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_metal_iommu_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -166,7 +194,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_sd_unit_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -187,7 +215,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_fd_unit_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -207,7 +235,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN Tutorials
   test-ttnn-tutorials:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_tutorials_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
@@ -226,7 +254,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   run-profiler-regression:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_profiler_regression }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -243,7 +271,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -261,7 +289,7 @@ jobs:
       gtest_filter: "*"
   # FD Model Tests
   models-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+    if: ${{ github.event_name == 'schedule' || inputs.run_models_unit_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -271,6 +299,23 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # TT-CNN Unit tests
+  tt-cnn-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests }}
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+        ]
+    uses: ./.github/workflows/tt-cnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}

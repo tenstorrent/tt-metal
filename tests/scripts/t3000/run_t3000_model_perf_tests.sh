@@ -133,6 +133,10 @@ run_t3000_gemma3_tests() {
   fi
 }
 
+run_t3000_gemma3_tests_op_to_op() {
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
+}
+
 run_t3000_wan22_tests() {
   # Record the start time
   fail=0
@@ -160,7 +164,7 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1 and yes_use_cache" --timeout 1800; fail+=$?
+  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1" --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

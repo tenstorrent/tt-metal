@@ -60,7 +60,7 @@ struct MoeExpertTokenRemapDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -90,8 +90,8 @@ struct MoeExpertTokenRemapDeviceOperation {
         const ttnn::Tensor& mapping_tensor,
         const ttnn::Tensor& metadata_tensor,
         const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor,
-        const std::optional<ttnn::Tensor>& optional_reduced_tensor,
+        const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
+        const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
         uint32_t reduction_size = REDUCTION_SIZE);
 };
 }  // namespace ttnn::operations::data_movement

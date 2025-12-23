@@ -198,6 +198,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
 }  // namespace detail
 
+namespace experimental {
+
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+
+}  // namespace experimental
+
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
@@ -312,10 +318,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (size_t i = 0; i < kernel_descriptor.runtime_args.size(); i++) {
-            for (size_t j = 0; j < kernel_descriptor.runtime_args[i].size(); j++) {
-                SetRuntimeArgs(*this, kernel_handle, CoreCoord(i, j), kernel_descriptor.runtime_args[i][j]);
-            }
+        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
         }
         SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
     }

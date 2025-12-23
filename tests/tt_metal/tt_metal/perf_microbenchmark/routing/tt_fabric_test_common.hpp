@@ -276,6 +276,18 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
+    uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const override {
+        auto cached = device_frequency_cache_.find(device_id);
+        if (cached != device_frequency_cache_.end()) {
+            return cached->second;
+        }
+        auto& metal_context = tt::tt_metal::MetalContext::instance();
+        auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+        auto freq = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
+        device_frequency_cache_.emplace(device_id, freq);
+        return freq;
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -1540,6 +1552,7 @@ private:
 
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+    mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
         const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
@@ -1647,6 +1660,19 @@ private:
         return MeshCoordinateRange(start, end);
     }
 
+    void adjust_hops_for_toroidal_links(std::unordered_map<RoutingDirection, uint32_t>& hops, uint32_t dim) const {
+        RoutingDirection forward_direction = (dim == EW_DIM) ? RoutingDirection::E : RoutingDirection::S;
+        RoutingDirection backward_direction = (dim == EW_DIM) ? RoutingDirection::W : RoutingDirection::N;
+
+        if (hops[forward_direction] > mesh_shape_[dim] / 2) {
+            hops[backward_direction] = mesh_shape_[dim] - hops[forward_direction];
+            hops[forward_direction] = 0;
+        } else if (hops[backward_direction] > mesh_shape_[dim] / 2) {
+            hops[forward_direction] = mesh_shape_[dim] - hops[backward_direction];
+            hops[backward_direction] = 0;
+        }
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_hops_from_displacement(
         const MeshCoordinate& displacement) const {
         std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -1667,6 +1693,24 @@ private:
             hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - displacement[NS_DIM] + 1;
         } else {
             hops[RoutingDirection::S] = displacement[NS_DIM];
+        }
+
+        // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
+        // over the wraparound link is faster
+        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
+        // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
+        if (fabric_type == tt::tt_fabric::FabricType::MESH) {
+            return hops;
+        }
+
+        // Wraparound links in the X dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, EW_DIM);
+        }
+
+        // Wraparound links in the Y dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_Y || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, NS_DIM);
         }
 
         return hops;
@@ -1884,7 +1928,7 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
-        if (topology_ == Topology::Ring || topology_ == Topology::Torus) {
+        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
             auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
             switch (fabric_type) {
                 case tt::tt_fabric::FabricType::TORUS_X:
