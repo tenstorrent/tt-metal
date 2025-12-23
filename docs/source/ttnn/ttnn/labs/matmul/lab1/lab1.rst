@@ -787,7 +787,7 @@ Add DPRINT statements to the writer kernel in our example program to print the v
 the resulting tile for the first three tiles processed by the kernel.
 Modify the input data to the program to not use random numbers for the first three tiles so you can verify that the
 results are as expected.
-since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it..
+Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
 
 
 
@@ -816,7 +816,7 @@ To disable DPRINT, use::
 Exercise 5: Debugging Metalium Kernels
 ========================================
 
-Introduce the following bugs:
+TODO: Add instructions for introducing bugs and debugging them.
 
 
 
