@@ -5,7 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
-#include "modules/module_base.hpp"
+#include "models/common/transformer_common.hpp"
 #include "modules/rotary_embedding.hpp"
 #include "ops/rope_op.hpp"
 
@@ -36,20 +36,6 @@ private:
     std::shared_ptr<ModuleBase> m_dropout;
     std::shared_ptr<RotaryEmbedding> m_embedding;
 
-    // Helper functions for KV cache updates
-    uint32_t update_cache_prefill(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        const autograd::TensorPtr& k_cache,
-        const autograd::TensorPtr& v_cache);
-
-    uint32_t update_cache_decode(
-        const tt::tt_metal::Tensor& key_tensor,
-        const tt::tt_metal::Tensor& value_tensor,
-        const autograd::TensorPtr& k_cache,
-        const autograd::TensorPtr& v_cache,
-        const uint32_t cache_position);
-
 public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
@@ -60,10 +46,9 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& x,
         const autograd::TensorPtr& mask,
-        const autograd::TensorPtr& k_cache,
-        const autograd::TensorPtr& v_cache,
-        const InferenceMode mode,
-        const uint32_t cache_position);
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
 };
 
 }  // namespace ttml::modules

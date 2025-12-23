@@ -42,16 +42,15 @@ public:
         float dropout_prob = 0.0F,
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
     // Forward with KV cache for inference
     autograd::TensorPtr operator()(
         const autograd::TensorPtr& input,
         const autograd::TensorPtr& mask,
-        const autograd::TensorPtr& k_cache,
-        const autograd::TensorPtr& v_cache,
-        const modules::InferenceMode mode,
-        const uint32_t cache_position);
+        std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+        const uint32_t layer_idx,
+        const uint32_t new_tokens);
 };
 
 }  // namespace ttml::modules

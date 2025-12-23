@@ -56,8 +56,6 @@ public:
     [[nodiscard]] virtual autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
     [[nodiscard]] virtual autograd::TensorPtr operator()(
         const autograd::TensorPtr& tensor, const autograd::TensorPtr& other);
-    [[nodiscard]] virtual autograd::TensorPtr operator()(
-        const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, const bool use_cache);
 };
 
 }  // namespace ttml::modules
