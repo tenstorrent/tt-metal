@@ -3,6 +3,7 @@
 import torch
 
 import ttnn
+from models.tt_symbiote.core.utils import TORCH_TO_TTNN, torch_dtype_to_ttnn_dtype
 
 
 def handle_view(func, args, kwargs):
@@ -14,6 +15,19 @@ def handle_view(func, args, kwargs):
         input_tensor = TorchTTNNTensor(input_tensor)
     new_shape = args[1]
     return TorchTTNNTensor(ttnn.reshape(input_tensor.to_ttnn, new_shape))
+
+
+def handle_unsafe_view(func, args, kwargs):
+    """Handle view operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    new_shape = args[1]
+    input_tensor.ttnn_tensor = ttnn.reshape(input_tensor.to_ttnn, new_shape)
+    input_tensor.elem = None
+    return input_tensor
 
 
 def handle_transpose(func, args, kwargs):
@@ -39,7 +53,7 @@ def handle_mul(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -49,7 +63,7 @@ def handle_mul(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -59,7 +73,13 @@ def handle_mul(func, args, kwargs):
     if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
         input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
-    res = TorchTTNNTensor(ttnn.multiply(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    ttnn_tensor1 = input_tensor1.to_ttnn
+    ttnn_tensor2 = input_tensor2.to_ttnn
+    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    res = TorchTTNNTensor(ttnn.multiply(ttnn_tensor1, ttnn_tensor2))
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
     if deallocate_b:
@@ -78,7 +98,7 @@ def handle_sub(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -88,7 +108,7 @@ def handle_sub(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -99,7 +119,14 @@ def handle_sub(func, args, kwargs):
         input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
 
-    res = TorchTTNNTensor(ttnn.subtract(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    ttnn_tensor1 = input_tensor1.to_ttnn
+    ttnn_tensor2 = input_tensor2.to_ttnn
+    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res = TorchTTNNTensor(ttnn.subtract(ttnn_tensor1, ttnn_tensor2))
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
     if deallocate_b:
@@ -118,7 +145,7 @@ def handle_div(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -128,7 +155,7 @@ def handle_div(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -158,7 +185,7 @@ def handle_add(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -168,7 +195,7 @@ def handle_add(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -179,12 +206,61 @@ def handle_add(func, args, kwargs):
         input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
 
-    res = TorchTTNNTensor(ttnn.add(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
+    ttnn_tensor1 = input_tensor1.to_ttnn
+    ttnn_tensor2 = input_tensor2.to_ttnn
+    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res = TorchTTNNTensor(ttnn.add(ttnn_tensor1, ttnn_tensor2))
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
     if deallocate_b:
         ttnn.deallocate(input_tensor2.ttnn_tensor)
     return res
+
+
+def handle_add_inplace(func, args, kwargs):
+    """Handle addition operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
+    else:
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    ttnn_tensor1 = input_tensor1.to_ttnn
+    ttnn_tensor2 = input_tensor2.to_ttnn
+    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    input_tensor1.ttnn_tensor = ttnn.add(ttnn_tensor1, ttnn_tensor2)
+    input_tensor1.elem = None
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return input_tensor1
 
 
 def handle_slice(func, args, kwargs):
@@ -197,13 +273,25 @@ def handle_slice(func, args, kwargs):
     input_shape = input_tensor.shape
     dim = args[1] + len(input_shape) if args[1] < 0 else args[1]
     start = [
-        0 if i != dim else min(args[2] + input_shape[i] if args[2] < 0 else args[2], input_shape[i])
+        0 if i != dim else max(min(args[2] + input_shape[i] if args[2] < 0 else args[2], input_shape[i]), 0)
         for i in range(len(input_shape))
     ]
     end = [
-        input_shape[i] if i != dim else min(args[3] + input_shape[i] if args[3] < 0 else args[3], input_shape[i])
+        (
+            input_shape[i]
+            if i != dim
+            else max(min(args[3] + input_shape[i] if args[3] < 0 else args[3], input_shape[i]), 0)
+        )
         for i in range(len(input_shape))
     ]
+    if len(args) == 5:
+        steps = []
+        for i in range(len(input_shape)):
+            if i == dim:
+                steps.append(args[4])
+            else:
+                steps.append(1)
+        return TorchTTNNTensor(ttnn.slice(input_tensor.to_ttnn, start, end, steps))
     return TorchTTNNTensor(ttnn.slice(input_tensor.to_ttnn, start, end))
 
 
@@ -235,11 +323,17 @@ def handle_cat(func, args, kwargs):
         deallocate_tensors.append(deallocate_tensor)
         device = tensors[index].to_ttnn.device() if device is None else device
     assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    dtype = tensors[0].to_ttnn.dtype
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
             tensor.ttnn_tensor = ttnn.to_device(tensor.to_ttnn, device)
         if tensor.ttnn_tensor.layout != ttnn.TILE_LAYOUT:
             tensor.ttnn_tensor = ttnn.to_layout(tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if tensor.to_ttnn.dtype != dtype:
+            print(
+                f"Warning: TTNN concat requires all tensors to have the same dtype, but got {tensor.to_ttnn.dtype} and {dtype}. Casting to {dtype}."
+            )
+            tensor.ttnn_tensor = ttnn.typecast(tensor.to_ttnn, dtype)
     res = TorchTTNNTensor(ttnn.concat([tensor.to_ttnn for tensor in tensors if tensor.numel() > 0], dim))
     for index, tensor in enumerate(tensors):
         if deallocate_tensors[index]:
@@ -255,7 +349,8 @@ def handle_unsqueeze(func, args, kwargs):
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
     dim = args[1]
-    return TorchTTNNTensor(ttnn.unsqueeze(input_tensor.to_ttnn, dim))
+    result = TorchTTNNTensor(ttnn.unsqueeze(input_tensor.to_ttnn, dim))
+    return result
 
 
 def handle_expand(func, args, kwargs):
@@ -302,7 +397,14 @@ def handle_bmm(func, args, kwargs):
         ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
         ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    res = TorchTTNNTensor(ttnn.matmul(ttnn_tensor1, ttnn_tensor2))
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    res = TorchTTNNTensor(ttnn.matmul(ttnn_tensor1, ttnn_tensor2, compute_kernel_config=compute_kernel_config))
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
     if deallocate_b:
@@ -409,6 +511,16 @@ def handle_softmax(func, args, kwargs):
         input_tensor = TorchTTNNTensor(input_tensor)
     dim = args[1]
     return TorchTTNNTensor(ttnn.softmax(input_tensor.to_ttnn, dim))
+
+
+def handle_silu(func, args, kwargs):
+    """Handle SiLU activation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(ttnn.silu(input_tensor.to_ttnn))
 
 
 def handle_power(func, args, kwargs):
@@ -554,7 +666,7 @@ def handle_ge(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -564,7 +676,7 @@ def handle_ge(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -583,6 +695,46 @@ def handle_ge(func, args, kwargs):
     return res
 
 
+def handle_gt(func, args, kwargs):
+    """Handle greater than operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.gt(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
 def handle_eq(func, args, kwargs):
     """Handle equal operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -594,7 +746,7 @@ def handle_eq(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -604,7 +756,7 @@ def handle_eq(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -616,6 +768,47 @@ def handle_eq(func, args, kwargs):
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
 
     res = TorchTTNNTensor(ttnn.eq(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
+
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    return res
+
+
+def handle_lt(func, args, kwargs):
+    """Handle less than operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    device = None
+    deallocate_a = False
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        if isinstance(input_tensor1, (int, float)):
+            input_tensor1 = torch.tensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = False
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        if isinstance(input_tensor2, (int, float)):
+            input_tensor2 = torch.tensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+
+    res = TorchTTNNTensor(ttnn.lt(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
 
     if deallocate_a:
         ttnn.deallocate(input_tensor1.ttnn_tensor)
@@ -686,7 +879,7 @@ def handle_where(func, args, kwargs):
     if not isinstance(condition, TorchTTNNTensor):
         if isinstance(condition, (int, float)):
             condition = torch.tensor(condition)
-        condition = TorchTTNNTensor(condition)
+        condition = TorchTTNNTensor(condition, dtype=torch.bool)
         deallocate_cond = True
     else:
         if condition.ttnn_tensor is None:
@@ -699,7 +892,7 @@ def handle_where(func, args, kwargs):
     if not isinstance(input_tensor1, TorchTTNNTensor):
         if isinstance(input_tensor1, (int, float)):
             input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
         deallocate_a = True
     else:
         if input_tensor1.ttnn_tensor is None:
@@ -709,7 +902,7 @@ def handle_where(func, args, kwargs):
     if not isinstance(input_tensor2, TorchTTNNTensor):
         if isinstance(input_tensor2, (int, float)):
             input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
         deallocate_b = True
     else:
         if input_tensor2.ttnn_tensor is None:
@@ -735,6 +928,412 @@ def handle_where(func, args, kwargs):
     return result
 
 
+def handle_split(func, args, kwargs):
+    """Handle split operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    split_size_or_sections = args[1]
+    dim = args[2] if len(args) > 2 else 0
+    dim = dim + len(input_tensor.shape) if dim < 0 else dim
+    # running slice to get start and end indices for each split
+    input_shape = input_tensor.shape
+    splits = []
+    if isinstance(split_size_or_sections, int):
+        split_size = split_size_or_sections
+        start_idx = 0
+        while start_idx < input_shape[dim]:
+            end_idx = min(start_idx + split_size, input_shape[dim])
+            splits.append((start_idx, end_idx))
+            start_idx = end_idx
+    else:
+        sections = split_size_or_sections
+        start_idx = 0
+        for section in sections:
+            end_idx = start_idx + section
+            splits.append((start_idx, end_idx))
+            start_idx = end_idx
+    ttnn_tensors = []
+    for start, end in splits:
+        starts = [0] * len(input_shape)
+        ends = list(input_shape)
+        starts[dim] = start
+        ends[dim] = end
+        slice_step = [1] * len(input_shape)
+        ttnn_tensor = ttnn.slice(input_tensor.to_ttnn, starts, ends, slice_step)
+        ttnn_tensors.append(ttnn_tensor)
+    return [TorchTTNNTensor(tensor) for tensor in ttnn_tensors]
+
+
+def _to_copy(
+    x,
+    dtype=None,
+):
+    """
+    TTNN equivalent of aten::_to_copy operation.
+
+    Creates a new tensor with potentially different properties while copying data.
+    """
+    # Input validation - only accept tensors or scalar numbers
+    assert isinstance(x, (ttnn.Tensor, int, float, bool, complex))
+
+    # Early return for no-op cases
+    if dtype is None:
+        assert isinstance(x, ttnn.Tensor)
+        return ttnn.clone(x)  # Use ttnn.clone for tensor copying
+
+    dtype_converted = False
+
+    # Convert scalars to tensors
+    if isinstance(x, ttnn.Tensor):
+        x_tensor = x
+    else:
+        x_tensor = ttnn.from_torch(torch.scalar_tensor(x))
+
+    # Handle dtype conversion
+    if dtype is not None and not dtype_converted:
+        x_tensor = ttnn.typecast(x_tensor, torch_dtype_to_ttnn_dtype(dtype))
+
+    return x_tensor
+
+
+def handle_to_copy(func, args, kwargs):
+    """Handle _to_copy operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    return TorchTTNNTensor(_to_copy(input_tensor.to_ttnn, kwargs.get("dtype", None)))
+
+
+def handle_max(func, args, kwargs):
+    """Handle max operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    dim = args[1] + len(input_tensor.shape) if args[1] < 0 else args[1]
+    keepdim = args[2] if len(args) > 2 else False
+    max_res = ttnn.max(input_tensor.to_ttnn, dim, keepdim=keepdim)
+    argmax = ttnn.argmax(input_tensor.to_ttnn, dim, keepdim=keepdim)
+    return (TorchTTNNTensor(max_res), TorchTTNNTensor(argmax, dtype=torch.int64))
+
+
+def handle_addmm(func, args, kwargs):
+    """Handle addmm operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor1 = args[0]
+    input_tensor2 = args[1]
+    input_tensor3 = args[2]
+    device = None
+    deallocate_a = None
+    if not isinstance(input_tensor1, TorchTTNNTensor):
+        input_tensor1 = TorchTTNNTensor(input_tensor1)
+        deallocate_a = True
+    else:
+        if input_tensor1.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor1.to_ttnn.device()
+    deallocate_b = None
+    if not isinstance(input_tensor2, TorchTTNNTensor):
+        input_tensor2 = TorchTTNNTensor(input_tensor2)
+        deallocate_b = True
+    else:
+        if input_tensor2.ttnn_tensor is None:
+            deallocate_b = True
+        device = input_tensor2.to_ttnn.device() if device is None else device
+    deallocate_c = None
+    if not isinstance(input_tensor3, TorchTTNNTensor):
+        input_tensor3 = TorchTTNNTensor(input_tensor3)
+        deallocate_c = True
+    else:
+        if input_tensor3.ttnn_tensor is None:
+            deallocate_c = True
+        device = input_tensor3.to_ttnn.device() if device is None else device
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if deallocate_a:
+        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
+    if deallocate_b:
+        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    if deallocate_c:
+        input_tensor3.ttnn_tensor = ttnn.to_device(input_tensor3.to_ttnn, device)
+
+    ttnn_tensor1 = input_tensor1.to_ttnn
+    ttnn_tensor2 = input_tensor2.to_ttnn
+    ttnn_tensor3 = input_tensor3.to_ttnn
+    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if ttnn_tensor3.layout != ttnn.TILE_LAYOUT:
+        ttnn_tensor3 = ttnn.to_layout(ttnn_tensor3, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_result = ttnn.matmul(ttnn_tensor2, ttnn_tensor3, compute_kernel_config=compute_kernel_config)
+    result = ttnn.add(matmul_result, ttnn_tensor1)
+    ttnn.deallocate(matmul_result)
+    res = TorchTTNNTensor(result)
+    if deallocate_a:
+        ttnn.deallocate(input_tensor1.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    if deallocate_c:
+        ttnn.deallocate(input_tensor3.ttnn_tensor)
+    return res
+
+
+def handle_zeros_like(func, args, kwargs):
+    """Handle zeros_like operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    result = TorchTTNNTensor(
+        ttnn.zeros_like(
+            input_tensor.to_ttnn,
+            memory_config=input_tensor.to_ttnn.memory_config(),
+            device=input_tensor.to_ttnn.device(),
+        ),
+        dtype=input_tensor.dtype,
+    )
+    return result
+
+
+def handle_index(func, args, kwargs):
+    """Handle index operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    indices = args[1][0]
+    if not isinstance(indices, TorchTTNNTensor):
+        indices = TorchTTNNTensor(indices)
+    indices_list = indices.tolist()
+    tensors = []
+    for idx in indices_list:
+        tensors.append(input_tensor.to_ttnn[idx, ...])
+
+    result = ttnn.stack(tensors, 0)
+    return TorchTTNNTensor(result)
+
+
+def handle_topk_2args(func, args, kwargs):
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    k = args[1]
+
+    if input_tensor.to_ttnn.dtype not in [ttnn.bfloat16, ttnn.bfloat8_b]:
+        print(
+            f"Warning: TTNN topk only supports bfloat16 and bfloat8_b, but got {input_tensor.to_ttnn.dtype}. Casting to bfloat16."
+        )
+        input_tensor.ttnn_tensor = ttnn.typecast(input_tensor.ttnn_tensor, ttnn.bfloat16)
+    topk_res = ttnn.topk(input_tensor.to_ttnn, k)
+    return (TorchTTNNTensor(topk_res[0]), TorchTTNNTensor(topk_res[1], dtype=torch.int64))
+
+
+def handle_topk_5args(func, args, kwargs):
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    k = args[1]
+    dim = args[2] + len(input_tensor.shape) if args[2] < 0 else args[2]
+    largest = args[3]
+    sorted = args[4]
+    if input_tensor.to_ttnn.dtype not in [ttnn.bfloat16, ttnn.bfloat8_b]:
+        print(
+            f"Warning: TTNN topk only supports bfloat16 and bfloat8_b, but got {input_tensor.to_ttnn.dtype}. Casting to bfloat16."
+        )
+        input_tensor.ttnn_tensor = ttnn.typecast(input_tensor.ttnn_tensor, ttnn.bfloat16)
+    topk_res = ttnn.topk(input_tensor.to_ttnn, k, dim=dim, largest=largest, sorted=sorted)
+    return (TorchTTNNTensor(topk_res[0]), TorchTTNNTensor(topk_res[1], dtype=torch.int64))
+
+
+def handle_topk(func, args, kwargs):
+    """Handle topk operation."""
+    if len(args) == 2:
+        return handle_topk_2args(func, args, kwargs)
+    elif len(args) == 5:
+        return handle_topk_5args(func, args, kwargs)
+    raise NotImplementedError("topk with {} arguments is not implemented.".format(len(args)))
+
+
+def handle_permute(func, args, kwargs):
+    """Handle permute operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    dims = args[1]
+    return TorchTTNNTensor(ttnn.permute(input_tensor.to_ttnn, dims))
+
+
+def handle_clamp(func, args, kwargs):
+    """Handle clamp operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    min_val = args[1] if len(args) > 1 else None
+    max_val = args[2] if len(args) > 2 else None
+    return TorchTTNNTensor(ttnn.clamp(input_tensor.to_ttnn, min_val, max_val))
+
+
+def handle_scatter_value_inplace(func, args, kwargs):
+    """Handle scatter_ value operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    dim = args[1]
+    index = args[2]
+    src = args[3]
+
+    device = None
+    deallocate_a = None
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        if isinstance(input_tensor, (int, float)):
+            input_tensor = torch.tensor(input_tensor)
+        input_tensor = TorchTTNNTensor(input_tensor, dtype=src.dtype)
+        deallocate_a = True
+    else:
+        if input_tensor.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor.to_ttnn.device()
+    deallocate_b = None
+    if not isinstance(index, TorchTTNNTensor):
+        if isinstance(index, (int, float)):
+            index = torch.tensor(index)
+        index = TorchTTNNTensor(index, dtype=torch.int64)
+        deallocate_b = True
+    else:
+        if index.ttnn_tensor is None:
+            deallocate_b = True
+        device = index.to_ttnn.device() if device is None else device
+    deallocate_c = None
+    if not isinstance(src, TorchTTNNTensor):
+        if isinstance(src, (int, float)):
+            src = torch.ones(input_tensor.shape) * src
+        src = TorchTTNNTensor(src, dtype=input_tensor.dtype)
+        deallocate_c = True
+    else:
+        if src.ttnn_tensor is None:
+            deallocate_c = True
+        device = src.to_ttnn.device() if device is None else device
+    if input_tensor.to_ttnn.device() != index.to_ttnn.device():
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+        index.ttnn_tensor = ttnn.to_device(index.to_ttnn, device)
+    if input_tensor.to_ttnn.device() != src.to_ttnn.device():
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+        src.ttnn_tensor = ttnn.to_device(src.to_ttnn, device)
+
+    if input_tensor.to_ttnn.layout != ttnn.TILE_LAYOUT:
+        input_tensor.ttnn_tensor = ttnn.to_layout(
+            input_tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    if index.to_ttnn.layout != ttnn.TILE_LAYOUT:
+        index.ttnn_tensor = ttnn.to_layout(index.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if src.to_ttnn.layout != ttnn.TILE_LAYOUT:
+        src.ttnn_tensor = ttnn.to_layout(src.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if input_tensor.to_ttnn.dtype != src.to_ttnn.dtype:
+        src.ttnn_tensor = ttnn.typecast(src.ttnn_tensor, input_tensor.ttnn_tensor.dtype)
+
+    assert device is not None, "At least one of the inputs must be a TTNN tensor."
+    if deallocate_a:
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+    if deallocate_b:
+        index.ttnn_tensor = ttnn.to_device(index.to_ttnn, device)
+    if deallocate_c:
+        src.ttnn_tensor = ttnn.to_device(src.to_ttnn, device)
+
+    input_tensor.ttnn_tensor = ttnn.scatter(input_tensor.to_ttnn, dim, index.to_ttnn, src.to_ttnn)
+    input_tensor.elem = None
+    return input_tensor
+
+
+def handle_bitwise_not(func, args, kwargs):
+    """Handle bitwise_not operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    input_tensor.ttnn_tensor = ttnn.typecast(input_tensor.ttnn_tensor, ttnn.int32)
+    return TorchTTNNTensor(ttnn.bitwise_not(input_tensor.to_ttnn), dtype=torch.bool)
+
+
+def handle_gather(func, args, kwargs):
+    """Handle gather operation."""
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    dim = args[1]
+    index = args[2]
+
+    device = None
+    deallocate_a = None
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        if isinstance(input_tensor, (int, float)):
+            input_tensor = torch.tensor(input_tensor)
+        input_tensor = TorchTTNNTensor(input_tensor)
+        deallocate_a = True
+    else:
+        if input_tensor.ttnn_tensor is None:
+            deallocate_a = True
+        device = input_tensor.to_ttnn.device()
+    deallocate_b = None
+    if not isinstance(index, TorchTTNNTensor):
+        if isinstance(index, (int, float)):
+            index = torch.tensor(index)
+        index = TorchTTNNTensor(index, dtype=torch.int64)
+        deallocate_b = True
+    else:
+        if index.ttnn_tensor is None:
+            deallocate_b = True
+        device = index.to_ttnn.device() if device is None else device
+    if input_tensor.to_ttnn.device() != index.to_ttnn.device():
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+        index.ttnn_tensor = ttnn.to_device(index.to_ttnn, device)
+
+    if input_tensor.to_ttnn.layout != ttnn.TILE_LAYOUT:
+        input_tensor.ttnn_tensor = ttnn.to_layout(
+            input_tensor.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    if index.to_ttnn.layout != ttnn.TILE_LAYOUT:
+        index.ttnn_tensor = ttnn.to_layout(index.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    res = TorchTTNNTensor(ttnn.gather(input_tensor.to_ttnn, dim, index.to_ttnn))
+
+    if deallocate_a:
+        ttnn.deallocate(input_tensor.ttnn_tensor)
+    if deallocate_b:
+        ttnn.deallocate(index.ttnn_tensor)
+
+    return res
+
+
 # Mapping of ATen operations to TTNN handlers
 func_to_ttnn_compatible = {
     "aten::view": handle_view,
@@ -753,7 +1352,7 @@ func_to_ttnn_compatible = {
     "aten::mul.Scalar": handle_mul,
     "aten::sub.Scalar": handle_sub,
     "aten::add.Scalar": handle_add,
-    "aten::add_.Tensor": handle_add,
+    "aten::add_.Tensor": handle_add_inplace,
     "aten::bmm": handle_bmm,
     "aten::_softmax": handle_softmax,
     "aten::pow.Tensor_Scalar": handle_power,
@@ -766,11 +1365,30 @@ func_to_ttnn_compatible = {
     "aten::stack": handle_stack,
     "aten::sum.dim_IntList": handle_sum,
     "aten::ge.Scalar": handle_ge,
+    "aten::gt.Scalar": handle_gt,
     "aten::select.int": handle_select,
     "aten::bernoulli.p": handle_bernoulli_p,
     "aten::repeat": handle_repeat,
     "aten::eq.Scalar": handle_eq,
+    "aten::eq.Tensor": handle_eq,
+    "aten::lt.Tensor": handle_lt,
     "aten::where.self": handle_where,
+    "aten::split.Tensor": handle_split,
+    "aten::_to_copy": handle_to_copy,
+    "aten::max.dim": handle_max,
+    "aten::addmm": handle_addmm,
+    "aten::zeros_like": handle_zeros_like,
+    "aten::index.Tensor": handle_index,
+    "aten::topk": handle_topk,
+    "aten::permute": handle_permute,
+    "aten::clamp": handle_clamp,
+    "aten::clone": handle_to_copy,
+    "aten::_safe_softmax": handle_softmax,
+    "aten::mm": handle_bmm,
+    "aten::silu": handle_silu,
+    "aten::scatter_.value": handle_scatter_value_inplace,
+    "aten::bitwise_not": handle_bitwise_not,
+    "aten::gather": handle_gather,
 }
 
 
@@ -781,7 +1399,19 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     any_ttnn_tensor = False
     for elem in args:
         if isinstance(elem, TorchTTNNTensor) and elem.ttnn_tensor is not None and elem.ttnn_tensor.device() is not None:
+            if not elem.ttnn_tensor.is_allocated():
+                print("TTNN: Found deallocated TTNN tensor, cannot dispatch to TTNN.")
+                return False
             any_ttnn_tensor = True
+        elif (
+            isinstance(elem, torch.Tensor)
+            and elem.dtype not in TORCH_TO_TTNN
+            and (not isinstance(elem, TorchTTNNTensor) or elem.ttnn_tensor is None)
+        ):
+            print(
+                f"TTNN: Found unsupported dtype {elem.dtype} for TTNN tensor in list/tuple, cannot dispatch {func_name} to TTNN"
+            )
+            return False
         elif isinstance(elem, (list, tuple)):
             for sub_elem in elem:
                 if (
@@ -789,13 +1419,70 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                     and sub_elem.ttnn_tensor is not None
                     and sub_elem.ttnn_tensor.device() is not None
                 ):
+                    if not sub_elem.ttnn_tensor.is_allocated():
+                        print("TTNN: Found deallocated TTNN tensor in list/tuple, cannot dispatch to TTNN.")
+                        return False
                     any_ttnn_tensor = True
-                    break
+                elif (
+                    isinstance(sub_elem, torch.Tensor)
+                    and sub_elem.dtype not in TORCH_TO_TTNN
+                    and (not isinstance(sub_elem, TorchTTNNTensor) or sub_elem.ttnn_tensor is None)
+                ):
+                    print(
+                        f"TTNN: Found unsupported dtype {sub_elem.dtype} for TTNN tensor in list/tuple, cannot dispatch {func_name} to TTNN"
+                    )
+                    return False
     if not any_ttnn_tensor:
         return False
     if "aten::slice.Tensor" == func_name:
-        return isinstance(args[1], int) and isinstance(args[2], int) and isinstance(args[3], int) and len(args) == 4
-    return func_name in func_to_ttnn_compatible
+        if (
+            not isinstance(args[1], int)
+            or not isinstance(args[2], int)
+            or not isinstance(args[3], int)
+            or len(args) not in [4, 5]
+        ):
+            return False
+        if len(args) == 5:
+            if not isinstance(args[4], int):
+                return False
+    if "aten::addmm" == func_name:
+        if len(kwargs) > 0:
+            return False
+    if "aten::index.Tensor" == func_name:
+        if (
+            len(kwargs) > 0
+            or len(args) != 2
+            or not isinstance(args[1], (list, tuple))
+            or len(args[1]) != 1
+            or not isinstance(args[1][0], (TorchTTNNTensor, torch.Tensor))
+            or not len(args[1][0].shape) == 1
+        ):
+            return False
+    if "aten::topk" == func_name:
+        if len(kwargs) > 0 or not (len(args) == 2 or len(args) == 5):
+            return False
+    if "aten::bitwise_not" == func_name:
+        if (
+            len(kwargs) > 0
+            or len(args) != 1
+            or not isinstance(args[0], torch.Tensor)
+            or not args[0].dtype == torch.bool
+        ):
+            return False
+    if "aten::sum.dim_IntList" == func_name:
+        if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32]:
+            return False
+    if "aten::unsqueeze" == func_name:
+        if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32]:
+            return False
+    if func_name in func_to_ttnn_compatible:
+        return True
+    if func_name != "aten::_scaled_dot_product_flash_attention_for_cpu":
+        print(
+            f"Found Operation {func_name} that if written in ttnn would be more efficient. "
+            "Please map this function to an appropriate ttnn function."
+        )
+    return False
 
 
 def dispatch_to_ttnn(func_name, args, kwargs):
