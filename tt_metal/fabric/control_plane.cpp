@@ -551,8 +551,12 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
+    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *global_context->size();
+    int rank = *global_context->rank();
     std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
-                                        "physical_chip_mesh_coordinate_mapping.yaml";
+                                        ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
+                                         std::to_string(world_size) + ".yaml");
     try {
         tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
     } catch (const std::exception& e) {

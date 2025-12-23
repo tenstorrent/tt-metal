@@ -204,7 +204,7 @@ void serialize_mesh_coordinates_to_file(
     out_file << emitter.c_str();
     out_file.close();
 
-    log_info(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
+    log_debug(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric
