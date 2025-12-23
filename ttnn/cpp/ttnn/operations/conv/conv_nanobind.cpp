@@ -9,6 +9,7 @@
 #include "conv2d/conv2d_nanobind.hpp"
 #include "conv_transpose2d/conv_transpose2d_nanobind.hpp"
 #include "conv1d/conv1d_nanobind.hpp"
+#include "deform_conv2d/deform_conv2d_nanobind.hpp"
 
 namespace ttnn::operations::conv {
 
