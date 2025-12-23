@@ -131,6 +131,10 @@ class Plotter:
                 self.plot_bandwidth_direct_write_performance(axes[0], plot_data[test_id])
             elif "Direct Write Address Pattern" in test_name:
                 self.plot_bandwidth_direct_write_address_pattern(axes[0], plot_data[test_id])
+            elif "NOC API Latency" in test_name:
+                # For NOC API Latency tests, plot cycles per transaction
+                self.plot_transaction_size_vs_cycles_per_transaction(axes[0], plot_data[test_id])
+                self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
@@ -457,6 +461,79 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
+        )
+
+    # NOC API Latency: Transaction Size vs Cycles per Transaction
+    def plot_transaction_size_vs_cycles_per_transaction(self, ax, data):
+        x_key = "transaction_size"
+        y_key = "cycles_per_transaction"
+        series_keys = ["riscv", "num_transactions"]
+
+        # Flatten data and compute cycles per transaction
+        all_runs = []
+        for riscv, runs in data.items():
+            for run in runs:
+                new_run = run.copy()
+                new_run["riscv"] = riscv
+                # Calculate cycles per transaction
+                if run.get("num_transactions", 0) > 0:
+                    new_run["cycles_per_transaction"] = run["duration_cycles"] / run["num_transactions"]
+                else:
+                    new_run["cycles_per_transaction"] = 0
+                all_runs.append(new_run)
+
+        if not all_runs:
+            return
+
+        # Reconstruct data dict
+        reconstructed_data = {riscv: [] for riscv in RISCV_PROCESSORS}
+        for run in all_runs:
+            reconstructed_data[run["riscv"]].append(run)
+
+        title = "Transaction Size vs Cycles per Transaction"
+        xlabel = "Transaction Size (bytes)"
+        ylabel = "Cycles per Transaction"
+
+        risc_to_kernel_map = RISC_TO_KERNEL_MAP
+        self._plot_series(
+            ax=ax,
+            data=reconstructed_data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"{risc_to_kernel_map[combo[0]]} (Transactions={combo[1]})",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
+        )
+
+    # NOC API Latency: Number of Transactions vs Total Cycles
+    def plot_num_transactions_vs_total_cycles(self, ax, data):
+        x_key = "num_transactions"
+        y_key = "duration_cycles"
+        series_keys = ["riscv", "transaction_size"]
+
+        title = "Number of Transactions vs Total Cycles"
+        xlabel = "Number of Transactions"
+        ylabel = "Total Cycles"
+
+        risc_to_kernel_map = RISC_TO_KERNEL_MAP
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"{risc_to_kernel_map[combo[0]]} (Size={combo[1]} bytes)",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
+            yscale="log",
+            ybase=10,
         )
 
     # Add comments section to the figure below the plots
