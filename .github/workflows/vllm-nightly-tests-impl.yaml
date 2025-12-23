@@ -361,7 +361,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          slow-dispatch-timeout: 15 # We need to increase default timeout
+          slow-dispatch-timeout: 15 # Increased above default to account for vLLM's longer-running dispatch operations and avoid false-positive hang detection when auto-triage is enabled.
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
