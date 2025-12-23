@@ -349,7 +349,12 @@ def handle_unsqueeze(func, args, kwargs):
     if not isinstance(input_tensor, TorchTTNNTensor):
         input_tensor = TorchTTNNTensor(input_tensor)
     dim = args[1]
-    result = TorchTTNNTensor(ttnn.unsqueeze(input_tensor.to_ttnn, dim))
+    if input_tensor.to_ttnn.dtype == ttnn.uint16:
+        input_tensor.ttnn_tensor = ttnn.typecast(input_tensor.to_ttnn, ttnn.uint32)
+    result = ttnn.unsqueeze(input_tensor.to_ttnn, dim)
+    if input_tensor.to_ttnn.dtype == ttnn.uint16:
+        result = ttnn.typecast(result, ttnn.uint16)
+    result = TorchTTNNTensor(result)
     return result
 
 
@@ -1435,8 +1440,6 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                         f"TTNN: Found unsupported dtype {sub_elem.dtype} for TTNN tensor in list/tuple, cannot dispatch {func_name} to TTNN"
                     )
                     return False
-    if not any_ttnn_tensor:
-        return False
     passed = True
     if "aten::slice.Tensor" == func_name:
         if (
@@ -1484,12 +1487,14 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             print("TTNN: aten::sum.dim_IntList only supports float32, bfloat16, bfloat8_b, and uint32 dtypes.")
             passed = False
     if "aten::unsqueeze" == func_name:
-        if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32]:
+        if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16]:
             print("TTNN: aten::unsqueeze only supports float32, bfloat16, int32, and uint32 dtypes.")
             passed = False
-    if func_name in func_to_ttnn_compatible:
+    if not any_ttnn_tensor and func_name in ["aten::mm", "aten::addmm", "aten::bmm"]:
+        print("Found invalid TTNN dispatch for matmul operation. Please check input dtypes and layouts.")
+    if func_name in func_to_ttnn_compatible and any_ttnn_tensor:
         return passed
-    if func_name != "aten::_scaled_dot_product_flash_attention_for_cpu":
+    if func_name != "aten::_scaled_dot_product_flash_attention_for_cpu" and passed and any_ttnn_tensor:
         print(
             f"Found Operation {func_name} that if written in ttnn would be more efficient. "
             "Please map this function to an appropriate ttnn function."
