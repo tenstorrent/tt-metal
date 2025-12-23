@@ -190,6 +190,13 @@ class TTSampling(LightweightModule):
             return tt_logits
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
+        # Force argmax sampling
+        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
+        if self._force_argmax_sampling:
+            self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
+            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+            return
+
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -252,7 +259,7 @@ class TTSampling(LightweightModule):
                     topology=self.ag_topology,
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     chunks_per_sync=10,
-                    num_workers_per_link=2,
+                    num_workers_per_link=1,
                     num_buffers_per_channel=2,
                 )
             x_untilized = ttnn.untilize(x, use_multicore=True)
