@@ -536,8 +536,12 @@ SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_con
     return SkipMcast{skip_act_mcast, skip_weights_mcast};
 }
 
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device) {
-    return init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
+    MeshDevice* device, DataType input_dtype, DataType weight_dtype) {
+    // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
+    bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
+    return init_device_compute_kernel_config(
+        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
