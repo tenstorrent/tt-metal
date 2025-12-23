@@ -497,8 +497,6 @@ class Transformer(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-            # Synchronize device to ensure async all_gather completes before using the result
-            ttnn.synchronize_device(self.mesh_device)
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
@@ -544,7 +542,6 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
-            print(f"model.py: layer{i} output: {x}")
 
         if mode == "prefill" and get_last_token == -1:
             return x

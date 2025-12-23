@@ -113,8 +113,6 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-        # Synchronize device to ensure async reduce_scatter completes before returning
-        ttnn.synchronize_device(mesh_device)
         input_tensor.deallocate(True)
         return reduced
 
@@ -144,8 +142,6 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-        # Synchronize device to ensure async all_gather completes before using the result
-        ttnn.synchronize_device(mesh_device)
 
         if sharded:
             gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -177,8 +173,6 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-        # Synchronize device to ensure async reduce_scatter completes before using the result
-        ttnn.synchronize_device(mesh_device)
 
         reduced_tensor = ttnn.experimental.all_gather_async(
             reduced_tensor,
@@ -194,8 +188,6 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-        # Synchronize device to ensure async all_gather completes before using the result
-        ttnn.synchronize_device(mesh_device)
 
     # Reshape the reduced tensor to the original shape
     reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
@@ -258,8 +250,6 @@ def tt_all_gather(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-    # Synchronize device to ensure async all_gather completes before returning
-    ttnn.synchronize_device(mesh_device)
     input_tensor.deallocate(True)
     return gathered
 
@@ -316,8 +306,6 @@ def tt_sharded_distributed_rmsnorm(
         num_workers_per_link=2,
         num_buffers_per_channel=2,
     )
-    # Synchronize device to ensure async all_gather completes before using the result
-    ttnn.synchronize_device(mesh_device)
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
