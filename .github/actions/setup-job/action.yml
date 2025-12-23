@@ -35,7 +35,7 @@ inputs:
     type: boolean
   slow-dispatch-timeout:
     description: 'Timeout in seconds to consider a dispatch as slow for auto-triage'
-    default: 5.0
+    default: 15.0
     type: float
 runs:
   using: "composite"
@@ -106,7 +106,7 @@ runs:
       shell: bash
 
     - name: Set up env vars for auto-triage
-      if: ${{ inputs.auto-triage == 'true' }}
+      if: ${{ inputs.auto-triage == 'true' and inputs.enable-watcher != 'true' }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
