@@ -13,6 +13,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -143,23 +144,9 @@ void MAIN {
 
 #ifndef RMSNORM
     // E[x],
-    index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
-    cb_wait_front(cb_scaler, 1);
-    cb_reserve_back(cb_ex_partial, block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_push_back(cb_ex_partial, block_h);
+    compute_kernel_lib::
+        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
+            cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, 0, block_w);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
