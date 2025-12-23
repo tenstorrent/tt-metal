@@ -8,6 +8,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
+pytestmark = pytest.mark.use_module_device
+
 
 def get_types_from_binding_framwork():
     if hasattr(ttnn.DataType, "__entries"):

@@ -15,6 +15,8 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("use_welford", [True, False])
