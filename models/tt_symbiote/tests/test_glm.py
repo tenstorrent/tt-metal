@@ -61,5 +61,5 @@ def test_glm(mesh_device):
     set_device(model, mesh_device)
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
-    outputs = model.generate(**inputs, max_new_tokens=1, use_cache=True)
+    outputs = model.generate(**inputs, max_new_tokens=40, use_cache=True)
     print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
