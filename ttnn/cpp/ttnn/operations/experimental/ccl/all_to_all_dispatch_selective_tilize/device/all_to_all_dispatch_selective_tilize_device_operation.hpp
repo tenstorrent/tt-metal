@@ -51,6 +51,7 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
             std::vector<CoreCoord> selective_tilize_cores;
             const GlobalSemaphore init_semaphore;
             const GlobalSemaphore cross_device_semaphore;
+            const GlobalSemaphore indices_sent_semaphore;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -67,7 +68,8 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
+            const GlobalSemaphore& cross_device_semaphore,
+            const GlobalSemaphore& indices_sent_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,

@@ -54,11 +54,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     // Default worker core range - single core for now
     CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    CoreRangeSet indices_sent_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 1), CoreCoord(0, 1)));
 
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
+    auto indices_sent_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, indices_sent_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
@@ -70,14 +73,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             tensor_return_value,
             tensor_coords,
             init_barrier_semaphore,
-            final_barrier_semaphore);
+            final_barrier_semaphore,
+            indices_sent_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::shared_variables_t>
+ttnn::device_operation::CachedProgram<
+    AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::shared_variables_t>
 AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
@@ -85,7 +90,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const GlobalSemaphore& cross_device_semaphore,
+    const GlobalSemaphore& indices_sent_semaphore) {
     tt::tt_metal::Program program{};
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -344,7 +350,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_d_buffer_id,
         program,
         full_grid,
-        experts_per_device * dispatch_devices * l1_alignment,
+        2 * experts_per_device * dispatch_devices * l1_alignment,  // ground truth table and semaphore table
         1,
         tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
                                   // 16B aligned
@@ -475,14 +481,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, writer_defines, named_compile_time_args));
 
     std::vector<uint32_t> selective_tilize_runtime_args = {
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        output_scores_tensor.buffer()->address(),
-
+        output_tensor.buffer()->address(),           // 0
+        metadata_tensor.buffer()->address(),         // 1
+        output_scores_tensor.buffer()->address(),    // 2
+        (uint32_t)indices_sent_semaphore.address(),  // 3
     };
 
     uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);
+    selective_tilize_runtime_args.push_back(0);  // 4
 
     std::vector<CoreCoord> drain_tilizer_cores;
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
@@ -507,6 +513,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         (uint32_t)init_semaphore.address(),          // 6
         input_scores_tensor.buffer()->address(),     // 7
         output_scores_tensor.buffer()->address(),    // 8
+        (uint32_t)indices_sent_semaphore.address(),  // 9
     };
 
     uint32_t subtoken_offset_idx = reader_runtime_args.size();
@@ -590,7 +597,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
          .cores = sender_cores,
          .selective_tilize_cores = selective_tilize_cores,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+         .cross_device_semaphore = cross_device_semaphore,
+         .indices_sent_semaphore = indices_sent_semaphore}};
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::override_runtime_arguments(
@@ -616,7 +624,7 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             // Update reader runtime args to match create_at layout:
             // 0: input_tensor, 1: indices_tensor, 2: mapping_tensor, 3: output_tensor,
             // 4: metadata_tensor, 5: cross_device_semaphore, 6: init_semaphore,
-            // 7: input_scores_tensor, 8: output_scores_tensor
+            // 7: input_scores_tensor, 8: output_scores_tensor, 9: indices_sent_semaphore
             reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
@@ -626,6 +634,7 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             reader_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
             reader_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
             reader_runtime_args.at(8) = output_scores_tensor.buffer()->address();
+            reader_runtime_args.at(9) = (uint32_t)shared_variables.indices_sent_semaphore.address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -636,6 +645,7 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
             writer_runtime_args.at(7) = tensor_args.expert_scores_tensor.buffer()->address();
             writer_runtime_args.at(8) = output_scores_tensor.buffer()->address();
+            writer_runtime_args.at(9) = (uint32_t)shared_variables.indices_sent_semaphore.address();
         }
 
         for (const auto& core : shared_variables.selective_tilize_cores) {
@@ -644,6 +654,7 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             selective_tilize_runtime_args.at(0) = output_tensor.buffer()->address();
             selective_tilize_runtime_args.at(1) = metadata_tensor.buffer()->address();
             selective_tilize_runtime_args.at(2) = output_scores_tensor.buffer()->address();
+            selective_tilize_runtime_args.at(3) = (uint32_t)shared_variables.indices_sent_semaphore.address();
         }
     }
 }

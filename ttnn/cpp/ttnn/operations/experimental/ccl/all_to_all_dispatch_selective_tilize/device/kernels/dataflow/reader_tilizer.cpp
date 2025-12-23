@@ -155,12 +155,13 @@ void kernel_main() {
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
-    zero_buffer_async(ed_addr, experts_per_device * dispatch_devices * l1_alignment * sizeof(uint32_t));
+    zero_buffer_async(ed_addr, 2 * experts_per_device * dispatch_devices * l1_alignment * sizeof(uint32_t));
     size_t rt_args_idx = 0;
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 0
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);       // 1
-    uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 2
-    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);       // 3
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);           // 0
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 1
+    uint32_t output_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
+    uint32_t indices_sent_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 3
+    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);         // 4
     zero_buffer_barrier();
 
     // DEBUG: Print E-D table right after zeroing to verify it's actually zeroed
@@ -196,6 +197,29 @@ void kernel_main() {
     // scores and indices tensors use same page size
     const auto output_scores_tensor_addr_gen =
         TensorAccessor(output_scores_args, output_scores_tensor_address, indices_page_size);
+
+    // Wait for all fabric writer cores to signal that indices/scores have been sent
+    // This ensures the metadata all-gather is complete before post-processing
+    // Only drain_tilizer_cores receive the atomic increments, so only they need to wait
+    if (is_drain_tilizer_core) {
+        noc_semaphore_wait((uint32_t*)indices_sent_semaphore_address, dispatch_devices - 1);
+        noc_semaphore_set((uint32_t*)indices_sent_semaphore_address, 0);
+    }
+
+    // POST-PROCESSING STAGE:
+    // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the E-D
+    // buffer
+    // for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
+    //     for (uint32_t indices_page = 0; indices_page < indices_pages; indices_page++) {
+    //         uint32_t metadata_page = device_id * indices_pages + indices_page;
+    //         cb_reserve_back(indices_tensor_cb_id, 1);
+    //         noc_async_read_page(metadata_page, metadata_tensor_addr_gen, get_write_ptr(indices_tensor_cb_id));
+    //         noc_async_read_barrier();
+    //         cb_push_back(indices_tensor_cb_id, 1);
+    //         // update the ground truth E-D table offset into the second half of the E-D buffer
+    //         uint32_t ed_table_offset = device_id * experts_per_device * l1_alignment;
+    //     }
+    // }
 
     // DEBUG: Polling loop to verify E-D buffer semaphore increments are landing
     // poll_ed_table_loop<experts_per_device, dispatch_devices, entries_per_l1_alignment>(ed_table,

@@ -347,21 +347,22 @@ void kernel_main() {
     constexpr auto gathered_scores_args = TensorAccessorArgs<input_scores_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 0
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);        // 1
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);        // 2
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 3
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);       // 4
-    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);      // 5
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);        // 6
-    uint32_t input_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 7
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);            // 0
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 1
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 2
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);           // 3
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 4
+    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);        // 5
+    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);          // 6
+    uint32_t input_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);     // 7
     uint32_t gathered_scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 8
-    uint32_t subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);               // 9
-    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                 // 10
-    uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                 // 11
-    uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
-    uint32_t drain_tilize_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);       // 13
-    uint32_t drain_tilize_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);       // 14
+    uint32_t indices_sent_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 9
+    uint32_t subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                 // 10
+    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                   // 11
+    uint32_t indices_start = get_arg_val<uint32_t>(rt_args_idx++);                   // 12
+    uint32_t indices_end = get_arg_val<uint32_t>(rt_args_idx++);                     // 13
+    uint32_t drain_tilize_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);         // 14
+    uint32_t drain_tilize_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);         // 15
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
@@ -485,6 +486,16 @@ void kernel_main() {
             pages_to_write);
         cb_pop_front(scores_tensor_cb_id, max_indices_pages_per_packet);
     }
+
+    // Signal that indices and scores have been sent to all devices
+    // This allows the tilizer cores to know when the metadata all-gather is complete
+    const uint64_t indices_sent_noc_semaphore_addr =
+        get_noc_addr(drain_tilize_core_noc_x, drain_tilize_core_noc_y, indices_sent_semaphore_address);
+    detail::fabric_multicast_bidirectional_atomic_inc<positive_distance, negative_distance>(
+        &fabric_connections[eth_chan_directions::EAST],
+        &fabric_connections[eth_chan_directions::WEST],
+        metadata_packet_header,
+        indices_sent_noc_semaphore_addr);
 
     constexpr uint32_t tile_height = 32;
     uint16_t* base_indices_ptr = (uint16_t*)base_indices_addr;
