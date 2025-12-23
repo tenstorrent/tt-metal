@@ -4,6 +4,7 @@
 
 #include "llama_block.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "modules/grouped_query_attention.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
@@ -83,13 +84,12 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
 autograd::TensorPtr LlamaBlock::operator()(
     const autograd::TensorPtr& input,
     const autograd::TensorPtr& mask,
-    const autograd::TensorPtr& k_cache,
-    const autograd::TensorPtr& v_cache,
-    const modules::InferenceMode mode,
-    const uint32_t cache_position) {
+    std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+    const uint32_t layer_idx,
+    const uint32_t new_tokens) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
-    h = (*m_attention)(h, mask, k_cache, v_cache, mode, cache_position);
+    h = (*m_attention)(h, mask, kv_cache, layer_idx, new_tokens);
     h = ops::add(h, residual);
 
     residual = h;

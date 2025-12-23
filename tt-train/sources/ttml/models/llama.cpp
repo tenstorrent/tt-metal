@@ -184,99 +184,59 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     common::transformer::initialize_weights_gpt2(*this);
 }
 
-void Llama::initialize_kv_cache(const uint32_t batch_size) {
-    uint32_t head_dim = m_config.embedding_dim / m_config.num_heads;
-    uint32_t max_seq_len = m_config.max_sequence_length;
-    uint32_t num_groups = m_config.num_groups;
+ttml::autograd::TensorPtr Llama::operator()(
+    const ttml::autograd::TensorPtr& x,
+    const ttml::autograd::TensorPtr& mask,
+    std::shared_ptr<common::transformer::KvCache> kv_cache,
+    uint32_t new_tokens) {
+    // Pad input tokens to nearest multiple of 32 before embedding
+    constexpr uint32_t TILE_SIZE = 32;
+    auto x_shape = x->get_value().logical_shape();
+    uint32_t actual_seq_len = x_shape[-1];  // Last dimension is sequence length
+    uint32_t padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
-    fmt::print("Initializing KV cache:\n");
-    fmt::print("    Batch size: {}\n", batch_size);
-    fmt::print("    Num layers: {}\n", m_config.num_blocks);
-    fmt::print("    Num groups: {}\n", num_groups);
-    fmt::print("    Max sequence length: {}\n", max_seq_len);
-    fmt::print("    Head dim: {}\n", head_dim);
-
-    m_kv_cache.clear();
-    m_kv_cache.reserve(m_config.num_blocks);
-
-    // Create cache tensors in DRAM for persistence across operations
-    // Shape: [batch_size, num_groups, max_seq_len, head_dim]
-    auto dram_memory_config = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
-
-    for (uint32_t layer_idx = 0; layer_idx < m_config.num_blocks; ++layer_idx) {
-        auto k_cache_shape = ttnn::Shape({batch_size, num_groups, max_seq_len, head_dim});
-        auto v_cache_shape = ttnn::Shape({batch_size, num_groups, max_seq_len, head_dim});
-
-        auto k_cache = autograd::create_tensor(ttnn::zeros(
-            k_cache_shape,
-            ttnn::DataType::BFLOAT16,
-            ttnn::Layout::TILE,
-            std::ref(autograd::ctx().get_device()),
-            dram_memory_config));
-        auto v_cache = autograd::create_tensor(ttnn::zeros(
-            v_cache_shape,
-            ttnn::DataType::BFLOAT16,
-            ttnn::Layout::TILE,
-            std::ref(autograd::ctx().get_device()),
-            dram_memory_config));
-
-        m_kv_cache.emplace_back(k_cache, v_cache);
+    autograd::TensorPtr x_padded = x;
+    if (padded_seq_len != actual_seq_len) {
+        // Pad the sequence dimension (last dimension) with zeros
+        // Create a new tensor instead of modifying in-place
+        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+            {0, 0},                               // batch dimension
+            {0, 0},                               // first spatial dimension
+            {0, 0},                               // second spatial dimension
+            {0, padded_seq_len - actual_seq_len}  // sequence dimension
+        };
+        auto x_padded_tensor = ttnn::pad(x->get_value(), padding, 0.0f, false, std::nullopt);
+        x_padded = autograd::create_tensor(x_padded_tensor);
     }
 
-    m_cache_position = 0U;
-    fmt::print("KV cache initialized successfully\n");
-}
+    auto tok_emb_out = (*tok_emb)(x_padded);
 
-ttml::autograd::TensorPtr Llama::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask, const bool use_cache) {
-    auto tok_emb_out = (*tok_emb)(x);
-    auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
+    // Unpad after embedding to restore original sequence length
+    autograd::TensorPtr out = tok_emb_out;
+    if (padded_seq_len != actual_seq_len) {
+        // Slice back to original sequence length (sequence dimension is now at index 2)
+        // Create a new tensor instead of modifying in-place
+        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> slice_end = {
+            tok_emb_out->get_value().logical_shape()[0],
+            tok_emb_out->get_value().logical_shape()[1],
+            actual_seq_len,
+            tok_emb_out->get_value().logical_shape()[3]};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
+        out = autograd::create_tensor(out_tensor);
+    }
 
-    if (use_cache) {
-        // Initialize KV cache if empty
-        if (m_kv_cache.empty()) {
-            const uint32_t batch_size = x->get_value().logical_shape()[0];
-            initialize_kv_cache(batch_size);
-        }
+    // llama does positional embedding in the attention blocks
 
+    if (kv_cache) {
         // Inference mode with KV cache
-        const modules::InferenceMode mode =
-            (m_cache_position == 0) ? modules::InferenceMode::PREFILL : modules::InferenceMode::DECODE;
-
-        if (mode == modules::InferenceMode::PREFILL) {
-            const uint32_t batch_size = x->get_value().logical_shape()[0];
-            const uint32_t kv_cache_batch_size = m_kv_cache[0].first->get_value().logical_shape()[0];
-            // If batch size mismatch, reinitialize KV cache
-            if (batch_size != kv_cache_batch_size) {
-                initialize_kv_cache(batch_size);
-            }
-        }
-
         for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
-            auto& [k_cache, v_cache] = m_kv_cache[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, k_cache, v_cache, mode, m_cache_position);
+            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
         }
-
-        // Update cache position based on mode
-        if (mode == modules::InferenceMode::PREFILL) {
-            // Extract actual sequence length from mask shape: [1, 1, padded_prompt_seq_len, padded_prompt_seq_len]
-            auto mask_tensor = mask->get_value();
-            auto mask_host = mask_tensor.to_vector<float>();
-            auto mask_shape = mask_tensor.logical_shape();
-
-            const uint32_t padded_key_seq_len = mask_shape[-1];
-            const uint32_t padded_query_seq_len = mask_shape[-2];
-
-            while (m_cache_position < padded_query_seq_len && mask_host[m_cache_position * padded_key_seq_len] > 0.0f) {
-                m_cache_position++;
-            }
-        } else {
-            m_cache_position += 1;
-        }
-
     } else {
         // Training mode or inference without cache
         for (auto& block : blocks) {

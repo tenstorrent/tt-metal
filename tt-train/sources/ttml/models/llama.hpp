@@ -48,39 +48,27 @@ private:
     ops::RotaryEmbeddingParams m_rope_params;
     uint32_t m_original_vocab_size = 0U;
 
-    // KV cache for inference mode
-    std::vector<std::pair<autograd::TensorPtr, autograd::TensorPtr>> m_kv_cache;  // [(k_cache, v_cache)] per layer
-    uint32_t m_cache_position = 0U;                                               // Current position in cache
-
 public:
     explicit Llama(const LlamaConfig& config);
     virtual ~Llama() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
+
+    // Forward pass with optional KV cache
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask, const bool use_cache) override;
+        const ttml::autograd::TensorPtr& x,
+        const ttml::autograd::TensorPtr& mask,
+        std::shared_ptr<common::transformer::KvCache> kv_cache,
+        const uint32_t new_tokens);
 
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override {
-        return (*this)(x, mask, false);
+        // When kv_cache is nullptr, new_tokens is not used, so pass 0
+        return (*this)(x, mask, std::shared_ptr<common::transformer::KvCache>(), 0);
     }
 
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {
         return m_original_vocab_size;
-    }
-
-    // Initialize KV cache for inference
-    void initialize_kv_cache(const uint32_t batch_size = 1);
-
-    // Reset cache position for new sequence
-    void reset_cache() {
-        m_cache_position = 0U;
-        m_kv_cache.clear();
-    }
-
-    // Get current inference mode (PREFILL if cache_position == 0, DECODE otherwise)
-    [[nodiscard]] ttml::modules::InferenceMode get_inference_mode() const {
-        return (m_cache_position == 0U) ? ttml::modules::InferenceMode::PREFILL : ttml::modules::InferenceMode::DECODE;
     }
 };
 

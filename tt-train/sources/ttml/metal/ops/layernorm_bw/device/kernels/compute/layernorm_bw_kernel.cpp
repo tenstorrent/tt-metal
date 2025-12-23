@@ -433,6 +433,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Multiply by x_normalized: x_normalized * (1/N) * sum(dy*gamma * x_normalized)
     reconfig_data_format(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+    zero_dst_reg(temp_register);
     mul_tiles_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     mul_tiles(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx, input_tile_idx, 0, temp_register);
 
