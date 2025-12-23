@@ -4,7 +4,6 @@
 
 """Multi-head attention layer for NanoGPT."""
 
-import math
 from typing import Optional
 
 import numpy as np

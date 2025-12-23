@@ -15,7 +15,7 @@ tracking via attribute assignment, eliminating the need for manual registration.
 
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Tuple
 
 from .._ttml.modules import RunMode
 

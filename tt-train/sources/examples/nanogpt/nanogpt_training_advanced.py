@@ -455,9 +455,6 @@ def train_step(
     # Forward pass
     logits = model(input_tensor)
 
-    # Model should now output [B, 1, seq_len, vocab_size] directly (reshaped in model.forward)
-    logits_shape = logits.shape()
-
     # Model should already output correct 4D shape [B, 1, seq_len, vocab_size]
     # Use logits directly - model.forward already handles reshaping
     logits_tensor = logits

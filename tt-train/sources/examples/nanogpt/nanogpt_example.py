@@ -15,7 +15,7 @@ import numpy as np
 
 import ttnn
 import ttml
-from ttml.models import NanoGPT, NanoGPTConfig, create_nanogpt
+from ttml.models import NanoGPTConfig, create_nanogpt
 
 
 def main():

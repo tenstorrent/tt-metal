@@ -11,7 +11,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, RunMode
+from ttml.modules import AbstractModuleBase, Parameter
 
 from .gpt_mlp import GPTMLP
 from .multi_head_attention import MultiHeadAttention
