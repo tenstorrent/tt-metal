@@ -31,7 +31,7 @@ def main():
 
     with trace():
         # Create a PyTorch tensor with shape (4, 64)
-        tensor = torch.randint(0, 100, (4, 64))
+        tensor = torch.randn((4, 64))
 
         # Convert PyTorch tensor to TT-NN format
         # This operation moves data to the TT-NN representation
