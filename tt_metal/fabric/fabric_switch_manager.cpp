@@ -63,10 +63,10 @@ void FabricSwitchManager::teardown() {
     // In the future, we could keep routers in standby mode instead of fully terminating
     // them, allowing faster reactivation without recompilation and re-handshake overhead.
     if (!switch_devices_.empty()) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-
         // Use the cached device map returned by CreateDevices
         tt::tt_metal::detail::CloseDevices(switch_devices_);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+
         switch_devices_.clear();
     }
 }

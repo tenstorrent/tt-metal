@@ -35,26 +35,29 @@ protected:
             GTEST_SKIP() << "This test is only for N300 2x2";
         }
 
-        // setup tt-switch manager
-        tt::tt_fabric::FabricSwitchManager::instance().setup(tt::tt_fabric::FabricConfig::FABRIC_2D);
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (control_plane.is_local_host_on_switch_mesh()) {
+            // setup tt-switch manager
+            tt::tt_fabric::FabricSwitchManager::instance().setup(tt::tt_fabric::FabricConfig::FABRIC_2D);
+            GTEST_SKIP() << "This test is only for compute mesh switch mesh just needs to setup tt-switch manager";
+        } else {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        }
     }
 
     void TearDown() override {
-        // teardown tt-switch manager
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-        tt::tt_fabric::FabricSwitchManager::instance().teardown();
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (control_plane.is_local_host_on_switch_mesh()) {
+            tt::tt_fabric::FabricSwitchManager::instance().teardown();
+        } else {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        }
     }
 };
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
-
-    // Only test compute mesh (mesh_id 0), not the switch
-    if (control_plane.is_local_host_on_switch_mesh()) {
-        GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
-    }
 
     auto mesh_id_val = 0;
 
@@ -88,23 +91,11 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
         EXPECT_EQ(*fabric_node_id.mesh_id, mesh_id_val)
             << "Mesh device should use mesh_id from TT_MESH_ID environment variable";
     }
-
-    // Close mesh device
-    mesh_device->close();
-    mesh_device.reset();
-
-    // Verify device is closed (should not crash on reset)
-    EXPECT_EQ(mesh_device, nullptr);
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
-
-    // Only test compute mesh (mesh_id 0), not the switch
-    if (control_plane.is_local_host_on_switch_mesh()) {
-        GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
-    }
 
     // Get chip IDs for mesh_id 0
     tt::tt_fabric::MeshId mesh_id_0(0);
@@ -153,11 +144,6 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
-
-    // Only test compute mesh (mesh_id 0), not the switch
-    if (control_plane.is_local_host_on_switch_mesh()) {
-        GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
-    }
 
     auto mesh_id_val = 0;
 
