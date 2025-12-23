@@ -241,6 +241,10 @@ def map_openvla_hf_to_meta_keys(loaded_weights):
 
 def get_LLama2OpenVLAArgs(state_dict):
     class LLama2OpenVLAArgs(ModelArgs):
+        # CRITICAL: Use BF16 for LM head to avoid token logit corruption
+        # BFP8 causes specific tokens (like 31872) to have inflated logits
+        lm_head_dtype = ttnn.bfloat16
+
         def __init__(self, *args, **kwargs):
             HF_MODEL = os.getenv("HF_MODEL")
             assert (
@@ -333,6 +337,7 @@ class OpenVLALanguageModel(GenerationMixin):
                     TensorGroup.WQKV: PrecisionSetting.BF16,
                     TensorGroup.KV_CACHE: PrecisionSetting.BF16,
                     TensorGroup.WO: PrecisionSetting.BF16,
+                    TensorGroup.ACTIVATION: PrecisionSetting.BF16,  # Q in SDPA must be BF16 too!
                     # FFN stays at BFP8 to fit in memory
                 },
                 "OpFidelity": {
@@ -383,6 +388,7 @@ class OpenVLALanguageModel(GenerationMixin):
                     TensorGroup.FF1_FF3: PrecisionSetting.BF16,
                     TensorGroup.FF2: PrecisionSetting.BF16,
                     TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                    TensorGroup.ACTIVATION: PrecisionSetting.BF16,  # Q in SDPA must be BF16 too!
                     # LM head controlled by dtype parameter in create_tt_model
                 },
                 "OpFidelity": {
@@ -401,17 +407,30 @@ class OpenVLALanguageModel(GenerationMixin):
             model_opt = ModelOptimizations(settings)
             return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
+        # Detect device type for automatic config selection
+        num_devices = device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1
+        is_t3k_or_larger = num_devices >= 8
+        is_multi_device = num_devices > 1
+        mesh_shape = tuple(device.shape) if isinstance(device, ttnn.MeshDevice) else (1, 1)
+
+        # Debug trace for N300/multi-device setup
+        print(f"🔧 OpenVLA LLM Config:")
+        print(f"   - Device type: {'MeshDevice' if isinstance(device, ttnn.MeshDevice) else 'SingleDevice'}")
+        print(f"   - num_devices={num_devices}, mesh_shape={mesh_shape}")
+        print(f"   - is_multi_device={is_multi_device}, is_t3k_or_larger={is_t3k_or_larger}")
+        print(f"   - Precision: {'FULL BF16 (T3K)' if is_t3k_or_larger else 'BF16 attention + BFP8 FFN (N300/P150)'}")
+        print(f"   - LM Head dtype: BF16 (via LLama2OpenVLAArgs.lm_head_dtype)")
+
         self.generator_args_config = {
-            "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
+            "num_devices": num_devices,
             "data_parallel": 1,
             "mesh_device": device,
             "instruct": False,
             "global_batch_size": 1,
-            # N300: BF16 attention (WQKV, WO, KV_CACHE), BFP8 FFN - fits in memory
-            # T3K: Can use full_bf16_config for better instruction sensitivity
-            "optimizations": qwen_style_bf16_attention,  # BF16 attention only (N300)
-            # "optimizations": full_bf16_config,  # FULL BF16 for T3K (8 devices)
-            # "optimizations": bf16_lmhead_bfp8_attn,  # BF16 LM head only (test config)
+            # Auto-select config based on device:
+            # - T3K (8+ devices): Full BF16 for best instruction sensitivity
+            # - N300 (2 devices): BF16 attention only (FFN/LM head BFP8 to fit)
+            "optimizations": full_bf16_config if is_t3k_or_larger else qwen_style_bf16_attention,
             "max_seq_len": 1024,  # Vision (~512) + text gets padded to 1024
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
             "paged_attention": True,
@@ -419,11 +438,15 @@ class OpenVLALanguageModel(GenerationMixin):
         }
 
         def model_factory_fn(*args, **kwargs):
+            # T3K: Full BF16 (including LM head) for best precision
             # N300: BFP8 LM head (default), BF16 attention via optimization
-            # For T3K with full_bf16_config: uncomment dtype override below
-            # kwargs.pop("dtype", None)
-            # return create_tt_model(*args, **kwargs, dtype=ttnn.bfloat16, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
-            return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
+            if is_t3k_or_larger:
+                kwargs.pop("dtype", None)  # Remove default BFP8 dtype
+                return create_tt_model(
+                    *args, **kwargs, dtype=ttnn.bfloat16, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict)
+                )
+            else:
+                return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
 
         (
             self.model_args,
@@ -617,6 +640,7 @@ class OpenVLALanguageModel(GenerationMixin):
 
         CHECKPOINTS.checkpoint("start_PREFILL")
         padding = get_padded_prefill_len(seq_len) - inputs_embeds.shape[2]
+        padded_seq_len = seq_len + padding
         if padding != 0:
             inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
 
@@ -1271,9 +1295,17 @@ class OpenVLAVisionEncoderNew:
         if hasattr(device, "shape") and tuple(device.shape) != (1, 1):
             self.mesh_mapper = ttnn.ReplicateTensorToMesh(device)
             self.is_multi_device = True
+            mesh_shape = tuple(device.shape)
         else:
             self.mesh_mapper = None
             self.is_multi_device = False
+            mesh_shape = (1, 1)
+
+        # Debug trace for N300/multi-device vision encoder setup
+        print(f"🔧 OpenVLA Vision Encoder Config:")
+        print(f"   - is_multi_device={self.is_multi_device}, mesh_shape={mesh_shape}")
+        print(f"   - mesh_mapper={'ReplicateTensorToMesh' if self.mesh_mapper else 'None'}")
+
         self._preprocess_weights(state_dict)
 
     def _to_device(self, tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -1817,6 +1849,15 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
     def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None) -> None:
         super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
 
+        # Debug trace for N300/multi-device main model setup
+        if ttnn_device is not None:
+            num_devices = ttnn_device.get_num_devices() if isinstance(ttnn_device, ttnn.MeshDevice) else 1
+            mesh_shape = tuple(ttnn_device.shape) if isinstance(ttnn_device, ttnn.MeshDevice) else (1, 1)
+            print(f"🔧 OpenVLA Main Model (PrismaticForConditionalGeneration):")
+            print(f"   - ttnn_device type: {type(ttnn_device).__name__}")
+            print(f"   - num_devices={num_devices}, mesh_shape={mesh_shape}")
+            print(f"   - MESH_DEVICE env: {os.environ.get('MESH_DEVICE', 'not set')}")
+
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
             raise ValueError("Missing config field `use_fused_vision_backbone`")
@@ -2119,9 +2160,22 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
             if self.ttnn_device is not None:
                 CHECKPOINTS.checkpoint("start_VISIONLLMCONCAT")
-                multimodal_embeddings = ttnn.concat(
-                    [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
-                )
+
+                # EXPERIMENT: Scale up text embeddings to match visual magnitude
+                # Visual std ~0.46, Text std ~0.016, ratio ~29x
+                # Set TEXT_EMBED_SCALE env var to experiment (default=1.0, try 10-30)
+                text_scale = float(os.environ.get("TEXT_EMBED_SCALE", "1.0"))
+                if text_scale != 1.0:
+                    print(f"🔧 TEXT_EMBED_SCALE={text_scale} - scaling text embeddings to boost instruction signal")
+                    # Scale text embeddings (excluding BOS which stays at position 0)
+                    scaled_text_embeddings = ttnn.mul(input_embeddings[:, 1:, :], text_scale)
+                    multimodal_embeddings = ttnn.concat(
+                        [input_embeddings[:, :1, :], projected_patch_embeddings, scaled_text_embeddings], dim=1
+                    )
+                else:
+                    multimodal_embeddings = ttnn.concat(
+                        [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
+                    )
 
                 # GUARDRAIL: Verify multimodal length matches expected
                 actual_mm_len = multimodal_embeddings.shape[1]

@@ -635,7 +635,193 @@ def capture_llm_layer_outputs(output_path="/tmp/pytorch_llm_layers.pt"):
     return layer_outputs
 
 
+def benchmark_fps(iterations=10, warmup=2, device="cpu"):
+    """
+    Benchmark PyTorch OpenVLA FPS with detailed timing breakdown.
+
+    Usage:
+        python run_pytorch_openvla.py --benchmark [--iterations 10] [--device cuda]
+    """
+    import time
+
+    import numpy as np
+    import torch
+    from PIL import Image
+    from transformers import AutoModelForVision2Seq, AutoProcessor
+
+    print("=" * 70)
+    print("PyTorch OpenVLA FPS BENCHMARK")
+    print("=" * 70)
+    print(f"Device: {device}")
+    print(f"Warmup iterations: {warmup}")
+    print(f"Benchmark iterations: {iterations}")
+
+    # Load model
+    print("\nLoading model...")
+    processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
+    model = AutoModelForVision2Seq.from_pretrained(
+        "openvla/openvla-7b",
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+    )
+
+    if device == "cuda" and torch.cuda.is_available():
+        model = model.cuda()
+        print("✅ Model moved to CUDA")
+    else:
+        device = "cpu"
+        print("ℹ️  Running on CPU")
+
+    model.eval()
+
+    # Prepare input
+    image = Image.new("RGB", (224, 224), color=(128, 64, 32))  # Synthetic brown
+    prompt = "In: What action should the robot take to pick up the red block?\nOut:"
+
+    inputs = processor(prompt, image)
+    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
+    input_ids = inputs["input_ids"]
+
+    if device == "cuda":
+        pixel_values = pixel_values.cuda()
+        input_ids = input_ids.cuda()
+
+    print(f"\nInput shapes:")
+    print(f"  pixel_values: {pixel_values.shape}")
+    print(f"  input_ids: {input_ids.shape}")
+
+    # Timing storage
+    timings = {
+        "vision": [],
+        "projector": [],
+        "generate": [],
+        "total": [],
+    }
+
+    # Warmup
+    print(f"\n--- Warmup ({warmup} iterations) ---")
+    for i in range(warmup):
+        with torch.no_grad():
+            _ = model.generate(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                max_new_tokens=8,
+                do_sample=False,
+            )
+        print(f"  Warmup {i+1}/{warmup} done")
+
+    if device == "cuda":
+        torch.cuda.synchronize()
+
+    # Benchmark with detailed timing
+    print(f"\n--- Benchmark ({iterations} iterations) ---")
+    for i in range(iterations):
+        with torch.no_grad():
+            # Total time
+            t_start = time.perf_counter()
+
+            # Vision backbone
+            t_vision_start = time.perf_counter()
+            vision_output = model.vision_backbone(pixel_values)
+            if device == "cuda":
+                torch.cuda.synchronize()
+            t_vision_end = time.perf_counter()
+
+            # Projector
+            t_proj_start = time.perf_counter()
+            projected = model.projector(vision_output)
+            if device == "cuda":
+                torch.cuda.synchronize()
+            t_proj_end = time.perf_counter()
+
+            # Generate (LLM prefill + decode)
+            t_gen_start = time.perf_counter()
+            outputs = model.generate(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                max_new_tokens=8,
+                do_sample=False,
+            )
+            if device == "cuda":
+                torch.cuda.synchronize()
+            t_gen_end = time.perf_counter()
+
+            t_end = time.perf_counter()
+
+            # Record timings (in ms)
+            timings["vision"].append((t_vision_end - t_vision_start) * 1000)
+            timings["projector"].append((t_proj_end - t_proj_start) * 1000)
+            timings["generate"].append((t_gen_end - t_gen_start) * 1000)
+            timings["total"].append((t_end - t_start) * 1000)
+
+        if (i + 1) % max(1, iterations // 5) == 0:
+            print(f"  Iteration {i+1}/{iterations}: {timings['total'][-1]:.1f}ms")
+
+    # Calculate statistics
+    print("\n" + "=" * 70)
+    print("TIMING RESULTS (ms)")
+    print("=" * 70)
+    print(f"{'Component':<20} {'Mean':>10} {'Std':>10} {'Min':>10} {'Max':>10}")
+    print("-" * 70)
+
+    for name, times in timings.items():
+        times_arr = np.array(times)
+        print(
+            f"{name:<20} {times_arr.mean():>10.2f} {times_arr.std():>10.2f} {times_arr.min():>10.2f} {times_arr.max():>10.2f}"
+        )
+
+    # Calculate FPS
+    total_times = np.array(timings["total"])
+    mean_time_ms = total_times.mean()
+    fps = 1000.0 / mean_time_ms
+
+    print("\n" + "=" * 70)
+    print("FPS SUMMARY")
+    print("=" * 70)
+    print(f"Mean inference time: {mean_time_ms:.2f} ms")
+    print(f"FPS: {fps:.2f}")
+    print(f"")
+    print(f"Breakdown (% of total):")
+    print(
+        f"  Vision:    {np.array(timings['vision']).mean():.1f}ms ({np.array(timings['vision']).mean()/mean_time_ms*100:.1f}%)"
+    )
+    print(
+        f"  Projector: {np.array(timings['projector']).mean():.1f}ms ({np.array(timings['projector']).mean()/mean_time_ms*100:.1f}%)"
+    )
+    print(
+        f"  Generate:  {np.array(timings['generate']).mean():.1f}ms ({np.array(timings['generate']).mean()/mean_time_ms*100:.1f}%)"
+    )
+
+    return {
+        "fps": fps,
+        "mean_time_ms": mean_time_ms,
+        "timings": {k: np.array(v).tolist() for k, v in timings.items()},
+        "device": device,
+        "iterations": iterations,
+    }
+
+
 if __name__ == "__main__":
+    # Check for --benchmark argument
+    if "--benchmark" in sys.argv:
+        iterations = 10
+        device = "cpu"
+
+        # Parse optional arguments
+        if "--iterations" in sys.argv:
+            idx = sys.argv.index("--iterations")
+            if idx + 1 < len(sys.argv):
+                iterations = int(sys.argv[idx + 1])
+
+        if "--device" in sys.argv:
+            idx = sys.argv.index("--device")
+            if idx + 1 < len(sys.argv):
+                device = sys.argv[idx + 1]
+
+        benchmark_fps(iterations=iterations, device=device)
+        sys.exit(0)
+
     # Check for --llm-layers argument
     if "--llm-layers" in sys.argv:
         capture_llm_layer_outputs()

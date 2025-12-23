@@ -489,6 +489,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        attn_mask=None,  # Optional attention mask for padding-aware attention
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -511,6 +512,7 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                attn_mask=attn_mask,
             )
 
         if mode == "prefill" and get_last_token == -1:
