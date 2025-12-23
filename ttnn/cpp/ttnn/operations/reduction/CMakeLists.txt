@@ -75,6 +75,9 @@ target_sources(
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp
         manual_seed/device/manual_seed_program_factory.cpp
+        tilize_untilize/device/tilize_untilize_device_operation.cpp
+        tilize_untilize/device/tilize_untilize_program_factory.cpp
+        tilize_untilize/tilize_untilize.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
