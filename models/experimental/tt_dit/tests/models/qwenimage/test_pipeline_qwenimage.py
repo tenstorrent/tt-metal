@@ -10,9 +10,6 @@ import ttnn
 from loguru import logger
 
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    TimingCollector,
-)
 
 
 @pytest.mark.parametrize(
@@ -21,7 +18,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 38000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 47000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
@@ -29,12 +26,12 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        # [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        # [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4sp2tp4",
-        # "4x8cfg1sp0tp1",
+        # "2x4sp2tp4",
+        "4x8sp4tp4",
     ],
     indirect=["mesh_device"],
 )
@@ -84,7 +81,6 @@ def test_qwenimage_pipeline(
         height=height,
         is_fsdp=True,  # enable fsdp to avoid model load/unload cycle
     )
-    pipeline.timing_collector = TimingCollector()
 
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee 😊 $2 per cup," with a neon light '
@@ -136,16 +132,6 @@ def test_qwenimage_pipeline(
         output_filename = f"{filename_prefix}_{number}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
-
-        timing_data = pipeline.timing_collector.get_timing_data()
-        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
-        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
-        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
-        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
-        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
-        if timing_data.denoising_step_times:
-            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
-            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
 
     if no_prompt:
         for i, prompt in enumerate(prompts):
