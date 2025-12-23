@@ -689,7 +689,7 @@ The following example shows a simple print of local kernel variables, including 
    }
 
 Printing a tile in a writer (dataflow) kernel
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------------------------
 
 TT-Metal kernels often share data between threads using circular buffers (CBs) of tiles.
 DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
@@ -756,7 +756,7 @@ Note that setting the ``print_untilized`` flag to ``true`` is important to print
 
 
 Caveats and best practices
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------------
 
 A few important caveats to keep in mind when using DPRINT:
 
