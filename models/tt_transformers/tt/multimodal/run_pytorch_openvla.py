@@ -327,43 +327,50 @@ def main():
     return 0
 
 
-def test_pytorch_llm_with_ttnn_vision(ttnn_vision_path: str):
+def test_pytorch_llm_with_ttnn_vision(ttnn_vision_path: str, use_tt_multimodal: bool = False):
     """
-    Test: Feed TTNN vision encoder output to PyTorch LLM.
-    This isolates whether the issue is in TTNN's vision or LLM.
+    Test: Feed TTNN outputs to PyTorch LLM.
+
+    TEST A (default): TT Vision + TT Projector + PT Text → PT LLM
+    TEST B (--use-tt-mm): TT Full Multimodal Embeddings → PT LLM
 
     Usage:
-        python run_pytorch_openvla.py --ttnn-vision /tmp/ttnn_vision_output.pt
+        # Test A: TT vision/projector → PT LLM
+        python run_pytorch_openvla.py --ttnn-vision /tmp/tt_outputs_pick.pt
+
+        # Test B: TT full multimodal → PT LLM
+        python run_pytorch_openvla.py --ttnn-vision /tmp/tt_outputs_pick.pt --use-tt-mm
     """
+    import numpy as np
     import torch
     from PIL import Image
     from transformers import AutoModelForVision2Seq, AutoProcessor
 
     print("=" * 70)
-    print("TEST: PyTorch LLM with TTNN Vision Encoder Output")
+    if use_tt_multimodal:
+        print("TEST B: PyTorch LLM with TT FULL Multimodal Embeddings")
+    else:
+        print("TEST A: PyTorch LLM with TT Vision/Projector + PT Text")
     print("=" * 70)
 
-    # Load TTNN vision output
-    print(f"\nLoading TTNN vision output from: {ttnn_vision_path}")
-    ttnn_data = torch.load(ttnn_vision_path)
+    # Load TT outputs
+    print(f"\nLoading TT outputs from: {ttnn_vision_path}")
+    tt_data = torch.load(ttnn_vision_path)
 
-    # Handle different key names
-    if "vision_output" in ttnn_data:
-        ttnn_vision = ttnn_data["vision_output"]
-    elif "vision_features" in ttnn_data:
-        ttnn_vision = ttnn_data["vision_features"]
-    else:
-        raise KeyError(f"Expected 'vision_output' or 'vision_features' in {ttnn_vision_path}")
+    # Print what we have
+    print(f"Available keys: {list(tt_data.keys())}")
 
-    ttnn_projector = ttnn_data.get("projector_output", None)
+    # Get prompt from saved data
+    prompt = tt_data.get("prompt", "In: What action should the robot take to pick up the block?\nOut:")
+    print(f"\nPrompt: {prompt}")
 
-    print(
-        f"TTNN vision: shape={ttnn_vision.shape}, mean={ttnn_vision.float().mean():.4f}, std={ttnn_vision.float().std():.4f}"
-    )
-    if ttnn_projector is not None:
-        print(
-            f"TTNN projector: shape={ttnn_projector.shape}, mean={ttnn_projector.float().mean():.4f}, std={ttnn_projector.float().std():.4f}"
-        )
+    # Get TT action for comparison
+    tt_action = tt_data.get("tt_action", None)
+    tt_tokens = tt_data.get("tt_tokens", None)
+    if tt_action is not None:
+        print(f"TT Action: {tt_action.tolist()}")
+    if tt_tokens is not None:
+        print(f"TT Tokens: {tt_tokens.tolist()}")
 
     # Load PyTorch model
     print("\nLoading PyTorch OpenVLA model...")
@@ -376,40 +383,72 @@ def test_pytorch_llm_with_ttnn_vision(ttnn_vision_path: str):
     model.eval()
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
-    # Get prompt tokens
-    prompt = "In: What action should the robot take to pick up the red block?\nOut:"
-    dummy_image = Image.new("RGB", (224, 224))  # Dummy image, we'll replace vision
-    inputs = processor(prompt, dummy_image)
-    input_ids = inputs["input_ids"]
+    if use_tt_multimodal:
+        # ============================================
+        # TEST B: Use TT full multimodal embeddings directly
+        # ============================================
+        print("\n--- Using TT Full Multimodal Embeddings ---")
 
-    print(f"\nPrompt: {prompt}")
-    print(f"input_ids shape: {input_ids.shape}")
+        if "multimodal_embeddings" not in tt_data:
+            raise KeyError("multimodal_embeddings not found in saved data")
 
-    # Get text embeddings from LLM
-    text_embeds = model.language_model.get_input_embeddings()(input_ids)
-    print(f"Text embeddings: shape={text_embeds.shape}")
-
-    # Use TTNN projector output if available, otherwise run PyTorch projector on TTNN vision
-    if ttnn_projector is not None:
-        projected = ttnn_projector.to(torch.float32)
-        print(f"Using TTNN projector output directly")
+        multimodal_embeds = tt_data["multimodal_embeddings"].to(torch.float32)
+        print(
+            f"TT Multimodal: shape={multimodal_embeds.shape}, mean={multimodal_embeds.mean():.4f}, std={multimodal_embeds.std():.4f}"
+        )
     else:
-        # Run PyTorch projector on TTNN vision output
-        print(f"Running PyTorch projector on TTNN vision output...")
-        projected = model.projector(ttnn_vision.to(torch.float32))
-    print(f"Projected: shape={projected.shape}, mean={projected.mean():.4f}, std={projected.std():.4f}")
+        # ============================================
+        # TEST A: Use TT vision/projector + PT text
+        # ============================================
+        print("\n--- Using TT Vision/Projector + PyTorch Text ---")
 
-    # Build multimodal embeddings: [BOS] + projected_vision + text[1:]
-    bos_embed = text_embeds[:, :1, :]
-    text_rest = text_embeds[:, 1:, :]
-    multimodal_embeds = torch.cat([bos_embed, projected, text_rest], dim=1)
-    print(f"Multimodal embeddings: shape={multimodal_embeds.shape}")
+        # Get TT projector output
+        tt_projector = tt_data.get("projector_output", None)
+        if tt_projector is None:
+            # Fall back to running PT projector on TT vision
+            tt_vision = tt_data.get("vision_output")
+            if tt_vision is None:
+                raise KeyError("Neither projector_output nor vision_output found")
+            print(f"TT Vision: shape={tt_vision.shape}, mean={tt_vision.float().mean():.4f}")
+            print("Running PyTorch projector on TT vision...")
+            tt_projector = model.projector(tt_vision.to(torch.float32))
 
-    # Run LLM with TTNN vision features
-    print("\n--- Running PyTorch LLM with TTNN vision features ---")
+        print(
+            f"TT Projector: shape={tt_projector.shape}, mean={tt_projector.float().mean():.4f}, std={tt_projector.float().std():.4f}"
+        )
+
+        # Get PyTorch text embeddings
+        dummy_image = Image.new("RGB", (224, 224))
+        inputs = processor(prompt, dummy_image)
+        input_ids = inputs["input_ids"]
+
+        # Add empty token 29871 if not present
+        if input_ids[0, -1].item() != 29871:
+            input_ids = torch.cat((input_ids, torch.tensor([[29871]])), dim=1)
+            print(f"Added empty token 29871")
+
+        print(f"input_ids: {input_ids[0].tolist()}")
+
+        text_embeds = model.language_model.get_input_embeddings()(input_ids)
+        print(f"PT Text Emb: shape={text_embeds.shape}, mean={text_embeds.float().mean():.4f}")
+
+        # Build multimodal: [BOS] + [TT vision 256] + [PT text after BOS]
+        multimodal_embeds = torch.cat(
+            [
+                text_embeds[:, :1, :],  # BOS from PyTorch
+                tt_projector.to(torch.float32),  # Vision from TT
+                text_embeds[:, 1:, :],  # Text from PyTorch
+            ],
+            dim=1,
+        )
+        print(f"Hybrid Multimodal: shape={multimodal_embeds.shape}")
+
+    # ============================================
+    # Run PyTorch LLM
+    # ============================================
+    print("\n--- Running PyTorch LLM ---")
     all_tokens = []
     with torch.no_grad():
-        # Use forward pass with KV cache for token-by-token generation
         past_key_values = None
         current_embeds = multimodal_embeds
 
@@ -424,12 +463,10 @@ def test_pytorch_llm_with_ttnn_vision(ttnn_vision_path: str):
             logits = outputs.logits
             past_key_values = outputs.past_key_values
 
-            # Get next token
             next_logits = logits[:, -1, :]
             next_token = torch.argmax(next_logits, dim=-1).item()
             all_tokens.append(next_token)
 
-            # Get top tokens for debug
             top_vals, top_ids = torch.topk(next_logits[0], 5)
             top1_val = top_vals[0].item()
             top2_val = top_vals[1].item()
@@ -437,21 +474,54 @@ def test_pytorch_llm_with_ttnn_vision(ttnn_vision_path: str):
 
             print(f"Step {step}: token={next_token}, top1={top1_val:.4f}, top2={top2_val:.4f}, GAP={gap:.4f}")
 
-            # Prepare next input (embed the token)
             next_embed = model.language_model.get_input_embeddings()(torch.tensor([[next_token]]))
             current_embeds = next_embed
 
-    print(f"\n✅ All generated tokens: {all_tokens}")
+    print(f"\n✅ PyTorch LLM generated tokens: {all_tokens}")
 
-    # Compare with expected PyTorch behavior
-    print("\n--- Analysis ---")
+    # Convert to action
+    action_tokens = all_tokens[1:8]  # 7 action tokens
+    bin_centers = np.linspace(-1, 1, 256)
+    bin_indices = [t - 31744 for t in action_tokens]
+    bin_indices = [max(0, min(255, i)) for i in bin_indices]
+    normalized_actions = [bin_centers[i] for i in bin_indices]
+    print(f"PyTorch LLM action tokens: {action_tokens}")
+    print(f"PyTorch LLM normalized actions: {[f'{a:.4f}' for a in normalized_actions]}")
+
+    # ============================================
+    # Analysis
+    # ============================================
+    print("\n" + "=" * 70)
+    print("ANALYSIS")
+    print("=" * 70)
+
     unique_tokens = set(all_tokens)
     if len(unique_tokens) == 1:
-        print(f"⚠️  All tokens are the same ({all_tokens[0]}) - matches TTNN behavior")
-        print("   This suggests the issue is in vision/projector, not LLM!")
+        print(f"⚠️  All tokens are SAME ({all_tokens[0]})")
+        if use_tt_multimodal:
+            print("   → TT multimodal embeddings cause collapse")
+            print("   → Issue is in TT Vision/Projector/Text embeddings")
+        else:
+            print("   → TT vision/projector causes collapse")
+            print("   → Issue is in TT Vision or Projector")
     else:
         print(f"✅ Different tokens generated: {unique_tokens}")
-        print("   This suggests the issue is in TTNN LLM, not vision!")
+        if use_tt_multimodal:
+            print("   → TT multimodal embeddings are good")
+            print("   → Issue is in TT LLM forward pass")
+        else:
+            print("   → TT vision/projector are good")
+
+    # Compare with TT tokens if available
+    if tt_tokens is not None:
+        tt_tokens_list = tt_tokens.tolist() if hasattr(tt_tokens, "tolist") else list(tt_tokens)
+        print(f"\nComparison:")
+        print(f"  TT tokens:      {tt_tokens_list}")
+        print(f"  PT LLM tokens:  {all_tokens}")
+        if tt_tokens_list == all_tokens:
+            print("  ✅ MATCH!")
+        else:
+            print("  ❌ DIFFERENT - TT LLM behaves differently than PT LLM")
 
     return all_tokens
 
@@ -641,12 +711,13 @@ if __name__ == "__main__":
         capture_llm_layer_outputs()
         sys.exit(0)
 
-    # Check for --ttnn-vision argument
+    # Check for --ttnn-vision argument (Test A or Test B)
     if "--ttnn-vision" in sys.argv:
         idx = sys.argv.index("--ttnn-vision")
         if idx + 1 < len(sys.argv):
             ttnn_vision_path = sys.argv[idx + 1]
-            test_pytorch_llm_with_ttnn_vision(ttnn_vision_path)
+            use_tt_mm = "--use-tt-mm" in sys.argv  # Test B: use full TT multimodal
+            test_pytorch_llm_with_ttnn_vision(ttnn_vision_path, use_tt_multimodal=use_tt_mm)
             sys.exit(0)
         else:
             print("Error: --ttnn-vision requires a path argument")

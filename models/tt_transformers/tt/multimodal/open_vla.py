@@ -248,6 +248,29 @@ def get_LLama2OpenVLAArgs(state_dict):
             ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
             super().__init__(*args, **kwargs)
 
+            # T3K FIX: Override MLP grid for multi-device to avoid L1 memory clash
+            # Problem: Llama-2-7b has hidden_dim=11008, on T3K (8 devices):
+            #   hidden_dim/8 = 1376 -> 1376/32 = 43 tiles (43 is PRIME!)
+            #   Common divisors of 43 and 128 (dim/32) = only 1
+            #   Result: 1x1 grid with all 4096 elements on single core -> L1 clash
+            # Fix: Use 8-core grid based on dim only (4096/8/32=16 tiles per core)
+            if hasattr(self, "model_config") and self.num_devices > 1:
+                mlp_core_grid = ttnn.CoreGrid(x=8, y=1)  # 8 cores -> 512 elements each
+                self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.dim // mlp_core_grid.num_cores,
+                    ),
+                    mlp_core_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
+                print(
+                    f"[OpenVLA T3K FIX] MLP grid: {mlp_core_grid.x}x{mlp_core_grid.y}={mlp_core_grid.num_cores} cores (was 1x1)"
+                )
+
         def _set_params_from_dict(self, config):
             new_config = {
                 "attention_bias": False,
@@ -392,10 +415,8 @@ class OpenVLALanguageModel(GenerationMixin):
                     OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                     OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                     OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_FF1_FF3_DECODE: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_FF1_FF3_PREFILL: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_FF2_DECODE: MathFidelitySetting.HIFI4,
-                    OpGroup.LI_FF2_PREFILL: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                    OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
                 },
             }
             model_opt = ModelOptimizations(settings)
@@ -409,8 +430,8 @@ class OpenVLALanguageModel(GenerationMixin):
             "global_batch_size": 1,
             # N300: BF16 attention (WQKV, WO, KV_CACHE), BFP8 FFN - fits in memory
             # T3K: Can use full_bf16_config for better instruction sensitivity
-            "optimizations": qwen_style_bf16_attention,  # BF16 attention only (N300)
-            # "optimizations": full_bf16_config,  # FULL BF16 for T3K (8 devices)
+            # "optimizations": qwen_style_bf16_attention,  # BF16 attention only (N300)
+            "optimizations": full_bf16_config,  # FULL BF16 for T3K (8 devices)
             # "optimizations": bf16_lmhead_bfp8_attn,  # BF16 LM head only (test config)
             "max_seq_len": 1024,  # Vision (~512) + text gets padded to 1024
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
@@ -420,10 +441,12 @@ class OpenVLALanguageModel(GenerationMixin):
 
         def model_factory_fn(*args, **kwargs):
             # N300: BFP8 LM head (default), BF16 attention via optimization
-            # For T3K with full_bf16_config: uncomment dtype override below
-            # kwargs.pop("dtype", None)
-            # return create_tt_model(*args, **kwargs, dtype=ttnn.bfloat16, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
-            return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
+            # For T3K with full_bf16_config: use dtype=ttnn.bfloat16 for BF16 LM head
+            kwargs.pop("dtype", None)
+            return create_tt_model(
+                *args, **kwargs, dtype=ttnn.bfloat16, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict)
+            )
+            # return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))  # BFP8 LM head
 
         (
             self.model_args,
@@ -2027,7 +2050,15 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 if getattr(self, "_save_vision_output", None):
                     save_path = self._save_vision_output
                     vision_torch = ttnn_to_torch_safe(ttnn_patch_features, self.ttnn_device).cpu()
-                    proj_torch = ttnn_to_torch_safe(projected_patch_embeddings, self.ttnn_device).cpu()
+                    # Projector output is sharded on dim=-1, need to concat all shards
+                    proj_torch = (
+                        ttnn.to_torch(
+                            projected_patch_embeddings,
+                            mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=-1),
+                        )
+                        .float()
+                        .cpu()
+                    )
                     torch.save(
                         {
                             "vision_output": vision_torch,
@@ -2119,8 +2150,18 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
             if self.ttnn_device is not None:
                 CHECKPOINTS.checkpoint("start_VISIONLLMCONCAT")
+
+                # TEXT EMBEDDING SCALING: Scale text embeddings to increase signal relative to visual
+                # Short instructions (~20 tokens) can be drowned out by 256 visual tokens
+                text_scale = float(os.environ.get("OPENVLA_TEXT_SCALE", "1.0"))
+                text_embeddings = input_embeddings[:, 1:, :]
+                if text_scale != 1.0:
+                    text_embeddings = ttnn.multiply(text_embeddings, text_scale)
+                    if getattr(self, "_debug_trace", False):
+                        print(f"DEBUG: Applied text embedding scale={text_scale}")
+
                 multimodal_embeddings = ttnn.concat(
-                    [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
+                    [input_embeddings[:, :1, :], projected_patch_embeddings, text_embeddings], dim=1
                 )
 
                 # GUARDRAIL: Verify multimodal length matches expected
@@ -2165,8 +2206,13 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     print(f"DEBUG  VISUAL checksum: {visual_checksum:.2f} (should differ per image)")
             else:
                 # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
+                # TEXT EMBEDDING SCALING (PyTorch path)
+                text_scale = float(os.environ.get("OPENVLA_TEXT_SCALE", "1.0"))
+                text_embeddings_pt = input_embeddings[:, 1:, :]
+                if text_scale != 1.0:
+                    text_embeddings_pt = text_embeddings_pt * text_scale
                 multimodal_embeddings = torch.cat(
-                    [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
+                    [input_embeddings[:, :1, :], projected_patch_embeddings, text_embeddings_pt], dim=1
                 )
             multimodal_attention_mask = None
             if attention_mask is not None:
@@ -2425,6 +2471,11 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         if self.ttnn_device is not None:
             self.language_model.num_actions = self.get_action_dim(unnorm_key)
         generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
+
+        # DEBUG: Print raw generated token IDs (always, not just with _debug_trace)
+        action_dim = self.get_action_dim(unnorm_key)
+        raw_token_ids = generated_ids[0, -action_dim:].cpu().tolist()
+        print(f"DEBUG predict_action: raw_token_ids = {raw_token_ids}")
 
         # get final actions
         actions = get_final_action(
