@@ -316,15 +316,16 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_4_free_slots_stream_id,
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id,
-    sender_channel_7_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 21);
-static_assert(sender_channel_free_slots_stream_ids[1] == 22);
-static_assert(sender_channel_free_slots_stream_ids[2] == 23);
-static_assert(sender_channel_free_slots_stream_ids[3] == 24);
-static_assert(sender_channel_free_slots_stream_ids[4] == 25);
-static_assert(sender_channel_free_slots_stream_ids[5] == 26);
-static_assert(sender_channel_free_slots_stream_ids[6] == 27);
-static_assert(sender_channel_free_slots_stream_ids[7] == 28);
+    sender_channel_7_free_slots_stream_id,
+    0};
+static_assert(sender_channel_free_slots_stream_ids[0] == 22);
+static_assert(sender_channel_free_slots_stream_ids[1] == 23);
+static_assert(sender_channel_free_slots_stream_ids[2] == 24);
+static_assert(sender_channel_free_slots_stream_ids[3] == 25);
+static_assert(sender_channel_free_slots_stream_ids[4] == 26);
+static_assert(sender_channel_free_slots_stream_ids[5] == 27);
+static_assert(sender_channel_free_slots_stream_ids[6] == 28);
+static_assert(sender_channel_free_slots_stream_ids[7] == 29);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
@@ -475,13 +476,13 @@ static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_
     vc_0_free_slots_from_downstream_edge_1_stream_id,
     vc_0_free_slots_from_downstream_edge_2_stream_id,
     vc_0_free_slots_from_downstream_edge_3_stream_id,
-    0};
+    vc_0_free_slots_from_downstream_edge_4_stream_id};
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_1_free_slots_stream_ids = {
     vc_1_free_slots_from_downstream_edge_1_stream_id,
     vc_1_free_slots_from_downstream_edge_2_stream_id,
     vc_1_free_slots_from_downstream_edge_3_stream_id,
-    0};
+    vc_1_free_slots_from_downstream_edge_4_stream_id};
 
 enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_INVALID = 0x0,
@@ -2063,8 +2064,23 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
+                if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
+                    tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                }
 #if defined(FABRIC_2D_VC1_SERVICED)
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC1>(
+                tx_progress |= run_sender_channel_step<
+                    VC1_RECEIVER_CHANNEL,
+                    ACTUAL_VC0_SENDER_CHANNELS,
+                    ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -2074,7 +2090,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 5, ENABLE_FIRST_LEVEL_ACK_VC1>(
+                tx_progress |= run_sender_channel_step<
+                    VC1_RECEIVER_CHANNEL,
+                    ACTUAL_VC0_SENDER_CHANNELS + 1,
+                    ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -2084,7 +2103,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 6, ENABLE_FIRST_LEVEL_ACK_VC1>(
+                tx_progress |= run_sender_channel_step<
+                    VC1_RECEIVER_CHANNEL,
+                    ACTUAL_VC0_SENDER_CHANNELS + 2,
+                    ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -2094,6 +2116,21 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
+                if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
+                    tx_progress |= run_sender_channel_step<
+                        VC1_RECEIVER_CHANNEL,
+                        ACTUAL_VC0_SENDER_CHANNELS + 3,
+                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector,
+                        local_fabric_telemetry);
+                }
                 rx_progress |= run_receiver_channel_step<
                     1,
                     ENABLE_FIRST_LEVEL_ACK_VC1,
@@ -3196,8 +3233,12 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
+#if defined(FABRIC_2D_VC1_ACTIVE)
     DPRINT << "checkpoint " << has_downstream_edm_vc1_buffer_connection << ":"
            << has_downstream_edm_vc0_buffer_connection << ENDL();
+#else
+    DPRINT << "checkpoint " << has_downstream_edm_vc0_buffer_connection << ENDL();
+#endif
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 
     //////////////////////////////

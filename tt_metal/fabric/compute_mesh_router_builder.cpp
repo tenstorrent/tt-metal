@@ -70,7 +70,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Determine the router variant
-    bool has_z_router = fabric_context.has_z_router_on_device(device->id());
+    bool has_z_router = fabric_context.has_z_router_on_device(local_node);
     RouterVariant variant = RouterVariant::MESH;  // Default to mesh router
     if (location.direction == RoutingDirection::Z) {
         variant = RouterVariant::Z_ROUTER;  // Z router
@@ -473,14 +473,17 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
 
             log_debug(
                 tt::LogTest,
-                "Router at x={}, y={}, Channel={}, Direction={}, FabricNodeId={} :: Connecting VC{} receiver_ch={} to "
+                "M{}-D{}: Router at x={}, y={}, UpstreamEthernetChannel={}, Direction={} :: Connecting VC{} "
+                "receiver_ch={} to "
                 "downstream "
-                "router at x={}, y={}, Channel={}, Direction={}, VC{}, vc_relative_ch={}, absolute_ch={}",
+                "router at x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
+                "AbsoluteChannel={}",
+                local_node_.mesh_id.get(),
+                local_node_.chip_id,
                 get_noc_x(),
                 get_noc_y(),
                 location_.eth_chan,
                 get_eth_direction(),
-                local_node_,
                 vc,
                 0,
                 downstream_builder->get_noc_x(),

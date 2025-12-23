@@ -55,19 +55,21 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_2_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
-constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
-constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
-constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
-constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);
-constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);
-constexpr uint32_t sender_channel_5_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
-constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
-constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
-constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);
+constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
+constexpr uint32_t sender_channel_5_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
+constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
+constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
+constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 31);
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 31;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 32;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -85,6 +87,7 @@ constexpr size_t MAX_NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(MAX_NUM_RE
 // These are computed from MAX_NUM_SENDER_CHANNELS
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;  // 5 if Z router, else 4
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;  // Remainder
+constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
 
 // Downstream tensix connections argument (after stream IDs, marker, and max channel counts)
 constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;
@@ -116,16 +119,16 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 40,
-    "wait_for_host_signal_IDX must be 40 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    wait_for_host_signal_IDX == 41,
+    "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 41,
-    "MAIN_CT_ARGS_START_IDX must be 41 (31 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
+    MAIN_CT_ARGS_START_IDX == 42,
+    "MAIN_CT_ARGS_START_IDX must be 42 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
 
@@ -165,8 +168,10 @@ constexpr bool ENABLE_RISC_CPU_DATA_CACHE = get_compile_time_arg_val(MAIN_CT_ARG
 constexpr bool z_router_enabled = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 13);
+constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 14);
+constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 15);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 14;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 16;
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 

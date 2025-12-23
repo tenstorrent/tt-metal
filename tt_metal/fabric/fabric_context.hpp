@@ -59,10 +59,9 @@ public:
     bool is_switch_mesh(MeshId mesh_id) const;
 
     // ============ Z Router Queries ============
-    // Check if a device has a Z router
-    // Stub for Phase 3: returns false (will be implemented in Phase 5)
-    // TODO(Phase 5): Implement proper Z router detection
-    bool has_z_router_on_device(ChipId device_id) const;
+    // Check if a fabric node has Z router channels
+    // Queries control plane to see if any ethernet channels are assigned Z direction
+    bool has_z_router_on_device(const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)

@@ -113,9 +113,7 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             // This keeps MESH_AND_Z at 8 total: 4 VC0 + 4 VC1 = 8
             uint32_t mesh_vc1_sender_count = is_mesh_and_z_router() ? 4 : 3;
 
-            uint32_t mesh_vc1_base_sender_channel = is_mesh_and_z_router()
-                                                        ? builder_config::num_sender_channels_z_router_vc0
-                                                        : builder_config::num_sender_channels_2d_mesh;
+            uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
             // Create sender channels (3 or 4 depending on router type)
