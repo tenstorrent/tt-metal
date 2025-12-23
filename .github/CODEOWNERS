@@ -2,7 +2,7 @@
 
 # Top-level files
 /* @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-METALIUM_GUIDE.md @davorchap @marty1885 @tenstorrent/codeowner-bypass
+METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -82,7 +82,7 @@ tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT @
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/kernels/ @abhullar-tt @tenstorrent/codeowner-bypass # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
-tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885 @tenstorrent/codeowner-bypass
+tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
@@ -364,7 +364,7 @@ scripts/ttexalens_ref.txt @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @te
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT @tenstorrent/codeowner-bypass
-docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar @marty1885 @tenstorrent/codeowner-bypass
+docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @aczajkowskiTT @ntarafdar @tenstorrent/codeowner-bypass
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 
 # misc
