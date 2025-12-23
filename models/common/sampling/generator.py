@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import random
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
@@ -257,8 +258,8 @@ class SamplingGenerator:
     def reset_seed(self, seed):
         for i, s in enumerate(seed):
             if s is None:
-                # set to default seed value which is 0
-                seed[i] = 0
+                # set to random value to have variability
+                seed[i] = random.randint(0, 1000000)
         seed = torch.tensor(seed)
         user_ids = torch.arange(seed.shape[0])
 
