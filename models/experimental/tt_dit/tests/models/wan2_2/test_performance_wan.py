@@ -244,9 +244,9 @@ def test_pipeline_performance(
         if is_blackhole():
             expected_metrics = {
                 "encoder": 15.0,
-                "denoising": 205.0,
+                "denoising": 185.0,
                 "vae": 8.0,
-                "total": 228.0,
+                "total": 208.0,
             }
         else:
             expected_metrics = {
