@@ -20,6 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -312,27 +313,21 @@ void MAIN {
                 reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
                 // Partial/E[x]
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, cb_ex_partial);
-                cb_reserve_back(cb_ex_partial, 1);
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler, 1);
                 cb_wait_front(cb_x, out_block_hw_normal);
-
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_x, cb_scaler, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_partial);
-                tile_regs_release();
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_x,
+                    cb_scaler,
+                    cb_ex_partial,
+                    out_block_h_actual,  // Ht
+                    block_w,             // Wt
+                    1);                  // num_batches
                 cb_pop_front(cb_x, out_block_hw_normal);
-                cb_push_back(cb_ex_partial, 1);
-                reduce_uninit<FP32_DEST_ACC>();
 
                 cb_wait_front(cb_ex_partial, 1);
             }
@@ -463,26 +458,21 @@ void MAIN {
                 cb_push_back(cb_xmm, out_block_hw_normal);
 
                 // Partial-Var(x)
-                index_h_offset = 0;
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, cb_ex2_partial);
-                cb_reserve_back(cb_ex2_partial, 1);
-                tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
-                cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_xmm, cb_scaler, index, scaler0, dst0);
-                    }
-                    index_h_offset += block_w;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2_partial);
-                tile_regs_release();
-                cb_push_back(cb_ex2_partial, 1);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_xmm,
+                    cb_scaler,
+                    cb_ex2_partial,
+                    out_block_h_actual,  // Ht
+                    block_w,             // Wt
+                    1);                  // num_batches
                 cb_pop_front(cb_xmm, out_block_hw_normal);
-                reduce_uninit<FP32_DEST_ACC>();
             }
             // End Local Reduce
             // Start Global Reduce
