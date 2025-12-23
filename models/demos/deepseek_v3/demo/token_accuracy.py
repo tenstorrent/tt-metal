@@ -58,6 +58,10 @@ class TokenAccuracy:
         """Decode the prompt token ids to a string prompt."""
         return tokenizer.decode(self.input_prompt.tolist())
 
+    def get_prompt_token_ids(self) -> list[int]:
+        """Return the prompt token IDs directly (bypasses text decoding/encoding)."""
+        return self.input_prompt.tolist()
+
     def num_gt_tokens(self) -> int:
         return len(self.gt_tokens)
 
@@ -69,7 +73,13 @@ class TokenAccuracy:
         self._pred_tokens.append(int(token_id))
         self._gt_pos += 1
         idx = min(self._gt_pos, self._max_index)
-        return int(self.gt_tokens[idx].item())
+        gt_token = int(self.gt_tokens[idx].item())
+
+        logger.debug(
+            f"Step {self._gt_pos}: Pred={token_id}, GT={gt_token} {'(MATCH)' if token_id == gt_token else '(MISMATCH)'}"
+        )
+
+        return gt_token
 
     def compute_accuracy(self) -> dict[str, float | None]:
         """Compute top-1 and optional top-5 accuracy for the collected predictions.
