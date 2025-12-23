@@ -59,6 +59,22 @@ def copy_to_torch(func):
     return _unwrap_to_torch
 
 
+def copy_to_ttnn(func):
+    def _remove_ttnn_tensor(e):
+        from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        res = e
+        if isinstance(e, TorchTTNNTensor) and e.elem is not None and e.ttnn_tensor is not None:
+            res = TorchTTNNTensor(ttnn.from_torch(e.elem.clone()))
+            res.ttnn_tensor = ttnn.to_device(res.to_ttnn, e.ttnn_tensor.device())
+            res.ttnn_tensor = ttnn.to_layout(
+                res.ttnn_tensor, e.ttnn_tensor.layout, memory_config=e.ttnn_tensor.memory_config()
+            )
+        return res
+
+    return _remove_ttnn_tensor
+
+
 def wrap_from_torch(e):
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
@@ -150,7 +166,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
-        if pcc < 0.98 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
+        if pcc < 0.99 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "
@@ -163,7 +179,7 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         if func_name == "aten::topk":
             break
     if not passed:
-        print(f"Operation {func_name} PCC < 0.98.")
+        print(f"Operation {func_name} PCC < 0.99.")
 
 
 def create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=False):
@@ -467,6 +483,74 @@ class DPLRun(NormalRun):
         return self.elem
 
 
+class DPLRunNoErrorProp(NormalRun):
+    @staticmethod
+    def torch_dispatch(cls, func, types, args=(), kwargs=None):
+        """Dispatch torch operations to TTNN when possible."""
+        from models.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
+
+        copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
+        copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
+        result = dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
+        ttnn_no_error_prop_args = tree_map(copy_to_ttnn(func), args)
+        ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(func), kwargs)
+        if can_dispatch_to_ttnn(func.name(), ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs):
+            ttnn_output = dispatch_to_ttnn_wrapper(func, ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs)
+            # Compare inputs
+            compare_fn_outputs(copied_torch_tensors_args, ttnn_no_error_prop_args, func.name())
+            # Compare outputs
+            compare_fn_outputs(result, ttnn_output, func.name())
+            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
+        return result
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        pass
+
+        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
+        copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
+        func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
+        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_kwargs)
+        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        result = torch_output
+        if self.device is not None:
+            ttnn_no_error_prop_args = tree_map(copy_to_ttnn(self.__class__.__name__), args)
+            ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(self.__class__.__name__), kwds)
+            func_args = tree_map(wrap_to_torch_ttnn_tensor, ttnn_no_error_prop_args)
+            func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, ttnn_no_error_prop_kwargs)
+            func_args = tree_map(to_ttnn_wrap, func_args)
+            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
+            func_args = tree_map(set_device_wrap(self.device), func_args)
+            func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+            self.preprocess_weights()
+            self.move_weights_to_device()
+            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            # Compare inputs
+            compare_fn_outputs(copied_torch_tensors_args, ttnn_no_error_prop_args, self.__class__.__name__)
+            # Compare outputs
+            compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
+            result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
+        return result
+
+
+class CPU(NormalRun):
+    @staticmethod
+    def torch_dispatch(cls, func, types, args=(), kwargs=None):
+        """Dispatch torch operations to CPU."""
+        print(f"Executing {func.name()} on CPU")
+        rs = dispatch_to_torch_wrapper(func, args, kwargs)
+        return rs
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        print(f"{self.__class__.__name__}: {self.module_name} on CPU")
+        func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
+        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
+        result = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        return result
+
+
 def get_tensor_run_implementation():
     if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "NORMAL":
         return NormalRun
@@ -476,4 +560,8 @@ def get_tensor_run_implementation():
         return SELRun
     elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
         return DPLRun
+    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL_NO_ERROR_PROP":
+        return DPLRunNoErrorProp
+    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "CPU":
+        return CPU
     return NormalRun
