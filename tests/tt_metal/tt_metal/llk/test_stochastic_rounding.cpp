@@ -43,8 +43,8 @@ struct StochasticRoundingResult {
     size_t total = 0;
 };
 
-/// @brief Get the next representable BF16 value (1 ULP higher)
-float bf16_next_up(float value) {
+/// @brief Get the next representable BF16 value away from zero (1 ULP)
+float bf16_next(float value) {
     bfloat16 bf = bfloat16(value);
     uint16_t bits = std::bit_cast<uint16_t>(bf);
     bits += 1;
@@ -65,7 +65,7 @@ StochasticRoundingResult run_stochastic_rounding(
 
     bfloat16 base_bf16 = bfloat16(base_value);
     float base_bf16_float = static_cast<float>(base_bf16);
-    float upper_bf16 = bf16_next_up(base_bf16_float);
+    float upper_bf16 = bf16_next(base_bf16_float);
 
     // Test value: at 'fraction' position between base and upper BF16
     // This is a float32 value that cannot be exactly represented in BF16
