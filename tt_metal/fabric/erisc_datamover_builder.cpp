@@ -71,8 +71,7 @@ namespace tt::tt_fabric {
  */
 namespace {
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
-// This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
-// and if we are not building with the tensix mux extension (due to stack size issue).
+// This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to.
 bool is_fabric_two_erisc_enabled() {
     auto& mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
@@ -87,14 +86,15 @@ bool is_fabric_two_erisc_enabled() {
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
     // out of stack size issue on the erisc, to be investigated
-    bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
+    // bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
 
     // 2d dynamic fabric doesn't properly support 2-erisc yet but is being deprecated anyways so we
     // simply disable 2-erisc on it for now.
     // Issue [#32419](https://github.com/tenstorrent/tt-metal/issues/32419)
-    return arch_bh && !tensix_extensions_enabled && !single_erisc_dispatch;
+    bool enabled = arch_bh && !single_erisc_dispatch;
+    return enabled;
 }
 
 void configure_risc_settings(
@@ -704,17 +704,25 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
         if (is_mux_mode) {
             // MUX mode: Only worker channel serviced for senders
-            uint32_t worker_channel = get_worker_connected_sender_channel();
-            this->is_sender_channel_serviced_[risc_id][worker_channel] = true;
+            // Still respect 2-ERISC split: ERISC0 handles senders, ERISC1 handles receivers
+            bool services_senders = should_risc_service_sender_channels(risc_id);
+            bool services_receivers = should_risc_service_receiver_channels(risc_id);
 
-            // All receiver channels serviced in MUX mode
-            size_t receiver_offset = 0;
-            for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-                size_t num_channels = receiver_counts[vc];
-                for (size_t i = 0; i < num_channels; ++i) {
-                    this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] = true;
+            if (services_senders) {
+                uint32_t worker_channel = get_worker_connected_sender_channel();
+                this->is_sender_channel_serviced_[risc_id][worker_channel] = true;
+            }
+
+            if (services_receivers) {
+                // All receiver channels serviced in MUX mode
+                size_t receiver_offset = 0;
+                for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+                    size_t num_channels = receiver_counts[vc];
+                    for (size_t i = 0; i < num_channels; ++i) {
+                        this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] = true;
+                    }
+                    receiver_offset += num_channels;
                 }
-                receiver_offset += num_channels;
             }
         } else {
             // Normal mode: Enable channels based on per-VC counts AND this RISC's responsibility

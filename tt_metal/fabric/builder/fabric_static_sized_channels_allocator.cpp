@@ -308,7 +308,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             {2, 2, 2, 2}     // Option 4
         },
         // BLACKHOLE
-        {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
+        {{48, 48, 0, 0}, {32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
 
     auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
         // Architecture-specific buffer slot configurations per VC
@@ -344,7 +344,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 {8, 16, 0, 0}  // Only VC0 for non-mesh topologies
             },
             // BLACKHOLE
-            {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}, {4, 8, 0, 0}}};
+            {{48, 32, 0, 0},
+             {32, 32, 0, 0},
+             {16, 32, 0, 0},
+             {16, 16, 0, 0},
+             {8, 16, 0, 0},
+             {8, 8, 0, 0},
+             {4, 8, 0, 0}}};
 
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
@@ -429,6 +435,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
     }
 
+    log_info(
+        tt::LogFabric,
+        "configure_buffer_slots_helper: options.fabric_tensix_config={}",
+        enchantum::to_string(options.fabric_tensix_config));
+
     switch (options.fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: {
             // MUX mode: Only VC0 channel 0 is used for worker
@@ -437,12 +448,14 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
 
             // get the optimal buffer slots for MUX mode (per-VC)
+            // MUX mode only uses 1 sender channel (worker channel), so use 1 for sender count
+            // to maximize buffer slots per channel
             get_optimal_num_slots_per_vc(
                 default_with_tensix_buffer_slot_options[arch_index],
-                num_used_sender_channels_per_vc[0],
-                num_used_receiver_channels_per_vc[0],
-                num_used_sender_channels_per_vc[1],
-                num_used_receiver_channels_per_vc[1],
+                1,  // MUX mode: only 1 sender channel used (worker channel)
+                1,
+                0,  // VC1: no sender channels in MUX mode
+                0,
                 vc0_sender_buffer_slots,
                 vc0_receiver_buffer_slots,
                 vc1_sender_buffer_slots,
@@ -457,6 +470,17 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             num_remote_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
             num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
             num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+
+            log_info(
+                tt::LogFabric,
+                "Fabric buffer slots (MUX mode, topology={}): VC0 sender={}, VC0 receiver={}, VC1 sender={}, VC1 "
+                "receiver={} (1 sender ch, {} receiver chs)",
+                enchantum::to_string(topology),
+                vc0_sender_buffer_slots,
+                vc0_receiver_buffer_slots,
+                vc1_sender_buffer_slots,
+                vc1_receiver_buffer_slots,
+                num_used_receiver_channels_per_vc[0]);
             return;
         }
         default: break;
@@ -488,6 +512,15 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_remote_sender_buffer_slots_per_vc[1].fill(vc1_sender_buffer_slots);
     num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+
+    log_info(
+        tt::LogFabric,
+        "Fabric buffer slots (topology={}): VC0 sender={}, VC0 receiver={}, VC1 sender={}, VC1 receiver={}",
+        enchantum::to_string(topology),
+        vc0_sender_buffer_slots,
+        vc0_receiver_buffer_slots,
+        vc1_sender_buffer_slots,
+        vc1_receiver_buffer_slots);
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
