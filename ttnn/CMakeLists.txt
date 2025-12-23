@@ -61,8 +61,8 @@ target_sources(
         FILES
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.h
-            cpp/ttnn/kernel_lib/untilize_helpers.h
+            cpp/ttnn/kernel_lib/tilize_helpers.hpp
+            cpp/ttnn/kernel_lib/untilize_helpers.hpp
             api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
