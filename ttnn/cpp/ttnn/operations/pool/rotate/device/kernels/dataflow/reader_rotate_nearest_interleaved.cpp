@@ -35,9 +35,10 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<11>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
-    uint32_t fill_stick_addr = 0;
-    if constexpr (!fill_is_zero) {
-        fill_stick_addr = get_write_ptr(fill_cb_index);
+    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
+    if constexpr (fill_is_zero) {
+        zero_out_page<fill_cb_index>(fill_stick_addr);
+    } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
         const uint32_t num_pairs = input_channels / 2;
@@ -83,8 +84,6 @@ void kernel_main() {
                     batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
                 const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
                 noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
-            } else if constexpr (fill_is_zero) {
-                zero_out_page<output_cb_index>(l1_write_addr);
             } else {
                 noc_async_read(get_noc_addr(fill_stick_addr), l1_write_addr, input_stick_nbytes_unaligned);
             }
