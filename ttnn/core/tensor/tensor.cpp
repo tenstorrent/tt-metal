@@ -736,6 +736,10 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tenso
 using namespace tt::tt_metal;
 namespace {
 
+auto get_datatype_tile_size(DataType dtype) {
+    return tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(dtype));
+}
+
 Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
     DataType src_dtype,
@@ -817,7 +821,11 @@ Tensor create_tt_tensor_from_host_data(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                tensor_layout,
+                // Sharded typecast does not support conversion between types with different tile sizes, like FLOAT32 ->
+                // BFLOAT4/8. In this case the type conversion should be done on host.
+                memory_config.is_sharded() && get_datatype_tile_size(src_dtype) != get_datatype_tile_size(dst_dtype)
+                    ? TensorLayout(dst_dtype, PageConfig(layout, optional_tile), memory_config)
+                    : tensor_layout,
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
@@ -877,11 +885,7 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
     const DataType mapped_dst_type =
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
 
-    auto get_type_tile = [](DataType dtype) {
-        return tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(dtype));
-    };
-
-    if (is_sharded && get_type_tile(dst_dtype) != get_type_tile(to_ttnn_dtype(src_dtype))) {
+    if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(to_ttnn_dtype(src_dtype))) {
         // Sharded typecast does not support conversion between tensors with types of different tile size:
         // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
         return mapped_dst_type;
