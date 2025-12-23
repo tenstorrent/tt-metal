@@ -494,10 +494,10 @@ static std::vector<Tensor> pool2d_DRAM(
 
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_h, input_w, channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
-    TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
+    TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Pool DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
+        "Input Tensor to Pool DRAM should be in Interleaved Memory Layout");
 
     Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
         TensorSpec(
