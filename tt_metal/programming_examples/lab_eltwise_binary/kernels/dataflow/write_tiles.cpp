@@ -19,7 +19,6 @@ void kernel_main() {
 
     // Create address generator for the output buffer. Address generators can determine
     // physical address based on the provided data layout and base address.
-
     // Start by extracting the tensor layout parameters from the compile-time arguments.
     // Recall that compile-time arguments are stored as a vector of uint32_t values. TensorAccessorArgs is a clean way
     // to extract the appropriate number of these uint32_t values and store them in an object.
