@@ -38,9 +38,10 @@ void point_to_point_barrier(
 
 }  // namespace
 
-void MeshSocket::initialize_from_host_ranks() {
+void MeshSocket::initialize_from_host_ranks(const std::shared_ptr<multihost::DistributedContext>& context) {
     multihost::Rank sender_rank = config_.sender_rank;
     multihost::Rank receiver_rank = config_.receiver_rank;
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     if (config_.distributed_context) {
         std::array<int, 2> socket_ranks = {*sender_rank, *receiver_rank};
         std::array<int, 2> translated_socket_ranks = {-1, -1};
@@ -69,7 +70,31 @@ void MeshSocket::initialize_from_host_ranks() {
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
 
-    // TODO: Need assert here to ensure that socket connection can be fully instantiated between the ranks.
+    bool coordinate_found = false;
+    bool is_sender = context->rank() == sender_rank;
+    bool is_receiver = context->rank() == receiver_rank;
+    if (is_sender || is_receiver) {
+        for (const auto& connection : config_.socket_connection_config) {
+            if (is_sender && control_plane.get_coord_range(config_.sender_mesh_id.value(), tt_fabric::MeshScope::LOCAL)
+                                 .contains(connection.sender_core.device_coord)) {
+                coordinate_found = true;
+                break;
+            } else if (
+                is_receiver &&
+                control_plane.get_coord_range(config_.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL)
+                    .contains(connection.receiver_core.device_coord)) {
+                coordinate_found = true;
+                break;
+            }
+        }
+    }
+    TT_FATAL(
+        coordinate_found,
+        "Creating Socket on ranks {} and {} with mesh ids {} and {} but no coordinates found in the local mesh.",
+        *sender_rank,
+        *receiver_rank,
+        *config_.sender_mesh_id,
+        *config_.receiver_mesh_id);
 }
 
 void MeshSocket::initialize_from_mesh_ids() {
@@ -99,7 +124,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         TT_FATAL(config.receiver_mesh_id.has_value(), "Sender mesh id and receiver mesh id must be set.");
         this->initialize_from_mesh_ids();
     } else {
-        this->initialize_from_host_ranks();
+        this->initialize_from_host_ranks(context);
     }
 
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
