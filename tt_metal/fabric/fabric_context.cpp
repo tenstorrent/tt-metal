@@ -4,6 +4,8 @@
 
 #include <unordered_map>
 #include <vector>
+#include <map>
+#include <algorithm>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -40,6 +42,103 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
+uint32_t FabricContext::get_max_1d_hops_from_topology() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // For 1D topologies: max hops determined by larger dimension of the mesh shape
+    // A 1D chain can be laid out as rows×1 or 1×cols, so we take max(rows, cols)
+    // Max hops = dimension_size - 1 (edges between nodes)
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    uint32_t max_hops = 0;
+
+    for (const auto& mesh_id : mesh_ids) {
+        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        uint32_t rows = mesh_shape[0];
+        uint32_t cols = mesh_shape[1];
+
+        // Max hops is the larger dimension minus 1
+        uint32_t mesh_max_hops = std::max(rows, cols);
+        if (mesh_max_hops > 0) {
+            mesh_max_hops -= 1;  // Convert size to hops (0-indexed)
+        }
+        max_hops = std::max(max_hops, mesh_max_hops);
+    }
+
+    TT_FATAL(max_hops > 0, "No chips found in mesh topology - cannot determine 1D hop count");
+
+    return max_hops;
+}
+
+uint32_t FabricContext::get_max_2d_hops_from_topology() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // For 2D mesh: max hops determined by XY-routing formula
+    // Max hops = (rows - 1) + (cols - 1) for worst-case corner-to-corner routing
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    uint32_t max_hops = 0;
+
+    for (const auto& mesh_id : mesh_ids) {
+        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        uint32_t rows = mesh_shape[0];
+        uint32_t cols = mesh_shape[1];
+
+        // XY-routing: worst case is diagonal corner-to-corner
+        uint32_t mesh_max_hops = (rows > 0 ? rows - 1 : 0) + (cols > 0 ? cols - 1 : 0);
+        max_hops = std::max(max_hops, mesh_max_hops);
+    }
+
+    TT_FATAL(max_hops > 0, "No chips found in mesh topology - cannot determine 2D hop count");
+
+    return max_hops;
+}
+
+uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const {
+    // Map hop count to discrete route buffer sizes (8, 16, 24, 32 bytes)
+    // These sizes are chosen to:
+    // 1. Align with 16-byte packet header boundaries (compiler adds tail padding)
+    // 2. Provide good coverage for common mesh sizes without excessive granularity
+    // 3. Balance memory efficiency vs simplicity (4 discrete sizes instead of per-hop sizing)
+    if (max_hops <= 8) {
+        return 8;
+    } else if (max_hops <= 16) {
+        return 16;
+    } else if (max_hops <= 24) {
+        return 24;
+    } else {
+        return 32;  // Maximum route buffer size (supports up to 32-hop 2D paths)
+    }
+}
+
+void FabricContext::compute_packet_specifications() {
+    // Query topology to determine optimal header sizes
+    if (this->is_2D_routing_enabled()) {
+        max_2d_hops_ = get_max_2d_hops_from_topology();
+        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
+        max_1d_hops_ = 32;  // Not used for 2D, but set default
+    } else {
+        max_1d_hops_ = get_max_1d_hops_from_topology();
+
+        // Current memory map limits: ROUTING_PATH_SIZE_1D = 256 bytes supports max 32 hops
+        // (32 chips × 8 bytes per routing entry = 256 bytes)
+        // Support for >32 hops requires L1 memory map updates and larger routing tables
+        TT_FATAL(
+            max_1d_hops_ <= 32,
+            "1D routing with >32 hops (max_hops={}) requires L1 memory map updates. "
+            "Current allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max 32 hops.",
+            max_1d_hops_);
+
+        routing_2d_buffer_size_ = 32;  // Default for 2D (unused in 1D mode)
+        max_2d_hops_ = 0;              // Not used for 1D
+    }
+
+    // Compute actual packet sizes based on topology
+    packet_header_size_bytes_ = compute_packet_header_size_bytes();
+    max_payload_size_bytes_ = compute_max_payload_size_bytes();
+    channel_buffer_size_bytes_ = packet_header_size_bytes_ + max_payload_size_bytes_;
+}
+
 tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
@@ -56,19 +155,42 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
+size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
+    // Use explicit template instantiation for compile-time type safety
+    switch (extension_words) {
+        case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
+        case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
+        default: TT_THROW("Unsupported extension words: {}", extension_words);
+    }
+}
+
+size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
+    // Use explicit template instantiation for compile-time type safety
+    switch (route_buffer_size) {
+        case 8: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<8>);
+        case 16: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<16>);
+        case 24: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<24>);
+        case 32: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<32>);
+        default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
+    }
+}
+
+size_t FabricContext::get_udm_header_size(uint32_t route_buffer_size) const {
+    // UDM header = base 2D header + UDM control fields
+    return get_2d_header_size(route_buffer_size) + sizeof(tt::tt_fabric::UDMControlFields);
+}
+
 size_t FabricContext::compute_packet_header_size_bytes() const {
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+
     if (udm_enabled) {
-        // UDM mode only supports 2D routing
         TT_FATAL(this->is_2D_routing_enabled(), "UDM mode only supports 2D routing");
-        return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
+        return get_udm_header_size(routing_2d_buffer_size_);
+    } else if (this->is_2D_routing_enabled()) {
+        return get_2d_header_size(routing_2d_buffer_size_);
     } else {
-        if (this->is_2D_routing_enabled()) {
-            return sizeof(tt::tt_fabric::HybridMeshPacketHeader);
-        } else {
-            return sizeof(tt::tt_fabric::PacketHeader);
-        }
+        return get_1d_header_size(get_1d_pkt_hdr_extension_words());
     }
 }
 
@@ -92,9 +214,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
     this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    this->packet_header_size_bytes_ = this->compute_packet_header_size_bytes();
-    this->max_payload_size_bytes_ = this->compute_max_payload_size_bytes();
-    this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
+    // Compute packet specifications based on topology (Phase 1)
+    this->compute_packet_specifications();
 
     // Query tensix config from MetalContext at init time
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
@@ -190,5 +311,28 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
+std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() const {
+    std::map<std::string, std::string> defines;
+
+    // Add routing mode define
+    defines["ROUTING_MODE"] = std::to_string(static_cast<uint32_t>(this->topology_));
+
+    // Add UDM mode define
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    defines["UDM_MODE"] = udm_enabled ? "1" : "0";
+
+    // Add dynamic packet header sizing defines based on topology
+    if (this->is_2D_routing_enabled()) {
+        // 2D routing: inject route buffer size
+        defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
+    } else {
+        // 1D routing: inject extension words
+        uint32_t extension_words = get_1d_pkt_hdr_extension_words();
+        defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(extension_words);
+    }
+
+    return defines;
+}
 
 }  // namespace tt::tt_fabric
