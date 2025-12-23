@@ -82,7 +82,12 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         tt_ccl=tt_ccl,
         prefetcher_setup=prefetcher_setup,
     )
-
+    # in Llama codebase
+    # memory config is shard shape of 32, 8192 // 4 // 16
+    # sharded on 16 cores
+    # then we convert memory config to
+    # 32 , 2304 // 24 = 32, 96
+    # sharded on 24 cores
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(

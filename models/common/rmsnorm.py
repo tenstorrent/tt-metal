@@ -117,11 +117,21 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        mode,
+        in_sharded=False,
+        out_sharded=False,
+        norm_config=None,
+    ) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
-        breakpoint()
-        program_config = self.sharded_program_config if in_sharded else None
-        memory_config = self.sharded_output_config if out_sharded else None
+        sharded_program_config = norm_config.get("sharded_program_config", None)
+        sharded_output_config = norm_config.get("sharded_output_config", None)
+        output_mem_config = norm_config.get("output_mem_config", None)
+
+        program_config = sharded_program_config if in_sharded else None
+        memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
@@ -131,22 +141,21 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        breakpoint()
         x = norm(
-            x,
+            x,  # 1,1,32,4096
             epsilon=self.eps,
-            weight=weight,
+            weight=weight,  # 1,1,128,32
             program_config=program_config,
-            memory_config=memory_config,
+            memory_config=memory_config,  # 32,128 sharded on 32 cores
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
-        breakpoint()
+
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
         else:
-            if self.output_mem_config is not None:
-                x = ttnn.to_memory_config(x, self.output_mem_config)
-            breakpoint()
+            if output_mem_config is not None:
+                x = ttnn.to_memory_config(x, output_mem_config)
+
             return x
 
     def _distributed_rmsnorm(

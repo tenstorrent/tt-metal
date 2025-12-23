@@ -303,16 +303,26 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
+        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
+
+        self.wo_sharded_ring = ttnn.as_tensor(
+            pt_wo,
+            dtype=self.wo_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=self.model_config["SHARDED_WO_RING_MEMCFG"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=self.shard_wo_dims,
+                mesh_shape=configuration.cluster_shape,
+            ),
+        )
+
         def get_wo_memory_config():
             if self.use_fused_all_gather_matmul or self.TG:
-                if self.prefetcher is not None and self.prefetcher.mode == "decode":
-                    return self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"]
-                else:
-                    return ttnn.DRAM_MEMORY_CONFIG
+                return ttnn.DRAM_MEMORY_CONFIG
             else:
                 return wo_mem_config
-
-        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
 
         self.wo = ttnn.as_tensor(
             pt_wo,
@@ -329,6 +339,7 @@ class Attention(LightweightModule):
             #     cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             # ),
         )
+
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -339,9 +350,13 @@ class Attention(LightweightModule):
             self.scale = self.head_dim**-0.5
 
         # Insert the tensors into the prefetcher only in decode mode, we do not use prefetcher in prefill mode
-        if self.prefetcher is not None and self.prefetcher.mode == "decode":
-            self.prefetcher.insert_tensor(self.wqkv)
-            self.prefetcher.insert_tensor(self.wo)
+        if self.prefetcher is not None:
+
+            def register_weights():
+                self.prefetcher.insert_tensor(self.wqkv)
+                self.prefetcher.insert_tensor(self.wo_sharded_ring)
+
+            self.prefetcher.register_callback(register_weights)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -410,7 +425,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        breakpoint()
+
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -433,9 +448,8 @@ class Attention(LightweightModule):
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
-        breakpoint()
-
         ttnn.deallocate(x)
+
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,  # input shape: [1, 1, 32, 3072]
             self.mesh_device,
@@ -452,7 +466,7 @@ class Attention(LightweightModule):
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
         # output shape: [1, 1, 32, 3072]
-        breakpoint()
+
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
             xqkv_fused = ttnn.matmul(
@@ -468,7 +482,7 @@ class Attention(LightweightModule):
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
-        breakpoint()
+
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
@@ -492,21 +506,22 @@ class Attention(LightweightModule):
             if self.prefetcher is None
             else self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"],
         )
-        breakpoint()
+
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
         ttnn.deallocate(xqkv_fused)
-        breakpoint()
+
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
         #
+
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
-        breakpoint()
+
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
@@ -522,12 +537,12 @@ class Attention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        breakpoint()
+
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
-        breakpoint()
+
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
         # NOTE: Varying the batch size will result in slightly different outputs.
@@ -563,7 +578,7 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
-        breakpoint()
+
         ttnn.deallocate(q_heads_1BQD)
         # Prefetcher + Attn working until here, still WIP
         attn_output_11BH = ttnn.to_memory_config(
@@ -572,17 +587,16 @@ class Attention(LightweightModule):
             if self.prefetcher is None
             else self.model_config["PREFETCHER_SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
         )
+        # With prefetcher:
         # attn_output_11BH shape: [1, 1, 16, 128]
-        breakpoint()
-        nlp_concat_heads_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 3)),
-            ]
-        )
+        # num heads:
+        # MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=1,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 128]),grid={[(x=1,y=0) - (x=1,y=0)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
+        # sub core grids: {[(x=1,y=0) - (x=4,y=9)], [(x=8,y=0) - (x=11,y=9)]}
+
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
-            sub_core_grids=nlp_concat_heads_core_range_set if self.prefetcher is not None else None,
+            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
         # attn_output_cat shape: [1, 1, 32, 2048]
         ttnn.deallocate(attn_output_11BH)
@@ -635,14 +649,12 @@ class Attention(LightweightModule):
                 )
 
                 # Right after all gather
-                breakpoint()
-
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
-                    self.wo,
+                    self.wo_sharded_ring if self.prefetcher is not None else self.wo,
                     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
                     if self.prefetcher is None
-                    else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                    else self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"]
                     if self.prefetcher is None
                     else self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_PROGCFG"],
@@ -650,7 +662,7 @@ class Attention(LightweightModule):
                     global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                     sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
-                breakpoint()
+
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(
@@ -662,7 +674,6 @@ class Attention(LightweightModule):
             return dense_out_sharded
 
         else:
-            breakpoint()
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
@@ -713,7 +724,7 @@ class Attention(LightweightModule):
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
-            breakpoint()
+
             ttnn.deallocate(attn_output_cat)
 
             # All reduce
@@ -827,7 +838,6 @@ class Attention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -854,6 +864,7 @@ class Attention(LightweightModule):
             keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
         ttnn.deallocate(k_heads_1KSD)
 

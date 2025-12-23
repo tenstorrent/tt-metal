@@ -461,6 +461,19 @@ class ModelArgs:
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
         self.prefetcher = prefetcher
         self.device_name = determine_device_name(self.mesh_device)
+        self.start_core = ttnn.CoreCoord(1, 0)
+        self.sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7)),
+            ]
+        )
+
+        self.sub_core_grid_topk = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+            ]
+        )
 
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
@@ -470,6 +483,10 @@ class ModelArgs:
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
+        if self.num_devices == 32:
+            self.batch_size_per_device_group = max(self.max_batch_size // list(device.shape)[1], 1)
+        else:
+            self.batch_size_per_device_group = self.max_batch_size
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
@@ -937,7 +954,7 @@ class ModelArgs:
             )
 
             # MLP configs
-            mlp_core_grid = (
+            self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
@@ -946,9 +963,9 @@ class ModelArgs:
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    self.dim // mlp_core_grid.num_cores,
+                    self.dim // self.mlp_core_grid.num_cores,
                 ),  # Shard shape: [32, 128] -> 1 shard per core
-                mlp_core_grid,
+                self.mlp_core_grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -957,7 +974,7 @@ class ModelArgs:
                 m=self.tile_padded_batch_rows,
                 k=self.dim,
                 n=self.hidden_dim // self.cluster_shape[1],
-                num_cores=mlp_core_grid.num_cores,
+                num_cores=self.mlp_core_grid.num_cores,
             )
 
             mlp2_core_grid = (
@@ -982,7 +999,7 @@ class ModelArgs:
                 n=self.dim,
                 num_cores=mlp2_core_grid.num_cores,
             )
-            attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
                     shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
@@ -995,254 +1012,14 @@ class ModelArgs:
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
+                        self.dim // self.attn_input_grid.num_cores,
                     ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
+                    self.attn_input_grid,
                     ttnn.ShardStrategy.WIDTH,
                     ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
             )
-
-            # ====== Prefetcher + Attention program configs ======
-            if self.prefetcher is not None:
-                self.start_core = ttnn.CoreCoord(1, 0)
-                sdpa_grid_size = (8, 4)
-                num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
-                self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=sdpa_grid_size,
-                    sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                        self.start_core, num_sdpa_cores, self.prefetcher.all_worker_cores_range_set, row_wise=True
-                    ),
-                    exp_approx_mode=False,
-                    q_chunk_size=128,
-                    k_chunk_size=128,
-                )
-
-                wo_shape_ring = (
-                    self.dim // self.cluster_shape[0],
-                    self.dim // self.cluster_shape[1],
-                )  # Use padded K and N
-                self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                    k=wo_shape_ring[0],
-                    n=wo_shape_ring[1],
-                )
-
-                attn_input_core_range_set = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                    ]
-                )
-                self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
-                    core_grid=attn_input_core_range_set,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"] = self.matmul_1d_ring_config(
-                    1,
-                    32,
-                    self.dim // self.cluster_shape[0],
-                    self.qkv_size // self.cluster_shape[1],  # Use padded N
-                    self.prefetcher.ring_size,
-                    num_global_cb_receivers=self.prefetcher.num_receiver_cores,
-                    untilize_out=True,
-                )
-
-                self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                qkv_out_shard_shape_ring = (
-                    32,
-                    self.qkv_size // self.cluster_shape[1] // self.prefetcher.ring_size,
-                )  # Use padded N
-                self.model_config["PREFETCHER_SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=qkv_out_shard_shape_ring,
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(
-                        self.prefetcher.all_worker_cores_range_set,
-                        [
-                            32,
-                            self.head_dim,
-                        ],
-                        ttnn.ShardOrientation.ROW_MAJOR,
-                    ),
-                )
-
-                self.model_config[
-                    "PREFETCHER_SCORES_BATCHED_MM_OUTPUT_MEMCFG"
-                ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
-                    core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                        self.start_core,
-                        batch_size_per_device_group,
-                        self.prefetcher.all_worker_cores_range_set,
-                        row_wise=True,
-                    ),
-                    strategy=ttnn.ShardStrategy.HEIGHT,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                wo_out_shard_shape_ring = (
-                    32,
-                    self.dim // self.cluster_shape[1] // self.prefetcher.ring_size,
-                )  # Use padded N
-                self.model_config[
-                    "PREFETCHER_ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"
-                ] = ttnn.create_sharded_memory_config(
-                    shape=wo_out_shard_shape_ring,
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_PROGCFG"] = self.matmul_1d_ring_config(
-                    1,
-                    32,
-                    self.dim,
-                    self.dim // self.cluster_shape[1],  # Use padded N
-                    self.prefetcher.ring_size,
-                    num_global_cb_receivers=self.prefetcher.num_receiver_cores,
-                )
-
-                self.model_config["PREFETCHER_WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                    1,
-                    32,
-                    self.dim,
-                    self.dim // self.cluster_shape[1],  # Use padded N
-                    self.prefetcher.ring_size,
-                    num_global_cb_receivers=self.prefetcher.num_receiver_cores,
-                )
-
-                wo_out_shard_shape_ring = (32, self.dim // self.prefetcher.ring_size)  # Use padded N
-                self.model_config["PREFETCHER_SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=wo_out_shard_shape_ring,
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                # ====== Prefetcher + MLP program configs ======
-                # FF1 and FF3 program configs
-                self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"] = self.matmul_1d_ring_config(
-                    1,
-                    32,
-                    self.dim,
-                    self.hidden_dim // self.cluster_shape[1],  # Use padded N
-                    self.prefetcher.ring_size,
-                    num_global_cb_receivers=self.prefetcher.num_receiver_cores,
-                )
-                # FF2 program configs
-                self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
-                    1,
-                    32,
-                    self.hidden_dim // self.cluster_shape[1],
-                    self.dim,  # Use padded N
-                    self.prefetcher.ring_size,
-                    num_global_cb_receivers=self.prefetcher.num_receiver_cores,
-                )
-
-                # Prefetcher Memory config for Input, FF1 and FF3 output
-                mlp_input_core_range_set = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                    ]
-                )
-                self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
-                    core_grid=mlp_input_core_range_set,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.hidden_dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                # Prefetcher Memory config for FF2 output
-                self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                # Prefetcher MLP All reduce output memory config (same memory config as PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG)
-                norm_core_range_set = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                    ]
-                )
-                self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),
-                    core_grid=norm_core_range_set,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                self.model_config["PREFETCHER_DECODE_RESIDUAL_ALL_REDUCE_MEMCFG"] = ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-                # ====== END of Prefetcher + MLP program configs ======
 
             # glx doesn't support DRAM sharded matmuls yet
             self.model_config["XQKV_DECODE_PROGCFG"] = (
@@ -1262,7 +1039,7 @@ class ModelArgs:
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
-                    num_cores=attn_input_grid.num_cores,
+                    num_cores=self.attn_input_grid.num_cores,
                 )
             )
 
@@ -1510,11 +1287,36 @@ class ModelArgs:
                     self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
                 )
 
-            # RMS NORM
-            self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
-            self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
-            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.lm_head_core_grid)
+            wo_shape_ring = (
+                self.dim // self.cluster_shape[0],
+                self.dim // self.cluster_shape[1],
+            )  # Use padded K and N
+            self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+                k=wo_shape_ring[0],
+                n=wo_shape_ring[1],
+            )
 
+            # RMS NORM
+            self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(self.attn_input_grid)
+            self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(self.mlp_core_grid)
+            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.mlp_core_grid)
+
+            self.model_config["ATTN_NORM_CONFIG"] = {
+                "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
+                "sharded_output_config": self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                "output_mem_config": None,
+            }
+            self.model_config["FF_NORM_CONFIG"] = {
+                "sharded_program_config": self.create_sharded_norm_config(self.mlp_core_grid),
+                "sharded_output_config": self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                "output_mem_config": None,
+            }
+
+            self.model_config["LM_HEAD_NORM_CONFIG"] = {
+                "sharded_program_config": self.create_sharded_norm_config(self.mlp_core_grid),
+                "sharded_output_config": self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                "output_mem_config": None,
+            }
             # All gather matmuls currently only supported on T3K
             # We need it sharded on num_cores = num_devices
             self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -1529,6 +1331,21 @@ class ModelArgs:
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
+            lm_head_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7)),
+                ]
+            )
+            self.model_config["LM_HEAD_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                self.dim,
+                16384,
+                lm_head_core_range_set.num_cores(),
+                prefetch=False,
+                num_global_cb_receivers=1,
+            )
 
             self.set_tg_attention_config()
 
@@ -1539,8 +1356,8 @@ class ModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
-            logger.info(f"Attention grid: {attn_input_grid}")
-            logger.info(f"MLP grid: {mlp_core_grid}")
+            logger.info(f"Attention grid: {self.attn_input_grid}")
+            logger.info(f"MLP grid: {self.mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")
             logger.info(
                 f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
@@ -1548,6 +1365,335 @@ class ModelArgs:
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def build_prefetcher_configs(self, mode: str):
+        """
+        (Re)build all prefetcher-related entries in self.model_config
+        from the current values of self.prefetcher and other attributes.
+        Call this again if self.prefetcher or its attributes change.
+        """
+        if self.prefetcher is None and mode == "decode":
+            raise ValueError("Prefetcher is not initialized for decode mode")
+
+        sdpa_grid_size = (8, 4)
+        start_core = ttnn.CoreCoord(1, 0)
+        num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+        self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_grid_size,
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, num_sdpa_cores, self.prefetcher.all_worker_cores_range_set, row_wise=True
+            ),
+            exp_approx_mode=False,
+            q_chunk_size=128,
+            k_chunk_size=128,
+        )
+
+        wo_shape_ring = (
+            self.dim // self.cluster_shape[0],
+            self.dim // self.cluster_shape[1],
+        )  # Use padded K and N
+        self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=wo_shape_ring[0],
+            n=wo_shape_ring[1],
+        )
+
+        attn_input_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
+            core_grid=attn_input_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim // self.cluster_shape[0],
+            self.qkv_size // self.cluster_shape[1],  # Use padded N
+            self.prefetcher.ring_size,
+            num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+            untilize_out=True,
+        )
+
+        self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        qkv_out_shard_shape_ring = (
+            32,
+            self.qkv_size // self.cluster_shape[1] // self.prefetcher.ring_size,
+        )  # Use padded N
+        self.model_config["PREFETCHER_SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=qkv_out_shard_shape_ring,
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                self.prefetcher.all_worker_cores_range_set,
+                [
+                    32,
+                    self.head_dim,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+        self.model_config[
+            "PREFETCHER_SCORES_BATCHED_MM_OUTPUT_MEMCFG"
+        ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+            shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+            core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core,
+                batch_size_per_device_group,
+                self.prefetcher.all_worker_cores_range_set,
+                row_wise=True,
+            ),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        wo_out_shard_shape_ring = (
+            32,
+            self.dim // self.cluster_shape[1] // self.prefetcher.ring_size,
+        )  # Use padded N
+        self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=wo_out_shard_shape_ring,
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim,
+            self.dim // self.cluster_shape[1],  # Use padded N
+            self.prefetcher.ring_size,
+            num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+        )
+
+        self.model_config["PREFETCHER_WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim,
+            self.dim // self.cluster_shape[1],  # Use padded N
+            self.prefetcher.ring_size,
+            num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+        )
+
+        wo_out_shard_shape_ring = (32, self.dim // self.prefetcher.ring_size)  # Use padded N
+        self.model_config["PREFETCHER_SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=wo_out_shard_shape_ring,
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ====== Prefetcher + MLP program configs ======
+        # FF1 and FF3 program configs
+        self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim,
+            self.hidden_dim // self.cluster_shape[1],  # Use padded N
+            self.prefetcher.ring_size,
+            num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+        )
+        # FF2 program configs
+        self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.hidden_dim // self.cluster_shape[1],
+            self.dim,  # Use padded N
+            self.prefetcher.ring_size,
+            num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+        )
+
+        # Prefetcher Memory config for Input, FF1 and FF3 output
+        mlp_input_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+            core_grid=mlp_input_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.hidden_dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # Prefetcher Memory config for FF2 output
+        self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # Prefetcher MLP All reduce output memory config (same memory config as PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG)
+        norm_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),
+            core_grid=norm_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_DECODE_RESIDUAL_ALL_REDUCE_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),
+            core_grid=self.prefetcher.to_core_range_set(
+                self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Prefetcher Memory config for LM Head input
+        lm_head_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // lm_head_core_range_set.num_cores()),
+            core_grid=lm_head_core_range_set,
+            # core_grid=self.prefetcher.to_core_range_set(
+            #     self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            # ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_SHARDED_LM_HEAD_OUTPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 16384 // lm_head_core_range_set.num_cores()),
+            core_grid=lm_head_core_range_set,
+            # core_grid=self.prefetcher.to_core_range_set(
+            #     self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            # ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        lm_head_output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 16384 // lm_head_output_core_range_set.num_cores()),  # padded shape
+            core_grid=lm_head_output_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.model_config["PREFETCHER_LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, 65536 // lm_head_output_core_range_set.num_cores()),
+            core_grid=lm_head_output_core_range_set,
+            # core_grid=self.prefetcher.to_core_range_set(
+            #     self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+            # ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Prefetcher Memory config for final norm input
+        final_norm_input_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
+            ]
+        )
+        self.model_config["PREFETCHER_SHARDED_FINAL_NORM_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+            core_grid=final_norm_input_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ====== Norm configs ======
+        self.model_config["ATTN_NORM_CONFIG"] = {
+            "sharded_program_config": self.create_sharded_norm_config(self.attn_input_grid),
+            "sharded_output_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"],
+            "output_mem_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"],
+        }
+        self.model_config["FF_NORM_CONFIG"] = {
+            "sharded_program_config": self.create_sharded_norm_config(self.mlp_core_grid),
+            "sharded_output_config": self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"],
+            "output_mem_config": self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"],
+        }
+        self.model_config["LM_HEAD_NORM_CONFIG"] = {
+            "sharded_program_config": self.create_sharded_norm_config(self.mlp_core_grid),
+            "sharded_output_config": self.model_config["PREFETCHER_SHARDED_FINAL_NORM_INPUT_MEMCFG"],
+            "output_mem_config": None,
+        }
+        # ====== END of Prefetcher program and memory configs ======
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
@@ -2382,7 +2528,7 @@ class ModelArgs:
         in0_block_h = M // ttnn.TILE_SIZE  # 1
         in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 2
         out_block_h = M // ttnn.TILE_SIZE  # 1
-        out_block_w = N // num_cores // ttnn.TILE_SIZE  # (4096/8/8)/32 = 2, N = 4096/8
+        out_block_w = N // num_cores // ttnn.TILE_SIZE  # (16384/32/32) = 16
 
         num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
         num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # (4096/8/32 - 1)/2 + 1 = 8
@@ -2421,7 +2567,7 @@ class ModelArgs:
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=num_global_cb_receivers,
+            num_global_cb_receivers=num_global_cb_receivers if prefetch else 1,
             untilize_out=untilize_out,
         )
 

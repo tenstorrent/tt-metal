@@ -64,7 +64,6 @@ void do_signaling(uint32_t& rt_args_idx) {
 
 void kernel_main() {
     // Compile time args
-
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
     constexpr const bool in1_is_dram_sharded = get_compile_time_arg_val(1);
     constexpr uint32_t in1_block_height_in_tiles = get_compile_time_arg_val(2);  // Padded block shape
@@ -77,6 +76,7 @@ void kernel_main() {
     constexpr uint32_t in1_block_width_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t in1_shard_width_in_dram = get_compile_time_arg_val(10);
 
+    DPRINT << "in1_shard_width_in_dram: " << in1_shard_width_in_dram << ENDL();  // 63
     DPRINT << "in1_is_dram_interleaved: " << static_cast<int>(in1_is_dram_interleaved) << ENDL();
     DPRINT << "in1_is_dram_sharded: " << static_cast<int>(in1_is_dram_sharded) << ENDL();
     DPRINT << "in1_block_height_in_tiles: " << in1_block_height_in_tiles << ENDL();
@@ -85,6 +85,7 @@ void kernel_main() {
     DPRINT << "num_blocks: " << num_blocks << ENDL();
     DPRINT << "batch: " << batch << ENDL();
     DPRINT << "in1_block_page_size: " << in1_block_page_size << ENDL();
+    DPRINT << "in1_block_width_num_pages: " << in1_block_width_num_pages << ENDL();
 
     uint32_t rt_args_idx = 0;
     constexpr bool needs_signaler = get_compile_time_arg_val(15) == 1;

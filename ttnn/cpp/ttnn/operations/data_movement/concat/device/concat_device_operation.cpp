@@ -84,17 +84,17 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(
             this->output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
-        if (this->dim == shape_first.rank() - 1) {
-            TT_FATAL(
-                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only support width concat on height-sharded tensors.");
-        } else if (this->dim == shape_first.rank() - 2) {
-            TT_FATAL(
-                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-                "Only support height concat on width-sharded tensors.");
-        } else {
-            TT_FATAL(false, "Only width or height concat on sharded tensors");
-        }
+        // if (this->dim == shape_first.rank() - 1) {
+        //     TT_FATAL(
+        //         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        //         "Only support width concat on height-sharded tensors.");
+        // } else if (this->dim == shape_first.rank() - 2) {
+        //     TT_FATAL(
+        //         memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        //         "Only support height concat on width-sharded tensors.");
+        // } else {
+        //     TT_FATAL(false, "Only width or height concat on sharded tensors");
+        // }
         TT_FATAL(
             this->groups == 1 || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
             "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",

@@ -593,6 +593,7 @@ class Generator:
         """
 
         # Compile run
+
         self._decode_forward_no_trace_text(
             tokens,
             current_pos,

@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import torch
 from loguru import logger
@@ -46,11 +46,11 @@ class PrefetcherCoreConfig:
         right_end_col = constants.RIGHT_END_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.RIGHT_END_COL_BLACKHOLE
 
         def get_sender_range(active: Optional[bool] = None):
-            left_sender_range = ([] if active == False else [0, 4, 5, 9]) + (
-                [] if active == True else [1, 2, 3, 6, 7, 8]
+            left_sender_range = ([] if active == False else [0, 3, 7, 9]) + (
+                [] if active == True else [1, 2, 4, 6, 5, 8]
             )
-            right_sender_range = ([] if active == False else [0, 1, 2, 4] + [] if is_blackhole() else [5, 6, 7, 9]) + (
-                [] if active == True else [3, 5, 6, 7, 8, 9] if is_blackhole() else [3, 8]
+            right_sender_range = ([] if active == False else [1, 4, 6, 9] + [] if is_blackhole() else [5, 6, 7, 9]) + (
+                [] if active == True else [2, 3, 5, 7, 8] if is_blackhole() else [3, 8]
             )
             return left_sender_range, right_sender_range
 
@@ -178,9 +178,20 @@ class Prefetcher(LightweightModule):
         self.height_cores = self.mesh_device.compute_with_storage_grid_size().y
         # Only ring size of 24 has been tested on WH
 
-        ### Prefetcher Subdevices
+        ### Prefetcher HardCoded Core Ranges (i dont like this)
+        self.all_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
+        )
+
+        self.all_worker_cores_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9)),
+            ]
+        )
 
         ### Prefetched Tensors
+        self.callbacks = []
         self.prefetched_tensors = []
         self.prefetched_tensor_addr = []
         self.prefetched_tt_addr_tensor = None
@@ -190,6 +201,10 @@ class Prefetcher(LightweightModule):
         self.receiver_cores = None
         self.all_cores = None
         self.mode = "prefill"
+
+    # Todo: add a note to that weights are prefetched in the order of the construction of the module
+    def register_callback(self, callback: Callable[[], None]):
+        self.callbacks.append(callback)
 
     def get_optimal_receiver_cores(self):
         if self.mesh_device.shape == ttnn.MeshShape([1, 2]):
@@ -234,17 +249,6 @@ class Prefetcher(LightweightModule):
         self.receiver_cores = PrefetcherCoreConfig(
             num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
         ).receiver_cores
-
-        self.all_core_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
-        )
-
-        self.all_worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9)),
-            ]
-        )
         self.sender_receiver_mapping = list(
             zip(
                 self.sender_cores(),
@@ -322,6 +326,14 @@ class Prefetcher(LightweightModule):
         logger.info(
             f"Inserted tensor {tensor.shape} into prefetcher, total number of tensors: {len(self.prefetched_tensor_addr)}"
         )
+
+    def prefetch(self):
+        """
+        Inserts the tensors to be prefetched in a queue
+        The tensors are prefetched in the order of the registration of the callbacks
+        """
+        for callback in self.callbacks:
+            callback()
 
     def run(self):
         """

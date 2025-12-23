@@ -12,11 +12,13 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("use_prefetcher", (True, False))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -65,7 +67,16 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+    "device_params",
+    [
+        {
+            "worker_l1_size": 1481384,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
 def test_model_inference(
     weights,
     layers,
@@ -78,6 +89,7 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     request,
+    use_prefetcher,
 ):
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env:
@@ -104,6 +116,13 @@ def test_model_inference(
     # Also avoid comparing PCC for dummy weights
     cache_pcc = layers == 1 and not dummy_weights
 
+    # Setup prefetcher
+    # num_tensors is 5 because we are prefetching qkv + do + ff1 + ff3 + ff2
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+    if use_prefetcher:
+        prefetcher.init(mode="decode")
+
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
@@ -112,6 +131,7 @@ def test_model_inference(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
         cache_hf=True,
+        prefetcher=prefetcher,
     )
 
     # Define minimum PCC for each iteration
@@ -252,6 +272,7 @@ def test_model_inference(
         )
 
     # Load TTNN model
+    breakpoint()
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
@@ -259,7 +280,12 @@ def test_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher if use_prefetcher else None,
     )
+    breakpoint()
+    if use_prefetcher:
+        tt_model.prefetcher.prefetch()
+
     logger.info("Model and caches loaded.")
 
     if run_ref_pt:
@@ -298,12 +324,16 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+            if use_prefetcher
+            else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
+        breakpoint()
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
 
+        breakpoint()
         # Run TT model
         tt_out = tt_model(
             decode_input,

@@ -1721,7 +1721,7 @@ process_mcast_in1_program_and_create_override_variables(
 }
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
-
+// THIS IS THE RING MATMUL PROGRAM AHHH
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
 process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
@@ -2225,13 +2225,13 @@ process_gather_in0_program_and_create_override_variables(
 
         } else if (device->arch() == tt::ARCH::BLACKHOLE) {
             worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
-            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
-            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
+            worker_coord_y_to_dram_bank_first_col_mapping[3] = 3;
+            worker_coord_y_to_dram_bank_first_col_mapping[7] = 2;
             worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
-            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
-            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
-            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
-            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
+            worker_coord_y_to_dram_bank_second_col_mapping[1] = 5;
+            worker_coord_y_to_dram_bank_second_col_mapping[4] = 7;
+            worker_coord_y_to_dram_bank_second_col_mapping[6] = 6;
+            worker_coord_y_to_dram_bank_second_col_mapping[9] = 4;
 
         } else {
             TT_THROW("ring gather MM currently not supporting this device arch");

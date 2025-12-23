@@ -13,7 +13,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -85,7 +85,7 @@ def test_decoder_inference(
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
-    breakpoint()
+
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {
@@ -106,6 +106,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
         rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
+        prefetcher=prefetcher,
     )
 
     if model_args.rope_theta_local is not None:
@@ -164,7 +165,9 @@ def test_decoder_inference(
         paged_attention_config=paged_attention_config,
         prefetcher=prefetcher,
     )
-    breakpoint()
+    if use_prefetcher:
+        model_args.build_prefetcher_configs("decode")
+        tt_model.prefetcher.prefetch()
 
     seqlen = 1
 
@@ -187,7 +190,7 @@ def test_decoder_inference(
 
         if prefetcher is not None:
             prefetcher.run()
-        breakpoint()
+
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
@@ -196,7 +199,7 @@ def test_decoder_inference(
             * 2
         ) - 1
         tt_decode_input = pt_decode_input.clone()
-        breakpoint()
+
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             # ttnn.DRAM_MEMORY_CONFIG,
@@ -208,7 +211,6 @@ def test_decoder_inference(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
-        breakpoint()
 
         # Run TT model
         tt_out = tt_model(
@@ -219,7 +221,7 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
-        breakpoint()
+
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),

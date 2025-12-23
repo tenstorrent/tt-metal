@@ -206,6 +206,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     num_layers,
+    use_prefetcher,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -235,6 +236,7 @@ def prepare_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             num_layers=num_layers,
+            use_prefetcher=use_prefetcher,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -293,7 +295,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
+            31,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
@@ -319,7 +321,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
+            1,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
@@ -692,6 +694,10 @@ def prepare_generator_args(
     ],
 )
 @pytest.mark.parametrize(
+    "use_prefetcher",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
@@ -701,7 +707,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1, "worker_l1_size": 1445000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -747,6 +753,7 @@ def test_demo_text(
     model_location_generator,
     num_layers,
     mode,
+    use_prefetcher,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -880,6 +887,7 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
         num_layers=num_layers,
+        use_prefetcher=use_prefetcher,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -941,8 +949,10 @@ def test_demo_text(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
+
         if batch_idx != 0:
             for i in range(len(model)):
+                model[i].switch_mode("prefill")
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -1038,6 +1048,10 @@ def test_demo_text(
             profiler.start(f"inference_decode_time_{1}", iteration=batch_idx)
             profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
             logger.info(f"Skipping decode forward pass when prefill mode is enabled")
+
+        if mode == "decode" or mode == "full":
+            for i in range(len(model)):
+                model[i].switch_mode("decode")
 
         while users_decoding and mode != "prefill":
             if iteration == 0:  # First iteration also accounts for compile time

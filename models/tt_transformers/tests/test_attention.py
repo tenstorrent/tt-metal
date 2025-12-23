@@ -110,8 +110,9 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
         rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
+        prefetcher=prefetcher,
     )
-
+    breakpoint()
     transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
@@ -156,6 +157,10 @@ def test_attention_inference(
         prefetcher=prefetcher,
     )
 
+    if prefetcher is not None and mode == "decode":
+        model_args.build_prefetcher_configs("decode")
+        prefetcher.prefetch()
+
     cos, sin = precompute_freqs(
         model_args.head_dim,
         model_args.max_seq_len * 2,
@@ -197,6 +202,7 @@ def test_attention_inference(
             else model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,
         )
+        breakpoint()
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if mode == "decode" else None)

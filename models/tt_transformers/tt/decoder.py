@@ -47,7 +47,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
-
+        self.use_prefetcher = prefetcher is not None and prefetcher.mode == "decode"
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
         self.attention = ActualAttentionClass(
@@ -109,13 +109,6 @@ class TransformerBlock(LightweightModule):
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"]
-                if self.prefetcher is not None and self.prefetcher.mode == "decode"
-                else self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                output_mem_config=self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"]
-                if self.prefetcher is not None and self.prefetcher.mode == "decode"
-                else None,
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
@@ -136,13 +129,6 @@ class TransformerBlock(LightweightModule):
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"]
-                if self.prefetcher is not None and self.prefetcher.mode == "decode"
-                else self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                output_mem_config=self.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"]
-                if self.prefetcher is not None and self.prefetcher.mode == "decode"
-                else None,
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
@@ -220,8 +206,8 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
-        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
 
+        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         def get_skip_mem_cfg():
             if self.prefetcher is None:
                 return self.model_config["DECODE_RESIDUAL_MEMCFG"]
@@ -230,7 +216,6 @@ class TransformerBlock(LightweightModule):
 
         skip_mem_cfg = get_skip_mem_cfg() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
-        breakpoint()
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -239,11 +224,9 @@ class TransformerBlock(LightweightModule):
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
-        breakpoint()
-        # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)
 
-        breakpoint()
+        # Norms take fractured inputs and output replicated across devices
+        attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
@@ -257,7 +240,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        breakpoint()
+
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -267,7 +250,8 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
         else:
             hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode)
+
+        hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices

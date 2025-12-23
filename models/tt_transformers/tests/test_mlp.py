@@ -89,6 +89,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
 
     # Run prefetcher if it is used
     if prefetcher is not None and mode == "decode":
+        prefetcher.prefetch()
         prefetcher.run()
 
     torch_input = torch.randn(

@@ -385,6 +385,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling] = None,
         datatype: ttnn.DataType = ttnn.bfloat16,
         rot_mats_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
+        prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
 
@@ -397,9 +398,9 @@ class RotarySetup(LightweightModule):
             self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
         else:
             self.batch_size_per_device_group = self.batch_size
-        self.core_grid = device.compute_with_storage_grid_size()
-        self.start_core = ttnn.CoreCoord(1, 0)
 
+        self.start_core = ttnn.CoreCoord(1, 0)
+        self.core_grid = device.compute_with_storage_grid_size()
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
             head_dim=head_dim,
@@ -408,14 +409,41 @@ class RotarySetup(LightweightModule):
             theta=rope_theta,
             rope_scaling=rope_scaling,
             datatype=datatype,
-            rot_mats_layout=rot_mats_layout,
+            rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        self.batch_grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
+        self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
+            head_dim=head_dim,
+            device=device,
+            seq_len=max_seq_len,
+            theta=rope_theta,
+            rope_scaling=rope_scaling,
+            datatype=datatype,
+            rot_mats_layout=ttnn.TILE_LAYOUT,
         )
+
+        def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):
+            if ttnn.get_arch_name() == "blackhole":
+                if prefetcher is not None:
+                    return ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                        start_core,
+                        batch_size_per_device_group,
+                        prefetcher.all_worker_cores_range_set,
+                        row_wise=True,
+                    )
+                else:
+                    return ttnn.CoreGrid(y=4, x=8)
+            else:
+                return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
+
+        self.batch_grid = get_batch_grid(
+            batch_size,
+            self.core_grid,
+            self.start_core,
+            self.batch_size_per_device_group,
+            prefetcher,
+        )
+
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -497,7 +525,6 @@ class RotarySetup(LightweightModule):
         return rot_idxs
 
     def get_rm_rot_idxs(self, position_idxs, on_host=False):
-        breakpoint()
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
         assert position_idxs.shape[0] == 32, "position idxs must be a [32] tensor"
@@ -559,7 +586,7 @@ class RotarySetup(LightweightModule):
                 use_height_and_width_as_shard_shape=True,
             )
         else:
-            mem_config = None
+            mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         cos = ttnn.embedding(
             rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
@@ -567,6 +594,30 @@ class RotarySetup(LightweightModule):
         sin = ttnn.embedding(
             rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
+
+        # # breakpoint()
+        cos = ttnn.reshape(
+            cos,
+            ttnn.Shape(
+                [self.batch_size_per_device_group, 1, cos.shape[-1]]
+                # (self.batch_size_per_device_group, 32, cos.shape[-1]),
+            ),
+            ttnn.Shape(
+                # [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                (self.batch_size_per_device_group, 32, sin.shape[-1]),
+            ),
+        )
+        sin = ttnn.reshape(
+            sin,
+            ttnn.Shape(
+                [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                # (self.batch_size_per_device_group, 32, sin.shape[-1]),
+            ),
+            ttnn.Shape(
+                # [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                (self.batch_size_per_device_group, 32, sin.shape[-1]),
+            ),
+        )
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
@@ -582,7 +633,6 @@ class RotarySetup(LightweightModule):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-
             if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
                 cos = cos[:, : self.batch_size_per_device_group, :, :]
                 sin = sin[:, : self.batch_size_per_device_group, :, :]

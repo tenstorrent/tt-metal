@@ -63,6 +63,7 @@ class Transformer(LightweightModule):
         self.embd = embd_cls(**embd_kwargs)
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -70,6 +71,8 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            rot_mats_layout=ttnn.TILE_LAYOUT,
+            prefetcher=prefetcher,
         )
 
         if args.rope_theta_local:
@@ -112,14 +115,13 @@ class Transformer(LightweightModule):
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
-            self.tt_ccl,
-            args.is_galaxy,
+            tt_ccl=self.tt_ccl,
+            prefetcher=prefetcher,
+            TG=args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -205,22 +207,22 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+            self.rope_setup.cos_matrix_prefill.shape[2] >= start_pos + S
+        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix_prefill.shape[2]}"
 
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
         start_pos = 0 if trace_enabled else start_pos
         end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            self.rope_setup.cos_matrix_prefill[:, :, start_pos:end_pos, :],
+            self.rope_setup.sin_matrix_prefill[:, :, start_pos:end_pos, :],
         ]
 
         if hasattr(self, "rope_local_setup"):
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                self.rope_local_setup.cos_matrix_prefill[:, :, start_pos:end_pos, :],
+                self.rope_local_setup.sin_matrix_prefill[:, :, start_pos:end_pos, :],
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -316,7 +318,10 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def _transform_decode_inputs_device(self, tokens):
+    def _transform_decode_inputs_device(
+        self,
+        tokens,
+    ):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
@@ -325,11 +330,18 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
-        tt_tokens = self.embd(tokens)
+        tt_tokens = self.embd(
+            tokens,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            if self.prefetcher is None
+            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+        )
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
-            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            self.args.model_config["DECODE_RESIDUAL_MEMCFG"]
+            if self.prefetcher is None
+            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
         )
         return tt_tokens
 
@@ -419,9 +431,14 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
+
+        rot_mats_global = self.rope_setup.get_rot_mats(
+            rot_mat_idxs, prefetcher=self.prefetcher if self.prefetcher is not None else None
+        )
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
+
         x_embed = self._transform_decode_inputs_device(x)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -436,6 +453,7 @@ class Transformer(LightweightModule):
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
                 return tt_logits
+
             tt_toks = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
@@ -470,6 +488,17 @@ class Transformer(LightweightModule):
 
         return tt_logits
 
+    def switch_mode(self, mode):
+        if mode == "decode":
+            if self.prefetcher is not None:
+                self.prefetcher.init("decode")
+                self.args.build_prefetcher_configs("decode")
+                self.prefetcher.prefetch()
+        else:
+            if self.prefetcher is not None:
+                self.prefetcher.init("prefill")
+                self.args.build_prefetcher_configs("prefill")
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -494,8 +523,15 @@ class Transformer(LightweightModule):
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
+
             if mode == "decode" and not self.args.is_galaxy:
-                x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
+                x = ttnn.to_memory_config(
+                    x,
+                    self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                    if self.prefetcher is None
+                    else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                    activation_dtype,
+                )
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
@@ -524,7 +560,9 @@ class Transformer(LightweightModule):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode)
+        # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=4,y=7)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 64]),grid={[(x=1,y=0) - (x=4,y=7)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
+
+        x = self.norm(x, mode=mode, norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
@@ -533,5 +571,4 @@ class Transformer(LightweightModule):
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

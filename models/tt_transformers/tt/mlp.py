@@ -91,10 +91,14 @@ class MLP(LightweightModule):
         )
 
         # Insert the tensors into the prefetcher if it is used
-        if self.prefetcher is not None and self.prefetcher.mode == "decode":
-            self.prefetcher.insert_tensor(self.w1)
-            self.prefetcher.insert_tensor(self.w3)
-            self.prefetcher.insert_tensor(self.w2)
+        if self.prefetcher is not None:
+
+            def register_weights():
+                self.prefetcher.insert_tensor(self.w1)
+                self.prefetcher.insert_tensor(self.w3)
+                self.prefetcher.insert_tensor(self.w2)
+
+            self.prefetcher.register_callback(register_weights)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -112,6 +116,7 @@ class MLP(LightweightModule):
         li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
+
         if mode == "decode":  # Sharded config
             if TG:  # TODO: Fix this when TG supports DRAM sharded matmuls
                 pc_1 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
@@ -276,6 +281,7 @@ class MLP(LightweightModule):
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
+
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
@@ -294,6 +300,7 @@ class MLP(LightweightModule):
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
 
         # TODO: Update all reduce to use sub device
+
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
@@ -334,5 +341,5 @@ class MLP(LightweightModule):
                     else self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 )
 
-        # ttnn.deallocate(w2_out)
+        ttnn.deallocate(w2_out)
         return w2_out_reduced

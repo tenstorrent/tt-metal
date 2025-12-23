@@ -224,7 +224,12 @@ class TTSampling(LightweightModule):
             Sampled token indices tensor
         """
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
-        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        typecast_mem_fig = x.memory_config()
+
+        x_bf16 = ttnn.typecast(
+            x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids, memory_config=typecast_mem_fig
+        )
+        x_bf16 = ttnn.sharded_to_interleaved(x_bf16, ttnn.L1_MEMORY_CONFIG)
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
@@ -346,7 +351,6 @@ class TTSampling(LightweightModule):
 
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
-
         return tt_out_tok
 
 
