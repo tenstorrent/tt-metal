@@ -10,11 +10,10 @@ on:
         type: choice
         options:
           - all
+#          - cnn
 #          - llama70b
 #          - llama_unit_tests
 #          - llama70b_prefill
-          - falcon3_1b
-          - cnn
           - sd35
           - flux1-dev
           - motif

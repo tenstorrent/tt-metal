@@ -4,9 +4,9 @@
 
 #include <cstdint>
 #include <algorithm>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {

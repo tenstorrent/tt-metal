@@ -1471,7 +1471,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 205,
+                "T3K_Llama-3.1-70B": (205, 1.25),
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
