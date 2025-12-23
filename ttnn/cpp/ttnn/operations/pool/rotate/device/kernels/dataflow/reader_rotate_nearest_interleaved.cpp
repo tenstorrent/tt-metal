@@ -6,17 +6,17 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
-#include <ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/fixed_point_q16.h>
+#include <ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/fixed_point_arithmetic.hpp>
 
 void kernel_main() {
     // Runtime arguments
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks = get_arg_val<uint32_t>(1);
     uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    fixed_point_t cos_angle = static_cast<fixed_point_t>(get_arg_val<uint32_t>(3));
-    fixed_point_t sin_angle = static_cast<fixed_point_t>(get_arg_val<uint32_t>(4));
-    fixed_point_t center_x = static_cast<fixed_point_t>(get_arg_val<uint32_t>(5));
-    fixed_point_t center_y = static_cast<fixed_point_t>(get_arg_val<uint32_t>(6));
+    int32_t cos_angle = static_cast<int32_t>(get_arg_val<uint32_t>(3));
+    int32_t sin_angle = static_cast<int32_t>(get_arg_val<uint32_t>(4));
+    int32_t center_x = static_cast<int32_t>(get_arg_val<uint32_t>(5));
+    int32_t center_y = static_cast<int32_t>(get_arg_val<uint32_t>(6));
     uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
 
     // Compile-time arguments
@@ -65,19 +65,19 @@ void kernel_main() {
             const uint32_t y_out = spatial_idx / input_width;
             const uint32_t x_out = spatial_idx % input_width;
 
-            const fixed_point_t x_out_q16 = int_to_q16(x_out);
-            const fixed_point_t y_out_q16 = int_to_q16(y_out);
-            const fixed_point_t x_centered = q16_sub(x_out_q16, center_x);
-            const fixed_point_t y_centered = q16_sub(y_out_q16, center_y);
+            const int32_t x_out_fixed = int_to_fixed(x_out);
+            const int32_t y_out_fixed = int_to_fixed(y_out);
+            const int32_t x_centered = x_out_fixed - center_x;
+            const int32_t y_centered = y_out_fixed - center_y;
 
-            const fixed_point_t x_in = q16_mul_sub_add(x_centered, cos_angle, y_centered, sin_angle, center_x);
-            const fixed_point_t y_in = q16_mul_add_add(x_centered, sin_angle, y_centered, cos_angle, center_y);
+            const int32_t x_in = fixed_mul_sub_add(x_centered, cos_angle, y_centered, sin_angle, center_x);
+            const int32_t y_in = fixed_mul_add_add(x_centered, sin_angle, y_centered, cos_angle, center_y);
 
-            const int32_t nearest_x = q16_to_int_round(x_in);
-            const int32_t nearest_y = q16_to_int_round(y_in);
+            const int32_t nearest_x = fixed_to_int_round(x_in);
+            const int32_t nearest_y = fixed_to_int_round(y_in);
 
-            const bool x_valid = is_coordinate_valid(nearest_x, input_width);
-            const bool y_valid = is_coordinate_valid(nearest_y, input_height);
+            const bool x_valid = nearest_x >= 0 && nearest_x < static_cast<int32_t>(input_width);
+            const bool y_valid = nearest_y >= 0 && nearest_y < static_cast<int32_t>(input_height);
 
             if (x_valid && y_valid) {
                 const uint32_t input_stick_index =
