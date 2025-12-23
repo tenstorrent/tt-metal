@@ -49,6 +49,7 @@ class BGEPerformanceRunnerInfra:
         output_mesh_composer=None,
         model_name="BAAI/bge-large-en-v1.5",
     ):
+        # Set seeds for reproducibility and PCC control
         torch.manual_seed(0)
         self.device = device
         self.batch_size = batch_size
@@ -71,6 +72,8 @@ class BGEPerformanceRunnerInfra:
             self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
         if input_ids is None:
+            # Set seed before input generation for reproducibility
+            torch.manual_seed(0)
             self.batch_size = self.batch_size * self.device.get_num_devices()
             self.input_ids = torch.randint(
                 low=0, high=config.vocab_size - 1, size=[self.batch_size, self.sequence_length], dtype=torch.int64
@@ -88,6 +91,8 @@ class BGEPerformanceRunnerInfra:
             # Update batch_size from input_ids shape to reflect actual batch size being processed
             self.batch_size = input_ids.shape[0]
 
+        # Set seed before torch model forward pass for deterministic dropout and other random operations
+        torch.manual_seed(0)
         self.torch_output = self.torch_model(
             self.input_ids,
             extended_attention_mask=self.extended_mask,
