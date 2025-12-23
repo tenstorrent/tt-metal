@@ -1,0 +1,123 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "{{ operation_name }}_device_operation.hpp"
+
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include <tt-metalium/constants.hpp>
+
+namespace {{ namespace }} {
+using namespace tt;
+using namespace tt::tt_metal;
+
+{{ operation_name_pascal }}DeviceOperation::program_factory_t {{ operation_name_pascal }}DeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return program::{{ operation_name_pascal }}ProgramFactory{};
+}
+
+void {{ operation_name_pascal }}DeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void {{ operation_name_pascal }}DeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+{% for tensor in input_tensors %}
+    const auto& {{ tensor.cpp_name }} = tensor_args.{{ tensor.cpp_name }};
+{% endfor %}
+
+    // Storage type validation
+{% for tensor in input_tensors %}
+    TT_FATAL({{ tensor.cpp_name }}.storage_type() == StorageType::DEVICE, "{{ tensor.name }} tensor must be on device");
+    TT_FATAL({{ tensor.cpp_name }}.buffer() != nullptr, "{{ tensor.name }} tensor must be allocated");
+{% endfor %}
+
+    // Validations from spec
+{% for validation in validations %}
+    TT_FATAL(
+        {{ validation.condition }},
+        "{{ validation.error_message }}"{% if validation.error_args %},
+{% for arg in validation.error_args %}
+        {{ arg }}{% if not loop.last %},{% endif %}
+{% endfor %}
+{% endif %});
+{% endfor %}
+}
+
+spec_return_value_t {{ operation_name_pascal }}DeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+{% for tensor in input_tensors %}
+    const auto& {{ tensor.cpp_name }} = tensor_args.{{ tensor.cpp_name }};
+{% endfor %}
+
+    // Output shape computation
+    {{ output_shape.cpp_code }}
+{% if output_shape.cpp_code_padded %}
+    {{ output_shape.cpp_code_padded }}
+{% else %}
+    ttnn::Shape output_padded = {{ input_tensors[0].cpp_name }}.padded_shape();
+{% endif %}
+
+{% if output_dtype == "same_as_input" %}
+    auto output_dtype = {{ input_tensors[0].cpp_name }}.dtype();
+{% else %}
+    auto output_dtype = {{ output_dtype }};
+{% endif %}
+
+    return TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig({{ output_layout }}),
+            operation_attributes.output_mem_config,
+            output_shape,
+            output_padded));
+}
+
+tt::stl::hash::hash_t {{ operation_name_pascal }}DeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+{% for tensor in input_tensors %}
+    const auto& {{ tensor.cpp_name }} = tensor_args.{{ tensor.cpp_name }};
+{% endfor %}
+    const auto& input_shape = {{ input_tensors[0].cpp_name }}.padded_shape();
+
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<{{ operation_name_pascal }}DeviceOperation>(
+        operation_attributes,
+        {{ input_tensors[0].cpp_name }}.dtype(),
+        {{ input_tensors[0].cpp_name }}.memory_config(),
+        input_shape);
+
+    return hash;
+}
+
+tensor_return_value_t {{ operation_name_pascal }}DeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.{{ input_tensors[0].cpp_name }}.device());
+}
+
+std::tuple<{{ operation_name_pascal }}DeviceOperation::operation_attributes_t, {{ operation_name_pascal }}DeviceOperation::tensor_args_t>
+{{ operation_name_pascal }}DeviceOperation::invoke(
+{% for tensor in input_tensors %}
+    const Tensor& {{ tensor.cpp_name }},
+{% endfor %}
+{% for param in parameters %}
+    {{ param.cpp_type }} {{ param.name }},
+{% endfor %}
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    return {
+        operation_attributes_t{
+{% for param in parameters %}
+            .{{ param.name }} = {{ param.name }},
+{% endfor %}
+            .output_mem_config = memory_config.value_or({{ input_tensors[0].cpp_name }}.memory_config())},
+        tensor_args_t{
+{% for tensor in input_tensors %}
+            .{{ tensor.cpp_name }} = {{ tensor.cpp_name }}{% if not loop.last %},{% endif %}
+{% endfor %}
+        }};
+}
+
+}  // namespace {{ namespace }}
