@@ -128,13 +128,13 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            cb_reserve_back(cb_xmm2, block.size());
+            cb_reserve_back(cb_xmm2, block.full_block_size());
             pack_reconfig_data_format(cb_xmm2);
             for (auto i : block.local()) {
                 pack_tile(i, cb_xmm2);
             }
             tile_regs_release();
-            cb_push_back(cb_xmm2, block.size());
+            cb_push_back(cb_xmm2, block.full_block_size());
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -144,7 +144,7 @@ void MAIN {
                 copy_tile(cb_accumulate, 0, dst0);
                 cb_pop_front(cb_accumulate, onetile);
             }
-            cb_wait_front(cb_xmm2, block.size());
+            cb_wait_front(cb_xmm2, block.full_block_size());
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
@@ -154,7 +154,7 @@ void MAIN {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 
-            cb_pop_front(cb_xmm2, block.size());
+            cb_pop_front(cb_xmm2, block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
@@ -265,15 +265,15 @@ void MAIN {
             // do a binary dest with reuse (as we used
             // to). However, tt-llk #868 is preventing
             // that from working at the moment.
-            cb_reserve_back(cb_xmm, block.size());
+            cb_reserve_back(cb_xmm, block.full_block_size());
             pack_reconfig_data_format(cb_xmm);
             for (auto i : block.local()) {
                 pack_tile(i, cb_xmm);
             }
-            cb_push_back(cb_xmm, block.size());
+            cb_push_back(cb_xmm, block.full_block_size());
             tile_regs_release();
 
-            cb_wait_front(cb_xmm, block.size());
+            cb_wait_front(cb_xmm, block.full_block_size());
             reconfig_data_format(cb_xmm, cb_ex2pe);
             tile_regs_acquire();
 
@@ -294,7 +294,7 @@ void MAIN {
             }
             tile_regs_release();
             cb_push_back(cb_fusion, block.full_block_size());
-            cb_pop_front(cb_xmm, block.size());
+            cb_pop_front(cb_xmm, block.full_block_size());
 
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();

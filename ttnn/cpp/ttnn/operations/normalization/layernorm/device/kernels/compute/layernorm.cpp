@@ -87,13 +87,10 @@ void MAIN {
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
 
-#ifndef RMSNORM
-    const auto xmm_buffer_size = Wt;
-#else
-    // RMS streams input directly into cb_xmm, which is
-    // sent in full blocks from the reader
-    const auto xmm_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
-#endif
+    // Intermediate buffers need to be reserved/pushed/popped
+    // in full blocks
+    const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 /*
  * X + Y
@@ -135,11 +132,12 @@ void MAIN {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, W, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
+            cb_x, cb_scaler, cb_ex, W, Wt, blk);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
-        cb_reserve_back(cb_xmm, xmm_buffer_size);
+        cb_reserve_back(cb_xmm, total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             ACQ();
@@ -147,7 +145,7 @@ void MAIN {
                 sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
                 pack_tile(i, cb_xmm);
             }
-            cb_push_back(cb_xmm, block.size());
+            cb_push_back(cb_xmm, block.full_block_size());
             cb_pop_front(cb_x, block.full_block_size());
             REL();
         }
@@ -168,14 +166,14 @@ void MAIN {
 #else
             cb_wait_front(cb_xmm, block.start() + block.full_block_size());
 #endif
-            cb_reserve_back(cb_xmm2, block.size());
+            cb_reserve_back(cb_xmm2, block.full_block_size());
             ACQ();
             for (auto i : block.local()) {
                 const auto global_i = block.to_global(i);
                 mul_tiles(cb_xmm, cb_xmm, global_i, global_i, i);
                 pack_tile(i, cb_xmm2);
             }
-            cb_push_back(cb_xmm2, block.size());
+            cb_push_back(cb_xmm2, block.full_block_size());
             REL();
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
@@ -183,7 +181,7 @@ void MAIN {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PartialBlockWithPopPolicy>(
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, W, Wt, blk);
 
         // Var[x] + eps
@@ -278,7 +276,7 @@ void MAIN {
             }
         }
         cb_pop_front(cb_ex2pe, 1);
-        cb_pop_front(cb_xmm, xmm_buffer_size);
+        cb_pop_front(cb_xmm, total_buffer_size);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE

@@ -81,6 +81,10 @@ void MAIN {
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
+    // Intermediate buffers need to be reserved/pushed/popped
+    // in full blocks
+    const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
@@ -183,7 +187,7 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
         }
         cb_wait_front(cb_ex, onetile);  // should have 1 tile
-        cb_reserve_back(cb_xmm, Wt);
+        cb_reserve_back(cb_xmm, total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
@@ -196,11 +200,11 @@ void MAIN {
                 pack_tile(i, cb_xmm);
             }
             tile_regs_release();
-            cb_push_back(cb_xmm, block.size());
+            cb_push_back(cb_xmm, block.full_block_size());
             cb_pop_front(cb_x, block.full_block_size());
         }
         cb_pop_front(cb_ex, 1);
-        cb_wait_front(cb_xmm, Wt);
+        cb_wait_front(cb_xmm, total_buffer_size);
 
         if constexpr (!fuse_pre_add) {
             reconfig_data_format_srca(cb_x, cb_xmm);
@@ -312,7 +316,7 @@ void MAIN {
             }
         }
         cb_pop_front(cb_ex2pe, onetile);
-        cb_pop_front(cb_xmm, Wt);
+        cb_pop_front(cb_xmm, total_buffer_size);
 
     }  // NCHt loop
 }

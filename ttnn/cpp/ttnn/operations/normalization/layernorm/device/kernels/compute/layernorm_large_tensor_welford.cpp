@@ -75,16 +75,16 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Pack to intermediate CB (needed
         // to workaround transpose_wh_dest bug)
         pack_reconfig_data_format(cb_interm_pre_add);
-        cb_reserve_back(cb_interm_pre_add, block.size());
+        cb_reserve_back(cb_interm_pre_add, block.full_block_size());
         tile_regs_wait();
         for (auto i : block.local()) {
             pack_tile(i, cb_interm_pre_add);
         }
         tile_regs_release();
-        cb_push_back(cb_interm_pre_add, block.size());
+        cb_push_back(cb_interm_pre_add, block.full_block_size());
 
         // Now run Welfords in these blk number of tiles
-        cb_wait_front(cb_interm_pre_add, block.size());
+        cb_wait_front(cb_interm_pre_add, block.full_block_size());
         cb_wait_front(cb_ex, 1);
         cb_wait_front(cb_ex2, 1);
         tile_regs_acquire();
@@ -117,7 +117,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
         welford_save_state(mean_dst);
         tile_regs_commit();
-        cb_pop_front(cb_interm_pre_add, block.size());
+        cb_pop_front(cb_interm_pre_add, block.full_block_size());
         cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_ex2, 1);
 
