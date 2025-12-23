@@ -122,7 +122,8 @@ class MotifPipeline:
             revision="update_new_ckpt",
         )
 
-        vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        # vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        vae_checkpoint = "stabilityai/stable-diffusion-3.5-large"
         self._torch_vae = AutoencoderKL.from_pretrained(vae_checkpoint, subfolder="vae")
         assert isinstance(self._torch_vae, AutoencoderKL)
 
