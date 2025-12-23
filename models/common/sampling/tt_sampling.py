@@ -60,6 +60,9 @@ class TTSampling(LightweightModule):
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
 
+        # Force argmax sampling
+        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
+
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.max_batch_size = 32
@@ -177,7 +180,7 @@ class TTSampling(LightweightModule):
                 tensor,
                 dim=dim,
                 num_links=num_links,
-                memory_config=tensor.memory_config(),
+                memory_config=memory_config,
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Linear,
             )
@@ -229,6 +232,24 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
+        if self._force_argmax_sampling:
+            logger.info("Forcing argmax sampling")
+            if list(self.mesh_device.shape) == [1, 2]:
+                # all gather x to all devices
+                x = self._perform_all_gather(x, dim=-1)
+            x_untilized = ttnn.untilize(x, use_multicore=True)
+            bogus_log_probs = ()
+            return (
+                ttnn.argmax(
+                    x_untilized,
+                    dim=-1,
+                    output_tensor=tt_out_tok,
+                    keepdim=True,
+                    use_multicore=True,
+                ),
+                bogus_log_probs,
+            )
+
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
