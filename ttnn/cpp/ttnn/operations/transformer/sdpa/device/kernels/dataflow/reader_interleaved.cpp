@@ -298,9 +298,9 @@ void kernel_main() {
                 }
             }
 
-        if constexpr (is_chunked) {
-            cb_pop_front(cb_id_page_table, 1);
-        }
+            if constexpr (is_chunked) {
+                cb_pop_front(cb_id_page_table, 1);
+            }
         }
     }
 }

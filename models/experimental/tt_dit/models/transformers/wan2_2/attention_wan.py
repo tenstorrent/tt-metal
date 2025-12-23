@@ -8,9 +8,19 @@ from ....layers.normalization import DistributedRMSNorm
 from ....layers.linear import ColParallelLinear
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
+from models.common.utility_functions import is_blackhole
 
 
 class WanAttention:
+    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    sdpa_chunk_size_map = {
+        (False, 2, 4): (256, 256),
+        (False, 8, 4): (256, 256),
+        (True, 2, 2): (128, 512),
+        (True, 8, 4): (128, 512),
+    }
+    default_sdpa_chunk_size = (256, 256)
+
     def __init__(
         self,
         dim,
@@ -92,13 +102,30 @@ class WanAttention:
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
+
+        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+            (
+                is_blackhole(),
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            ),
+            self.default_sdpa_chunk_size,
+        )
+
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=ring_sdpa_chunk_size[0],
+            k_chunk_size=ring_sdpa_chunk_size[1],
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -248,7 +275,7 @@ class WanAttention:
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self.sdpa_program_config,
+                    program_config=self.ring_sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
