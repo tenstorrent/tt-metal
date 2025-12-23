@@ -4,8 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
-
+#include "api/dataflow/dataflow_api.h"
 /**
  * Simplified matmul reader kernel for fully sharded inputs.
  *

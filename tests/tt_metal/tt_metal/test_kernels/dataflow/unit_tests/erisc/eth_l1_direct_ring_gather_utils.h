@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 /**
  * A blocking call that waits for remote receiver to acknowledge that all data sent with eth_send_bytes since the last
