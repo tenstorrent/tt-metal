@@ -982,16 +982,19 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "item",
             [](const Tensor& self) -> nb::object {
+                TT_FATAL(
+                    self.logical_volume() == 1,
+                    "tensor.item() requires tensor to have exactly one element, but got {} elements",
+                    self.logical_volume());
                 switch (self.dtype()) {
-                    case DataType::FLOAT32: return nb::cast(self.item<float>());
-                    case DataType::BFLOAT16: return nb::cast(static_cast<float>(self.item<bfloat16>()));
-                    // case DataType::BFLOAT16: return nb::cast(self.item<bfloat16>().to_float());
+                    case DataType::FLOAT32: return nb::cast(self.to_vector<float>()[0]);
+                    case DataType::BFLOAT16: return nb::cast(static_cast<float>(self.to_vector<bfloat16>()[0]));
                     case DataType::BFLOAT8_B:
-                    case DataType::BFLOAT4_B: return nb::cast(self.item<float>());
-                    case DataType::INT32: return nb::cast(self.item<int32_t>());
-                    case DataType::UINT32: return nb::cast(self.item<uint32_t>());
-                    case DataType::UINT16: return nb::cast(self.item<uint16_t>());
-                    case DataType::UINT8: return nb::cast(self.item<uint8_t>());
+                    case DataType::BFLOAT4_B: return nb::cast(self.to_vector<float>()[0]);
+                    case DataType::INT32: return nb::cast(self.to_vector<int32_t>()[0]);
+                    case DataType::UINT32: return nb::cast(self.to_vector<uint32_t>()[0]);
+                    case DataType::UINT16: return nb::cast(self.to_vector<uint16_t>()[0]);
+                    case DataType::UINT8: return nb::cast(self.to_vector<uint8_t>()[0]);
                     case DataType::INVALID: TT_THROW("Unsupported DataType");
                 }
                 TT_THROW("Unreachable");
