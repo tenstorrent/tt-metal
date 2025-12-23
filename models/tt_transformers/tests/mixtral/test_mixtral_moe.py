@@ -1,20 +1,29 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig
+from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
-from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+
+
+def load_hf_mixtral_config():
+    hf_model = os.getenv("HF_MODEL")
+    assert hf_model is not None, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
+    return config
 
 
 def convert2ref(state_dict):
@@ -41,6 +50,8 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
     model_args.n_layers = 1
     layer_num = 0
 
+    hf_config = load_hf_mixtral_config()
+
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
@@ -49,11 +60,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
 
     partial_state_dict_ref = {k[22:]: v for k, v in partial_state_dict.items()}
 
-    reference_model = MoeLayer(
-        experts=[FeedForward(args=model_args) for _ in range(8)],
-        gate=torch.nn.Linear(model_args.dim, 8, bias=False),
-        moe_args=model_args,
-    )
+    reference_model = MixtralSparseMoeBlock(hf_config)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
     tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtMoeLayer(
@@ -122,8 +129,8 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
             .view(seqlen, batch, -1)
         )
         # Reference Model Output
-        logger.info(f"Starting Reeference MOE {mode}")
-        ref_output = reference_model(pt_decode_input)
+        logger.info(f"Starting Reference MOE {mode}")
+        ref_output, _ = reference_model(pt_decode_input)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))
