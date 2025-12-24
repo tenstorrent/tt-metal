@@ -27,8 +27,8 @@ using ::tt::tt_fabric::MeshId;
 using LogicalAdjacencyMap = std::map<FabricNodeId, std::vector<FabricNodeId>>;
 using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 
-// ASIC position: (TrayID, ASICLocation) pair for pinning constraints
-using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>;
+// Use ASICPosition from tt::tt_metal namespace
+using AsicPosition = tt::tt_metal::ASICPosition;
 
 // Map from AsicID to its physical position (TrayID, ASICLocation)
 // Required only when using pinning constraints

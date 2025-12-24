@@ -34,6 +34,9 @@ class GraphRef;
 class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
+class LogicalFabricNodeId;
+class PhysicalAsicPosition;
+class AsicPinning;
 }  // namespace proto
 
 inline namespace v1_1 {
@@ -85,6 +88,8 @@ private:
     }
 };
 }  // namespace v1_1
+
+// FabricNodeId is now defined in fabric_types.hpp (already included above)
 
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
@@ -165,6 +170,10 @@ public:
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
+    const std::vector<std::pair<tt::tt_metal::ASICPosition, tt::tt_fabric::FabricNodeId>>& get_pinnings() const {
+        return pinnings_;
+    }
+
 private:
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -190,6 +199,8 @@ private:
     std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
+    std::vector<std::pair<tt::tt_metal::ASICPosition, tt::tt_fabric::FabricNodeId>> pinnings_;
+
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
@@ -210,6 +221,7 @@ private:
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
@@ -219,6 +231,9 @@ private:
 
     // Populate Descriptors
     void populate_descriptors();
+
+    // Populate Pinnings
+    void populate_pinnings();
 
     // Populate Instances
     void populate_top_level_instance();
