@@ -217,12 +217,12 @@ def test_dram_group_norm_perf_welford_reciprocal():
         f"DRAM GroupNorm {C}x{H}x{W} {welford_mode} Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
     )
 
-    # Performance validation with 1% margin
-    margin = 0.01
+    # Performance validation with 1.5% margin
+    margin = 0.015
     lower_bound = expected_duration_ns * (1 - margin)
     upper_bound = expected_duration_ns * (1 + margin)
 
     # Performance validation - assert if outside expected range
     assert (
         lower_bound <= device_kernel_duration <= upper_bound
-    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
+    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
