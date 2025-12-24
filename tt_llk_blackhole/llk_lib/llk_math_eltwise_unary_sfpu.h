@@ -67,7 +67,7 @@ inline void eltwise_unary_sfpu_configure_mop();
 template <DstSync Dst>
 inline void _llk_math_eltwise_unary_sfpu_start_(const uint dst_index)
 {
-    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 }
 

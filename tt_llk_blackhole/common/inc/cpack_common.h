@@ -577,12 +577,6 @@ inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
         THCON_SEC0_REG1_Disable_pack_zero_flags_MASK | THCON_SEC0_REG1_Pack_L1_Acc_MASK>(pack_l1_acc_disable_pack_zero_flag);
 }
 
-// Write tile header to l1
-inline void write_tile_header()
-{
-    TTI_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
-}
-
 // READERS FOR CONFIG STRUCTS
 
 inline pack_config_t read_pack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg)

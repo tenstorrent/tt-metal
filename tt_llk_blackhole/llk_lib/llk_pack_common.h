@@ -57,7 +57,7 @@ inline void _llk_pack_dest_section_done_()
     }
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout>
+template <DstSync Dst>
 inline void _llk_init_packer_dest_offset_registers_(
     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
@@ -73,12 +73,12 @@ inline void _llk_init_packer_dest_offset_registers_(
     select_packer_dest_registers<Dst>();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, DstTileFaceLayout FaceLayout = RowMajor>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
     tensix_sync();
     reset_dest_offset_id();
-    _llk_init_packer_dest_offset_registers_<Dst, FaceLayout>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<Dst>(face_r_dim, narrow_tile);
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }

@@ -50,24 +50,6 @@ enum ThreadId
     PackThreadId   = 3
 };
 
-enum DstTileLayout
-{
-    Default,
-    Interleaved,
-    // TightDest,
-    // Conv3x3,
-    // Conv1x1,
-    // L1ReadSource,
-    // NLLLoss,
-    // IndexAccumulate, //Add polling before packing to L1
-};
-
-enum DstTileFaceLayout
-{
-    RowMajor, // default
-    ColMajor,
-};
-
 enum class DataLayout
 {
     TILE      = 0,
@@ -80,12 +62,11 @@ enum DstTileShape
     Tile32x16 = 1,
     Tile16x16 = 2
 };
-enum class ParallelPackerMode
+
+enum UnpackDestination
 {
-    Disabled,
-    SingleFTEntry,
-    MultiFTEntry,
-    TileParallel
+    SrcRegs = 0,
+    DestReg = 1
 };
 
 enum register_space_e
@@ -95,29 +76,16 @@ enum register_space_e
     ADDR_COUNTERS = 0x2
 };
 
-enum PackSelMask
-{
-    PACK_ALL = 0xF, // default
-    PACK_0   = 0x1,
-    PACK_1   = 0x2,
-    PACK_2   = 0x4,
-    PACK_3   = 0x8,
-    PACK_01  = 0x3,
-    PACK_23  = 0xC
-};
-
 enum SortDir : bool
 {
     ArgMax = false,
     ArgMin = true,
 };
 
-constexpr std::uint32_t FACE_HEIGHT      = 16;
-constexpr std::uint32_t FACE_WIDTH       = 16;
-constexpr std::uint32_t TILE_HEIGHT      = 32;
-constexpr std::uint32_t TILE_WIDTH       = 32;
-constexpr std::uint32_t DATUMS_PER_ROW   = 16;
-constexpr std::uint32_t TILE_HEADER_SIZE = 1;
+constexpr std::uint32_t FACE_HEIGHT = 16;
+constexpr std::uint32_t FACE_WIDTH  = 16;
+constexpr std::uint32_t TILE_HEIGHT = 32;
+constexpr std::uint32_t TILE_WIDTH  = 32;
 
 constexpr std::uint32_t FACE_R_DIM = FACE_HEIGHT;
 constexpr std::uint32_t FACE_C_DIM = FACE_WIDTH;

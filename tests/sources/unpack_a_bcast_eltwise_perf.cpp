@@ -28,7 +28,8 @@ void run_kernel()
 {
     {
         ZONE_SCOPED("INIT")
-        _llk_unpack_bcastA_B_hw_config_<false>(formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst);
+        _llk_unpack_hw_configure_<false>(
+            formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
         _llk_unpack_bcastA_B_init_();
         PROFILER_SYNC();
     }
@@ -65,7 +66,7 @@ void run_kernel()
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<false, false>(formats.math, formats.math);
+        _llk_math_hw_configure_(formats.math, formats.math);
         _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, 0>(SRCA_REUSE_COUNT);
         PROFILER_SYNC();
     }

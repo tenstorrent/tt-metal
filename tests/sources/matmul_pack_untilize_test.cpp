@@ -22,12 +22,13 @@ const ckernel::DstSync sync       = ckernel::DstSync::SyncHalf;
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
+#include "llk_unpack_common.h"
 #include "params.h"
 
 void run_kernel()
 {
-    _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst);
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), 0, 0, face_size, face_size);
 }
@@ -42,11 +43,14 @@ void run_kernel()
 
 void run_kernel()
 {
-    _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>();
+    _llk_math_matmul_init_<MATH_FIDELITY>();
     _llk_math_pack_sync_init_<sync, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<true, false>(formats.math, formats.math);
+    _llk_math_hw_configure_(formats.math, formats.math);
+#ifdef ARCH_BLACKHOLE
+    _llk_math_reconfig_remap_(true);
+#endif
     _llk_math_wait_for_dest_available_<sync>();
-    _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0);
+    _llk_math_matmul_<MATH_FIDELITY>(0);
     _llk_math_dest_section_done_<sync, is_fp32_dest_acc_en>();
 }
 
@@ -62,11 +66,11 @@ void run_kernel()
 {
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
+    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en>();
     _llk_pack_untilize_init_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4);
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, tile_size);
-    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, UNTILIZE>();
+    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, UNTILIZE>();
     _llk_pack_untilize_init_<ct_dim>(formats.pack_dst, FACE_R_DIM, 4);
 #endif
     _llk_packer_wait_for_math_done_();

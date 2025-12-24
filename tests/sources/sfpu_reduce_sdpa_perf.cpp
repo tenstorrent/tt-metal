@@ -31,7 +31,8 @@ void run_kernel()
     {
         ZONE_SCOPED("INIT")
         // Configure unpacker for Float16_b format
-        _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(formats.unpack_src, formats.unpack_dst, FACE_R_DIM, 0, 4);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0, 0, FACE_R_DIM, 4, formats.unpack_src, formats.unpack_dst);
         PROFILER_SYNC();
@@ -87,7 +88,7 @@ void run_kernel()
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, formats.math);
 #endif
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<false, false>(formats.math, formats.math);
+        _llk_math_hw_configure_(formats.math, formats.math);
 
         // Initialize SFPU for reduce operation
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
@@ -186,13 +187,13 @@ void run_kernel()
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
-        _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(formats.pack_dst);
+        _llk_pack_init_<false, false>(formats.pack_dst);
 
         // Initialize destination for packing
 #ifdef ARCH_BLACKHOLE
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
+        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-        _llk_pack_dest_init_<DstSync::SyncHalf, false, DstTileFaceLayout::RowMajor, false>();
+        _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
 #endif
         PROFILER_SYNC();
     }

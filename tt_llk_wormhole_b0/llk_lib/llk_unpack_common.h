@@ -30,84 +30,44 @@ static inline __attribute__((always_inline)) uint32_t store_then_load(volatile u
     return result;
 }
 
-void _llk_zero_buffer_(const std::uint32_t base_address, const std::uint32_t size)
+// TODO NC: Remove disable_src_zero_flag parameter from here, configure_unpack_AB and
+// llk_unpack_hw_configure as the part of #966
+template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+inline void _llk_unpack_hw_configure_(
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t unpB_dst_format,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_num_faces,
+    const std::uint32_t unpA_tile_size = 0,
+    const std::uint32_t unpB_tile_size = 0)
 {
-    TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
-    TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
+    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false, disable_src_zero_flag>(
+        unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(base_address), 0, LO_16(p_gpr_unpack::p_gpr_unpack::OPERAND_BASE_ADDR));
-    TT_SETDMAREG(0, UPPER_HALFWORD(base_address), 0, HI_16(p_gpr_unpack::p_gpr_unpack::OPERAND_BASE_ADDR));
-
-    for (std::uint32_t i = 0; i < size; i++)
-    {
-        TTI_STOREIND(1, 0, p_ind::LD_16B, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR), p_ind::INC_16B, p_gpr_unpack::ZERO_0, p_gpr_unpack::OPERAND_BASE_ADDR);
-    }
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 }
 
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_unpack_get_tile_(std::uint32_t address, std::uint32_t *p_tile)
+template <StochRndType stoch_rnd_mode>
+inline void _llk_unpack_configure_stoch_rnd_()
 {
-    std::uint32_t byte_address = (address) << 4;
-
-    if constexpr (mail2math || mail2pack)
-    {
-        // We only need to make sure the last semaphore_post happens before mailbox write.
-        // When we need to do 2 semaphore posts the first one is a general one, the second
-        // one is done using store_then_load. When we need only one, this one is skipped.
-        if constexpr (mail2math && mail2pack)
-        {
-            semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
-        }
-
-        uint32_t sem_tmp = store_then_load(&pc_buf_base[PC_BUF_SEMAPHORE_BASE + semaphore::UNPACK_OPERAND_SYNC], 0);
-        consume_discard(sem_tmp);
-
-        if constexpr (mail2math)
-        {
-            mailbox_write(ThreadId::MathThreadId, byte_address);
-        }
-
-        if constexpr (mail2pack)
-        {
-            mailbox_write(ThreadId::PackThreadId, byte_address);
-        }
-    }
-
-    *p_tile = byte_address;
+    constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
+    constexpr bool fpu_srnd_en        = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en       = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Pack);
+    alu_config_u alu_payload          = {.val = 0};
+    alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
+    alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
+    alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_stoch_rnd_mask>(alu_payload.val);
 }
 
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_unpack_release_tile_()
-{
-    while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) > 0)
-        ;
-}
-
-inline void _llk_unpack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_unpack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
-}
-
-inline void _llk_unpack_config_tile_dim_srca_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
-    config_unpacker_0_face_dim<true, p_setadc::UNP_A>(face_r_dim);
-}
-
-inline void _llk_unpack_config_tile_dim_srcb_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const uint face_dim = face_r_dim * FACE_C_DIM;
-    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(face_dim);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
-}
-
+// TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size)
@@ -123,6 +83,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 }
 
+// TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size)
@@ -142,11 +103,6 @@ inline void _llk_unpack_dbg_feature_disable_()
 {
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                              // workaround for bug tenstorrent/budabackend#1372
-}
-
-inline void _llk_unpack_clear_dbg_feature_disable_()
-{
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Unset debug feature disable
 }
 
 inline void _llk_enable_int8_fpu_math_()
