@@ -108,7 +108,7 @@ Ensure the `.cpp` file includes the header for `launch_on_device`:
 To ensure everything is still intact after your changes, run the following build command:
 
 ```bash
-./build_metal.sh -c -e --debug
+./build_metal.sh -c -e --debug --build-tt-train
 ```
 
 1.  **Build:** Verify the build succeeds with the command above.
