@@ -231,7 +231,7 @@ class TTMSDeformableAttention:
             query, self.params.sampling_offsets.weight, bias=self.params.sampling_offsets.bias
         )
         sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
+            sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
 
         # Generate attention weights
@@ -261,18 +261,15 @@ class TTMSDeformableAttention:
             if not isinstance(reference_points, ttnn.Tensor):
                 reference_points = ttnn.from_torch(reference_points, device=self.device, dtype=ttnn.bfloat16)
 
-            # Expand offset_normalizer for broadcasting [None, None, None, :, None, :]
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch dimension
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add query dimension
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add head dimension
+            # Expand offset_normalizer for broadcasting [None, :, None, :]
+            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
             offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
+            sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 
             # reference_points[:, :, None, None, None, :, :] - Add head, level and point dimensions
             reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 3)  # Add level dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 4)  # Add point dimension
-
-            sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 
             sampling_offsets = ttnn.reshape(
                 sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels, self.num_points // D, D, 2)
