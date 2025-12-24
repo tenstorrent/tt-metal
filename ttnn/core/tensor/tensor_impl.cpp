@@ -26,7 +26,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/distributed/api.hpp"
-#include <numeric>
 
 #include <tracy/Tracy.hpp>
 
