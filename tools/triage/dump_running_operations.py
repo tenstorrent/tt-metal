@@ -31,7 +31,7 @@ from triage import (
     ScriptConfig,
     collection_serializer,
     hex_serializer,
-    log_check_risc,
+    log_check,
     triage_field,
     run_script,
 )
@@ -183,7 +183,7 @@ def _collect_running_operations(
                 dispatcher_core_data,
             )
     except Exception as e:
-        log_error(f"Failed to collect running operations: {e}")
+        log_check(False, f"Failed to collect running operations with error {str(e)}")
         return None
 
     if not aggregations:
