@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_softmax_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -131,27 +132,30 @@ MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehSoftmaxOperation::operation_attributes_t, MorehSoftmaxOperation::tensor_args_t>
-MorehSoftmaxOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation::tensor_return_value_t moreh_softmax(
     const Tensor& input,
     uint32_t dim,
     const std::optional<Tensor>& output,
-    const MorehSoftmaxOp op,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp op,
+    const ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using OperationType = ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOperation;
     const bool is_fp32 = input.dtype() == DataType::FLOAT32;
-    return {
-        operation_attributes_t{
-            dim,
-            op,
-            strategy,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(
-                input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32)},
-        tensor_args_t{input, output}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        op,
+        strategy,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(
+            input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32)};
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
+}  // namespace ttnn::prim
 
+namespace ttnn::operations::moreh::moreh_softmax {
 MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization_strategy(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

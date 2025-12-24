@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sgd_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -97,7 +98,8 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
     return ret;
 }
 
-std::tuple<MorehSgdOperation::operation_attributes_t, MorehSgdOperation::tensor_args_t> MorehSgdOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t moreh_sgd(
     const Tensor& param_in,
     const Tensor& grad,
     const std::optional<Tensor>& momentum_buffer_in,
@@ -112,18 +114,20 @@ std::tuple<MorehSgdOperation::operation_attributes_t, MorehSgdOperation::tensor_
     const std::optional<MemoryConfig>& param_out_memory_config,
     const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            lr,
-            momentum,
-            dampening,
-            weight_decay,
-            nesterov,
-            momentum_initialized,
-            param_out_memory_config.value_or(param_in.memory_config()),
-            momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
-            init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-
-        tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out}};
+    using OperationType = ttnn::operations::moreh::moreh_sgd::MorehSgdOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        nesterov,
+        momentum_initialized,
+        param_out_memory_config.value_or(param_in.memory_config()),
+        momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
+        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_sgd
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::moreh::moreh_sgd {
