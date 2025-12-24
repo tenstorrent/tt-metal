@@ -1666,10 +1666,6 @@ ttnn::Tensor prepare_conv_weights(
     }
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
-    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
-    DeviceComputeKernelConfig compute_config =
-        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
 
     if (!conv_config.weights_dtype.has_value()) {
         log_warning(
@@ -1679,6 +1675,9 @@ ttnn::Tensor prepare_conv_weights(
             "conv_weights_dtype is set to the same dtype before calling prepare_bias.");
         conv_config.weights_dtype = weight_tensor.dtype();
     }
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
     // Use common setup function to get configuration parameters
     Conv2dWeightsBiasPrepConfig params = setup_conv_prep_config(
         input_memory_config,
