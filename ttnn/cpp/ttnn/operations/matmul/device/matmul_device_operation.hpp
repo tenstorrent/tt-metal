@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -48,18 +47,6 @@ struct MatmulDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<Tensor>& bias = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const matmul::operation_attributes_t& attributes = matmul::operation_attributes_t());
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const matmul::operation_attributes_t& attributes = matmul::operation_attributes_t());
 };
 
 MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
@@ -71,6 +58,17 @@ MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
 }  // namespace ttnn::operations::matmul
 
 namespace ttnn::prim {
-constexpr auto matmul =
-    ttnn::register_operation<"ttnn::prim::matmul", ttnn::operations::matmul::MatmulDeviceOperation>();
+
+operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<Tensor>& bias = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const operations::matmul::operation_attributes_t& attributes = operations::matmul::operation_attributes_t());
+
+operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+    const std::vector<Tensor>& input_tensors,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const operations::matmul::operation_attributes_t& attributes = operations::matmul::operation_attributes_t());
+
 }  // namespace ttnn::prim

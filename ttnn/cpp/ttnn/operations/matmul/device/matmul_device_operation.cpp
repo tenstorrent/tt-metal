@@ -1159,60 +1159,6 @@ tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<MatmulDeviceOperation::operation_attributes_t, MatmulDeviceOperation::tensor_args_t>
-MatmulDeviceOperation::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<Tensor>& bias,
-    const std::optional<Tensor>& optional_output_tensor,
-    const matmul::operation_attributes_t& attributes) {
-    if (!attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-        if (bias.has_value()) {
-            auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
-            bias_single_tile_size = tt::tile_size(bias_data_format);
-        }
-
-        matmul::operation_attributes_t attributes_with_program_config = attributes;
-        attributes_with_program_config.program_config = get_program_config(
-            input_tensor_a,
-            input_tensor_b,
-            attributes.transpose_a,
-            attributes.transpose_b,
-            bias_single_tile_size,
-            attributes);
-
-        return {
-            attributes_with_program_config,
-            tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
-    }
-
-    return {attributes, tensor_args_t{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}}};
-}
-
-std::tuple<MatmulDeviceOperation::operation_attributes_t, MatmulDeviceOperation::tensor_args_t>
-MatmulDeviceOperation::invoke(
-    const std::vector<Tensor>& input_tensors,
-    const std::optional<Tensor>& optional_output_tensor,
-    const matmul::operation_attributes_t& attributes) {
-    if (!attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-
-        matmul::operation_attributes_t attributes_with_program_config = attributes;
-        attributes_with_program_config.program_config = get_program_config(
-            input_tensors.at(0),
-            input_tensors.at(1),
-            attributes.transpose_a,
-            attributes.transpose_b,
-            bias_single_tile_size,
-            attributes);
-
-        return {attributes_with_program_config, tensor_args_t{input_tensors, {}, {optional_output_tensor}}};
-    }
-
-    return {attributes, tensor_args_t{input_tensors, {}, {optional_output_tensor}}};
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 MatmulDeviceOperation::create_op_performance_model(
     const operation_attributes_t& operation_attributes,
@@ -1353,3 +1299,61 @@ MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
 }
 
 }  // namespace ttnn::operations::matmul
+
+namespace ttnn::prim {
+using OperationType = operations::matmul::MatmulDeviceOperation;
+
+operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<Tensor>& bias,
+    const std::optional<Tensor>& optional_output_tensor,
+    const operations::matmul::operation_attributes_t& attributes) {
+    if (!attributes.program_config.has_value()) {
+        uint32_t bias_single_tile_size = 0;
+        if (bias.has_value()) {
+            auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
+            bias_single_tile_size = tt::tile_size(bias_data_format);
+        }
+
+        OperationType::operation_attributes_t attributes_with_program_config = attributes;
+        attributes_with_program_config.program_config = get_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            attributes.transpose_a,
+            attributes.transpose_b,
+            bias_single_tile_size,
+            attributes);
+
+        return ttnn::device_operation::detail::launch_on_device<OperationType>(
+            attributes_with_program_config, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+    }
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+}
+
+operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+    const std::vector<Tensor>& input_tensors,
+    const std::optional<Tensor>& optional_output_tensor,
+    const operations::matmul::operation_attributes_t& attributes) {
+    if (!attributes.program_config.has_value()) {
+        uint32_t bias_single_tile_size = 0;
+
+        OperationType::operation_attributes_t attributes_with_program_config = attributes;
+        attributes_with_program_config.program_config = get_program_config(
+            input_tensors.at(0),
+            input_tensors.at(1),
+            attributes.transpose_a,
+            attributes.transpose_b,
+            bias_single_tile_size,
+            attributes);
+
+        return ttnn::device_operation::detail::launch_on_device<OperationType>(
+            attributes_with_program_config, {input_tensors, {}, {optional_output_tensor}});
+    }
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        attributes, {input_tensors, {}, {optional_output_tensor}});
+}
+
+}  // namespace ttnn::prim
