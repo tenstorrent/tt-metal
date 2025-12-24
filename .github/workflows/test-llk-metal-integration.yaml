@@ -195,7 +195,18 @@ jobs:
 
             # Special handling for tt-metal-l2-nightly.yaml to pass C++ and other test configuration flags
             if [ "$workflow_file" = "tt-metal-l2-nightly.yaml" ]; then
-              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_cpp_tests=true \
+              # Build architecture parameter based on which post-commit tests are enabled
+              if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
+                arch_param='["wormhole_b0", "blackhole"]'
+              elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
+                arch_param='["wormhole_b0"]'
+              else
+                arch_param='["blackhole"]'
+              fi
+
+              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+              -f architecture="$arch_param" \
+              -f run_cpp_tests=true \
               -f run_metal_iommu_tests=true \
               -f run_sd_unit_tests=true \
               -f run_fd_unit_tests=true \
