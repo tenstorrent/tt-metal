@@ -4,9 +4,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-from models.experimental.SSD512.reference.layers import *
-from models.experimental.SSD512.reference.configs import voc
+from models.experimental.SSD512.reference.detection import Detect
+from models.experimental.SSD512.reference.l2norm import L2Norm
 from loguru import logger
 import os
 
@@ -33,10 +32,6 @@ class SSD(nn.Module):
         super(SSD, self).__init__()
         self.phase = phase
         self.num_classes = num_classes
-        self.cfg = voc["SSD{}".format(size)]
-        self.priorbox = PriorBox(self.cfg)
-        with torch.no_grad():
-            self.priors = Variable(self.priorbox.forward())
         self.size = size
 
         # SSD network
@@ -113,7 +108,7 @@ class SSD(nn.Module):
 
     def load_weights(self, base_file):
         other, ext = os.path.splitext(base_file)
-        if ext in (".pkl", ".pth"):
+        if ext == ".pkl" or ".pth":
             self.load_state_dict(torch.load(base_file, map_location=lambda storage, loc: storage))
 
 
@@ -189,10 +184,10 @@ mbox = {
 def build_ssd(phase, size=512, num_classes=21):
     if phase != "test" and phase != "train":
         logger.error("ERROR: Phase: " + phase + " not recognized")
-        return None
+        return
     if size not in [512]:
         logger.error("ERROR: specified size " + repr(size) + " is not supported. Currently only SSD512 are supported!")
-        return None
+        return
     base_, extras_, head_ = multibox(
         vgg(base[str(size)], 3), add_extras(extras[str(size)], 1024), mbox[str(size)], num_classes
     )
