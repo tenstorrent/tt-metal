@@ -758,13 +758,28 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
     mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }
     return mesh_ids;
+}
+
+std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+        if (!this->is_switch_mesh(mesh_id)) {
+            mesh_ids.push_back(mesh_id);
+        }
+    }
+    return mesh_ids;
+}
+
+bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {
+    return std::find(switch_ids_.begin(), switch_ids_.end(), mesh_id) != switch_ids_.end();
 }
 
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
