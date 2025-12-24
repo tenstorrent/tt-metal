@@ -176,9 +176,11 @@ pytest tests/test_llama.py         # LLaMA-3.2-1B-Instruct
 pytest tests/test_owl_vit.py       # OWL-ViT object detection
 pytest tests/test_speech_t5.py     # SpeechT5 speech synthesis
 pytest tests/test_resnet50.py      # ResNet50 with Conv and Bottleneck
+pytest tests/test_conv.py          # Standalone Conv2d, Conv+BN, Conv+BN+Activation
 pytest tests/test_glm.py           # GLM-4.5-Air with mesh device support
 pytest tests/test_gptoss.py        # GPT-OSS-20B model
-pytest tests/test_dpl.py           # Debug Per Layer test
+pytest tests/test_openvla.py       # OpenVLA-7B vision-language-action model
+pytest tests/test_dpl.py           # Debug Per Layer mode test
 ```
 
 ## Architecture
@@ -240,6 +242,8 @@ See [tests/](tests/) directory:
 - [test_owl_vit.py](tests/test_owl_vit.py) - OWL-ViT object detection model
 - [test_speech_t5.py](tests/test_speech_t5.py) - SpeechT5 speech synthesis model
 - [test_resnet50.py](tests/test_resnet50.py) - ResNet50 with Conv and Bottleneck blocks
+- [test_conv.py](tests/test_conv.py) - Standalone Conv2d, Conv+BN, and Conv+BN+Activation tests
 - [test_glm.py](tests/test_glm.py) - GLM-4.5-Air with mesh device support
 - [test_gptoss.py](tests/test_gptoss.py) - GPT-OSS-20B model
-- [test_dpl.py](tests/test_dpl.py) - Dual path logging example
+- [test_openvla.py](tests/test_openvla.py) - OpenVLA-7B vision-language-action model
+- [test_dpl.py](tests/test_dpl.py) - Debug Per Layer mode test
