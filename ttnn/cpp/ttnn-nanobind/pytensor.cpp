@@ -363,10 +363,9 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
         }
 
-        // No modifications needed; directly return buffer
-        if (tensor_impl::logical_matches_physical(tensor_spec)) {
-            return RowMajorHostBuffer::create_logical(std::move(host_buffer), tensor_spec);
-        }
+        // Previous impl only copied if data needed transformation. Instead *always* copy
+        // because the HostBuffer will be returned directly to the other python frameworks
+        // wrapped in an ndarray
 
         auto logical_data = tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
@@ -454,24 +453,18 @@ template <typename Framework>
     requires requires {
         { Framework::is_framework == true };
     }
-nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(
-    RowMajorHostBuffer& row_major_host_buffer, nb::rv_policy policy = nb::rv_policy::copy) {
+nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer& row_major_host_buffer) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor", row_major_host_buffer);
 
     auto shape_vec = ttnn_shape_to_ndarray(row_major_host_buffer.shape);
 
-    HostBuffer* buffer = [&row_major_host_buffer, policy]() {
-        if (policy == nb::rv_policy::move) {
-            return new HostBuffer{std::move(row_major_host_buffer.buffer)};
-        }
-
-        return new HostBuffer{row_major_host_buffer.buffer};
-    }();
+    // HostBuffer usage like this is shallow copy
+    HostBuffer* buffer = new HostBuffer{row_major_host_buffer.buffer};
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // whose sign bit is it anyway
+    // Fiddling with sign bit to match previous behavior
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
     if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
         dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
@@ -507,41 +500,9 @@ auto parse_external_operation(
         function_name = nb::cast<std::string>(external_operation.attr("__qualname__"));
     }
 
+    // original impl had a bunch of no-ops. Reduce to minimum functionality.
     std::vector<Tensor> input_tensors;
     tt::stl::reflection::Attributes attributes;
-
-    auto process_name_and_value = [&function_name, &input_tensors, &attributes](const auto& name, const auto& value) {
-        nb::object torch = nb::module_::import_("torch");
-        nb::object ttnn = nb::module_::import_("ttnn");
-        if (nb::isinstance<Tensor>(value)) {
-            // TODO(arakhmati): figure out how to handle this without causing extra memory usage
-            // auto tensor = nb::cast<Tensor>(value);
-            // input_tensors.push_back(tensor);
-        } else if (nb::isinstance(value, ttnn.attr("Tensor"))) {
-            // TODO(arakhmati): figure out how to handle this without causing extra memory usage
-            // auto tensor = nb::cast<Tensor>(value.attr("value"));
-            // input_tensors.push_back(tensor);
-        } else if (nb::isinstance(value, torch.attr("nn").attr("Module"))) {
-            // do nothing
-        } else if (nb::isinstance(value, torch.attr("Tensor"))) {
-            // TODO(arakhmati): figure out how to handle this without causing extra memory usage
-            // auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
-            // input_tensors.push_back(tensor);
-        } else {
-            // TODO(MO): Exclude tensor data as it is not an attribute
-            // attributes.push_back({name, fmt::format("{}", value)});
-        }
-    };
-
-    auto arg_index = 0;
-    for (const auto& value : args) {
-        auto name = fmt::format("arg_{}", arg_index++);
-        process_name_and_value(name, value);
-    }
-
-    for (const auto& [name, value] : kwargs) {
-        process_name_and_value(nb::cast<std::string>(name), value);
-    }
 
     auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
     return std::make_tuple(operation, input_tensors);
@@ -798,7 +759,6 @@ void pytensor_module(nb::module_& mod) {
             )doc");
     };
 
-    // TODO_NANOBIND: CONVERT
     auto pyTensor = static_cast<nb::class_<Tensor>>(mod.attr("Tensor"));
     pyTensor.def(nb::init<ttnn::Tensor&>());
 
@@ -971,7 +931,6 @@ void pytensor_module(nb::module_& mod) {
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
-            nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
@@ -1381,7 +1340,7 @@ void pytensor_module(nb::module_& mod) {
                 auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
-            nb::rv_policy::copy,
+            nb::rv_policy::take_ownership,
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1402,7 +1361,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
-            nb::rv_policy::copy,
+            nb::rv_policy::take_ownership,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to torch tensor.
@@ -1423,7 +1382,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
-            nb::rv_policy::copy,
+            nb::rv_policy::take_ownership,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
@@ -1619,7 +1578,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "tensor_topology",
             [](const Tensor& self) { return self.tensor_topology(); },
-            nb::keep_alive<1, 0>(),
+            nb::rv_policy::reference_internal,
             R"doc(
                 Get the topology of the tensor.
 
