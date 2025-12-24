@@ -15,7 +15,7 @@ import numpy as np
 from collections import defaultdict
 
 
-from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, clear_profiler_runtime_artifacts
 
 from tests.tt_metal.tt_metal.data_movement.python.config import DataMovementConfig
 from tests.tt_metal.tt_metal.data_movement.python.test_metadata import TestMetadataLoader
@@ -81,6 +81,9 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 def profile_dm_tests(verbose=False, gtest_filter=None):
     if verbose:
         logger.info(f"Profiling Kernels...")
+
+    clear_profiler_runtime_artifacts()
+
     cmd = f"TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=1333 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
     if gtest_filter:
