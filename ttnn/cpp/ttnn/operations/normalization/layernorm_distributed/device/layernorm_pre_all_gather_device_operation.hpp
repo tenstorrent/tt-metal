@@ -34,21 +34,18 @@ struct LayerNormPreAllGatherDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        LayerNormDistributedType norm_type,
-        DataType dtype,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        std::optional<bool> use_2d_core_grid,
-        const LayerNormDistributedDefaultProgramConfig& program_config,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::normalization::layernorm
 
 namespace ttnn::prim {
-constexpr auto layernorm_pre_all_gather = ttnn::register_operation<
-    "ttnn::prim::layernorm_pre_all_gather",
-    ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation>();
+ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation::tensor_return_value_t
+layernorm_pre_all_gather(
+    const Tensor& input,
+    ttnn::operations::normalization::layernorm::LayerNormDistributedType norm_type,
+    DataType dtype,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<bool> use_2d_core_grid,
+    const ttnn::operations::normalization::layernorm::LayerNormDistributedDefaultProgramConfig& program_config,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim
