@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "moe_routing_remap_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -68,23 +69,25 @@ MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOpera
         create_device_tensor(output_spec, tensor_args.input_routing_weights.device()));
 }
 
-std::tuple<MoeRoutingRemapDeviceOperation::operation_attributes_t, MoeRoutingRemapDeviceOperation::tensor_args_t>
-MoeRoutingRemapDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation::tensor_return_value_t moe_routing_remap(
     const ttnn::Tensor& routing_weights,
     uint32_t non_zero_weight_size,
     uint32_t expert_parallel_size,
     uint32_t cluster_axis,
     const std::optional<ttnn::MemoryConfig>& output_mem_config,
     const std::optional<ttnn::Tensor>& optional_output_routing_weights) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .non_zero_weight_size = non_zero_weight_size,
             .expert_parallel_size = expert_parallel_size,
             .cluster_axis = cluster_axis,
             .output_mem_config = output_mem_config},
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input_routing_weights = routing_weights,
-            .optional_output_routing_weights = optional_output_routing_weights}};
+            .optional_output_routing_weights = optional_output_routing_weights});
 }
+}  // namespace ttnn::prim
 
 }  // namespace ttnn::operations::data_movement

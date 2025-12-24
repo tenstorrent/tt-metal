@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp"
-
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_program_factory.hpp"
 
@@ -52,9 +52,14 @@ tensor_return_value_t NonZeroIndicesDeviceOperation::create_output_tensors(
     };
 }
 
-std::tuple<NonZeroIndicesDeviceOperation::operation_attributes_t, NonZeroIndicesDeviceOperation::tensor_args_t>
-NonZeroIndicesDeviceOperation::invoke(const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config) {
-    return {operation_attributes_t{.output_memory_config = memory_config}, tensor_args_t{.input = input_tensor}};
+namespace ttnn::prim {
+ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
+    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config) {
+    using OperationType = ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{.output_memory_config = memory_config},
+        OperationType::tensor_args_t{.input = input_tensor});
 }
+}  // namespace ttnn::prim
 
 }  // namespace ttnn::operations::data_movement::nonzero
