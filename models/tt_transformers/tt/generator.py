@@ -49,6 +49,35 @@ class SamplingParams:
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
+def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingParams, idx: int) -> SamplingParams:
+    """
+    Create a new SamplingParams where each list field is broadcast to a full (length-32) list,
+    taking the value from `idx`. Does not mutate the input.
+    """
+    slot_len = len(formatted_sampling_params.top_k)
+    kwargs = {}
+    for f in fields(SamplingParams):
+        value = getattr(formatted_sampling_params, f.name)
+        chosen = value[idx] if isinstance(value, List) else value
+        kwargs[f.name] = [chosen] * slot_len
+    return SamplingParams(**kwargs)
+
+
+def _apply_prefill_sampling_state(
+    model_instance,
+    *,
+    sampling_params: SamplingParams,
+    prompt_tokens: torch.Tensor | None,
+):
+    sampling_module = getattr(model_instance, "sampling_prefill", None)
+    assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+    sampling_module.reset_sampling_params(sampling_params)
+    sampling_module.reset_seed(sampling_params.seed)
+    if prompt_tokens is not None:
+        sampling_module.reset_prompt_tokens(prompt_tokens)
+    sampling_module.reset_output_state()
+
+
 # Split lists into chunks
 def split_list(lst, n):
     """Split list into n equal parts"""
@@ -294,9 +323,6 @@ class Generator:
         self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
-        print("BATCH SIZE", batch_size)
-        print("BATCH SEQ LEN", batch_seq_len)
-        print("EMPTY SLOTS", empty_slots)
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Each model expected to run the same model, safe to use 1st vocab size
@@ -310,11 +336,12 @@ class Generator:
             empty_slots = list(range(batch_size))
 
         out_list = []
+        sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
+        prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
-            print("GROUP USER ID", group_user_id, "max_batch_size_per_model", max_batch_size_per_model)
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
@@ -360,33 +387,10 @@ class Generator:
 
             # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
-                sampling_module = getattr(self.model[model_id], "sampling_prefill", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                print("ORIGINAL FORMATTED SAMPLING PARAMS", formatted_sampling_params)
-                group_user_id_sampling = user_id % max_batch_size_per_model
-                print("GROUP USER ID SAMPLING", group_user_id_sampling)
-                print("INDEX", idx)
-                formatted_sampling_params.top_k[group_user_id_sampling] = formatted_sampling_params.top_k[idx]
-                formatted_sampling_params.temperature[group_user_id_sampling] = formatted_sampling_params.temperature[
-                    idx
-                ]
-                formatted_sampling_params.top_p[group_user_id_sampling] = formatted_sampling_params.top_p[idx]
-                formatted_sampling_params.presence_penalty[
-                    group_user_id_sampling
-                ] = formatted_sampling_params.presence_penalty[idx]
-                formatted_sampling_params.frequency_penalty[
-                    group_user_id_sampling
-                ] = formatted_sampling_params.frequency_penalty[idx]
-                formatted_sampling_params.repetition_penalty[
-                    group_user_id_sampling
-                ] = formatted_sampling_params.repetition_penalty[idx]
-                formatted_sampling_params.seed[group_user_id_sampling] = formatted_sampling_params.seed[idx]
-                print("FORMATTED SAMPLING PARAMS", formatted_sampling_params)
-                sampling_module.reset_sampling_params(formatted_sampling_params)
-                sampling_module.reset_seed(formatted_sampling_params.seed)
-                sampling_module.reset_prompt_tokens(prefill_ids[:, :seq_len].repeat(32, 1))
-                sampling_module.reset_output_state()
+                enable_trace_current_prompt = False
                 sampling_executed = True
+                sampling_params_per_out[idx] = _broadcast_formatted_sampling_params(formatted_sampling_params, idx)
+                prompt_tokens_per_out[idx] = prefill_ids[:, :seq_len].repeat(32, 1)
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
@@ -436,6 +440,14 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             if sampling_executed:
+                # Re-apply per-request params right before sampling so seeds/params are not overwritten by other requests.
+                per_request_params = sampling_params_per_out[idx]
+                assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
+                _apply_prefill_sampling_state(
+                    self.model[model_id],
+                    sampling_params=per_request_params,
+                    prompt_tokens=prompt_tokens_per_out[idx],
+                )
                 tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
                     out,
                     enable_trace=False,
