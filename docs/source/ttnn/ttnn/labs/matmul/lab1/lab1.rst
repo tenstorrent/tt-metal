@@ -1,6 +1,8 @@
 Lab 1: Single Core Matrix Multiplication
 ========================================
 
+**THIS DOCUMENT IS A DRAFT**
+
 Introduction
 ------------
 
