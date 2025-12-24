@@ -138,18 +138,21 @@ class TTNNConv2dNHWC(TTNNModule):
         self.tt_weight, self.tt_bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
             self.torch_layer.conv.weight, self.torch_layer.conv.bias
         )
+        super().preprocess_weights_impl()
 
     def move_weights_to_host_impl(self):
         """Move weights back to host."""
         self.tt_weight = self.tt_weight.cpu()
         if self.tt_bias is not None:
             self.tt_bias = self.tt_bias.cpu()
+        super().move_weights_to_host_impl()
 
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""
         ttnn.deallocate(self.tt_weight)
         if self.tt_bias is not None:
             ttnn.deallocate(self.tt_bias)
+        super().deallocate_weights_impl()
 
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
@@ -225,6 +228,8 @@ class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
                 nn.BatchNorm2d(self.out_channels),
             )
         self._preprocess_weights_local()
+        # call method from TTNNConv2dNHWC's grandparent TTNNModule
+        TTNNModule.preprocess_weights_impl(self)
 
 
 class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
@@ -264,6 +269,8 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
                 nn.ReLU(),
             )
         self._preprocess_weights_local()
+        # call method from TTNNConv2dNHWC's grandparent TTNNModule
+        TTNNModule.preprocess_weights_impl(self)
 
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
@@ -329,22 +336,6 @@ class TTNNBottleneck(TTNNModule):
         new_bottleneck._fallback_torch_layer = bottleneck
         new_bottleneck.initilize_submodules()
         return new_bottleneck
-
-    def preprocess_weights_impl(self):
-        """Preprocess attention weights for TTNN."""
-        assert (
-            self.torch_layer is not None
-        ), "Torch layer must be set before preprocessing weights. This layer can only be created from a torch layer (e.g. from_torch method)."
-        self.conv1.preprocess_weights()
-        self.conv2.preprocess_weights()
-        self.conv3.preprocess_weights()
-
-    def move_weights_to_device_impl(self):
-        """Move attention weights to TTNN device."""
-        assert self.device is not None, "Device must be set before moving weights to device."
-        self.conv1.move_weights_to_device()
-        self.conv2.move_weights_to_device()
-        self.conv3.move_weights_to_device()
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through Bottleneck block."""
