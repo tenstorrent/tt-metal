@@ -11,6 +11,13 @@ from models.experimental.uniad.tt.ttnn_temporal_self_attention import TtTemporal
 from models.experimental.uniad.tt.ttnn_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.uniad.tt.ttnn_ffn import TtFFN
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ImportError:
+    use_signpost = False
+
 
 class TtBEVFormerEncoder:
     def __init__(
@@ -156,16 +163,28 @@ class TtBEVFormerEncoder:
         num_query = reference_points.shape[2]
         num_cam = lidar2img.shape[1]
 
-        reference_points = ttnn.unsqueeze(reference_points, 2)
-        reference_points = ttnn.repeat(reference_points, (1, 1, num_cam, 1, 1))
-        reference_points = ttnn.unsqueeze(reference_points, -1)
+        if use_signpost:
+            signpost(header="Applying lidar to image transformation")
 
-        lidar2img = ttnn.unsqueeze(lidar2img, 0)
-        lidar2img = ttnn.unsqueeze(lidar2img, 3)
-        lidar2img = ttnn.repeat(lidar2img, (D, 1, 1, num_query, 1, 1))
+        reference_points_cam_list = []
 
-        reference_points_cam = ttnn.matmul(lidar2img, reference_points)
-        reference_points_cam = ttnn.squeeze(reference_points_cam, -1)
+        for cam_idx in range(num_cam):
+            cam_lidar2img = lidar2img[0, cam_idx]  # [4, 4] for current camera
+            ref_points_flat = ttnn.reshape(reference_points, (B * num_query * D, 4))  # [B*Q*D, 4]
+
+            # [B*Q*D, 4] @ [4, 4]
+            cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)  # Last two dims transpose
+            points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B*Q*D, 4]
+
+            points_cam = ttnn.reshape(points_cam_flat, (B, num_query, D, 4))  # [B, Q, D, 4]
+
+            points_cam = ttnn.reshape(points_cam, (D, B, 1, num_query, 4))
+            reference_points_cam_list.append(points_cam)
+
+        reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 4]
+
+        if use_signpost:
+            signpost(header="Completed lidar to image transformation")
 
         eps = 1e-5
         z = reference_points_cam[..., 2:3]
@@ -446,5 +465,7 @@ class TtBEVFormerLayer:
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
 
                 ffn_index += 1
+
+            ttnn.ReadDeviceProfiler(self.device)
 
         return query
