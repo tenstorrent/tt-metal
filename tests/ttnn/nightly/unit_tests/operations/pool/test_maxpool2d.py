@@ -51,6 +51,7 @@ def run_max_pool2d(
     nightly_skips=True,
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    use_reshaped_tensor=True,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -124,13 +125,27 @@ def run_max_pool2d(
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     if in_dtype == ttnn.bfloat8_b:
+        assert use_reshaped_tensor == True
         ttnn_input = ttnn.from_torch(
             torch_input_reshaped, in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_memory_config
         )
     else:
-        ttnn_input = ttnn.from_torch(
-            torch_input_reshaped, in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_memory_config
-        )
+        if use_reshaped_tensor:
+            ttnn_input = ttnn.from_torch(
+                torch_input_reshaped,
+                in_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=in_memory_config,
+            )
+        else:
+            ttnn_input = ttnn.from_torch(
+                torch_input_permuted,
+                in_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=in_memory_config,
+            )
     # run ttnn maxpool2d
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
@@ -563,6 +578,7 @@ def test_run_max_pool_squeeze_net_model(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("use_reshaped_tensor", [True, False])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
@@ -595,11 +611,27 @@ def test_run_max_pool_squeeze_net_model(
     ],
 )
 def test_max_pool2d_output_formats_and_layouts(
-    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+    device,
+    tensor_map,
+    input_shape,
+    shard_startegy,
+    kernel_size,
+    use_reshaped_tensor,
+    out_dtype,
+    output_layout,
+    in_dtype,
 ):
     padding = (0, 0)
     stride = (1, 1)
     dilation = (1, 1)
+
+    if not use_reshaped_tensor:
+        if in_dtype == ttnn.bfloat8_b:
+            pytest.skip("BFLOAT8_B input data format is not supported without reshaped tensor")
+        if out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
+            pytest.skip("skip BFLOAT8_B/BFLOAT4_B output data format for non-reshaped tensor")
+        if output_layout == ttnn.TILE_LAYOUT:
+            pytest.skip("skip TILE_LAYOUT output layout for non-reshaped tensor")
 
     run_max_pool2d(
         input_shape,
