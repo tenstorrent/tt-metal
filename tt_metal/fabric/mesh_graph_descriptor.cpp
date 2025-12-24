@@ -175,7 +175,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) : mes
     instances_by_type_ = other.instances_by_type_;
     device_instances_ = other.device_instances_;
     mesh_instances_ = other.mesh_instances_;
-    graph_instances_ = other.graph_instances_;
+    
     switch_instances_ = other.switch_instances_;
     connections_by_instance_id_ = other.connections_by_instance_id_;
     connections_by_type_ = other.connections_by_type_;
