@@ -361,21 +361,20 @@ jobs:
           TRIGGER_TIME=$(date +%s)
           echo "Trigger timestamp: $TRIGGER_TIME"
 
+          # Build architecture parameter based on which architectures have changes
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0", "blackhole"]'
+          elif [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0"]'
+          else
+            ARCH_PARAM='["blackhole"]'
+          fi
+
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          # Special handling for tt-metal-l2-nightly.yaml to pass C++ and unit test configuration flags
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
-            # Build architecture parameter based on which architectures have changes
-            if [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole }}" = "true" ]; then
-              arch_param='["wormhole_b0", "blackhole"]'
-            elif [ "${{ needs.update-submodule.outputs.should-run-wormhole }}" = "true" ]; then
-              arch_param='["wormhole_b0"]'
-            else
-              arch_param='["blackhole"]'
-            fi
-
             gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" \
-            -f architecture="$arch_param" \
+            -f architecture="$ARCH_PARAM" \
             -f run_cpp_tests=true \
             -f run_metal_iommu_tests=true \
             -f run_sd_unit_tests=true \
@@ -384,6 +383,9 @@ jobs:
             -f run_tt_train_cpp_unit_tests=true \
             -f run_models_unit_tests=true \
             -f run_tt_cnn_unit_tests=true
+          elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" \
+            -f architecture="$ARCH_PARAM"
           else
             gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
           fi
