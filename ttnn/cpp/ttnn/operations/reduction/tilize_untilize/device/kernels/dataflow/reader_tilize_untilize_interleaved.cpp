@@ -40,21 +40,12 @@ void kernel_main() {
     // Setup tensor accessor
     const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
 
-    // Array to hold NOC addresses for 32 rows at a time
-    uint64_t base_src_noc_addr[tile_height];
-
     // Process all tile blocks (each block = 32 rows)
     uint32_t stick_id = start_stick_id;
     uint32_t num_blocks = num_sticks / tile_height;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
-        // Get base addresses for 32 consecutive rows
-        for (uint32_t row = 0; row < tile_height; row++) {
-            base_src_noc_addr[row] = get_noc_addr(stick_id + row, s);
-        }
-
         // Reserve space in CB for num_tiles_per_row tiles
-        // This reserves space for 32 rows * width in tiles * tile_size
         cb_reserve_back(cb_id_in0, num_tiles_per_row);
 
         // Get write pointer
@@ -62,7 +53,7 @@ void kernel_main() {
 
         // Read 32 rows (full stick width each)
         for (uint32_t row = 0; row < tile_height; row++) {
-            noc_async_read(base_src_noc_addr[row], l1_write_addr, stick_size);
+            noc_async_read(get_noc_addr(stick_id + row, s), l1_write_addr, stick_size);
             l1_write_addr += stick_size;
         }
 
