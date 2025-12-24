@@ -37,6 +37,7 @@ from triage import (
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import ElfVariable
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
@@ -106,10 +107,10 @@ class RunningOperationAggregation:
         )
 
 
-def _format_operation(kernel_name: str | None, watcher_kernel_id: int | None) -> str | None:
+def _format_operation(kernel_name: str | None, watcher_kernel_id: ElfVariable | None) -> str | None:
     if kernel_name:
         return f"Kernel: {kernel_name}"
-    if watcher_kernel_id is not None and watcher_kernel_id >= 0:
+    if watcher_kernel_id is not None and watcher_kernel_id.read_value() >= 0:
         return f"Kernel ID: {watcher_kernel_id}"
     return None
 
@@ -163,22 +164,27 @@ def _collect_running_operations(
 
     aggregations: dict[int, RunningOperationAggregation] = {}
 
-    # Process results
-    for check_result in collected_results:
-        if check_result.result is None:
-            continue
-        assert isinstance(check_result.result, DispatcherCoreData)
-        dispatcher_core_data: DispatcherCoreData = check_result.result
-        assert dispatcher_core_data.host_assigned_id is not None
-        aggregation = aggregations.setdefault(
-            dispatcher_core_data.host_assigned_id, RunningOperationAggregation(dispatcher_core_data.host_assigned_id)
-        )
-        aggregation.add_core(
-            device_description_serializer(check_result.device_description),
-            check_result.location,
-            check_result.risc_name,
-            dispatcher_core_data,
-        )
+    try:
+        # Process results
+        for check_result in collected_results:
+            if check_result.result is None:
+                continue
+            assert isinstance(check_result.result, DispatcherCoreData)
+            dispatcher_core_data: DispatcherCoreData = check_result.result
+            assert dispatcher_core_data.host_assigned_id is not None
+            aggregation = aggregations.setdefault(
+                dispatcher_core_data.host_assigned_id,
+                RunningOperationAggregation(dispatcher_core_data.host_assigned_id),
+            )
+            aggregation.add_core(
+                device_description_serializer(check_result.device_description),
+                check_result.location,
+                check_result.risc_name,
+                dispatcher_core_data,
+            )
+    except Exception as e:
+        log_error(f"Failed to collect running operations: {e}")
+        return None
 
     if not aggregations:
         return None
