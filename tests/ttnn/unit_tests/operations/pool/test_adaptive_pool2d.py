@@ -101,7 +101,7 @@ def test_adaptive_dram_pool2d(
     dtype,
     pool_type,
 ):
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2dDRAMSliceHeight)
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceHeight)
 
     run_adaptive_pool2d(
         device=device,
