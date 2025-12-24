@@ -713,7 +713,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_dat
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    // Mock devices may not have command queues fully initialized
     if (this->command_queues_.empty() || cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
     }

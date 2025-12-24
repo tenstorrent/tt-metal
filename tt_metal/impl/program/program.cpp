@@ -1442,13 +1442,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    // Mock devices don't compile kernels, skip elf path registration
                     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
                         tt::TargetDevice::Mock) {
                         kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
 
-                    // Mock devices don't compile kernels - skip binary generation and use empty stubs
                     bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
                                    tt::TargetDevice::Mock;
 

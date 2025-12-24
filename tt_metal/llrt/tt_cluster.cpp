@@ -385,7 +385,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
-    std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;  // Declare here to ensure it lives for entire function
+    std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,

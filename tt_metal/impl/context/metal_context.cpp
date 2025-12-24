@@ -381,7 +381,6 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        // Skip dprint detach for mock devices
         if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
             dprint_server_->detach_devices();
         }
@@ -389,7 +388,6 @@ void MetalContext::teardown() {
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    // Skip watcher detach for mock devices (they may not have been properly attached)
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
         watcher_server_->detach_devices();
     }
@@ -1059,7 +1057,6 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    // For mock devices, NOC translation may not be configured, default to disabled
     bool noc_translation_enabled = (cluster_->get_target_device_type() == tt::TargetDevice::Mock)
                                        ? false
                                        : cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);

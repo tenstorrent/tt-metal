@@ -401,7 +401,6 @@ void DeviceManager::initialize_active_devices() {
     // Activate fabric (must be before FD)
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        // Mock devices don't have real fabric hardware, skip fabric initialization
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
             log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
         } else if (has_flag(
