@@ -225,10 +225,10 @@ struct MatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
-    bool is_all_gather();
-    bool is_reduce_scatter();
-    bool is_llama_reduce_scatter();
-    bool is_llama_all_gather();
+    bool is_all_gather() const;
+    bool is_reduce_scatter() const;
+    bool is_llama_reduce_scatter() const;
+    bool is_llama_all_gather() const;
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);

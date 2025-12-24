@@ -207,8 +207,10 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDevice::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDevice::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 MeshDevice::MeshDevice(

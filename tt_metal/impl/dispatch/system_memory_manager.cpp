@@ -261,7 +261,7 @@ void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
     }
 }
 
-bool SystemMemoryManager::get_bypass_mode() { return this->bypass_enable; }
+bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
 
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 

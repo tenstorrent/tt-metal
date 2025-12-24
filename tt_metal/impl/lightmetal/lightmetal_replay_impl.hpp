@@ -68,17 +68,23 @@ public:
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd);
 
     // Object maps public accessors
@@ -107,6 +113,7 @@ public:
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args);
 
     // Workload related members --------------------

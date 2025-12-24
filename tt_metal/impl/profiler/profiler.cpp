@@ -1099,6 +1099,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
@@ -1132,6 +1133,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
@@ -1604,6 +1606,7 @@ struct DispatchMetaData {
     std::string cmd_subtype;
 };
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
     DispatchMetaData current_dispatch_meta_data;
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;

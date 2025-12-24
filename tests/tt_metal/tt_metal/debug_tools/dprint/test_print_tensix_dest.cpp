@@ -86,7 +86,7 @@ protected:
     // Hook method to be implemented by derived classes
     virtual void print_datum(std::stringstream& ss, uint32_t datum) = 0;
 
-    void print_new_line(std::stringstream& ss, uint32_t i) {
+    void print_new_line(std::stringstream& ss, uint32_t i) const {
         if (i > 0) {
             ss << std::endl;
         }
