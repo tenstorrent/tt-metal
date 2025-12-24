@@ -168,7 +168,7 @@ jobs:
 
           # Check if matrix is empty
           matrix_length=$(echo "$filtered_matrix" | jq 'length')
-          echo "[info] Final matrix length: $matrix_length"
+          echo "[info] Matrix length: $matrix_length"
 
           if [ "$matrix_length" -eq 0 ]; then
             echo "[warning] No matrix entries selected - using empty matrix"
