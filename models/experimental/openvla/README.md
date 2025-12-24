@@ -1,7 +1,7 @@
 # OpenVLA - Vision-Language-Action Model
 
 OpenVLA (Open Vision-Language-Action) is a 7B parameter vision-language-action model for robot manipulation tasks.
-This implementation supports multi-device configurations: N300 (2 devices) and T3K (8 devices).
+This implementation supports N150/P150 and N300 (2 devices).
 
 ## Model Architecture
 
@@ -15,7 +15,7 @@ OpenVLA combines:
 
 | Device | Configuration | Precision |
 |--------|--------------|-----------|
-| P150/N150 | 1 device | BF16 KV cache, BFP8 attention/FFN |
+| P150/N150 | 1 device | Default Performance Mode |
 | N300 | 2 devices (1x2 mesh) | BF16 attention, BFP8 FFN |
 | T3K | 8 devices | Full BF16 |
 
@@ -98,7 +98,7 @@ pytest models/experimental/openvla/tt/open_vla.py::test_openvla_model -v
 
 | Component | PCC |
 |-----------|-----|
-| Vision Encoder (DINOv2) | 0.99+ |
+| Vision Encoder (DINOv2) | 0.98+ |
 | Vision Encoder (SigLIP) | 0.99+ |
 | Full Model | TBD |
 
