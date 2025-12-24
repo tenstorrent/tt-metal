@@ -19,7 +19,7 @@
 #include "compute_kernel_api/pack.h"
 #include "ckernel_sfpu.h"
 #include "compute_kernel_api/tilize.h"
-
+// #include "debug/dprint_pages.h"
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
@@ -48,6 +48,8 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     tile_regs_release();
 
     cb_push_back(cb_id, 1);
+    // DPRINT << "SEED: " << seed << ENDL();
+    // UNPACK(tt::compute::common::print_full_tile(cb_id, 0));
 }
 
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>

@@ -59,6 +59,7 @@ void override_multi_core_runtime_args(
     // Override runtime args for each core
     for (uint32_t i = 0; i < cached_program.shared_variables.cores.size(); ++i) {
         const auto& core = cached_program.shared_variables.cores[i];
+        // std::cout << "MANUAL SEED SET CORES1: core: " << i << " -> " << core.x << ", " << core.y << std::endl;
         const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_ids[i];
 
         auto& reader_runtime_args = GetRuntimeArgs(cached_program.program, reader_kernel_id, core);
@@ -268,7 +269,7 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
     for (uint32_t core_id = 0; core_id < cores.size(); ++core_id) {
         // Get core
         const auto& core = cores[core_id];
-
+        // std::cout << "MANUAL SEED SET CORES2: core: " << core_id << " -> " << core.x << ", " << core.y << std::endl;
         // Set runtime args for reader kernel
         tt::tt_metal::SetRuntimeArgs(
             program,

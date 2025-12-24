@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+// #include "debug/dprint.h"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -294,6 +295,8 @@ void kernel_main() {
     uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
+
+    // DPRINT << "rand = " << rand << ENDL();
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 32);
     cb_wait_front(output_local_values_cb_index, 1);

@@ -153,6 +153,7 @@ ManualSeedDeviceOperation::invoke(
         tensor_args.user_ids = std::get<Tensor>(user_ids.value());
     }
     // Return prepared arguments
+    // std::cout << "MANUAL SEED HIT" << std::endl;
     return {operation_attributes, tensor_args};
 }
 }  // namespace ttnn::operations::reduction::manual_seed

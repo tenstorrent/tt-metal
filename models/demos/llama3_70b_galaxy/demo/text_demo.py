@@ -226,14 +226,26 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
-                "seed": torch.randint(0, 33, size=(32,)).tolist(),
-            },  # sampling_params (non-uniform)
+                "temperature": (2.0 * torch.ones((32,))).tolist(),
+                "top_p": (1.0 * torch.ones((32,))).tolist(),
+                "top_k": (32 * torch.ones((32,))).tolist(),
+                "seed": (12 * torch.ones((32,))).tolist(),
+            },
+            # {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            # {
+            #     "temperature": torch.ones((32,)).tolist(),
+            #     "top_p": torch.ones((32,)).tolist(),
+            #     "top_k": (torch.ones((32,))*32).tolist(),
+            #     "presence_penalty": torch.ones((32,)).tolist(),
+            #     "frequency_penalty": torch.ones((32,)).tolist(),
+            #     "repetition_penalty": torch.ones((32,)).tolist(),
+            #     # "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+            #     # "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+            #     # "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+            #     # "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+            #     # "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+            #     "seed": torch.ones((32,)).tolist(),
+            # },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -991,6 +1003,7 @@ def test_demo_text(
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
                     async_read=True,
+                    reset_batch=iteration == 0,
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,

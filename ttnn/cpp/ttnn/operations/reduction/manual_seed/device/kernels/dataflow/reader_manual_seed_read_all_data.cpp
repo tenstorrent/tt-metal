@@ -56,6 +56,8 @@ void kernel_main() {
         if (core_id == user_id[id]) {
             is_user_id = true;  // Indicate match
             seed = seeds[id];
+            // DPRINT << "SEED: " << seeds[id] << ENDL();
+            // DPRINT << "CORE ID: " << core_id << ENDL();
             break;
         }
     }

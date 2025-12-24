@@ -83,6 +83,7 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        return
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 

@@ -250,6 +250,7 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
+        // std::cout << "SAMPLING SET CORES: core: " << i << " -> " << core.x << ", " << core.y << std::endl;
         std::vector<uint32_t> writer_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(temp_buffer).append_to(writer_compile_time_args);
@@ -340,6 +341,7 @@ void SamplingProgramFactory::override_runtime_arguments(
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
+        // std::cout << "SAMPLING SET CORES: core: " << i << " -> " << core.x << ", " << core.y << std::endl;
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
         reader_runtime_args[0] = input_values_buffer->address();
         reader_runtime_args[1] = input_indices_buffer->address();
