@@ -26,7 +26,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     save_predictions,
     preprocess_input_params,
-    skip_if_not_blackhole_20_or_130_cores,
+    skip_if_not_blackhole_20_or_110_cores,
 )
 from models.tt_cnn.tt.pipeline import PipelineConfig
 from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
@@ -487,7 +487,7 @@ def run_panoptic_deeplab_demo(
 @pytest.mark.parametrize("use_trace", [False, True], ids=["ModelExecutor", "CustomTracedModelExecutor"])
 def test_panoptic_deeplab_demo_pipeline(device, output_dir, model_category, use_trace, model_location_generator):
     """Test pipeline execution with both executor types for both model categories."""
-    skip_if_not_blackhole_20_or_130_cores(device)
+    skip_if_not_blackhole_20_or_110_cores(device)
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
