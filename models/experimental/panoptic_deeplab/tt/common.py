@@ -470,8 +470,8 @@ def create_ttnn_model(
     # Create model configurations if not provided
     if model_configs is None:
         model_configs = ModelOptimisations(
-            conv_act_dtype=ttnn.bfloat8_b,
-            conv_w_dtype=ttnn.bfloat8_b,
+            conv_act_dtype=ttnn.bfloat16,
+            conv_w_dtype=ttnn.bfloat16,
         )
         model_configs.setup_resnet_backbone()
         model_configs.setup_aspp()

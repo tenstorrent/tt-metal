@@ -93,7 +93,7 @@ class TtPanopticDeepLab:
         self.backbone = TtResNet(
             parameters=backbone_params,
             device=device,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             model_configs=model_configs,
         )
 

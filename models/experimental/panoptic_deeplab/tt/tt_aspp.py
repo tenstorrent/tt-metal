@@ -200,7 +200,7 @@ class TtASPP(LightweightModule):
         res.append(pooled)
 
         # Ensure all tensors have the same dtype before concatenation
-        target_dtype = ttnn.bfloat8_b
+        target_dtype = self.model_configs.conv_output_dtype if self.model_configs is not None else ttnn.bfloat16
         for i in range(len(res)):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)

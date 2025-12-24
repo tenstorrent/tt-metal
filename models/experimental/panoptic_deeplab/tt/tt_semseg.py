@@ -259,7 +259,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 
             # Ensure both tensors have the same dtype before concatenation
-            target_dtype = ttnn.bfloat8_b
+            target_dtype = self.model_configs.conv_output_dtype if self.model_configs is not None else ttnn.bfloat16
             if proj_x.dtype != target_dtype:
                 proj_x = ttnn.typecast(proj_x, target_dtype)
             if y_upsampled.dtype != target_dtype:
@@ -447,7 +447,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             output_channels_first=True,
             mm1_program_config=final_upsample_mm_config1,
             mm2_program_config=final_upsample_mm_config2,
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=self.model_configs.conv_output_dtype if self.model_configs is not None else ttnn.bfloat16,
         )
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 

@@ -146,7 +146,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             output_channels_first=True,
             mm1_program_config=final_upsample_mm_config1,
             mm2_program_config=final_upsample_mm_config2,
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=self.model_configs.conv_output_dtype if self.model_configs is not None else ttnn.bfloat16,
         )
 
         # Initialize original output channels to None if not already set from parameters
