@@ -7,10 +7,11 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "minimal_matmul_device_operation_types.hpp"
 #include "minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
@@ -51,7 +52,15 @@ struct MinimalMatmulDeviceOperation {
 }  // namespace ttnn::operations::experimental::minimal_matmul
 
 namespace ttnn::prim {
-constexpr auto minimal_matmul = ttnn::register_operation<
-    "ttnn::prim::minimal_matmul",
-    ttnn::operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation>();
-}
+
+operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<Tensor>& bias_tensor,
+    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+
+}  // namespace ttnn::prim

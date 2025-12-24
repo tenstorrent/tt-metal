@@ -171,16 +171,20 @@ MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<MinimalMatmulDeviceOperation::operation_attributes_t, MinimalMatmulDeviceOperation::tensor_args_t>
-MinimalMatmulDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::minimal_matmul
+
+namespace ttnn::prim {
+
+operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
-    std::optional<unary::UnaryWithParam> fused_activation,
-    const std::optional<const MinimalMatmulConfig>& config,
+    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -189,14 +193,14 @@ MinimalMatmulDeviceOperation::invoke(
         true /*fp32_acc*/,
         true /*packer_acc*/);
 
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .config = config,
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config,
             .output_dtype = dtype,
             .compute_kernel_config = kernel_config_val},
-        tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor}};
+        OperationType::tensor_args_t{
+            .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
 }
-
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::prim
