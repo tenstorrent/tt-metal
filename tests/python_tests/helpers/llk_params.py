@@ -179,6 +179,30 @@ class StochasticRounding(Enum):
     All = "StochRndType::All"
 
 
+class PackerReluType(Enum):
+    """
+    Relu activation function types for packer operations.
+    """
+
+    NoRelu = 0
+    ZeroRelu = 1
+    MinThresholdRelu = 2
+    MaxThresholdRelu = 3
+
+    def __str__(self):
+        match self:
+            case PackerReluType.NoRelu:
+                return "NO_RELU"
+            case PackerReluType.ZeroRelu:
+                return "ZERO_RELU"
+            case PackerReluType.MinThresholdRelu:
+                return "MIN_THRESHOLD_RELU"
+            case PackerReluType.MaxThresholdRelu:
+                return "MAX_THRESHOLD_RELU"
+            case _:
+                raise ValueError(f"Unsupported PackerReluType: {self!r}")
+
+
 class Haloize(Enum):
     Yes = "true"
     No = "false"
