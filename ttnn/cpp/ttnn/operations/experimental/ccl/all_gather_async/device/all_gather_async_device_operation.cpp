@@ -17,7 +17,7 @@
 
 namespace ttnn {
 
-namespace detail {
+namespace {
 
 uint32_t all_gather_async_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -78,7 +78,7 @@ uint32_t default_workers(
         "Not enough cores available on the subdevice or device for the requested match the number of links {}",
         num_links);
 }
-}  // namespace detail
+}  // namespace
 
 namespace operations::experimental::ccl::all_gather_async {
 
@@ -123,7 +123,6 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
-    [[maybe_unused]] std::string arch_name = tt::tt_metal::hal::get_arch_name();
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
@@ -480,7 +479,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
     uint32_t output_data_size_bytes = output_tensor.buffer()->size();
-    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(default_workers(
         *mesh_device,
         sub_device_id,
         topology,
@@ -490,7 +489,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_directions_per_link,
         num_mux_cores_per_direction_per_link,
         sub_core_grid));
-    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
+    uint32_t num_cores_per_link = all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
