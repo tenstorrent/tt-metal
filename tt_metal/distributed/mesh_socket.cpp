@@ -115,10 +115,14 @@ void MeshSocket::process_mesh_ids() {
             if (config_.distributed_context) {
                 std::array<int, 1> socket_ranks = {*rank};
                 std::array<int, 1> translated_socket_ranks = {-1};
-                config_.distributed_context->translate_ranks_to_other_ctx(
-                    socket_ranks, DistributedContext::get_current_world(), translated_socket_ranks);
-                rank_translation_table_[Rank{translated_socket_ranks[0]}] = rank;
-
+                DistributedContext::get_current_world()->translate_ranks_to_other_ctx(
+                    socket_ranks, config_.distributed_context, translated_socket_ranks);
+                // Only add to translation table if the global rank is part of the subcontext
+                // i.e. the translated rank is valid (positive and less than the size of the subcontext)
+                if (translated_socket_ranks[0] >= 0 &&
+                    translated_socket_ranks[0] < *config_.distributed_context->size()) {
+                    rank_translation_table_[rank] = Rank{translated_socket_ranks[0]};
+                }
             } else {
                 rank_translation_table_[rank] = rank;
             }
