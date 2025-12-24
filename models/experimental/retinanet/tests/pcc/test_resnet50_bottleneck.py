@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.retinanet.tt.tt_bottleneck import TTBottleneck, get_bottleneck_optimisation
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+from ttnn.model_preprocessing import infer_ttnn_module_args
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
@@ -61,6 +62,7 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
 
 
 def load_input(name):
+    # name = "backbone_layer2_1"
     retinanet = retinanet_resnet50_fpn_v2(weights=RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT)
     retinanet.eval()
     torch_backbone = retinanet.backbone.body
@@ -113,7 +115,20 @@ class BottleneckTestInfra:
         torch_model.eval()
 
         self.torch_input_tensor = load_input(name)
+        tt_host_tensor = ttnn.from_torch(
+            self.torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=self.inputs_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+
+        ################# MODEL ARGS ##################
+        model_args = {}
+        model_args = infer_ttnn_module_args(
+            model=torch_model, run_model=lambda model: torch_model(self.torch_input_tensor), device=device
+        )
+        ################# MODEL ARGS ##################
 
         # Preprocess model params
         parameters = preprocess_model_parameters(
@@ -140,6 +155,8 @@ class BottleneckTestInfra:
             dilation=dilation,
             name=name,
             model_config=model_config,
+            model_args=model_args,
+            device=device,
             layer_optimisations=get_bottleneck_optimisation(name),
         )
 
