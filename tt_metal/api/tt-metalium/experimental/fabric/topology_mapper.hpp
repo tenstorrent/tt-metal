@@ -23,8 +23,8 @@ namespace tt::tt_fabric {
 
 struct LocalMeshBinding;
 
-// Concise alias for ASIC physical position (tray, location)
-using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>;
+// Use ASICPosition from tt::tt_metal namespace
+using AsicPosition = tt::tt_metal::ASICPosition;
 
 /**
  * @brief TopologyMapper creates and manages mappings between fabric node IDs and physical ASIC IDs

@@ -87,9 +87,12 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
 std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_position_pinnings(size_t board_size) {
     std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
     // Top left corner: index 0
-    fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+    fixed_asic_position_pinnings.push_back(
+        {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}}, FabricNodeId(MeshId{0}, 0)});
     // Bottom right corner: last device index
-    fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
+    fixed_asic_position_pinnings.push_back(
+        {AsicPosition{tt::tt_metal::TrayID{4}, tt::tt_metal::ASICLocation{1}},
+         FabricNodeId(MeshId{0}, board_size - 1)});
     return fixed_asic_position_pinnings;
 }
 
