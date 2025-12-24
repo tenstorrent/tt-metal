@@ -18,7 +18,6 @@ Features:
 - Multi-device support (N150, N300, etc.)
 """
 
-import sys
 import torch
 import ttnn
 import soundfile as sf
@@ -28,8 +27,6 @@ import time
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
 
-# Add tt-metal to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import (
     TTNNSpeechT5Encoder,
     TTNNEncoderConfig,

@@ -588,10 +588,6 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.path.append("/home/ttuser/ssinghal/PR-fix/speecht5_tts/tt-metal")
-
     from models.experimental.speecht5_tts.reference.speecht5_postnet import (
         load_from_huggingface,
     )

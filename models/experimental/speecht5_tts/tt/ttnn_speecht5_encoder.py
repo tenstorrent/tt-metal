@@ -845,10 +845,6 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.path.append("/home/ttuser/ssinghal/PR-fix/speecht5_tts/tt-metal")
-
     from models.experimental.speecht5_tts.reference.speecht5_encoder import (
         load_from_huggingface,
         SpeechT5Config as PyTorchConfig,
