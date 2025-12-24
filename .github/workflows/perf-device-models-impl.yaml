@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "in-service"
+      architecture:
+        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
+        required: false
+        type: string
+        default: '["blackhole", "wormhole_b0"]'
       requested-models:
         default: "all"
         type: string
@@ -100,6 +105,33 @@ jobs:
           models_json='${{ needs.define-models.outputs.models-to-run }}'
           echo "[info] Models to run: $models_json"
 
+          # Parse and validate architecture input
+          arch='${{ inputs.architecture }}'
+          if [[ -z "$arch" ]]; then
+            arch='["blackhole", "wormhole_b0"]'
+          fi
+          echo "[info] Architecture input: $arch"
+
+          # Validate JSON format
+          if ! echo "$arch" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            echo "❌ Error: Invalid JSON format for 'architecture' input. Expected a JSON array."
+            echo "   Received input: $arch"
+            echo "   Valid format: [\"blackhole\", \"wormhole_b0\"]"
+            exit 1
+          fi
+
+          # Validate each architecture name using jq for exact matching
+          valid_archs='["blackhole", "wormhole_b0"]'
+          invalid_archs=$(echo "$arch" | jq -r --argjson valid "$valid_archs" '.[] | select(. as $a | $valid | index($a) | not)')
+          if [[ -n "$invalid_archs" ]]; then
+            echo "❌ Error: Invalid architecture(s) found:"
+            echo "$invalid_archs" | while read -r invalid; do
+              echo "   - '$invalid'"
+            done
+            echo "   Valid values are: blackhole, wormhole_b0"
+            exit 1
+          fi
+
           # Define which models belong to each matrix group
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
@@ -124,6 +156,14 @@ jobs:
           ]')
 
           echo "[info] Filtered matrix:"
+          echo "$filtered_matrix" | jq .
+
+          # Filter matrix based on selected architectures
+          filtered_matrix=$(echo "$filtered_matrix" | jq -c --argjson archs "$arch" '[
+            .[] | select(.arch as $a | $archs | index($a))
+          ]')
+
+          echo "[info] Matrix after architecture filtering:"
           echo "$filtered_matrix" | jq .
 
           # Check if matrix is empty
