@@ -31,6 +31,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
+            reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
 
@@ -73,6 +74,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         else if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
         {
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
+            reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
 
@@ -113,6 +115,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         else if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
             // workarounds for hi/lo D2B/B2D on BH (Issue #449)
+            reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11);
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1); // Do not 0 out ints
             TTI_SETDVALID(0b10);
 
@@ -374,7 +377,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }
 
-    TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
 

@@ -382,16 +382,19 @@ inline void configure_unpack_AB(
     // Workaround for HW bug (fp32 dest and movd2a/b is used with srcA/B configured with 5-bit exponent)
     if (is_fp32_dest_acc_en && (exp_width == 0)) {
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
-                                                               // workaround for bug tenstorrent/budabackend#1372
+                                                               // workaround for bug tenstor
+                                                               // rent/budabackend#1372
     }
     */
     // Workaround for HW bug (int32 dest and movd2a/b is used with srcA/B configured as int8)
-    if (int8_math_enabled || (fp32_dest_acc_en && ((uint)unpA_dst_format == (uint)DataFormat::UInt16 || (uint)unpA_dst_format == (uint)DataFormat::Float16_b ||
-                                                   (uint)unpA_dst_format == (uint)DataFormat::Float32 || (uint)unpA_dst_format == (uint)DataFormat::Bfp8_b ||
-                                                   (uint)unpA_dst_format == (uint)DataFormat::Bfp4_b)))
+    if (int8_math_enabled || (fp32_dest_acc_en && ((uint)unpA_dst_format == (uint)DataFormat::UInt16)))
     {
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                                  // workaround for bug tenstorrent/budabackend#1948
+    }
+    else
+    {
+        reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Unset debug feature disable
     }
 
     // Clear context ID
