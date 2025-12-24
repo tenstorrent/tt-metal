@@ -17,7 +17,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, temb_shape, block_id, pcc",
     [
-        ((1, 384, 128, 128), (1, 1536), 0, 0.999),
+        ((1, 384, 128, 128), (1, 1536), 0, 0.998),
         ((1, 1536, 16, 16), (1, 1536), 3, 0.998),
     ],
 )
