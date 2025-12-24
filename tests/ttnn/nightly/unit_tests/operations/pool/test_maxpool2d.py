@@ -44,7 +44,8 @@ def run_max_pool2d(
     device,
     tensor_map,
     in_dtype,
-    memory_config=None,
+    in_memory_config=None,
+    out_memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
     nightly_skips=True,
@@ -120,13 +121,16 @@ def run_max_pool2d(
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
+    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
+    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     if in_dtype == ttnn.bfloat8_b:
-        ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-        torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_input = ttnn.from_torch(
+            torch_input_reshaped, in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_memory_config
+        )
     else:
-        ttnn_input = ttnn.from_torch(torch_input_permuted, in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
+        ttnn_input = ttnn.from_torch(
+            torch_input_reshaped, in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_memory_config
+        )
     # run ttnn maxpool2d
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
@@ -138,7 +142,7 @@ def run_max_pool2d(
         stride=stride,
         padding=[pad_t, pad_b, pad_l, pad_r],  # ttnn is padding in the order (top, bottom, left, right)
         dilation=dilation,
-        memory_config=memory_config,
+        memory_config=out_memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         deallocate_input=True,
@@ -451,12 +455,12 @@ def test_run_max_pool_block_shard(
         )
     ),
 )
-@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 def test_run_max_pool_mem_config(
     input_shape,
     device,
     tensor_map,
-    memory_config,
+    out_memory_config,
 ):
     run_max_pool2d(
         input_shape,
@@ -467,7 +471,7 @@ def test_run_max_pool_mem_config(
         device,
         tensor_map,
         ttnn.bfloat16,
-        memory_config=memory_config,
+        out_memory_config=memory_config,
     )
 
 
