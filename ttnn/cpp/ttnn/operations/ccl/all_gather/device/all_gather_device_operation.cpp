@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "all_gather_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::ccl {
@@ -163,8 +164,10 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         input_tensor);
 }
 
-std::tuple<AllGatherDeviceOperation::operation_attributes_t, AllGatherDeviceOperation::tensor_args_t>
-AllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
@@ -174,8 +177,9 @@ AllGatherDeviceOperation::invoke(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
@@ -183,7 +187,6 @@ AllGatherDeviceOperation::invoke(
             .topology = topology,
             .num_links = num_links,
             .sub_core_grid = sub_core_grid},
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

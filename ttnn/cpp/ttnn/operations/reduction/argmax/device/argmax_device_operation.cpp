@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -180,8 +181,10 @@ tensor_return_value_t ArgMaxDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<ArgMaxDeviceOperation::operation_attributes_t, ArgMaxDeviceOperation::tensor_args_t>
-ArgMaxDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::argmax
+
+namespace ttnn::prim {
+ttnn::Tensor argmax(
     const Tensor& input,
     tt::tt_metal::DataType output_dtype,
     std::optional<int> dim,
@@ -190,8 +193,9 @@ ArgMaxDeviceOperation::invoke(
     bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::reduction::argmax::ArgMaxDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_dtype = output_dtype,
             .dim = dim,
             .keepdim = keepdim,
@@ -199,7 +203,6 @@ ArgMaxDeviceOperation::invoke(
             .use_multicore = use_multicore,
             .output_mem_config = output_mem_config,
         },
-        tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)}};
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
-
-}  // namespace ttnn::operations::reduction::argmax
+}  // namespace ttnn::prim
