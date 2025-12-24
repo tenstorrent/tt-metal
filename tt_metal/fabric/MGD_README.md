@@ -77,7 +77,7 @@ Pinnings are specified as a separate top-level section in the MGD file:
 # --- Pinnings ---------------------------------------------------------------
 
 pinnings {
-  fabric_node_id {
+  logical_fabric_node_id {
     mesh_id: 0
     chip_id: 0
   }
