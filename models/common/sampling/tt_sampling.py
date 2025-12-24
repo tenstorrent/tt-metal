@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 
 import torch
+from loguru import logger
 
 import ttnn
-
-logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
 from models.common.utils import LogProbsCalculator
 
@@ -85,6 +83,7 @@ class TTSampling(LightweightModule):
         # Force argmax sampling
         self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
         if self._force_argmax_sampling:
+            self.args = args
             self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
             self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
 
@@ -193,8 +192,8 @@ class TTSampling(LightweightModule):
         # Force argmax sampling
         self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
         if self._force_argmax_sampling:
-            self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
-            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+            self.num_gather_links = self.args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
+            self.ag_topology = self.args.model_config["SAMPLING_AG_CONFIG"]["topology"]
             return
 
         """Update sampling parameters (k, p, temperature) dynamically."""
@@ -269,7 +268,7 @@ class TTSampling(LightweightModule):
                     x_untilized,
                     dim=-1,
                     output_tensor=tt_out_tok,
-                    keepdim=True,
+                    keepdim=False,
                     use_multicore=True,
                 ),
                 bogus_log_probs,

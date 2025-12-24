@@ -535,7 +535,7 @@ class Generator:
                     sampling_module = getattr(self.model[i], "sampling", None)
                     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                     sampling_module.reset_sampling_params(formatted_params)
-                    if not sampling_module.tt_sampling._force_argemax_sampling:
+                    if not sampling_module.tt_sampling._force_argmax_sampling:
                         sampling_module.reset_seed(formatted_params.seed)
                         sampling_module.reset_prompt_tokens(prompt_chunks[i])
                         sampling_module.reset_output_state(output_chunks[i])

@@ -2,18 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
