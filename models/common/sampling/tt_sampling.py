@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 
 import torch
+from loguru import logger
 
 import ttnn
-
-logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
 from models.common.utils import LogProbsCalculator
 
@@ -83,13 +81,24 @@ class TTSampling(LightweightModule):
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Force argmax sampling
-        if (k is not None and k[0] == 1) and (p is not None and p[0] == 1.0) and (temp is not None and temp[0] == 1.0):
+        if hasattr(args, "model_config") and "SAMPLING_AG_CONFIG" in args.model_config:
+            self._allow_force_argmax_sampling = args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"]
+            self.num_argmax_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
+            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+        else:
+            self._allow_force_argmax_sampling = False
+            self.num_argmax_gather_links = self.num_gather_links
+            self.ag_topology = ttnn.Topology.Linear
+
+        if (
+            self._allow_force_argmax_sampling
+            and (k is not None and k[0] == 1)
+            and (p is not None and p[0] == 1.0)
+            and (temp is not None and temp[0] == 1.0)
+        ):
             self._force_argmax_sampling = True
         else:
             self._force_argmax_sampling = False
-        if self._force_argmax_sampling:
-            self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
-            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
 
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
@@ -194,15 +203,15 @@ class TTSampling(LightweightModule):
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         # Force argmax sampling
-        if (k is not None and k[0] == 1) and (p is not None and p[0] == 1.0) and (temp is not None and temp[0] == 1.0):
+        if (
+            self._allow_force_argmax_sampling
+            and (k is not None and k[0] == 1)
+            and (p is not None and p[0] == 1.0)
+            and (temp is not None and temp[0] == 1.0)
+        ):
             self._force_argmax_sampling = True
         else:
             self._force_argmax_sampling = False
-
-        if self._force_argmax_sampling:
-            self.num_gather_links = 4
-            self.ag_topology = ttnn.Topology.Ring
-            return
 
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
@@ -260,7 +269,7 @@ class TTSampling(LightweightModule):
                     persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                    num_links=self.num_gather_links,
+                    num_links=self.num_argmax_gather_links,
                     memory_config=x.memory_config(),
                     cluster_axis=cluster_axis,
                     topology=self.ag_topology,
@@ -276,7 +285,7 @@ class TTSampling(LightweightModule):
                     x_untilized,
                     dim=-1,
                     output_tensor=tt_out_tok,
-                    keepdim=True,
+                    keepdim=False,
                     use_multicore=True,
                 ),
                 bogus_log_probs,
