@@ -118,17 +118,17 @@ class SamplingGenerator:
         )
         if self.tt_sampling._force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
-        if self.tt_sampling._force_argmax_sampling:
-            return
 
-        self.tt_penalties.reset_params(
-            sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
-        )
+        old_penalties_active = self._penalties_active
         self._penalties_active = not (
             self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
             and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
             and self._is_default_penalty(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
+        if self._penalties_active or self._penalties_active != old_penalties_active:
+            self.tt_penalties.reset_params(
+                sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
+            )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
