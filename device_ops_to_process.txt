@@ -373,26 +373,26 @@
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/split/device/split_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/fill_rm_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/pad/device/pad_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/moe_routing_remap_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/pad/device/pad_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/moe_routing_remap_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_device_operation.hpp
