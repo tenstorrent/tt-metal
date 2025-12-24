@@ -107,7 +107,7 @@ jobs:
 
           # Parse and validate architecture input
           arch='${{ inputs.architecture }}'
-          if [[ -z "$arch" || "$arch" == "" ]]; then
+          if [[ -z "$arch" ]]; then
             arch='["blackhole", "wormhole_b0"]'
           fi
           echo "[info] Architecture input: $arch"
