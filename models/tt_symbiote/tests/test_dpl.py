@@ -19,8 +19,8 @@ class CustomModule(nn.Module):
         return x
 
 
-def test_llama(device):
-    """Test LLaMA model with TTNN acceleration."""
+def test_dpl(device):
+    """Test DPL model with TTNN acceleration."""
     model = CustomModule()
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
