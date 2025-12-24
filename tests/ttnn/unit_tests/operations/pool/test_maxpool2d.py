@@ -66,21 +66,8 @@ parameters = {
     "in_mem_config_tests": {
         "cores": [[8, 7]],  # N300 core grid
         "input_specs": [
-            [
-                2,
-                32,
-                78,
-                78,
-                3,
-                3,
-                3,
-                3,
-                0,
-                0,
-                1,
-                1,
-                False,
-            ],  # trace from openpdn_mnist test, no work on core 47 for 8x7 N300 grid
+            # trace from openpdn_mnist test, no work on core 47 for 8x7 N300 grid
+            [2, 32, 78, 78, 3, 3, 3, 3, 0, 0, 1, 1, False],
         ],
     },
     "out_mem_config_tests": {
