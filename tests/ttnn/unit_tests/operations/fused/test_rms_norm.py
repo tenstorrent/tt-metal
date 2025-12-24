@@ -53,9 +53,9 @@ def test_rms_norm_row_major(device, batch_size, h, w):
 
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [2048])
-@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("w", [4022])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_large_rms_norm(device, batch_size, h, w, dtype):
+def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=dtype)
