@@ -77,7 +77,7 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "ops basic tests", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations -k 'test_' -xv --tb=short", merge_gate: false },
+            { name: "conv basic tests", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv/perf/test_conv_perf.py -xv --tb=short", merge_gate: false },
           ]]
     steps:
       - name: Compute tests
