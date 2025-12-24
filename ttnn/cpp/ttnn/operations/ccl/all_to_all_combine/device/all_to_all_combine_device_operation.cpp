@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_combine_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -157,8 +158,10 @@ AllToAllCombineDeviceOperation::tensor_return_value_t AllToAllCombineDeviceOpera
         create_device_tensor(output_spec, tensor_args.input_tensor.device()));
 }
 
-std::tuple<AllToAllCombineDeviceOperation::operation_attributes_t, AllToAllCombineDeviceOperation::tensor_args_t>
-AllToAllCombineDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
@@ -170,8 +173,9 @@ AllToAllCombineDeviceOperation::invoke(
     const bool locally_reduced,
     const CoreRangeSet& worker_core_range_set,
     uint32_t output_shard_dim) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::AllToAllCombineDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
@@ -180,11 +184,10 @@ AllToAllCombineDeviceOperation::invoke(
             .worker_core_range_set = worker_core_range_set,
             .output_shard_dim = output_shard_dim,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .mapping_tensor = expert_mapping_tensor,
             .metadata_tensor = expert_metadata_tensor,
-            .optional_output_tensor = optional_output_tensor}};
+            .optional_output_tensor = optional_output_tensor});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

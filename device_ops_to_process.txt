@@ -158,14 +158,14 @@
 [x] ./ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.hpp
 [x] ./ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/moe_expert_token_remap_device_operation.hpp
 [x] ./ttnn/cpp/ttnn/operations/data_movement/fold/device/fold_device_op.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/gather/device/gather_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/scatter/device/scatter_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/clone/device/clone_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/split/device/split_device_operation.hpp
-[/] ./ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/fill_rm_device_operation.hpp
+[ ] ./ttnn/cpp/ttnn/operations/data_movement/gather/device/gather_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/scatter/device/scatter_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/clone/device/clone_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/split/device/split_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/fill_rm_device_operation.hpp
 [x] ./ttnn/cpp/ttnn/operations/data_movement/pad/device/pad_device_operation.hpp
 [x] ./ttnn/cpp/ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp
 [x] ./ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_device_operation.hpp

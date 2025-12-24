@@ -32,20 +32,17 @@ struct ShardedToInterleavedPartialDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor) const;
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const Tensor& cache_tensor,
-        uint32_t num_slices,
-        uint32_t slice_index,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const tt::tt_metal::DataType& output_dtype);
 };
 
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto sharded_to_interleaved_partial = ttnn::register_operation<
-    "ttnn::prim::sharded_to_interleaved_partial",
-    ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation>();
+ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t
+sharded_to_interleaved_partial(
+    const Tensor& input_tensor,
+    const Tensor& cache_tensor,
+    uint32_t num_slices,
+    uint32_t slice_index,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype);
 }  // namespace ttnn::prim

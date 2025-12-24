@@ -4,6 +4,7 @@
 ///
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -287,3 +288,18 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 };
 
 }  // namespace ttnn::operations::point_to_point
+
+namespace ttnn::prim {
+ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to_point(
+    const Tensor& input_tensor,
+    const ::ttnn::ccl::Topology& topology,
+    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& sender_coord,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
+    using OperationType = ttnn::operations::point_to_point::PointToPointOp;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
+        OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
+}
+}  // namespace ttnn::prim

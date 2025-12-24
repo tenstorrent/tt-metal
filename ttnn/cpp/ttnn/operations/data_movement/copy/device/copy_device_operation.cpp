@@ -3,22 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "copy_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 
-namespace ttnn::operations::data_movement::copy {
-
-using namespace tt::tt_metal;
-
-std::tuple<CopyDeviceOperation::operation_attributes_t, CopyDeviceOperation::tensor_args_t> CopyDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t copy(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
-    return {
-        operation_attributes_t{output_mem_config, output_dtype, backwards}, tensor_args_t{input, preallocated_output}};
+    using OperationType = ttnn::operations::data_movement::copy::CopyDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
+        OperationType::tensor_args_t{input, preallocated_output});
 }
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::data_movement::copy {
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

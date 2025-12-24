@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -92,7 +93,10 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> BroadcastDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl::broadcast
+
+namespace ttnn::prim {
+ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_t broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
@@ -100,6 +104,8 @@ std::tuple<operation_attributes_t, tensor_args_t> BroadcastDeviceOperation::invo
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    using OperationType = ttnn::operations::ccl::broadcast::BroadcastDeviceOperation;
+
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -124,8 +130,8 @@ std::tuple<operation_attributes_t, tensor_args_t> BroadcastDeviceOperation::invo
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return {
-        operation_attributes_t(
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t(
             sender_coord,
             num_links,
             num_devices,
@@ -133,7 +139,6 @@ std::tuple<operation_attributes_t, tensor_args_t> BroadcastDeviceOperation::invo
             ccl_topology,
             cluster_axis,
             sub_device_id),
-        tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::ccl::broadcast
+}  // namespace ttnn::prim

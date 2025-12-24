@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "softmax_operation_types.hpp"
 #include "softmax_program_factory.hpp"
 
@@ -347,34 +348,39 @@ SoftmaxDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<SoftmaxDeviceOperation::operation_attributes_t, SoftmaxDeviceOperation::tensor_args_t>
-SoftmaxDeviceOperation::invoke(
-    SoftmaxOperationType softmax_type,
+}  // namespace ttnn::operations::normalization::softmax
+
+namespace ttnn::prim {
+ttnn::operations::normalization::softmax::SoftmaxDeviceOperation::tensor_return_value_t softmax(
+    ttnn::operations::normalization::softmax::SoftmaxOperationType softmax_type,
     const Tensor& input_tensor,
     int8_t dim,
     const std::optional<const Tensor>& mask,
     std::optional<float> scale,
     bool inplace,
     tt::tt_metal::MemoryConfig output_mem_config,
-    SoftmaxProgramConfig program_config,
+    ttnn::operations::normalization::softmax::SoftmaxProgramConfig program_config,
     bool is_causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
     bool is_scale_causal_mask_hw_dims_softmax,
     bool numeric_stable) {
-    return {
-        operation_attributes_t{
-            softmax_type,
-            dim,
-            scale,
-            inplace,
-            std::move(output_mem_config),
-            program_config,
-            is_causal_mask,
-            compute_kernel_config,
-            is_scale_causal_mask_hw_dims_softmax,
-            numeric_stable},
-        tensor_args_t{input_tensor, mask}};
+    using OperationType = ttnn::operations::normalization::softmax::SoftmaxDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        softmax_type,
+        dim,
+        scale,
+        inplace,
+        std::move(output_mem_config),
+        program_config,
+        is_causal_mask,
+        compute_kernel_config,
+        is_scale_causal_mask_hw_dims_softmax,
+        numeric_stable};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, mask};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
+}  // namespace ttnn::prim
 
 Tensor softmax(
     const Tensor& input_tensor,
