@@ -169,8 +169,9 @@ public:
     std::set<SenderReceiverPair> unique_links;
 
 private:
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     std::pair<std::optional<CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
-    assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) const {
+    assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) {
         if (params.benchmark_type != BenchmarkType::EthEthTensixUniDir and
             params.benchmark_type != BenchmarkType::EthEthTensixBiDir) {
             return {std::nullopt, nullptr};

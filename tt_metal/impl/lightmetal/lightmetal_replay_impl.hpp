@@ -71,8 +71,10 @@ public:
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) const;
-    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
@@ -82,7 +84,8 @@ public:
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd);
 
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
@@ -110,7 +113,8 @@ public:
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state
-    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args) const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    std::shared_ptr<RuntimeArgs> rt_args_from_flatbuffer(FlatbufferRuntimeArgVector flatbuffer_args);
 
     // Workload related members --------------------
     const tt::tt_metal::flatbuffer::LightMetalBinary* parse_flatbuffer_binary();

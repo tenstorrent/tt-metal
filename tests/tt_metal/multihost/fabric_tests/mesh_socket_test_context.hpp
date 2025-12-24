@@ -41,7 +41,8 @@ private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
 
     void initialize_mesh_device();
-    void setup_fabric_configuration() const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void setup_fabric_configuration();
     void share_seed();
     std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
     void expand_test_configurations();

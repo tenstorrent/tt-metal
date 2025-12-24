@@ -85,8 +85,9 @@ LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* d
 }
 
 // Needs access to BufferMap, so part of LightMetalReplay class
+// NOLINTNEXTLINE(readability-make-member-function-const)
 std::shared_ptr<RuntimeArgs> LightMetalReplayImpl::rt_args_from_flatbuffer(
-    const FlatbufferRuntimeArgVector flatbuffer_args) const {
+    const FlatbufferRuntimeArgVector flatbuffer_args) {
     auto runtime_args = std::make_shared<RuntimeArgs>();
 
     for (const auto& flatbuffer_arg : *flatbuffer_args) {
@@ -464,7 +465,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteC
     remove_bufer_from_map(cmd->global_id());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
         buffer,
@@ -484,7 +486,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
     // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
         buffer,
@@ -629,7 +632,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 }
 
 // Verification command to compare readback of a buffer with golden from either capture or user expected values.
-void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(LightMetalCompare) cq_global_id: {} buffer_global_id: {} is_user_data: {}",

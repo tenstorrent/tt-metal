@@ -120,8 +120,9 @@ public:
 
     static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) const {
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
         } else {
@@ -137,8 +138,9 @@ public:
         }
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) const {
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             // Wait for the program to finish
             tt::tt_metal::detail::WaitProgramDone(device->get_devices()[0], program);
