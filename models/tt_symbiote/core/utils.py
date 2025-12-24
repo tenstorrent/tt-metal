@@ -47,3 +47,53 @@ def torch_dtype_to_ttnn_dtype(torch_dtype):
         return ttnn.int32
     else:
         raise RuntimeError(f"Unsupported torch dtype for conversion to ttnn dtype: {torch_dtype}")
+
+
+def compare_fn_outputs(torch_output, ttnn_output, func_name):
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    torch_output_tensors = []
+    ttnn_output_tensors = []
+    if isinstance(torch_output, TorchTTNNTensor):
+        torch_output_tensors.append(torch_output.to_torch)
+    elif isinstance(torch_output, (list, tuple)):
+        for item in torch_output:
+            if isinstance(item, TorchTTNNTensor):
+                torch_output_tensors.append(item.to_torch)
+    if isinstance(ttnn_output, TorchTTNNTensor):
+        ttnn_output.elem = None
+        ttnn_output_tensors.append(ttnn_output.to_torch)
+        assert isinstance(torch_output, TorchTTNNTensor), "Mismatched output types between TTNN and Torch."
+    elif isinstance(ttnn_output, (list, tuple)):
+        assert isinstance(torch_output, (list, tuple)), "Mismatched output types between TTNN and Torch."
+        assert len(ttnn_output) == len(torch_output), "Mismatched output lengths between TTNN and Torch."
+        for index, item in enumerate(ttnn_output):
+            if isinstance(item, TorchTTNNTensor):
+                assert isinstance(
+                    torch_output[index], TorchTTNNTensor
+                ), "Mismatched output types between TTNN and Torch."
+                item.elem = None
+                ttnn_output_tensors.append(item.to_torch)
+
+    passed = True
+    for t_tensor, n_tensor in zip(torch_output_tensors, ttnn_output_tensors):
+        # calculate PCC between t_tensor and n_tensor
+        t_tensor = t_tensor.to(torch.float32)
+        n_tensor = n_tensor.to(torch.float32)
+        assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
+        pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
+        diff = torch.abs(t_tensor - n_tensor)
+        if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
+            passed = False
+            print(
+                f"Warning: High discrepancy detected in operation {func_name}. "
+                f"PCC: {pcc.item()}, Max Abs Diff: {torch.max(diff).item()}, Median Abs Diff: {torch.median(diff).item()}, Mean Abs Diff: {torch.mean(diff).item()}"
+            )
+        if torch.logical_xor((n_tensor == 0).all(), (t_tensor == 0).all()):
+            passed = False
+            print(f"Warning: One of the outputs is all zeros while the other is not in operation {func_name}.")
+
+        if func_name == "aten::topk":
+            break
+    if not passed:
+        print(f"Operation {func_name} PCC < 0.99.")
