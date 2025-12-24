@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
-
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
@@ -257,13 +257,15 @@ tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
         args.program_config);
 }
 
-std::tuple<GroupNormDeviceOperation::operation_attributes_t, GroupNormDeviceOperation::tensor_args_t>
-GroupNormDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization::group_norm
+
+namespace ttnn::prim {
+ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_return_value_t group_norm(
     const Tensor& input,
     float eps,
     uint32_t num_groups,
     const MemoryConfig& output_mem_config,
-    const GroupNormProgramConfig& program_config,
+    const ttnn::operations::normalization::group_norm::GroupNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_welford,
     std::optional<Tensor> gamma,
@@ -271,22 +273,23 @@ GroupNormDeviceOperation::invoke(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
-    return {
-        operation_attributes_t{
-            .eps = eps,
-            .num_groups = num_groups,
-            .output_mem_config = output_mem_config,
-            .program_config = program_config,
-            .compute_kernel_config = compute_kernel_config,
-            .use_welford = use_welford,
-        },
-        tensor_args_t{
-            .input = input,
-            .gamma = std::move(gamma),
-            .beta = std::move(beta),
-            .input_mask = std::move(input_mask),
-            .negative_mask = std::move(negative_mask),
-            .reciprocals = std::move(reciprocals)}};
-}
+    using OperationType = ttnn::operations::normalization::group_norm::GroupNormDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .eps = eps,
+        .num_groups = num_groups,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .use_welford = use_welford,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input,
+        .gamma = std::move(gamma),
+        .beta = std::move(beta),
+        .input_mask = std::move(input_mask),
+        .negative_mask = std::move(negative_mask),
+        .reciprocals = std::move(reciprocals)};
 
-}  // namespace ttnn::operations::normalization::group_norm
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim
