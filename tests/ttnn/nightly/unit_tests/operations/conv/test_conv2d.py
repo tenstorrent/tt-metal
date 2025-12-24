@@ -66,17 +66,19 @@ def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
+    dtype=torch.bfloat16,
 ):
     if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
         torch_tensor = torch.abs(torch_tensor)
         return torch_tensor
     else:
-        if tensor_shape in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[tensor_shape]
+        cache_key = (tensor_shape, dtype)
+        if cache_key in torch_tensor_map.keys():
+            torch_tensor = torch_tensor_map[cache_key]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-            torch_tensor_map[tensor_shape] = torch_tensor
+            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
+            torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
@@ -5091,3 +5093,125 @@ def test_conv_block_sharding(
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
+    """
+    Test that FP32 accumulation is automatically enabled when both input and weights are FP32.
+
+    Runs conv2d three times with FP32 inputs and FP32 weights:
+    1. Without compute_config (relies on auto-default)
+    2. With explicit fp32_dest_acc_en=True
+    3. With explicit fp32_dest_acc_en=False
+
+    Verifies that auto-default matches explicit True (not False), proving FP32 accum is auto-enabled.
+    """
+    batch_size = 1
+    out_channels = 64
+    input_channels = 64
+    input_height = 8
+    input_width = 8
+    kernel_size = 3
+    stride = 1
+    padding = 1
+
+    # Generate random FP32 inputs
+    torch.manual_seed(0)
+    torch_input_nchw = randomize_torch_tensor(torch_tensor_map, (batch_size, input_channels, input_height, input_width),dtype=torch.float32)
+    torch_weight = randomize_torch_tensor(torch_tensor_map, (out_channels, input_channels, kernel_size, kernel_size),dtype=torch.float32)
+    torch_bias = randomize_torch_tensor(torch_tensor_map, (1, 1, 1, out_channels),dtype=torch.float32)
+
+    # Convert input to NHWC for ttnn
+    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+
+    # Convert to ttnn tensors - all FP32
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.float32, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.float32)
+    tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.float32)
+
+    # Run 1: WITHOUT explicit compute_config (auto-default behavior)
+    # Default from get_conv_default_compute_kernel_config() is:
+    # math_fidelity=HiFi4, math_approx_mode=true, fp32_dest_acc_en=true (for FP32xFP32), packer_l1_acc=false
+    tt_output_auto = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        # No compute_config - uses get_conv_default_compute_kernel_config()
+    )
+
+    # Run 2: WITH explicit fp32_dest_acc_en=True (matching expected default)
+    # Must match all default params: MathFidelity::HiFi4, math_approx_mode=true, packer_l1_acc=false
+    compute_config_true = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    tt_output_explicit_true = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config_true,
+    )
+
+    # Run 3: WITH explicit fp32_dest_acc_en=False (to verify difference)
+    # Keep all other params same as default, only change fp32_dest_acc_en
+    compute_config_false = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_output_explicit_false = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config_false,
+    )
+
+    # Convert outputs to torch
+    tt_output_auto_torch = ttnn.to_torch(tt_output_auto)
+    tt_output_explicit_true_torch = ttnn.to_torch(tt_output_explicit_true)
+    tt_output_explicit_false_torch = ttnn.to_torch(tt_output_explicit_false)
+
+    # Auto-default should match explicit True (FP32 accum enabled)
+    assert torch.equal(tt_output_auto_torch, tt_output_explicit_true_torch), \
+        "Auto-default output does not match explicit fp32_dest_acc_en=True. " \
+        "FP32 accumulation was NOT automatically enabled for FP32 x FP32!"
+
+    # Auto-default should NOT match explicit False (verify they're different)
+    assert not torch.equal(tt_output_auto_torch, tt_output_explicit_false_torch), \
+        "Auto-default output matches explicit fp32_dest_acc_en=False. " \
+        "This suggests FP32 accumulation was NOT enabled (unexpected)."
