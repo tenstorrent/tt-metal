@@ -226,3 +226,148 @@ def test_dram_group_norm_perf_welford_reciprocal():
     assert (
         lower_bound <= device_kernel_duration <= upper_bound
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
+
+
+@pytest.mark.models_device_performance_bare_metal
+def test_conv2d_sdxl_perf():
+    """
+    Test performance of SDXL Conv2D operation.
+    This test measures device kernel performance for the specific input configuration:
+    (1, 2560, 1280, 32, 32) with 3x3 kernel, stride (1,1), padding (1,1).
+    """
+
+    # Specific SDXL Conv2D test case parameters
+    batch, input_channels, output_channels = 1, 2560, 1280
+    input_height, input_width = 32, 32
+
+    # Create a command that runs the specific Conv2D SDXL test
+    test_name = "test_conv2d_sdxl[device_params={'l1_small_size': 32768}-batch=1-input_channels=2560-output_channels=1280-input_height=32-input_width=32-weights_dtype=DataType.BFLOAT8_B-output_dtype=DataType.BFLOAT16-groups=1-kernel=(3, 3)-stride=(1, 1)-padding=(1, 1)-dilation=(1, 1)-shard_layout=TensorMemoryLayout.BLOCK_SHARDED-act_block_h_override=64-act_block_w_div=1-deallocate_activation=True-math_fidelity=MathFidelity.HiFi2-fp32_accum=False-packer_l1_acc=True-act_db=True-w_db=True]"
+    command = f'pytest "tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::{test_name}" -v'
+    subdir = f"conv2d_sdxl_perf_{input_channels}x{output_channels}_{input_height}x{input_width}"
+    cols = ["DEVICE KERNEL"]
+    op_name = "Conv2dDeviceOperation"
+
+    # Run the performance test and get detailed results
+    results = run_device_perf_detailed(
+        command=command,
+        subdir=subdir,
+        cols=cols,
+        op_name=op_name,
+    )
+
+    # Extract the device kernel duration result
+    device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
+
+    # Expected performance value (actual measurement)
+    expected_duration_ns = 1115488  # Measured: 1.12ms for Conv2D SDXL (2560->1280, 32x32)
+
+    # Log the performance result
+    print(
+        f"Conv2D SDXL {input_channels}->{output_channels} {input_height}x{input_width} Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
+    )
+
+    # Performance validation with 1.5% margin
+    margin = 0.015
+    lower_bound = expected_duration_ns * (1 - margin)
+    upper_bound = expected_duration_ns * (1 + margin)
+
+    # Performance validation - assert if outside expected range
+    assert (
+        lower_bound <= device_kernel_duration <= upper_bound
+    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
+
+
+@pytest.mark.models_device_performance_bare_metal
+def test_matmul_sdxl_perf_no_gelu():
+    """
+    Test performance of SDXL Matmul operation without GELU activation.
+    This test measures device kernel performance for the configuration:
+    M=1024, K=5120, N=1280 (1024x5120x1280).
+    """
+
+    # Specific SDXL Matmul test case parameters (no GELU)
+    M, K, N = 1024, 5120, 1280
+
+    # Create a command that runs the specific Matmul SDXL test
+    test_name = "test_sdxl_matmul[M=1024-K=5120-N=1280-in0_block_w=4-out_subblock_h=1-out_subblock_w=8-per_core_M=4-per_core_N=8-has_gelu=False-core_grid=ttnn.CoreGrid(x=5, y=8)]"
+    command = f'pytest "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul.py::{test_name}" -v'
+    subdir = f"matmul_sdxl_perf_{M}x{K}x{N}_no_gelu"
+    cols = ["DEVICE KERNEL"]
+    op_name = "Matmul"
+
+    # Run the performance test and get detailed results
+    results = run_device_perf_detailed(
+        command=command,
+        subdir=subdir,
+        cols=cols,
+        op_name=op_name,
+    )
+
+    # Extract the device kernel duration result
+    device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
+
+    # Expected performance value (actual measurement)
+    expected_duration_ns = 209173  # Measured: 209μs for Matmul SDXL (1024x5120x1280, no GELU)
+
+    # Log the performance result
+    print(
+        f"Matmul SDXL {M}x{K}x{N} (no GELU) Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
+    )
+
+    # Performance validation with 1.5% margin
+    margin = 0.015
+    lower_bound = expected_duration_ns * (1 - margin)
+    upper_bound = expected_duration_ns * (1 + margin)
+
+    # Performance validation - assert if outside expected range
+    assert (
+        lower_bound <= device_kernel_duration <= upper_bound
+    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
+
+
+@pytest.mark.models_device_performance_bare_metal
+def test_matmul_sdxl_perf_with_gelu():
+    """
+    Test performance of SDXL Matmul operation with GELU activation.
+    This test measures device kernel performance for the configuration:
+    M=1024, K=1280, N=5120 (1024x1280x5120) with GELU.
+    """
+
+    # Specific SDXL Matmul test case parameters (with GELU)
+    M, K, N = 1024, 1280, 5120
+
+    # Create a command that runs the specific Matmul SDXL test
+    test_name = "test_sdxl_matmul[M=1024-K=1280-N=5120-in0_block_w=4-out_subblock_h=1-out_subblock_w=8-per_core_M=4-per_core_N=32-has_gelu=True-core_grid=ttnn.CoreGrid(x=5, y=8)]"
+    command = f'pytest "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul.py::{test_name}" -v'
+    subdir = f"matmul_sdxl_perf_{M}x{K}x{N}_with_gelu"
+    cols = ["DEVICE KERNEL"]
+    op_name = "Matmul"
+
+    # Run the performance test and get detailed results
+    results = run_device_perf_detailed(
+        command=command,
+        subdir=subdir,
+        cols=cols,
+        op_name=op_name,
+    )
+
+    # Extract the device kernel duration result
+    device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
+
+    # Expected performance value (actual measurement)
+    expected_duration_ns = 238534  # Measured: 238μs for Matmul SDXL (1024x1280x5120, with GELU)
+
+    # Log the performance result
+    print(
+        f"Matmul SDXL {M}x{K}x{N} (with GELU) Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
+    )
+
+    # Performance validation with 1.5% margin
+    margin = 0.015
+    lower_bound = expected_duration_ns * (1 - margin)
+    upper_bound = expected_duration_ns * (1 + margin)
+
+    # Performance validation - assert if outside expected range
+    assert (
+        lower_bound <= device_kernel_duration <= upper_bound
+    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
