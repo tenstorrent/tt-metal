@@ -112,7 +112,6 @@ class TtConv1d:
             force_split_reader=False,  # Don't force split reader
             # Add missing parameters from conv2d tests
             transpose_shards=False,
-            in_place=False,
             enable_activation_reuse=False,
             full_inner_dim=False,
         )

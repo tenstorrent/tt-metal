@@ -15,12 +15,15 @@ Features:
 - HiFi4 compute kernels with optimized configurations
 - Minimal torch ↔ ttnn conversions
 - Clean, production-ready code
+- Multi-device support (N150, N300, etc.)
 """
 
 import sys
 import torch
 import ttnn
 import soundfile as sf
+import pytest
+import os
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
 
@@ -41,6 +44,52 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     preprocess_postnet_parameters,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import SpeechT5Generator
+
+
+# Pytest fixtures for multi-device support
+@pytest.fixture(scope="module")
+def mesh_device(request):
+    """Fixture to create mesh device based on MESH_DEVICE environment variable."""
+    mesh_device_env = os.environ.get("MESH_DEVICE")
+
+    # Map environment variable to device configuration
+    device_configs = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+        "TG": (8, 4),
+        "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        "BHGLX": (8, 4),
+    }
+
+    if mesh_device_env in device_configs:
+        mesh_shape = device_configs[mesh_device_env]
+        if mesh_shape == (1, 1):
+            # Single device
+            mesh_device = ttnn.open_device(device_id=0, l1_small_size=24576)
+            mesh_device.enable_program_cache()
+        else:
+            # Multi-device mesh
+            devices = ttnn.get_device_ids()[: mesh_shape[0] * mesh_shape[1]]
+            mesh_device = ttnn.MeshDevice(devices, mesh_shape)
+    else:
+        # Default to single device
+        mesh_device = ttnn.open_device(device_id=0, l1_small_size=24576)
+        mesh_device.enable_program_cache()
+
+    yield mesh_device
+
+    # Cleanup
+    if hasattr(mesh_device, "close"):
+        mesh_device.close()
+    else:
+        # Multi-device cleanup
+        for device in mesh_device.get_devices():
+            ttnn.close_device(device)
 
 
 def get_high_perf_compute_config(device):
@@ -334,48 +383,91 @@ def generate_speech_ttnn(
         return speech
 
 
-def main():
-    """Main demo function."""
-
-    import argparse
-
-    parser = argparse.ArgumentParser(description="TTNN SpeechT5 TTS Demo")
-    parser.add_argument(
-        "texts", nargs="+", help="Input text(s) to convert to speech. Each text will generate a separate audio file."
-    )
-    parser.add_argument(
-        "--output_dir", default=".", help="Output directory for audio files (default: current directory)"
-    )
-    parser.add_argument("--max_steps", type=int, default=100, help="Maximum number of generation steps (default: 100)")
-    parser.add_argument(
-        "--enable_trace", action="store_true", help="Enable TTNN trace for faster inference (default: False)"
-    )
-
-    args = parser.parse_args()
+def run_demo(
+    texts,
+    output_dir=".",
+    max_steps=100,
+    enable_trace=False,
+    speaker_id=0,
+    mesh_device=None,
+    model_location_generator=None,
+):
+    """Core demo function that can be called from pytest or main."""
 
     # Create output directory if it doesn't exist
     import os
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
         # Enable persistent kernel cache for faster subsequent runs
         ttnn.device.EnablePersistentKernelCache()
 
-        # Initialize device
-        device = ttnn.open_device(device_id=0, l1_small_size=300000, trace_region_size=10000000)
+        # Initialize device - use mesh_device if provided, otherwise default to single device
+        if mesh_device is not None:
+            device = mesh_device
+            # For multi-device, get the first device
+            if hasattr(mesh_device, "get_devices"):
+                actual_device = mesh_device.get_devices()[0]
+            else:
+                actual_device = mesh_device
+        else:
+            # Default single device initialization
+            device = ttnn.open_device(device_id=0, l1_small_size=300000, trace_region_size=10000000)
+            actual_device = device
 
         # Enable program cache for faster inference
-        device.enable_program_cache()
+        if hasattr(device, "enable_program_cache"):
+            device.enable_program_cache()
+        elif hasattr(actual_device, "enable_program_cache"):
+            actual_device.enable_program_cache()
 
-        # Load models
-        processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
-        model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
-        vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+        # Load models - use CIv2 cache if available
+        is_ci_v2 = os.environ.get("TT_GH_CI_INFRA") is not None
 
-        # Load speaker embeddings
-        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
-        speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+        if is_ci_v2 and model_location_generator is not None:
+            # CIv2: Use model_location_generator for cached models
+            print("🔄 Loading models from CIv2 cache...")
+
+            # SpeechT5 TTS model components
+            tts_model_path = model_location_generator(
+                "microsoft/speecht5_tts", model_subdir="", download_if_ci_v2=True, ci_v2_timeout_in_s=900
+            )
+
+            # HiFi-GAN vocoder
+            vocoder_path = model_location_generator(
+                "microsoft/speecht5_hifigan", model_subdir="", download_if_ci_v2=True, ci_v2_timeout_in_s=900
+            )
+
+            # Speaker embeddings dataset
+            embeddings_path = model_location_generator(
+                "microsoft/speecht5_tts/cmu-arctic-xvectors",
+                model_subdir="",
+                download_if_ci_v2=True,
+                ci_v2_timeout_in_s=900,
+            )
+
+            # Load from local paths
+            processor = SpeechT5Processor.from_pretrained(str(tts_model_path))
+            model = SpeechT5ForTextToSpeech.from_pretrained(str(tts_model_path))
+            vocoder = SpeechT5HifiGan.from_pretrained(str(vocoder_path))
+
+            # Load speaker embeddings from local dataset
+            embeddings_dataset = load_dataset(str(embeddings_path / "cmu-arctic-xvectors"), split="validation")
+            speaker_embeddings = torch.tensor(embeddings_dataset[speaker_id]["xvector"]).unsqueeze(0)
+
+        else:
+            # Local/HuggingFace: Load directly from HuggingFace
+            print("🔄 Loading models from HuggingFace...")
+            processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+            model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
+            vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+
+            # Load speaker embeddings from HuggingFace
+            embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+            speaker_embeddings = torch.tensor(embeddings_dataset[speaker_id]["xvector"]).unsqueeze(0)
+
+        # Initialize TTNN models
 
         # Initialize TTNN models
 
@@ -424,15 +516,15 @@ def main():
         )
 
         ttnn_decoder = TTNNSpeechT5Decoder(
-            device,
-            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, device, speaker_embeddings),
+            actual_device,
+            preprocess_decoder_parameters(model.speecht5.decoder, decoder_config, actual_device, speaker_embeddings),
             decoder_config,
-            max_sequence_length=args.max_steps,  # Pass the max_steps value
+            max_sequence_length=max_steps,  # Pass the max_steps value
         )
 
         ttnn_postnet = TTNNSpeechT5SpeechDecoderPostnet(
-            device,
-            preprocess_postnet_parameters(model.speech_decoder_postnet, postnet_config, device),
+            actual_device,
+            preprocess_postnet_parameters(model.speech_decoder_postnet, postnet_config, actual_device),
             postnet_config,
         )
 
@@ -441,15 +533,15 @@ def main():
             encoder=ttnn_encoder,
             decoder=ttnn_decoder,
             postnet=ttnn_postnet,
-            device=device,
-            max_steps=args.max_steps,
+            device=actual_device,
+            max_steps=max_steps,
         )
 
         # Warm-up phase to compile TTNN operations (separate from timing)
         import time
 
         warmup_start_time = time.time()
-        if args.enable_trace:
+        if enable_trace:
             print("🔥 Warming up TTNN operations with trace capture...")
             print("   This may take ~2-3 minutes as TTNN captures traces for encoder, decoder and postnet")
             print("   TTNN will pre-compile operations for all sequence lengths")
@@ -462,7 +554,7 @@ def main():
             print("   TTNN will optimize operations for the decoder, postnet, and memory management")
 
         # Use the first input text for warm-up to ensure encoder processes the actual input
-        warmup_text = args.texts[0]
+        warmup_text = texts[0]
         warmup_speech = generate_speech_ttnn(
             warmup_text,
             speaker_embeddings,
@@ -471,28 +563,28 @@ def main():
             ttnn_encoder,
             ttnn_decoder,
             ttnn_postnet,
-            device,
-            max_steps=args.max_steps,
+            actual_device,
+            max_steps=max_steps,
             warmup_mode=True,
-            enable_trace=args.enable_trace,
+            enable_trace=enable_trace,
             generator=generator,  # Pass generator for trace support
         )
         warmup_duration = time.time() - warmup_start_time
         print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
-        if args.enable_trace:
+        if enable_trace:
             print("   TTNN traces are now captured - subsequent inference will be much faster!")
         else:
             print("   TTNN kernels are now optimized - subsequent inference will be much faster!")
 
         # Generate speech for each input text
         results = []
-        for i, text in enumerate(args.texts, 1):
+        for i, text in enumerate(texts, 1):
             # Generate filename from text (sanitize for filesystem)
             safe_text = "".join(c for c in text[:50] if c.isalnum() or c in (" ", "-", "_")).rstrip()
             if not safe_text:
                 safe_text = f"speech_{i}"
             safe_text = safe_text.replace(" ", "_")
-            output_file = os.path.join(args.output_dir, f"speech_ttnn_{safe_text}.wav")
+            output_file = os.path.join(output_dir, f"speech_ttnn_{safe_text}.wav")
 
             # Time the generation
             generation_start = time.time()
@@ -505,9 +597,9 @@ def main():
                 ttnn_decoder,
                 ttnn_postnet,
                 device,
-                max_steps=args.max_steps,
+                max_steps=max_steps,
                 return_stats=True,
-                enable_trace=args.enable_trace,
+                enable_trace=enable_trace,
                 generator=generator,
             )
             generation_time = time.time() - generation_start
@@ -580,6 +672,60 @@ def main():
         return 1
 
     return 0
+
+
+@pytest.mark.parametrize(
+    "input_text",
+    [
+        "Hello world, this is a test of text to speech synthesis on Tenstorrent hardware.",
+        "The quick brown fox jumps over the lazy dog. This demonstrates multi-sentence generation.",
+    ],
+)
+def test_demo(mesh_device, input_text, model_location_generator):
+    """Pytest version of the demo for automated testing."""
+    run_demo(
+        texts=[input_text],
+        output_dir="pytest_output",
+        max_steps=24,  # Reduced for faster CI
+        enable_trace=False,
+        speaker_id=0,
+        mesh_device=mesh_device,
+        model_location_generator=model_location_generator,
+    )
+
+
+def main(mesh_device=None):
+    """Main demo function."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TTNN SpeechT5 TTS Demo")
+    parser.add_argument(
+        "texts", nargs="+", help="Input text(s) to convert to speech. Each text will generate a separate audio file."
+    )
+    parser.add_argument(
+        "--output_dir", default=".", help="Output directory for audio files (default: current directory)"
+    )
+    parser.add_argument("--max_steps", type=int, default=100, help="Maximum number of generation steps (default: 100)")
+    parser.add_argument(
+        "--enable_trace", action="store_true", help="Enable TTNN trace for faster inference (default: False)"
+    )
+    parser.add_argument("--speaker_id", type=int, default=0, help="Speaker ID from CMU ARCTIC dataset (0-7456)")
+
+    args = parser.parse_args()
+
+    # Call the core demo function
+    # For main(), we don't have model_location_generator, so pass None
+    # The run_demo function will handle CIv2 detection internally
+    return run_demo(
+        texts=args.texts,
+        output_dir=args.output_dir,
+        max_steps=args.max_steps,
+        enable_trace=args.enable_trace,
+        speaker_id=args.speaker_id,
+        mesh_device=mesh_device,
+        model_location_generator=None,
+    )
 
 
 if __name__ == "__main__":

@@ -296,6 +296,13 @@ run_whisper_perf() {
 
 }
 
+run_speecht5_tts_func() {
+
+  # SpeechT5 TTS demo - CIv2 compatible pytest test
+  $PYTEST_CMD models/experimental/speecht5_tts/demo_ttnn.py::test_demo
+
+}
+
 run_yolov9c_perf() {
   # yolov9c demo
   $PYTEST_CMD models/demos/yolov9c/demo/demo.py
