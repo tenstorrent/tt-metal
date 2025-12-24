@@ -380,6 +380,15 @@ def _device_module_impl(request):
     if marker and marker.args:
         device_params = marker.args[0]
     elif marker and marker.kwargs:
+        # Validate kwargs - only 'device_params' is allowed
+        unexpected_kwargs = set(marker.kwargs.keys()) - {"device_params"}
+        if unexpected_kwargs:
+            raise ValueError(
+                f"@pytest.mark.use_module_device received unexpected keyword argument(s): "
+                f"{unexpected_kwargs}. Only 'device_params' is supported. "
+                f"Usage: @pytest.mark.use_module_device({{'l1_small_size': 16384}}) or "
+                f"@pytest.mark.use_module_device(device_params={{'l1_small_size': 16384}})"
+            )
         device_params = marker.kwargs.get("device_params", {})
     else:
         device_params = {}
