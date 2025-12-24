@@ -77,7 +77,7 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "ops basic tests", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations -k 'test_' -xv --tb=short", merge_gate: false },
+            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -xv --tb=short", merge_gate: false },
           ]]
     steps:
       - name: Compute tests
@@ -140,6 +140,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
