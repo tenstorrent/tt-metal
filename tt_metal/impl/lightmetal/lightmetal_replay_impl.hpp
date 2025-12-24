@@ -68,7 +68,8 @@ public:
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) const;
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) const;
@@ -76,8 +77,10 @@ public:
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) const;
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) const;
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) const;
 

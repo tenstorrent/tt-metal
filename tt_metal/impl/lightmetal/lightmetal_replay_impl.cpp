@@ -445,7 +445,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
     }
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->global_id());
     TT_FATAL(
         buffer,
@@ -547,7 +548,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(SetRuntimeArgs). program_global_id: {} kernel_global_id: {}",
@@ -570,7 +572,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) const {
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(SetRuntimeArgs). program_global_id: {} kernel_global_id: {}",
