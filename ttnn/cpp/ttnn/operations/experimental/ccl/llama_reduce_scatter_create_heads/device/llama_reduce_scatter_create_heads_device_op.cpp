@@ -124,46 +124,74 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     return tensors;
 }
 
-std::tuple<
-    LlamaReduceScatterCreateHeadsDeviceOperation::operation_attributes_t,
-    LlamaReduceScatterCreateHeadsDeviceOperation::tensor_args_t>
-LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
+tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    auto program_factory = select_program_factory(attributes, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<LlamaReduceScatterCreateHeadsDeviceOperation>(
+        attributes.dim,
+        attributes.cluster_axis,
+        attributes.ring_devices,
+        attributes.num_links,
+        attributes.num_heads,
+        attributes.num_kv_heads,
+        attributes.head_dim,
+        attributes.slice_size,
+        attributes.topology,
+        attributes.use_noc1_only,
+        attributes.use_optimal_ccl_for_llama,
+        tensor_args.input_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.input_tensor.device()->id(),
+        program_factory.index());
+}
+
+}  // namespace ttnn::operations::experimental::ccl
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
+llama_reduce_scatter_create_heads(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
-    const int32_t dim,
+    int32_t dim,
     const GlobalSemaphore& semaphore,
-    const tt::tt_metal::SubDeviceId subdevice_id,
-    const uint32_t cluster_axis,
-    const uint32_t ring_devices,
-    const ttnn::ccl::Topology topology,
-    const uint32_t num_links,
-    const uint32_t num_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const uint32_t slice_size,
+    tt::tt_metal::SubDeviceId subdevice_id,
+    uint32_t cluster_axis,
+    uint32_t ring_devices,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    return {
-        operation_attributes_t{
-            .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
-            .cross_device_semaphore = semaphore,
-            .subdevice_id = subdevice_id,
-            .cluster_axis = cluster_axis,
-            .output_mem_config = memory_config,
-            .ring_devices = ring_devices,
-            .topology = topology,
-            .num_links = num_links,
-            .num_heads = num_heads,
-            .num_kv_heads = num_kv_heads,
-            .head_dim = head_dim,
-            .slice_size = slice_size,
-            .qkv_memory_config = qkv_memory_config,
-            .use_noc1_only = use_noc1_only,
-            .use_optimal_ccl_for_llama = use_optimal_ccl_for_llama,
-        },
-        tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
+    using OperationType = ttnn::operations::experimental::ccl::LlamaReduceScatterCreateHeadsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
+        .cross_device_semaphore = semaphore,
+        .subdevice_id = subdevice_id,
+        .cluster_axis = cluster_axis,
+        .output_mem_config = memory_config,
+        .ring_devices = ring_devices,
+        .topology = topology,
+        .num_links = num_links,
+        .num_heads = num_heads,
+        .num_kv_heads = num_kv_heads,
+        .head_dim = head_dim,
+        .slice_size = slice_size,
+        .qkv_memory_config = qkv_memory_config,
+        .use_noc1_only = use_noc1_only,
+        .use_optimal_ccl_for_llama = use_optimal_ccl_for_llama,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::prim

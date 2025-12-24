@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
 
@@ -165,10 +166,12 @@ tensor_return_value_t FusedRMSNormPostAllGatherDeviceOperation::create_output_te
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<
-    FusedRMSNormPostAllGatherDeviceOperation::operation_attributes_t,
-    FusedRMSNormPostAllGatherDeviceOperation::tensor_args_t>
-FusedRMSNormPostAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::tensor_return_value_t
+fused_rmsnorm_post_all_gather(
     const Tensor& input_tensor,
     const Tensor& stats_tensor,
     float eps,
@@ -180,23 +183,27 @@ FusedRMSNormPostAllGatherDeviceOperation::invoke(
     const MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype) {
-    return {
-        operation_attributes_t{
-            .eps = eps,
-            .num_heads = num_heads,
-            .memory_config = memory_config,
-            .compute_kernel_config = compute_kernel_config,
-            .dtype = dtype,
-        },
-        tensor_args_t{
-            .input_tensor = input_tensor,
-            .stats_tensor = stats_tensor,
-            .weight = weight.has_value() ? std::optional<Tensor>(weight.value()) : std::nullopt,
-            .transformation_mat =
-                transformation_mat.has_value() ? std::optional<Tensor>(transformation_mat.value()) : std::nullopt,
-            .rope_cos = rope_cos.has_value() ? std::optional<Tensor>(rope_cos.value()) : std::nullopt,
-            .rope_sin = rope_sin.has_value() ? std::optional<Tensor>(rope_sin.value()) : std::nullopt,
-        }};
+    using OperationType = ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::
+        FusedRMSNormPostAllGatherDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .eps = eps,
+        .num_heads = num_heads,
+        .memory_config = memory_config,
+        .compute_kernel_config = compute_kernel_config,
+        .dtype = dtype,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor,
+        .stats_tensor = stats_tensor,
+        .weight = weight.has_value() ? std::optional<Tensor>(weight.value()) : std::nullopt,
+        .transformation_mat =
+            transformation_mat.has_value() ? std::optional<Tensor>(transformation_mat.value()) : std::nullopt,
+        .rope_cos = rope_cos.has_value() ? std::optional<Tensor>(rope_cos.value()) : std::nullopt,
+        .rope_sin = rope_sin.has_value() ? std::optional<Tensor>(rope_sin.value()) : std::nullopt,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+}  // namespace ttnn::prim

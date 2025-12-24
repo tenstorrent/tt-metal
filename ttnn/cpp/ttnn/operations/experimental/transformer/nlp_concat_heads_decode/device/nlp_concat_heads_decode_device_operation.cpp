@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
@@ -122,15 +123,18 @@ tensor_return_value_t NLPConcatHeadsDecodeDeviceOperation::create_output_tensors
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<
-    NLPConcatHeadsDecodeDeviceOperation::operation_attributes_t,
-    NLPConcatHeadsDecodeDeviceOperation::tensor_args_t>
-NLPConcatHeadsDecodeDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::nlp_concat_heads_decode::tensor_return_value_t nlp_concat_heads_decode(
     const Tensor& input_tensor,
     uint32_t num_heads,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using OperationType = ttnn::operations::experimental::nlp_concat_heads_decode::NLPConcatHeadsDecodeDeviceOperation;
+
     bool on_subcoregrids = false;
     if (input_tensor.is_sharded()) {
         const auto& input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
@@ -140,13 +144,14 @@ NLPConcatHeadsDecodeDeviceOperation::invoke(
         }
     }
 
-    return {
-        operation_attributes_t{
-            .num_heads = num_heads,
-            .on_subcoregrids = on_subcoregrids,
-            .sub_core_grids = sub_core_grids,
-        },
-        tensor_args_t{.input = input_tensor, .preallocated_output = preallocated_output}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_heads = num_heads,
+        .on_subcoregrids = on_subcoregrids,
+        .sub_core_grids = sub_core_grids,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+}  // namespace ttnn::prim

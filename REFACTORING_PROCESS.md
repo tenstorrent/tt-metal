@@ -24,7 +24,7 @@ Following the `REFACTORING_GUIDE.md`, the agent:
 ### 4. Build and Verify
 The agent runs the verification build:
 ```bash
-./build_metal.sh -c -e --debug
+./build_metal.sh -c -e --debug --build-tt-train
 ```
 
 ### 5. Finalize the Task
