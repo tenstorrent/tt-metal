@@ -107,7 +107,11 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
+    extern uint32_t rta_count;
+    // ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
+    return (uintptr_t)&rta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**
@@ -121,7 +125,11 @@ static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) { return (uintptr_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) {
+    extern uint32_t crta_count;
+    // ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
+    return (uintptr_t)&crta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**

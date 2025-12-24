@@ -788,6 +788,14 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 "NOC posted writes sent barrier).";
             break;
         }
+        case dev_msgs::DebugAssertRtaOutOfBounds: {
+            error_msg += "accessed unique runtime arg index out of bounds.";
+            break;
+        }
+        case dev_msgs::DebugAssertCrtaOutOfBounds: {
+            error_msg += "accessed common runtime arg index out of bounds.";
+            break;
+        }
         default:
             LogRunningKernels();
             TT_THROW(

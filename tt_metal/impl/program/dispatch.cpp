@@ -194,12 +194,14 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         uint32_t dispatch_class = kernel->dispatch_class();
         max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
     }
+    const bool watcher_enabled = MetalContext::instance().rtoptions().get_watcher_enabled();
+    const uint32_t count_word_size = watcher_enabled ? sizeof(uint32_t) : 0;
 
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
+        uint32_t size = count_word_size + max_crtas[dispatch_class] * sizeof(uint32_t);
         crta_offsets[dispatch_class] = crta_base_offset + offset;
         crta_sizes[dispatch_class] = size;
         offset += size;
@@ -450,11 +452,12 @@ void generate_runtime_args_cmds(
     };
 
     constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
-
+    auto watcher_enable = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ? true : false;
+    uint32_t max_runtime_args_len_ = watcher_enable ? max_runtime_args_len + 1 : max_runtime_args_len;
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     DeviceCommandCalculator calculator;
     uint32_t max_packed_cmds = calculator.get_max_write_packed_sub_cmds<PackedSubCmd>(
-        max_runtime_args_len,
+        max_runtime_args_len_,
         constants.max_prefetch_command_size,
         constants.packed_write_max_unicast_sub_cmds,
         no_stride);
@@ -467,19 +470,20 @@ void generate_runtime_args_cmds(
             max_packed_cmds);
     }
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB =
-            get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast, no_stride);
+            get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len_, unicast, no_stride);
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
-            max_runtime_args_len * sizeof(uint32_t),
+            (max_runtime_args_len_) * sizeof(uint32_t),
             constants.packed_write_max_unicast_sub_cmds,
             no_stride);
         auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
-        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
+        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len_, unicast);
         // Watcher only: pre-fill the RTA payload region with 0xBEEF0000 | rand16
         // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand
         // This makes any unused runtime-arg slots obvious on device (equality tests likely to fail)
@@ -500,7 +504,7 @@ void generate_runtime_args_cmds(
             CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA,
             num_packed_cmds,
             l1_arg_base_addr,
-            max_runtime_args_len * sizeof(uint32_t),
+            (max_runtime_args_len_) * sizeof(uint32_t),
             rt_payload_sizeB,
             sub_cmds,
             rt_data_and_sizes,
@@ -512,7 +516,7 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
-        const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
+        const uint32_t data_inc = tt::align(max_runtime_args_len_ * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             uint32_t offset = 0;
@@ -520,6 +524,10 @@ void generate_runtime_args_cmds(
                 auto& data = rt_args_data[i][j];
                 uint32_t* data_in_sequence =
                     (uint32_t*)((char*)runtime_args_command_sequences.back().data() + data_offset + offset);
+                if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+                    data_in_sequence[0] = data.first.get().rt_args_count;
+                    data_in_sequence += 1;
+                }
                 if (data.first.get().rt_args_data == data.second.get().data()) {
                     // Update the pointer to point into the command sequence. Future RTA updates will modify the command
                     // sequence directly.
@@ -650,6 +658,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
     // kernel group multicast can merge with CB multicast, so prefer it in general.
     bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
+    std::cout << "use_kernel_group_crta_multicast: " << static_cast<uint16_t>(use_kernel_group_crta_multicast) << '\n';
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
@@ -710,13 +719,20 @@ BatchedTransfers assemble_runtime_args_commands(
                      extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                     auto noc_xy_addr = device->get_noc_multicast_encoding(
                         constants.noc_index, std::get<CoreRange>(transfer_info.cores));
-                    size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                    const bool watcher_enabled =
+                        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+                    auto& crta_payload = watcher_enabled
+                                             ? kernel->get_dispatch_common_runtime_args()  // [count | args...]
+                                             : kernel->common_runtime_args();
+                    kernel->common_runtime_args_data().rt_args_data = crta_payload.data();
+                    kernel->common_runtime_args_data().rt_args_count = crta_payload.size();
+                    size_t size = crta_payload.size() * sizeof(*crta_payload.data());
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
+
                     transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                         std::vector<Transfer>{Transfer{
                             .start = crta_offset,
-                            .data = tt::stl::Span<const uint8_t>(
-                                reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                            .data = tt::stl::Span<const uint8_t>(reinterpret_cast<uint8_t*>(crta_payload.data()), size),
                             .cbs = {},
                             .rta_data = &kernel->common_runtime_args_data()}};
                 }
@@ -744,7 +760,11 @@ BatchedTransfers assemble_runtime_args_commands(
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
+                            if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+                                unique_rt_data_and_sizes.back().emplace_back(nullptr, 0, sizeof(uint32_t));
+                            }
                             for (auto kernel_id : kg->kernel_ids) {
+                                std::cout << "kernel_id: " << kernel_id << '\n';
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
@@ -813,20 +833,30 @@ BatchedTransfers assemble_runtime_args_commands(
                         continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
 
-                    const auto& common_rt_args = kernel->common_runtime_args();
+                    // const auto& common_rt_args = kernel->common_runtime_args();
+                    const bool watcher_enabled =
+                        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
+                    const auto& common_rt_args = watcher_enabled
+                                                     ? kernel->get_dispatch_common_runtime_args()  // [count | args...]
+                                                     : kernel->common_runtime_args();
                     if (common_rt_args.empty()) {
                         continue;
                     }
 
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
-
-                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
-                    TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
-                    common_rt_data_and_sizes.back().emplace_back(
-                        kernel->common_runtime_args_data().data(),
-                        common_rt_args.size() * sizeof(uint32_t),
-                        common_size);
+                    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+                        common_rt_data_and_sizes.back().emplace_back(nullptr, 0, sizeof(uint32_t));
+                    }
+                    // TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                    // TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
+                    uint32_t payload_size = common_rt_args.size() * sizeof(uint32_t);
+                    if (watcher_enabled) {
+                        TT_ASSERT(payload_size == common_size);
+                    } else {
+                        TT_ASSERT(payload_size <= common_size);
+                    }
+                    common_rt_data_and_sizes.back().emplace_back(common_rt_args.data(), payload_size, common_size);
                     common_rt_args_data.back().emplace_back(
                         RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
 
@@ -1419,6 +1449,7 @@ public:
                 last_end = transfer.end();
             }
             std::vector<uint8_t*> data_collection_location;
+            std::cout << "batched_dispatch_subcmds[i].size(): " << batched_dispatch_subcmds[i].size() << '\n';
             device_command_sequence.add_dispatch_write_packed_large(
                 CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
                 l1_alignment,
@@ -1445,12 +1476,23 @@ public:
                         // rt_args_data points to the original vector. Update it so later modifications directly modify
                         // the command stream.
                         transfer.rta_data->rt_args_data = reinterpret_cast<uint32_t*>(data_collection_location[j]);
+                        const auto num_words = transfer.data.size() / sizeof(uint32_t);
+                        const auto words_ptr = reinterpret_cast<const uint32_t*>(data_collection_location[j]);
+                        for (size_t i = 0; i < num_words; i++) {
+                            std::cout << "cond1: 0x" << std::hex << words_ptr[i] << '\n';
+                        }
+
                     } else {
                         // rt_args_data points into the command stream. Setup a copy from that other location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
                             transfer.rta_data->rt_args_data,
                             data_collection_location[j],
                             static_cast<uint32_t>(transfer.data.size())});
+                        const auto num_words = transfer.data.size() / sizeof(uint32_t);
+                        const auto words_ptr = reinterpret_cast<const uint32_t*>(transfer.data.data());
+                        for (size_t i = 0; i < num_words; i++) {
+                            std::cout << "Cond2: 0x" << std::hex << words_ptr[i] << '\n';
+                        }
                     }
                 }
                 j++;

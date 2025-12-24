@@ -404,6 +404,25 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
+std::vector<uint32_t>& Kernel::get_dispatch_common_runtime_args() {
+    if (!MetalContext::instance().rtoptions().get_watcher_enabled() || common_runtime_args_.empty()) {
+        return common_runtime_args_;
+    }
+
+    // Lazy init - build [count|args] on first access
+    if (common_runtime_args_dispatch_.empty()) {
+        common_runtime_args_dispatch_.reserve(1 + common_runtime_args_.size());
+        common_runtime_args_dispatch_.push_back(static_cast<uint32_t>(common_runtime_args_.size()));
+        common_runtime_args_dispatch_.insert(
+            common_runtime_args_dispatch_.end(), common_runtime_args_.begin(), common_runtime_args_.end());
+    }
+
+    for (const auto& each : common_runtime_args_dispatch_) {
+        std::cout << "CRTA entry in common_runtime_args_dispatch_: " << std::hex << each << '\n';
+    }
+    return common_runtime_args_dispatch_;
+}
+
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {

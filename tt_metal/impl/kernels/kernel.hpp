@@ -102,6 +102,7 @@ public:
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
+    std::vector<uint32_t>& get_dispatch_common_runtime_args();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
     uint32_t dispatch_class() const { return this->dispatch_class_; }
@@ -182,6 +183,7 @@ protected:
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
     std::vector<uint32_t> common_runtime_args_;
+    std::vector<uint32_t> common_runtime_args_dispatch_;  // NEW: [count, args] for dispatch
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_{0};  // For validation

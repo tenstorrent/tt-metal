@@ -129,6 +129,22 @@ uint32_t firmware_config_init(
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                          launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
 
+#if defined(WATCHER_ENABLED)
+    extern uint32_t rta_count;
+    extern uint32_t crta_count;
+
+    // BEEF pattern (0xBEEF****) indicates no args set by host
+    if ((rta_l1_base[0] & 0xFFFF0000) != 0xBEEF0000) {
+        rta_count = rta_l1_base[0];
+        rta_l1_base = rta_l1_base + 1;
+    } else {
+        rta_count = 0;
+    }
+
+    crta_count = crta_l1_base[0];
+    crta_l1_base = crta_l1_base + 1;
+#endif
+
     return kernel_config_base[core_type_index];
 }
 
