@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -98,27 +99,27 @@ EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceO
     return create_device_tensor(output_spec, tensor_args.grad_tensor.device());
 }
 
-std::tuple<EmbeddingBackwardDeviceOperation::operation_attributes_t, EmbeddingBackwardDeviceOperation::tensor_args_t>
-EmbeddingBackwardDeviceOperation::invoke(
+}  // namespace ttnn::operations::embedding_backward
+
+namespace ttnn::prim {
+ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     uint32_t num_embeddings,
     const std::optional<Tensor>& preallocated_output) {
-    operation_attributes_t operation_attributes{
-        .output_mem_config = output_mem_config,
-        .output_dtype = output_dtype,
-        .num_embeddings = num_embeddings,
-    };
-
-    tensor_args_t tensor_args{
-        .index_tensor = index_tensor,
-        .grad_tensor = grad_tensor,
-        .preallocated_output = preallocated_output,
-    };
-
-    return {operation_attributes, tensor_args};
+    using OperationType = ttnn::operations::embedding_backward::EmbeddingBackwardDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = output_mem_config,
+            .output_dtype = output_dtype,
+            .num_embeddings = num_embeddings,
+        },
+        OperationType::tensor_args_t{
+            .index_tensor = index_tensor,
+            .grad_tensor = grad_tensor,
+            .preallocated_output = preallocated_output,
+        });
 }
-
-}  // namespace ttnn::operations::embedding_backward
+}  // namespace ttnn::prim

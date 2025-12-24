@@ -99,7 +99,7 @@ ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor
 ### 3.2 Required Includes
 Ensure the `.cpp` file includes the header for `launch_on_device`:
 ```cpp
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 ```
 
 ---

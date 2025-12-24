@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "manual_seed_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 #include "manual_seed/device/manual_seed_device_operation_types.hpp"
 
@@ -117,19 +118,20 @@ ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::crea
     return create_device_tensor(output_specs, operation_attributes.device);
 }
 
-std::tuple<ManualSeedDeviceOperation::operation_attributes_t, ManualSeedDeviceOperation::tensor_args_t>
-ManualSeedDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::manual_seed
+
+namespace ttnn::prim {
+ttnn::Tensor manual_seed(
     const std::variant<uint32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // Check if device is provided when seeds is uint32_t
     if (std::holds_alternative<uint32_t>(seeds)) {
         TT_FATAL(device.has_value(), "Device must be provided when seeds is a uint32_t value.");
     }
 
-    // Prepare operation attributes
-    operation_attributes_t operation_attributes{};
+    using OperationType = ttnn::operations::reduction::manual_seed::ManualSeedDeviceOperation;
+    OperationType::operation_attributes_t operation_attributes{};
     if (device.has_value()) {
         operation_attributes.device = std::addressof(device.value().get());
     } else {
@@ -144,15 +146,15 @@ ManualSeedDeviceOperation::invoke(
         operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());
     }
     operation_attributes.sub_core_grids = sub_core_grids;
-    // Prepare tensor arguments
-    tensor_args_t tensor_args{};
+
+    OperationType::tensor_args_t tensor_args{};
     if (std::holds_alternative<Tensor>(seeds)) {
         tensor_args.seeds = std::get<Tensor>(seeds);
     }
     if (user_ids.has_value() && std::holds_alternative<Tensor>(user_ids.value())) {
         tensor_args.user_ids = std::get<Tensor>(user_ids.value());
     }
-    // Return prepared arguments
-    return {operation_attributes, tensor_args};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::reduction::manual_seed
+}  // namespace ttnn::prim

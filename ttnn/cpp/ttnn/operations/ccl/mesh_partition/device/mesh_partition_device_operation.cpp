@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "mesh_partition_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -97,20 +98,22 @@ MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation
     return tensor;
 }
 
-std::tuple<MeshPartitionDeviceOperation::operation_attributes_t, MeshPartitionDeviceOperation::tensor_args_t>
-MeshPartitionDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::MeshPartitionDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,
             .output_mem_config = memory_config,
         },
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

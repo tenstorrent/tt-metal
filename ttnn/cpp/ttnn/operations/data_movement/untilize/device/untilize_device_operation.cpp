@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -245,8 +246,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     return program::UntilizeMultiCoreProgramFactory{};
 }
 
-std::tuple<UntilizeDeviceOperation::operation_attributes_t, UntilizeDeviceOperation::tensor_args_t>
-UntilizeDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     bool use_multicore,
@@ -256,8 +257,9 @@ UntilizeDeviceOperation::invoke(
     bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type) {
-    return {
-        UntilizeDeviceOperation::operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,
             .use_pack_untilize = use_pack_untilize,
@@ -266,8 +268,9 @@ UntilizeDeviceOperation::invoke(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
-        UntilizeDeviceOperation::tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
+}  // namespace ttnn::prim
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(

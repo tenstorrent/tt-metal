@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -47,13 +48,18 @@ IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tens
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
-std::tuple<IndexFillOperation::operation_attributes_t, IndexFillOperation::tensor_args_t> IndexFillOperation::invoke(
+}  // namespace ttnn::operations::index_fill
+
+namespace ttnn::prim {
+ttnn::Tensor index_fill(
     const Tensor& input,
     const uint32_t dim,
     const Tensor& index,
     const std::variant<float, int> value,
     const std::optional<MemoryConfig>& memory_config) {
-    return {
-        operation_attributes_t{dim, value, memory_config.value_or(input.memory_config())}, tensor_args_t{input, index}};
+    using OperationType = ttnn::operations::index_fill::IndexFillOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{dim, value, memory_config.value_or(input.memory_config())},
+        OperationType::tensor_args_t{input, index});
 }
-}  // namespace ttnn::operations::index_fill
+}  // namespace ttnn::prim

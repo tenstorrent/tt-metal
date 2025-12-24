@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -71,23 +72,25 @@ IndexedFillDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<IndexedFillDeviceOperation::operation_attributes_t, IndexedFillDeviceOperation::tensor_args_t>
-IndexedFillDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
     const Tensor& batch_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     int64_t dim) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .dim = dim,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .batch_id = batch_id,
             .input_tensor_a = input_tensor_a,
             .input_tensor_b = input_tensor_b,
-        }};
+        });
 }
+}  // namespace ttnn::prim
 
 }  // namespace ttnn::operations::data_movement::indexed_fill

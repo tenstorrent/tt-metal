@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::pool::grid_sample {
@@ -315,7 +316,10 @@ Tensor GridSampleOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> GridSampleOperation::invoke(
+}  // namespace ttnn::operations::pool::grid_sample
+
+namespace ttnn::prim {
+ttnn::Tensor grid_sample(
     const Tensor& input_tensor,
     const Tensor& grid,
     const std::string& mode,
@@ -324,8 +328,9 @@ std::tuple<operation_attributes_t, tensor_args_t> GridSampleOperation::invoke(
     bool use_precomputed_grid,
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::pool::grid_sample::GridSampleOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .mode = mode,
             .padding_mode = padding_mode,
             .align_corners = align_corners,
@@ -333,7 +338,6 @@ std::tuple<operation_attributes_t, tensor_args_t> GridSampleOperation::invoke(
             .batch_output_channels = batch_output_channels,
             .output_mem_config = memory_config.value_or(grid.memory_config()),
         },
-        tensor_args_t{.input_tensor = input_tensor, .grid = grid}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});
 }
-
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim
