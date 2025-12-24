@@ -203,4 +203,5 @@ operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_r
         OperationType::tensor_args_t{
             .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
 }
+
 }  // namespace ttnn::prim
