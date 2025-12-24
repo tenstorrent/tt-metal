@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
 namespace ttnn::operations::reduction::generic {
 
-std::tuple<ReduceDeviceOperation::operation_attributes_t, ReduceDeviceOperation::tensor_args_t>
-ReduceDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::generic
+
+namespace ttnn::prim {
+ttnn::Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
@@ -17,8 +20,9 @@ ReduceDeviceOperation::invoke(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::reduction::generic::ReduceDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             reduce_math,
             reduce_dim,
             scaler,
@@ -26,8 +30,11 @@ ReduceDeviceOperation::invoke(
             output_dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             sub_core_grids},
-        tensor_args_t{input_tensor}};
+        OperationType::tensor_args_t{input_tensor});
 }
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::reduction::generic {
 
 ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
