@@ -45,9 +45,7 @@ models/experimental/detr3d/
 ### Dependencies
 
 ```bash
-pip install torch torchvision
-pip install numpy scipy
-pip install plyfile trimesh  # For point cloud processing
+pip install trimesh  # For point cloud processing
 ```
 
 ## Usage

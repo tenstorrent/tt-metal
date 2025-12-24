@@ -108,6 +108,4 @@ mmcv-full==1.7.2 #Required for UniAD model
 torch==2.7.1 ; platform_machine == 'x86_64'
 torchvision==0.22.1 ; platform_machine == 'x86_64'
 
-scipy>=1.15.3    # Required for 3DETR model
-plyfile>=1.1.3  # Required for point cloud processing in 3DETR model
 trimesh>=4.10.1  # Required for point cloud processing in 3DETR model
