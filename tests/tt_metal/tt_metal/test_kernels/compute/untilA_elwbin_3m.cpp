@@ -25,7 +25,7 @@ void math_main() {
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
-    llk_math_hw_configure_disaggregated(0, 1);
+    llk_math_hw_configure(0, 1);
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
         for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
             // Untilize
@@ -58,8 +58,7 @@ void unpack_main() {
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
-    llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(0, 1);
-    // llk_unpack_untilize_hw_configure_disaggregated(0);
+    llk_unpack_hw_configure<DST_ACCUM_MODE>(0, 1);
 
     // llk_unpack_untilize_init(0);
     for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
