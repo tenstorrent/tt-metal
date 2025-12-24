@@ -1,0 +1,74 @@
+name: "Test Conan TTNN Package"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'conanfile.py'
+      - 'test_package/**'
+      - 'ttnn/**'
+      - 'tt_metal/**'
+      - 'tt_stl/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/test-conan-package.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'conanfile.py'
+      - 'test_package/**'
+      - 'ttnn/**'
+      - 'tt_metal/**'
+      - 'tt_stl/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/test-conan-package.yaml'
+
+jobs:
+  test-conan-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0  # Fetch all history and tags for version detection
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Conan
+        run: |
+          pip install --upgrade pip
+          pip install conan==2.4.1
+
+      - name: 🔧 Configure Conan Profile
+        run: |
+          conan profile detect --force
+          conan profile show default
+
+      - name: 🏗️ Create and Test Conan Package
+        run: |
+          echo "Creating and testing Conan package for tt-nn..."
+          conan create . --build=missing -s build_type=Release
+
+      - name: ✅ Verify Package Creation
+        run: |
+          echo "Verifying package was created successfully..."
+          conan search tt-nn
+          conan list tt-nn
+
+      - name: 📊 Show Conan Cache Info
+        if: always()
+        run: |
+          echo "Conan cache information:"
+          conan cache path
+          du -sh $(conan cache path) || true
