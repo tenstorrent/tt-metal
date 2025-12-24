@@ -168,7 +168,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt);
 
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
+    MeshDevice* device, DataType input_dtype, DataType weight_dtype);
 
 struct core_count_and_size {
     uint32_t core_count{};
