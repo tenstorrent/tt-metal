@@ -472,7 +472,7 @@ void ControlPlane::init_control_plane(
         }
 
         // Add MGD pinnings to the topology mapper
-        auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+        const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
         for (const auto& [pos, fabric_node] : pinnings) {
             fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
         }

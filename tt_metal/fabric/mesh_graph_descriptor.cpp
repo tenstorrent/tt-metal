@@ -164,24 +164,21 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
-MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) : mesh_instances_(other.mesh_instances_), top_level_id_(other.top_level_id_) {
-    // Deep copy the protobuf object
-    proto_ = std::make_unique<proto::MeshGraphDescriptor>(*other.proto_);
-
-    // Copy all member data structures
-    instances_ = other.instances_;
-    connections_ = other.connections_;
-    instances_by_name_ = other.instances_by_name_;
-    instances_by_type_ = other.instances_by_type_;
-    device_instances_ = other.device_instances_;
-    mesh_instances_ = other.mesh_instances_;
-    
-    switch_instances_ = other.switch_instances_;
-    connections_by_instance_id_ = other.connections_by_instance_id_;
-    connections_by_type_ = other.connections_by_type_;
-    connections_by_source_device_id_ = other.connections_by_source_device_id_;
-    pinnings_ = other.pinnings_;
-
+MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) :
+    proto_(std::make_unique<proto::MeshGraphDescriptor>(*other.proto_)),
+    instances_(other.instances_),
+    connections_(other.connections_),
+    instances_by_name_(other.instances_by_name_),
+    instances_by_type_(other.instances_by_type_),
+    device_instances_(other.device_instances_),
+    mesh_instances_(other.mesh_instances_),
+    graph_instances_(other.graph_instances_),
+    switch_instances_(other.switch_instances_),
+    top_level_id_(other.top_level_id_),
+    connections_by_instance_id_(other.connections_by_instance_id_),
+    connections_by_type_(other.connections_by_type_),
+    connections_by_source_device_id_(other.connections_by_source_device_id_),
+    pinnings_(other.pinnings_) {
     // Update descriptor maps and pointers to point to the new proto_ object
     update_descriptor_pointers();
 }
