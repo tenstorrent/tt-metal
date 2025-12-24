@@ -1,72 +1,56 @@
-[ ] ./tt-train/sources/ttml/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/silu_bw/device/silu_bw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/softmax/device/softmax_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp
-[ ] ./tt-train/sources/ttml/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/moreh/moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/eltwise/binary/device/binary_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/embedding/device/embedding_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/fill_rm/device/fill_rm_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/move/device/move_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
-[ ] ./build_Debug/include/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/debug/device/apply_device_delay_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fill_cache/paged_fill_cache_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fused_update_cache/paged_fused_update_cache_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/slice_write/device/slice_write_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/convert_to_hwc_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/convert_to_chw_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/hc_sum_reduce_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/prefix_scan_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/intimg_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/send_async_op_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/concatenate_heads_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/silu_bw/device/silu_bw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/softmax/device/softmax_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp
+[x] ./tt-train/sources/ttml/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/debug/device/apply_device_delay_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fill_cache/paged_fill_cache_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fused_update_cache/paged_fused_update_cache_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/slice_write/device/slice_write_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/convert_to_hwc_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/convert_to_chw_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/hc_sum_reduce_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/prefix_scan_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/intimg_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/send_async_op_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation.hpp
+[/] ./ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/concatenate_heads_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.hpp
