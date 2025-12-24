@@ -44,7 +44,7 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
         size_t grid_area = available_grid.num_cores();
-        uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_blocks) / grid_area);
+        const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_blocks) / grid_area);
         const uint32_t ncores =
             nblocks_per_core == 0 ? num_blocks : std::ceil(static_cast<float>(num_blocks) / nblocks_per_core);
 
@@ -54,15 +54,18 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
                 uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) /
                                             (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
 
-                // Adjust nblocks_per_core and determine the optimal block size.
+                // Compute grid area and initial blocks-per-core using integer math.
+                uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
+
+                // Adjust nblocks_per_core_wh and determine the optimal block size.
                 auto [adjusted_nblocks_per_core, single_block_size] =
-                    closest_square_larger_than_b(nblocks_per_core, num_tiles_per_row, num_tiles_per_col, grid_area);
-                nblocks_per_core = adjusted_nblocks_per_core;
+                    closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
+                nblocks_per_core_wh = adjusted_nblocks_per_core;
 
                 const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
                 const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
                 const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-                const uint32_t ncores_block = (nblocks_per_core == 0) ? num_blocks_block : total_blocks;
+                const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
                 if (ncores < ncores_block) {
                     return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
                 }
