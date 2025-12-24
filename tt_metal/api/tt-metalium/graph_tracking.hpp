@@ -122,11 +122,15 @@ public:
             return;
         }
         std::array<std::any, sizeof...(Args)> params{std::any(std::ref(args))...};
+        track_function_start(function_name, params);
+    }
+    // NOLINTEND(cppcoreguidelines-missing-std-forward)
+
+    void track_function_start(std::string_view function_name, const std::span<std::any>& params) {
         for (auto& it : processors) {
             it->track_function_start(function_name, params);
         }
     }
-    // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
     // Track op that doesn't return anything
     void track_function_end() {
