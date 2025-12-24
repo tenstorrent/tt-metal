@@ -8,7 +8,8 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-def test_celu_arange(device):
+def test_celu_arange(device_module):
+    device = device_module
     # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
@@ -42,7 +43,8 @@ def test_celu_arange(device):
         (1.1663108012064884e-38, 1.6 * 10**38, 1e-6, 1e-6),
     ],
 )
-def test_celu_allclose(low, high, expected_Atol, expected_rtol, device):
+def test_celu_allclose(low, high, expected_Atol, expected_rtol, device_module):
+    device = device_module
     num_elements = math.prod([1, 3, 320, 320])
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))

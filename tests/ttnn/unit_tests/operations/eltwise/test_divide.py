@@ -12,7 +12,8 @@ import pytest
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("approx", [True, False])
-def test_div_zero(device, val_a, val_b, dtype, approx):
+def test_div_zero(device_module, val_a, val_b, dtype, approx):
+    device = device_module
     torch_dtype = getattr(torch, dtype)
     tt_dtype = getattr(ttnn, dtype)
 
@@ -43,7 +44,8 @@ def test_div_zero(device, val_a, val_b, dtype, approx):
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("approx", [True, False])
-def test_divide_inplace_zero(device, val_a, val_b, dtype, approx):
+def test_divide_inplace_zero(device_module, val_a, val_b, dtype, approx):
+    device = device_module
     torch_dtype = getattr(torch, dtype)
     tt_dtype = getattr(ttnn, dtype)
 

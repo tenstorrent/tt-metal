@@ -134,7 +134,7 @@ def run_elt_silu_relu(
 @pytest.mark.parametrize("op", ["silu", "relu"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_gs_silu_relu(
-    device,
+    device_module,
     batch_size,
     input_channels,
     input_height,
@@ -146,6 +146,7 @@ def test_gs_silu_relu(
     op,
     dtype,
 ):
+    device = device_module
     run_elt_silu_relu(
         device,
         batch_size,
@@ -177,7 +178,7 @@ def test_gs_silu_relu(
 @pytest.mark.parametrize("op", ["silu", "relu"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_wh_silu_relu(
-    device,
+    device_module,
     batch_size,
     input_channels,
     input_height,
@@ -189,6 +190,7 @@ def test_wh_silu_relu(
     op,
     dtype,
 ):
+    device = device_module
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             grid_size = (grid_size[0], 4) if grid_size[1] == 8 else grid_size  # reduce #f core used for N300
@@ -214,7 +216,7 @@ def test_wh_silu_relu(
 )
 @pytest.mark.parametrize("op", ["silu", "relu"])
 def test_silu_llm(
-    device,
+    device_module,
     batch_size,
     input_channels,
     input_height,
@@ -225,6 +227,7 @@ def test_silu_llm(
     shard_orientation,
     op,
 ):
+    device = device_module
     run_elt_silu_relu(
         device,
         batch_size,

@@ -328,6 +328,30 @@ def device(request, device_params):
     ttnn.close_device(device)
 
 
+# Module-scoped device fixture for faster test execution
+# Shares a single device across all tests in a module (file)
+# Use this for parameterized tests that don't need custom device_params
+@pytest.fixture(scope="module")
+def device_module(request):
+    import ttnn
+
+    device_id = request.config.getoption("device_id")
+
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
+    device = ttnn.CreateDevice(device_id=device_id)
+    ttnn.SetDefaultDevice(device)
+
+    yield device
+
+    ttnn.SetDefaultDevice(None)
+    ttnn.close_device(device)
+
+
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
@@ -922,7 +946,7 @@ def pytest_runtest_teardown(item, nextitem):
     if metal_timeout_enabled is not None or using_xdist:
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
-        if test_failed:
+        if test_failed and hasattr(item, "pci_ids"):
             logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
             reset_tensix(set(item.pci_ids))
 

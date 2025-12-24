@@ -22,7 +22,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_max_int32(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_max_int32(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
@@ -64,7 +65,8 @@ def test_binary_max_int32(input_shapes, low_a, high_a, low_b, high_b, device):
         (11, 53),
     ],
 )
-def test_binary_max_fill_val_int32(input_shapes, input_a_val, input_b_val, device):
+def test_binary_max_fill_val_int32(input_shapes, input_a_val, input_b_val, device_module):
+    device = device_module
     torch_input_a = torch.ones(input_shapes, dtype=torch.int32) * input_a_val
     torch_input_b = torch.ones(input_shapes, dtype=torch.int32) * input_b_val
 
@@ -109,7 +111,8 @@ def test_binary_max_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
+def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
@@ -154,7 +157,8 @@ def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
-def test_binary_max_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_max_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
@@ -211,7 +215,8 @@ def test_binary_max_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
         (-1.0 * 10**38, 1.0 * 10**38, -1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-def test_binary_max_fp32(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_max_fp32(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
@@ -260,7 +265,8 @@ def test_binary_max_fp32(input_shapes, low_a, high_a, low_b, high_b, device):
         (-3.4 * 10**38, -float("inf")),
     ],
 )
-def test_binary_max_fill_val_fp32(input_shapes, input_a_val, input_b_val, device):
+def test_binary_max_fill_val_fp32(input_shapes, input_a_val, input_b_val, device_module):
+    device = device_module
     torch_input_a = torch.ones(input_shapes, dtype=torch.float32) * input_a_val
     torch_input_b = torch.ones(input_shapes, dtype=torch.float32) * input_b_val
 
@@ -310,7 +316,8 @@ def test_binary_max_fill_val_fp32(input_shapes, input_a_val, input_b_val, device
         (11, 1),
     ],
 )
-def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device):
+def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device_module):
+    device = device_module
     torch_input_a = torch.ones(input_shapes, dtype=torch.bfloat16) * input_a_val
     torch_input_b = torch.ones(input_shapes, dtype=torch.bfloat16) * input_b_val
 
@@ -354,7 +361,8 @@ def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
         (-3.0 * 10**38, 3.0 * 10**38, -3.3 * 10**38, 3.3 * 10**38),
     ],
 )
-def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.bfloat16)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)
@@ -400,7 +408,8 @@ def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
         (-1.0 * 10**38, 1.0 * 10**38, -1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
+def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
@@ -448,7 +457,8 @@ def test_binary_max_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         (-1.0 * 10**38, 1.0 * 10**38, -1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
+def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(input_shape_a)).item()), 1)
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.bfloat16)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shape_a)
@@ -494,7 +504,8 @@ def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         (-1.0 * 10**38, 1.0 * 10**38, -1.7 * 10**38, 1.7 * 10**38),
     ],
 )
-def test_binary_max_fp32_opt(input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_max_fp32_opt(input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.float32)
     torch_input_a = torch_input_a[:num_elements].reshape(input_shapes)

@@ -21,7 +21,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     ),
 )
 @pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_ternary_addcmul_ttnn(input_shapes, value, device):
+def test_ternary_addcmul_ttnn(input_shapes, value, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -80, 80, device)
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -90, 90, device)
@@ -43,7 +44,8 @@ def test_ternary_addcmul_ttnn(input_shapes, value, device):
     ),
 )
 @pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_ternary_addcdiv_ttnn(input_shapes, value, device):
+def test_ternary_addcdiv_ttnn(input_shapes, value, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -65,7 +67,8 @@ def test_ternary_addcdiv_ttnn(input_shapes, value, device):
     ),
 )
 @pytest.mark.parametrize("predicate", [0, 1])
-def test_ternary_where_opt_output(input_shapes, predicate, device):
+def test_ternary_where_opt_output(input_shapes, predicate, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_val(input_shapes, device, val=predicate)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -90, 90, device)
@@ -88,7 +91,8 @@ def test_ternary_where_opt_output(input_shapes, predicate, device):
     ),
 )
 @pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_lerp_overload_ttnn(input_shapes, value, device):
+def test_lerp_overload_ttnn(input_shapes, value, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -108,7 +112,8 @@ def test_lerp_overload_ttnn(input_shapes, value, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_lerp_ttnn(input_shapes, device):
+def test_lerp_ttnn(input_shapes, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -131,7 +136,8 @@ def test_lerp_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize("value1", [1.0, 5.0, 10.0])
 @pytest.mark.parametrize("value2", [1.0, 5.0, 10.0])
-def test_mac_overload_ttnn(input_shapes, value1, value2, device):
+def test_mac_overload_ttnn(input_shapes, value1, value2, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.mac(input_tensor1, value1, value2)
@@ -150,7 +156,8 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_mac_ttnn(input_shapes, device):
+def test_mac_ttnn(input_shapes, device_module):
+    device = device_module
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device)

@@ -46,7 +46,7 @@ def torch_equal_nan(a, b):
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_no_bcast_with_sharding(
-    device,
+    device_module,
     shape,
     shard_strategy,
     shard_shape_row_major,
@@ -58,6 +58,7 @@ def test_where_ttt_no_bcast_with_sharding(
     out_sharded,
     shard_orientation,
 ):
+    device = device_module
     torch.manual_seed(0)
     torch_predicate = torch.randint(0, 2, shape, dtype=torch.bfloat16)
     torch_true = torch.rand(shape, dtype=torch.bfloat16)
@@ -117,8 +118,9 @@ def test_where_ttt_no_bcast_with_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_height_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (5, 7, 2 * 32, 4 * 32)  # [5, 7, 64, 128]
     true_shape = (5, 7, 2 * 32, 1)  # width broadcast [5, 7, 64, 1]
@@ -192,8 +194,9 @@ def test_where_ttt_width_bcast_with_height_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_width_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (1, 2, 2 * 32, 40 * 32)  # [1, 2, 64, 1280]
     true_shape = (1, 1, 2 * 32, 1)  # width broadcast [1, 1, 64, 1]
@@ -267,8 +270,9 @@ def test_where_ttt_width_bcast_with_width_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_height_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 4 * 32)  # height broadcast [1, 7, 1, 128]
@@ -342,8 +346,9 @@ def test_where_ttt_height_bcast_with_height_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_width_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 1, 2 * 32, 7 * 32)  # [2, 1, 64, 224]
     true_shape = (1, 1, 1, 7 * 32)  # height broadcast [1, 1, 1, 224]
@@ -417,8 +422,9 @@ def test_where_ttt_height_bcast_with_width_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_block_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 32 * 2, 1)  # width broadcast [1, 7, 64, 1]
@@ -496,8 +502,9 @@ def test_where_ttt_width_bcast_with_block_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_block_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 4 * 32)  # height broadcast [1, 7, 1, 128]
@@ -575,8 +582,9 @@ def test_where_ttt_height_bcast_with_block_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_height_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 2 * 32, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 1)  # scalar broadcast [1, 7, 1, 1]
@@ -650,8 +658,9 @@ def test_where_ttt_scalar_bcast_with_height_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_width_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 1, 2 * 32, 7 * 32)  # [2, 1, 64, 224]
     true_shape = (1, 1, 1, 1)  # scalar broadcast [1, 1, 1, 1]
@@ -725,8 +734,9 @@ def test_where_ttt_scalar_bcast_with_width_sharding(
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_block_sharding(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 1)  # scalar broadcast [1, 7, 1, 1]
@@ -803,8 +813,9 @@ def test_where_ttt_scalar_bcast_with_block_sharding(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_width_bcast_with_height_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (5, 7, 2 * 32, 4 * 32)  # [5, 7, 64, 128]
     true_shape = (5, 7, 2 * 32, 1)  # width broadcast [5, 7, 64, 1]
@@ -873,8 +884,9 @@ def test_where_ttt_width_bcast_with_height_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_width_bcast_with_width_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (1, 2, 2 * 32, 40 * 32)  # [1, 2, 64, 1280]
     true_shape = (1, 1, 2 * 32, 1)  # width broadcast [1, 1, 64, 1]
@@ -943,8 +955,9 @@ def test_where_ttt_width_bcast_with_width_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_width_bcast_with_block_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 3 * 32)  # [2, 7, 64, 96]
     true_shape = (1, 7, 32 * 2, 1)  # width broadcast [1, 7, 64, 1]
@@ -1013,8 +1026,9 @@ def test_where_ttt_width_bcast_with_block_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_height_bcast_with_height_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 4 * 32)  # height broadcast [1, 7, 1, 128]
@@ -1083,8 +1097,9 @@ def test_where_ttt_height_bcast_with_height_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_height_bcast_with_width_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     # Height broadcast: true broadcasts along height dimension
     predicate_shape = (2, 1, 64, 7 * 32)  # [2, 1, 64, 224]
@@ -1156,8 +1171,9 @@ def test_where_ttt_height_bcast_with_width_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_height_bcast_with_block_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
 
     predicate_shape = (2, 7, 32 * 2, 5 * 32)  # [2, 7, 64, 160]
@@ -1230,8 +1246,9 @@ def test_where_ttt_height_bcast_with_block_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_scalar_bcast_with_height_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 2 * 32, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (1, 7, 1, 1)  # scalar broadcast [1, 7, 1, 1]
@@ -1300,8 +1317,9 @@ def test_where_ttt_scalar_bcast_with_height_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_scalar_bcast_with_width_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 1, 64, 7 * 32)  # [2, 1, 64, 224]
     true_shape = (1, 1, 1, 1)  # scalar broadcast [1, 1, 1, 1]
@@ -1370,8 +1388,9 @@ def test_where_ttt_scalar_bcast_with_width_sharding_uneven(
 @pytest.mark.parametrize("false_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
 def test_where_ttt_scalar_bcast_with_block_sharding_uneven(
-    device, predicate_sharded, true_sharded, false_sharded, out_sharded
+    device_module, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 5 * 32)  # [2, 7, 64, 160]
     true_shape = (1, 7, 1, 1)  # scalar broadcast [1, 7, 1, 1]
@@ -1439,7 +1458,8 @@ def test_where_ttt_scalar_bcast_with_block_sharding_uneven(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
+def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device_module):
+    device = device_module
     torch.manual_seed(0)
     dram_grid_size = device.dram_grid_size()
     input_shape = (1, 1, dram_grid_size.x * dram_grid_size.y * 32, 32)
@@ -1527,8 +1547,9 @@ def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, devic
 @pytest.mark.parametrize("true_sharded", [True, False])
 @pytest.mark.parametrize("false_sharded", [True, False])
 def test_where_ttt_identical_mixed_strategy(
-    device, dtype_pt, dtype_tt, config_permutation, out_strategy, predicate_sharded, true_sharded, false_sharded
+    device_module, dtype_pt, dtype_tt, config_permutation, out_strategy, predicate_sharded, true_sharded, false_sharded
 ):
+    device = device_module
     torch.manual_seed(0)
     predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
     true_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
@@ -1635,7 +1656,10 @@ def test_where_ttt_identical_mixed_strategy(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_where_ttt_height_bcast_mixed_strategy_mixed_L1(device, dtype_pt, dtype_tt):
+def test_where_ttt_height_bcast_mixed_strategy_mixed_L1(device_module, dtype_pt, dtype_tt):
+    device = device_module
+    # Clear program cache to ensure correct handling of broadcast shapes
+    device.disable_and_clear_program_cache()
     torch.manual_seed(0)
     predicate_shape = torch.Size([2, 7, 32 * 2, 4 * 32])  # [2, 7, 64, 128]
     true_shape = torch.Size([1, 7, 1, 4 * 32])  # [1, 7, 1, 128] - height broadcast

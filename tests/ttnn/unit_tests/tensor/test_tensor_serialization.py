@@ -82,7 +82,8 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, [8, 7], True)
         ),
     ],
 )
-def test_sharded_tensor_serialization(tmp_path, device, tensor_spec):
+def test_sharded_tensor_serialization(tmp_path, device_module, tensor_spec):
+    device = device_module
     torch.manual_seed(0)
     dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype]
     py_tensor = torch.rand(list(tensor_spec.shape), dtype=dtype)

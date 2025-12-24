@@ -32,6 +32,7 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
 @pytest.mark.parametrize("out_channels", [2])
 @pytest.mark.parametrize("vector_mode", [2, 4])
 @pytest.mark.parametrize("approx_mode", [True, False])
-def test_sigmoid_two_out_channels(device, h, w, out_channels, vector_mode, approx_mode):
+def test_sigmoid_two_out_channels(device_module, h, w, out_channels, vector_mode, approx_mode):
+    device = device_module
     torch.manual_seed(0)
     run_unary_test_sharded(device, h * w, out_channels, vector_mode, approx_mode, ttnn.sigmoid, pcc=0.991)

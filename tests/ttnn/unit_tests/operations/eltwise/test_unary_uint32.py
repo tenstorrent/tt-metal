@@ -52,7 +52,8 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
         torch.Size([1, 2, 32, 128]),
     ],
 )
-def test_unary_uint32(ttnn_op, value_ranges, input_shape, device):
+def test_unary_uint32(ttnn_op, value_ranges, input_shape, device_module):
+    device = device_module
     torch_input_tensor = create_full_range_tensor(input_shape=input_shape, dtype=torch.int64, value_ranges=value_ranges)
     if ttnn_op == ttnn.logical_not:
         torch_input_tensor[..., ::5] = 0  # every 5th element is zero
@@ -122,7 +123,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         ttnn.logical_not,
     ],
 )
-def test_unary_uint32_sharded(a_shape, sharded_config, ttnn_op, device):
+def test_unary_uint32_sharded(a_shape, sharded_config, ttnn_op, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor = torch.linspace(0, 4000, num_elements, dtype=torch.int32)
     if ttnn_op == ttnn.logical_not:
@@ -148,7 +150,8 @@ def test_unary_uint32_sharded(a_shape, sharded_config, ttnn_op, device):
 
 # Inputs beyond 65535 will give an output > 2^32-1 when squared, causing overflow.
 # This test checks that overflow is handled correctly.
-def test_unary_square_uint32_overflow(device):
+def test_unary_square_uint32_overflow(device_module):
+    device = device_module
     torch_input_tensor = torch.tensor([0, 1, 46340, 65535, 65536, 70000])
     input_tensor = ttnn.from_torch(
         torch_input_tensor,

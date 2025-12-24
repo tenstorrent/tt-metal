@@ -38,8 +38,9 @@ from models.common.utility_functions import comp_pcc
 @pytest.mark.parametrize("momentum", [0.0, 0.1])
 @pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
 def test_batch_norm_tests(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype
+    input_shapes, check_mean, check_var, weight, bias, eps, device_module, momentum, training, testing_dtype
 ):
+    device = device_module
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
@@ -125,7 +126,8 @@ def test_batch_norm_tests(
 @pytest.mark.parametrize("channel_size", [1, 4])
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
+def test_BN_fp32_full_value(device_module, channel_size, eps, weight, bias):
+    device = device_module
     input_tensor_torch = torch.full(torch.Size([3, channel_size, 64, 120]), 1, dtype=torch.float32)
     batch_mean_torch = torch.full(torch.Size([channel_size]), 0.00030171126, dtype=torch.float32)
     batch_var_torch = torch.full(torch.Size([channel_size]), 0.1262342343, dtype=torch.float32)
@@ -185,8 +187,9 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("eps", [0.0, 1e-05])
 def test_batch_norm_fp32(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, training=False, testing_dtype="float32"
+    input_shapes, check_mean, check_var, weight, bias, eps, device_module, training=False, testing_dtype="float32"
 ):
+    device = device_module
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
@@ -264,7 +267,8 @@ def test_batch_norm_fp32(
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("eps", [1.0, 2.34])
 @pytest.mark.parametrize("momentum", [0.0, 0.5])
-def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
+def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device_module):
+    device = device_module
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if (check_mean) else (None, None)
@@ -338,7 +342,8 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
-def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
+def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device_module):
+    device = device_module
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
@@ -369,7 +374,8 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
         torch.Size([3, 2, 32, 32]),
     ],
 )
-def test_batch_norm_qid_Default(input_shapes, device):
+def test_batch_norm_qid_Default(input_shapes, device_module):
+    device = device_module
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
@@ -390,7 +396,8 @@ def test_batch_norm_qid_Default(input_shapes, device):
         torch.Size([3, 2, 32, 32]),
     ],
 )
-def test_batch_norm_qid(input_shapes, device):
+def test_batch_norm_qid(input_shapes, device_module):
+    device = device_module
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device, is_input=True)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device)
@@ -409,7 +416,8 @@ def test_batch_norm_qid(input_shapes, device):
         torch.Size([2, 3, 120, 120]),
     ],
 )
-def test_batch_norm_output_Default(input_shapes, device):
+def test_batch_norm_output_Default(input_shapes, device_module):
+    device = device_module
     N, H, W, C = input_shapes
     _, tt_output_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
@@ -438,7 +446,8 @@ def test_batch_norm_output_Default(input_shapes, device):
         (False, False, False),
     ],
 )
-def test_batch_norm_compute_config(input_shapes, training, weight, bias, device):
+def test_batch_norm_compute_config(input_shapes, training, weight, bias, device_module):
+    device = device_module
     N, H, W, C = input_shapes
     d_type = "float32"
     torch.manual_seed(0)

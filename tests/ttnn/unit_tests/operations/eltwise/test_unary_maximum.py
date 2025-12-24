@@ -24,7 +24,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("scalar", [-2, 0, 10, -16777216, 16777216, 2147483647, -2147483647])
-def test_unary_max_int32(input_shapes, low, high, scalar, device):
+def test_unary_max_int32(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -64,7 +65,8 @@ def test_unary_max_int32(input_shapes, low, high, scalar, device):
         (-3.4 * 10**38, -float("inf")),
     ],
 )
-def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
+def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device_module):
+    device = device_module
     torch_input = torch.ones(input_shapes, dtype=torch.float32) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
@@ -105,7 +107,8 @@ def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
         (-3.4 * 10**38, -float("inf")),
     ],
 )
-def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
+def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device_module):
+    device = device_module
     torch_input = torch.ones(input_shapes, dtype=torch.bfloat16) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
@@ -136,7 +139,8 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
     ],
 )
 @pytest.mark.parametrize("scalar", [0.5, 0.0, 20.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
-def test_unary_max_bf16(input_shapes, low, high, scalar, device):
+def test_unary_max_bf16(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -171,7 +175,8 @@ def test_unary_max_bf16(input_shapes, low, high, scalar, device):
 @pytest.mark.parametrize(
     "scalar", [0.5, 0.1, 0.0, 1.0, 10.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")]
 )
-def test_unary_max_fp32(input_shapes, low, high, scalar, device):
+def test_unary_max_fp32(input_shapes, low, high, scalar, device_module):
+    device = device_module
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.float32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -196,7 +201,8 @@ def test_unary_max_fp32(input_shapes, low, high, scalar, device):
     "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),
 )
-def test_unary_max_fp32_opt(input_shapes, device):
+def test_unary_max_fp32_opt(input_shapes, device_module):
+    device = device_module
     scalar = 11.3
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(100, -100, num_elements, dtype=torch.float32)

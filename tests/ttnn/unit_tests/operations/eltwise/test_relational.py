@@ -49,73 +49,85 @@ def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gtz(device, h, w):
+def test_gtz(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.gtz)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gt(device, h, w):
+def test_gt(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.gt)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_ltz(device, h, w):
+def test_ltz(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.ltz)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_ge(device, h, w):
+def test_ge(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.ge)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gez(device, h, w):
+def test_gez(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.gez)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_lt(device, h, w):
+def test_lt(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.lt)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_lez(device, h, w):
+def test_lez(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.lez)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_le(device, h, w):
+def test_le(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.le)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_eqz(device, h, w):
+def test_eqz(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.eqz)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_eq(device, h, w):
+def test_eq(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.eq)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nez(device, h, w):
+def test_nez(device_module, h, w):
+    device = device_module
     run_relational_z_test(device, h, w, ttnn.nez)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_ne(device, h, w):
+def test_ne(device_module, h, w):
+    device = device_module
     run_relational_test(device, h, w, ttnn.ne)
 
 
@@ -140,90 +152,103 @@ def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_gt(device, h, w, scalar):
+def test_scalarB_gt(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.gt)
 
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_ge(device, h, w, scalar):
+def test_scalarB_ge(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ge)
 
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_lt(device, h, w, scalar):
+def test_scalarB_lt(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.lt)
 
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_le(device, h, w, scalar):
+def test_scalarB_le(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.le)
 
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_eq(device, h, w, scalar):
+def test_scalarB_eq(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.eq)
 
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_scalarB_ne(device, h, w, scalar):
+def test_scalarB_ne(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ne)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_gt(device, h, w, scalar):
+def test_nscalarB_gt(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.gt)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_ge(device, h, w, scalar):
+def test_nscalarB_ge(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ge)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_lt(device, h, w, scalar):
+def test_nscalarB_lt(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.lt)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_le(device, h, w, scalar):
+def test_nscalarB_le(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.le)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_eq(device, h, w, scalar):
+def test_nscalarB_eq(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.eq)
 
 
 @pytest.mark.parametrize("scalar", [-1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_nscalarB_ne(device, h, w, scalar):
+def test_nscalarB_ne(device_module, h, w, scalar):
+    device = device_module
     run_relational_test_with_scalar(device, h, w, scalar, ttnn.ne)
 
 
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
-def test_expand_and_broadcast(device, h, w):
+def test_expand_and_broadcast(device_module, h, w):
+    device = device_module
     torch_a = torch.rand((1, h, w), dtype=torch.bfloat16)
     torch_b = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.lt)
@@ -239,7 +264,8 @@ def test_expand_and_broadcast(device, h, w):
 
 @pytest.mark.parametrize("h", [500])
 @pytest.mark.parametrize("w", [512])
-def test_expand_and_broadcast_reversed(device, h, w):
+def test_expand_and_broadcast_reversed(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((1, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.lt)
@@ -257,7 +283,8 @@ def test_expand_and_broadcast_reversed(device, h, w):
 @pytest.mark.parametrize("rtol", [1e-5, 1e-9])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_isclose(device, h, w, atol, rtol):
+def test_isclose(device_module, h, w, atol, rtol):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
@@ -309,7 +336,8 @@ def test_isclose(device, h, w, atol, rtol):
     "use_legacy",
     [False, True],
 )
-def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device):
+def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device_module):
+    device = device_module
     low1, high1 = range1
     low2, high2 = range2
     in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch.int32)
@@ -348,7 +376,8 @@ def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use
     "use_legacy",
     [False, True],
 )
-def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legacy, device):
+def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legacy, device_module):
+    device = device_module
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -395,7 +424,8 @@ def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legac
     ],
 )
 @pytest.mark.parametrize("scalar", [-2, -1, 0, 1, 2])
-def test_binary_relational_scalar_ttnn(device, input_shapes, scalar, ttnn_function):
+def test_binary_relational_scalar_ttnn(device_module, input_shapes, scalar, ttnn_function):
+    device = device_module
     in_data = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 

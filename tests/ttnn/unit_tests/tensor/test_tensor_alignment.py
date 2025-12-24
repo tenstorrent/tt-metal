@@ -6,7 +6,8 @@ import ttnn
 import torch
 
 
-def test_tensor_alignment(device):
+def test_tensor_alignment(device_module):
+    device = device_module
     a = torch.arange(1022).to(torch.bfloat16).reshape(1, 1, 1, 1022)
     b = torch.arange(1024).to(torch.bfloat16).reshape(1, 1, 32, 32)
 

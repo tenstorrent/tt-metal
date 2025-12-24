@@ -31,7 +31,8 @@ dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16]
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 512])
 @pytest.mark.parametrize("W", [1024, 256])
-def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+def test_untilize_2D(device_module, in_dtype, use_multicore, use_pack_untilize, H, W):
+    device = device_module
     if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
         pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
@@ -52,7 +53,8 @@ def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 2048])
 @pytest.mark.parametrize("W", [32, 1056])
-def test_tilize_2D(device, in_dtype, use_multicore, H, W):
+def test_tilize_2D(device_module, in_dtype, use_multicore, H, W):
+    device = device_module
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -73,7 +75,8 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 43])
 @pytest.mark.parametrize("W", [64, 76])
-def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+def test_untilize_with_unpadding_2D(device_module, in_dtype, use_multicore, use_pack_untilize, H, W):
+    device = device_module
     if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
         pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
@@ -97,7 +100,8 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
 @pytest.mark.parametrize("pad_value", [2, 1.3])
 @pytest.mark.parametrize("H", [32, 43])
 @pytest.mark.parametrize("W", [64, 76])
-def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_value):
+def test_tilize_with_val_padding_2D(device_module, in_dtype, use_multicore, H, W, pad_value):
+    device = device_module
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
@@ -116,7 +120,8 @@ def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_v
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 98])
 @pytest.mark.parametrize("W", [78, 1024])
-def test_tilize_with_zero_padding_2D(device, in_dtype, use_multicore, H, W):
+def test_tilize_with_zero_padding_2D(device_module, in_dtype, use_multicore, H, W):
+    device = device_module
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)

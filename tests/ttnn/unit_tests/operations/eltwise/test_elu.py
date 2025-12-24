@@ -9,7 +9,8 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-def test_elu_arange_masking(device):
+def test_elu_arange_masking(device_module):
+    device = device_module
     # elu Working range - Underflow after -88(<0) as in exp
     high = math.inf
     low = -88.0
@@ -53,7 +54,8 @@ def test_elu_arange_masking(device):
         (-88.0, 1.6 * 10**38, 0.0, 0.0),  # bf16 working range for elu
     ],
 )
-def test_elu_allclose(low, high, expected_atol, expected_rtol, device):
+def test_elu_allclose(low, high, expected_atol, expected_rtol, device_module):
+    device = device_module
     num_elements = math.prod(torch.Size([1, 3, 320, 320]))
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))

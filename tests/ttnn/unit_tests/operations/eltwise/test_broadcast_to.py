@@ -43,7 +43,8 @@ input_bcast_shape_pairs = [
     [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
-def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+def test_broadcast_to(device_module, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+    device = device_module
     shape, broadcast_shape = shape_and_broadcast_spec
     torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(shape)
     torch_result = torch_input_tensor.broadcast_to(broadcast_shape)
@@ -88,7 +89,8 @@ input_bcast_shape_pairs = [
     [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
-def test_broadcast_to_out(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+def test_broadcast_to_out(device_module, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+    device = device_module
     shape, broadcast_shape = shape_and_broadcast_spec
     torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(shape)
     torch_output_tensor = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
@@ -138,7 +140,8 @@ profile_input_bcast_shape_pairs = [
     [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", profile_input_bcast_shape_pairs)
-def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+def test_broadcast_to_profile(device_module, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
+    device = device_module
     torch.manual_seed(0)
     shape, broadcast_shape = shape_and_broadcast_spec
     if dtype_pt == torch.bfloat16 and shape[-1] < 2 and broadcast_shape[-1] < 2:
@@ -175,7 +178,8 @@ input_bcast_shape_pairs = [
 
 @pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
+def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device_module):
+    device = device_module
     torch.manual_seed(0)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
@@ -196,7 +200,8 @@ input_bcast_shape_pairs = [
 
 
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to_sharding(input, bcast, device):
+def test_invalid_broadcast_to_sharding(input, bcast, device_module):
+    device = device_module
     torch.manual_seed(0)
     dtype_pt, dtype_tt = [torch.bfloat16, ttnn.bfloat16]
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype_tt)(input)
@@ -229,7 +234,8 @@ input_bcast_shape_pairs = [
 
 
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
-def test_broadcast_to_bf8_b(device, shape_and_broadcast_spec):
+def test_broadcast_to_bf8_b(device_module, shape_and_broadcast_spec):
+    device = device_module
     pytest.skip("Skip for now, as it is not stable. Need to investigate.")
     shape, broadcast_shape = shape_and_broadcast_spec
     torch_input_tensor = gen_func_with_cast_tt(

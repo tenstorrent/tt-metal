@@ -17,7 +17,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
         ttnn.remainder,
     ],
 )
-def test_remainder_fp32(device, ttnn_function):
+def test_remainder_fp32(device_module, ttnn_function):
+    device = device_module
     torch.manual_seed(213919)
     x_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
     y_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
@@ -38,7 +39,8 @@ def test_remainder_fp32(device, ttnn_function):
         ttnn.div_no_nan,
     ],
 )
-def test_div_no_nan_fp32(device, ttnn_function):
+def test_div_no_nan_fp32(device_module, ttnn_function):
+    device = device_module
     x_torch = torch.tensor(
         [
             [
@@ -86,7 +88,8 @@ def test_div_no_nan_fp32(device, ttnn_function):
         ttnn.remainder,
     ],
 )
-def test_remainder_forge(device, ttnn_function):
+def test_remainder_forge(device_module, ttnn_function):
+    device = device_module
     torch.manual_seed(213919)
     input1 = torch.randn(2, 32, 32)
     input2 = torch.randn(2, 32, 32)
@@ -97,8 +100,8 @@ def test_remainder_forge(device, ttnn_function):
     input1 = ttnn.from_torch(input1, dtype=ttnn.float32)
     input2 = ttnn.from_torch(input2, dtype=ttnn.float32)
 
-    input1 = ttnn.to_device(input1, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    input2 = ttnn.to_device(input2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input1 = ttnn.to_device(input1, device_module, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input2 = ttnn.to_device(input2, device_module, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     input1 = ttnn.to_layout(input1, ttnn.TILE_LAYOUT)
     input2 = ttnn.to_layout(input2, ttnn.TILE_LAYOUT)
@@ -126,9 +129,10 @@ def generate_torch_tensor(shape, low, high, step=0.0025, dtype=torch.float32):
     [[64, 640], [2, 32, 320], [2, 1, 1024, 1024], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]],
 )
 def test_binary_fmod_bf16(
-    device,
+    device_module,
     input_shapes,
 ):
+    device = device_module
     torch_input_tensor_a = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100, 100)
     torch_input_tensor_b = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-80, 120)
     torch_output_tensor = torch.fmod(torch_input_tensor_a, torch_input_tensor_b)
@@ -159,7 +163,8 @@ def test_binary_fmod_bf16(
     ),
 )
 @pytest.mark.parametrize("scalar", [-0.0029, -0.002, -0.0005, 0.0, 0.0007, 0.001, 0.0025])
-def test_unary_fmod(input_shapes, scalar, device):
+def test_unary_fmod(input_shapes, scalar, device_module):
+    device = device_module
     torch.manual_seed(0)
     if len(input_shapes) == 0:
         torch_input_tensor = torch.tensor(5.0, dtype=torch.bfloat16)

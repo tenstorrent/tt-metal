@@ -18,7 +18,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, asser
     ),
 )
 @pytest.mark.parametrize("exponent", [0.5, 2.0, 4])
-def test_unary_pow_ttnn(input_shapes, exponent, device):
+def test_unary_pow_ttnn(input_shapes, exponent, device_module):
+    device = device_module
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -40,7 +41,8 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 # Both input and exponent are -ve and exponent is a non-integer, TT and Torch output = nan
 # input = non-zero and exponent = 0, TT and Torch output = 1
 # Both input and exponent are 0, TT = 1 and Torch output = 0
-def test_binary_pow_scalar_input(input_shapes, input, exponent, device):
+def test_binary_pow_scalar_input(input_shapes, input, exponent, device_module):
+    device = device_module
     torch_input_tensor_b = torch.full(input_shapes, exponent, dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
     torch_output_tensor = golden_fn(input, torch_input_tensor_b)
@@ -67,7 +69,8 @@ def generate_torch_tensor(shape, low, high, step=0.0025, dtype=torch.float32):
     "input_shapes",
     [[64, 640], [2, 32, 320], [2, 1, 32, 1024], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 128]],
 )
-def test_binary_sfpu_pow(device, input_shapes):
+def test_binary_sfpu_pow(device_module, input_shapes):
+    device = device_module
     torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 30, step=0.0022)
     torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
@@ -87,7 +90,8 @@ def test_binary_sfpu_pow(device, input_shapes):
     "input_shapes",
     [[64, 640], [2, 32, 320], [2, 1, 1024, 1024], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]],
 )
-def test_binary_sfpu_pow_bf16(device, input_shapes):
+def test_binary_sfpu_pow_bf16(device_module, input_shapes):
+    device = device_module
     torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 30, step=0.0021, dtype=torch.bfloat16)
     torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20, dtype=torch.bfloat16)
     torch_output_tensor = torch.pow(torch_input_tensor_a, torch_input_tensor_b)
@@ -106,7 +110,8 @@ def test_binary_sfpu_pow_bf16(device, input_shapes):
     "input_shapes",
     [[2, 1, 32, 1024], [1, 3, 320, 384], [1, 2, 32, 64, 128], [1, 1, 32, 64]],
 )
-def test_binary_sfpu_pow_pos(device, input_shapes):
+def test_binary_sfpu_pow_pos(device_module, input_shapes):
+    device = device_module
     torch_input_tensor_a = generate_torch_tensor(input_shapes, 0, 30, step=0.0111)
     torch_input_tensor_b = generate_torch_tensor(input_shapes, -20, 20)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
@@ -126,7 +131,8 @@ def test_binary_sfpu_pow_pos(device, input_shapes):
     "input_shapes",
     [[2, 1, 32, 1024], [1, 3, 320, 384], [1, 2, 32, 64, 128]],
 )
-def test_binary_sfpu_pow_neg(device, input_shapes):
+def test_binary_sfpu_pow_neg(device_module, input_shapes):
+    device = device_module
     torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 0, step=0.0111)
     torch_input_tensor_b = generate_torch_tensor(input_shapes, 0, 10)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
@@ -156,7 +162,8 @@ def test_binary_sfpu_pow_neg(device, input_shapes):
         "bfloat16",
     ],
 )
-def test_binary_pow(device, dtype_a, dtype_b):
+def test_binary_pow(device_module, dtype_a, dtype_b):
+    device = device_module
     torch_dtype_a = getattr(torch, dtype_a)
     ttnn_dtype_a = getattr(ttnn, dtype_a)
     torch_dtype_b = getattr(torch, dtype_b)
@@ -190,7 +197,8 @@ def test_binary_pow(device, dtype_a, dtype_b):
     ),
 )
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
+def test_binary_sfpu_pow_bug(device_module, input_shapes, dtype):
+    device = device_module
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
@@ -210,7 +218,8 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_binary_sfpu_accuracy(device, dtype):
+def test_binary_sfpu_accuracy(device_module, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_dtype = getattr(torch, dtype)
@@ -233,7 +242,8 @@ def test_binary_sfpu_accuracy(device, dtype):
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
 
 
-def test_special_input_fp32(device):
+def test_special_input_fp32(device_module):
+    device = device_module
     a = torch.tensor(
         [[1.0, 0.999, 0.999, 0.999, 0.999, 0.234, 0.985, 1.456, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999]],
         dtype=torch.float32,
@@ -255,7 +265,8 @@ def test_special_input_fp32(device):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_pow_determinism(device, dtype):
+def test_pow_determinism(device_module, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_dtype = getattr(torch, dtype)
@@ -285,7 +296,8 @@ def test_pow_determinism(device, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_binary_sfpu_accuracy_pos(device, dtype):
+def test_binary_sfpu_accuracy_pos(device_module, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_dtype = getattr(torch, dtype)
@@ -325,7 +337,8 @@ def test_binary_sfpu_accuracy_pos(device, dtype):
     ],
 )
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_binary_ng_pow(device, input_a, input_b, dtype):
+def test_binary_ng_pow(device_module, input_a, input_b, dtype):
+    device = device_module
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)

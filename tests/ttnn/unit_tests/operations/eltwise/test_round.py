@@ -27,7 +27,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
-def test_round_new(shape, dtypes, decimal, device):
+def test_round_new(shape, dtypes, decimal, device_module):
+    device = device_module
     torch.manual_seed(0)
     torch_dtype, tt_dtype = dtypes
     torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch_dtype), tt_dtype)(

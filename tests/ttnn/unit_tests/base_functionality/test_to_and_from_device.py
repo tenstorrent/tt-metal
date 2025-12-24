@@ -22,7 +22,8 @@ import ttnn
         (2, 3, 4, 5, 6, 7, 8, 10),
     ],
 )
-def test_to_and_from(device, shape):
+def test_to_and_from(device_module, shape):
+    device = device_module
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_input_tensor, device=device)
     torch_output_tensor = ttnn.to_torch(tensor)
@@ -41,7 +42,8 @@ def test_to_and_from(device, shape):
         (2, 3, 4, 5, 6, 7, 8, 9),
     ],
 )
-def test_to_and_from_using_tile_layout(device, shape):
+def test_to_and_from_using_tile_layout(device_module, shape):
+    device = device_module
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
     torch_output_tensor = ttnn.to_torch(tensor)
@@ -50,7 +52,8 @@ def test_to_and_from_using_tile_layout(device, shape):
 
 @pytest.mark.parametrize("h", [7])
 @pytest.mark.parametrize("w", [4])
-def test_to_and_from_2D(device, h, w):
+def test_to_and_from_2D(device_module, h, w):
+    device = device_module
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_input_tensor)
     # when w=3->size 40 & page size 6 (bad)
@@ -64,7 +67,8 @@ def test_to_and_from_2D(device, h, w):
 # fmt: off
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.bfloat16)])
 # fmt: on
-def test_to_and_from_device(device, torch_dtype, ttnn_dtype):
+def test_to_and_from_device(device_module, torch_dtype, ttnn_dtype):
+    device = device_module
     # Notice that the width of these tensors are even!
     torch_input_tensor = torch.as_tensor([0, 1, 2, 3], dtype=torch_dtype)
     tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype)
@@ -79,7 +83,8 @@ def test_to_and_from_device(device, torch_dtype, ttnn_dtype):
 @pytest.mark.parametrize("c", [8])
 @pytest.mark.parametrize("h", [1500])
 @pytest.mark.parametrize("w", [64])
-def test_from_device_hang(device, b, c, h, w):
+def test_from_device_hang(device_module, b, c, h, w):
+    device = device_module
     torch_input_tensor = torch.rand((b, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
@@ -92,7 +97,8 @@ def test_from_device_hang(device, b, c, h, w):
 @pytest.mark.parametrize("c", [8])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_to_and_from_multiple_times(device, b, c, h, w):
+def test_to_and_from_multiple_times(device_module, b, c, h, w):
+    device = device_module
     tensor = torch.rand((b, c, h, w), dtype=torch.bfloat16)
     original_tensor = tensor
     for i in range(0, 50):

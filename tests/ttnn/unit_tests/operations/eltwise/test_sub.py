@@ -14,7 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("s", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sub_scalar(device, s, h, w):
+def test_sub_scalar(device_module, s, h, w):
+    device = device_module
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor - s
 
@@ -29,7 +30,8 @@ def test_sub_scalar(device, s, h, w):
 @pytest.mark.parametrize("s", [3])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_rsub_scalar(device, s, h, w):
+def test_rsub_scalar(device_module, s, h, w):
+    device = device_module
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = s - torch_input_tensor
 
@@ -46,7 +48,8 @@ def test_rsub_scalar(device, s, h, w):
 @pytest.mark.parametrize("scalar_input_tensor_b", [0.5])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
-def test_sub_scalar_and_alpha(device, scalar_input_tensor_b, h, w):
+def test_sub_scalar_and_alpha(device_module, scalar_input_tensor_b, h, w):
+    device = device_module
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor, scalar_input_tensor_b)
 
@@ -59,7 +62,8 @@ def test_sub_scalar_and_alpha(device, scalar_input_tensor_b, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_sub(device, h, w):
+def test_sub(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
@@ -74,7 +78,8 @@ def test_sub(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_rsub(device, h, w):
+def test_rsub(device_module, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor_b, torch_input_tensor_a)
@@ -91,7 +96,8 @@ def test_rsub(device, h, w):
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [128])
-def test_sub_4D(device, n, c, h, w):
+def test_sub_4D(device_module, n, c, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
@@ -109,7 +115,8 @@ def test_sub_4D(device, n, c, h, w):
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [128])
-def test_rsub_4D(device, n, c, h, w):
+def test_rsub_4D(device_module, n, c, h, w):
+    device = device_module
     torch_input_tensor_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor_b, torch_input_tensor_a)

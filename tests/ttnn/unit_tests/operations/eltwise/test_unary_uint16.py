@@ -49,7 +49,8 @@ def _run_unary_uint16_test(torch_input_tensor, ttnn_fn, device, memory_config=No
     ],
 )
 @pytest.mark.parametrize("ttnn_fn", [ttnn.logical_not])
-def test_unary_uint16_operations(input_shapes, low_a, high_a, ttnn_fn, device):
+def test_unary_uint16_operations(input_shapes, low_a, high_a, ttnn_fn, device_module):
+    device = device_module
     """Test uint16 unary operations with various shapes and value ranges"""
     if len(input_shapes) == 0:
         torch_input_tensor = torch.randint(low=0, high=2**16, size=(), dtype=torch.int32)
@@ -78,7 +79,8 @@ def test_unary_uint16_operations(input_shapes, low_a, high_a, ttnn_fn, device):
         "sequential_pattern",
     ],
 )
-def test_unary_uint16_edge_cases(ttnn_fn, edge_pattern, device):
+def test_unary_uint16_edge_cases(ttnn_fn, edge_pattern, device_module):
+    device = device_module
     """Test uint16 unary operations with specific edge case patterns"""
 
     if edge_pattern == "critical_values":
@@ -147,7 +149,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 @pytest.mark.parametrize("ttnn_fn", [ttnn.logical_not])
-def test_unary_uint16_sharded(a_shape, sharded_config, ttnn_fn, device):
+def test_unary_uint16_sharded(a_shape, sharded_config, ttnn_fn, device_module):
+    device = device_module
     """Test uint16 unary operations with sharded memory configurations"""
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor = torch.linspace(0, 65535, num_elements, dtype=torch.int32)
@@ -173,7 +176,8 @@ def test_unary_uint16_sharded(a_shape, sharded_config, ttnn_fn, device):
         "random_sparse",
     ],
 )
-def test_unary_uint16_stress_patterns(ttnn_fn, test_pattern, device):
+def test_unary_uint16_stress_patterns(ttnn_fn, test_pattern, device_module):
+    device = device_module
     """Test uint16 unary operations with stress/edge patterns"""
     shape = torch.Size([1, 1, 64, 64])
     num_elements = int(torch.prod(torch.tensor(shape)).item())

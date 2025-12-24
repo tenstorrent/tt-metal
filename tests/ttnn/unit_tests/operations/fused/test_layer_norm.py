@@ -49,7 +49,8 @@ def assert_output_accuracy(torch_output, ttnn_output):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_layer_norm(device, h, w, use_welford, dtype):
+def test_layer_norm(device_module, h, w, use_welford, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -66,7 +67,8 @@ def test_layer_norm(device, h, w, use_welford, dtype):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
+def test_layer_norm_with_weight_and_bias(device_module, h, w, use_welford):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -92,7 +94,8 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
+def test_layer_norm_with_weight_and_bias_row_major(device_module, h, w, use_welford):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -120,7 +123,8 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
+def test_layer_norm_with_weight_bias_and_residual_input(device_module, h, w, use_welford, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -152,7 +156,8 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
 
 @pytest.mark.parametrize("h", [2])
 @pytest.mark.parametrize("w", [512])
-def test_layer_norm_with_tile_layout(device, h, w):
+def test_layer_norm_with_tile_layout(device_module, h, w):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -194,7 +199,8 @@ def test_layer_norm_with_tile_layout(device, h, w):
 @pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_large_layer_norm(device, h, w, use_welford, dtype):
+def test_large_layer_norm(device_module, h, w, use_welford, dtype):
+    device = device_module
     torch.manual_seed(15)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -212,7 +218,8 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
+def test_large_layer_norm_with_weight_and_bias(device_module, h, w, use_welford):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -239,7 +246,8 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_large_layer_norm_with_weight(device, h, w, use_welford):
+def test_large_layer_norm_with_weight(device_module, h, w, use_welford):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -262,7 +270,8 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_large_layer_norm_with_bias(device, h, w, use_welford):
+def test_large_layer_norm_with_bias(device_module, h, w, use_welford):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -285,7 +294,8 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 @pytest.mark.parametrize("legacy_rsqrt", [True, False])
-def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_reduction, legacy_rsqrt):
+def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device_module, h, w, legacy_reduction, legacy_rsqrt):
+    device = device_module
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -321,7 +331,8 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
 @pytest.mark.parametrize("h, w", [(32, 2592), (32, 3232), (1024, 2880)])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
+def test_large_layer_norm_with_weight_bias_and_residual_input(device_module, h, w, use_welford, dtype):
+    device = device_module
     torch.manual_seed(3333)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -357,7 +368,8 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
 
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_l1_interleaved(device, use_welford, dtype):
+def test_l1_interleaved(device_module, use_welford, dtype):
+    device = device_module
     torch.manual_seed(0)
 
     h, w = 32, 64
@@ -384,7 +396,8 @@ def test_l1_interleaved(device, use_welford, dtype):
 @pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
 @pytest.mark.parametrize("dim_b", [2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
+def test_layer_norm_across_dtypes(device_module, *, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
+    device = device_module
     torch.manual_seed(0)
 
     epsilon = 1e-5

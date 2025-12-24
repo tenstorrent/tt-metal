@@ -7,7 +7,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-def test_sigmoid_accurate_arange(device):
+def test_sigmoid_accurate_arange(device_module):
+    device = device_module
     # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)

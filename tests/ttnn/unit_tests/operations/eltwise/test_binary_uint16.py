@@ -27,7 +27,8 @@ import ttnn
         (0, 32000, 0, 32000),
     ],
 )
-def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -63,7 +64,8 @@ def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_binary_add_uint16_edge_cases(device):
+def test_binary_add_uint16_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 11, 500, 32767, 30000, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -130,7 +132,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 @pytest.mark.parametrize("ttnn_fn", ("add", "mul", "logical_and", "logical_or", "logical_xor"))
-def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
+def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device_module):
+    device = device_module
     ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
@@ -187,7 +190,8 @@ def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device
         (32001, 65000, 0, 32000),
     ],
 )
-def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -221,7 +225,8 @@ def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_binary_sub_uint16_edge_cases(device):
+def test_binary_sub_uint16_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 11, 7727, 65535, 65535, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -262,7 +267,8 @@ def test_binary_sub_uint16_edge_cases(device):
         block_sharded_memory_config,
     ],
 )
-def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
+def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(151, 300, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -325,7 +331,8 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
         ttnn.bitwise_xor,
     ],
 )
-def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b, bitwise_op, device):
+def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b, bitwise_op, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 65535, 0, 65535, 1], dtype=torch.int32)
@@ -385,7 +392,8 @@ def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b
         ttnn.bitwise_xor,
     ],
 )
-def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op, device):
+def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 65535, 0, 65535, 1], dtype=torch.int32)
@@ -447,7 +455,8 @@ def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op,
         (0, 1, 32767, 65535),
     ],
 )
-def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     if high_a in (32, 4, 2, 1):
         values_a = torch.arange(low_a, high_a + 1, dtype=torch.int32)
@@ -485,7 +494,8 @@ def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-def test_binary_mul_uint16_edge_cases(device):
+def test_binary_mul_uint16_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65535, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -542,7 +552,8 @@ def test_binary_mul_uint16_edge_cases(device):
         (0, 32000, 0, 32000),
     ],
 )
-def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, low_b, high_b, device):
+def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(low_a, high_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a[::5] = 0  # every 5th element is zero
@@ -589,7 +600,8 @@ def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, l
     ],
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
+def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65534, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -634,7 +646,8 @@ def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
         (305, 400, 150, 300),
     ],
 )
-def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
     num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)

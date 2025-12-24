@@ -67,7 +67,8 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
         ttnn.hypot,
     ],
 )
-def test_ND_subtile_bcast(device, shapes, ttnn_fn):
+def test_ND_subtile_bcast(device_module, shapes, ttnn_fn):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * 100 - 50
@@ -136,7 +137,8 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         ttnn.bias_gelu,
     ],
 )
-def test_ND_scalar_bcast(device, shapes, ttnn_fn):
+def test_ND_scalar_bcast(device_module, shapes, ttnn_fn):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * 220 - 100

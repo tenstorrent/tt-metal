@@ -19,7 +19,8 @@ import torch
         (2, 2, 2, 2, 2, 3, 30, 30),
     ],
 )
-def test_tensor_ranks(shape, device):
+def test_tensor_ranks(shape, device_module):
+    device = device_module
     torch_input_tensor = torch.randint(low=0, high=100, size=shape).to(torch.bfloat16)
 
     tt_tensor = ttnn.Tensor(torch_input_tensor, ttnn.bfloat16)

@@ -16,7 +16,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
-def test_copy(shape, layout, dtype, device):
+def test_copy(shape, layout, dtype, device_module):
+    device = device_module
     torch.manual_seed(2005)
     torch_dtype = torch.int32
 
@@ -42,7 +43,8 @@ def test_copy(shape, layout, dtype, device):
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_block_sharded(device_module, layout, shape, shard_scheme, dtype):
+    device = device_module
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
@@ -97,7 +99,8 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ],
 )
-def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_width_sharded(device_module, layout, shape, shard_scheme, dtype):
+    device = device_module
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
@@ -156,7 +159,8 @@ def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
-def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_height_sharded(device_module, layout, shape, shard_scheme, dtype):
+    device = device_module
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)

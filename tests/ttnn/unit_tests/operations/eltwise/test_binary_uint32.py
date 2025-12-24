@@ -67,7 +67,8 @@ BINARY_OP_TEST_CASES = [
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
 )
-def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input_shapes, device):
+def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input_shapes, device_module):
+    device = device_module
     torch_input_tensor_a = create_full_range_tensor(
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
     )
@@ -123,7 +124,8 @@ def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input
         pytest.param([(1, 16, 1), (8, 1, 32)], id="broadcast_both_5"),  # mixed bcast
     ],
 )
-def test_binary_uint32_bcast(ttnn_op, input_shapes, low_a, high_a, low_b, high_b, device):
+def test_binary_uint32_bcast(ttnn_op, input_shapes, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     a_shape, b_shape = input_shapes
 
     num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
@@ -209,7 +211,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         block_sharded_memory_config,
     ],
 )
-def test_binary_uint32_sharded(ttnn_op, low_a, high_a, low_b, high_b, a_shape, b_shape, sharded_config, device):
+def test_binary_uint32_sharded(ttnn_op, low_a, high_a, low_b, high_b, a_shape, b_shape, sharded_config, device_module):
+    device = device_module
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -258,7 +261,8 @@ def test_binary_uint32_sharded(ttnn_op, low_a, high_a, low_b, high_b, a_shape, b
         (0, 70000, 80000, 200000),
     ],
 )
-def test_binary_sub_uint32_underflow(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+def test_binary_sub_uint32_underflow(a_shape, b_shape, low_a, high_a, low_b, high_b, device_module):
+    device = device_module
     """Test uint32 subtraction with underflow cases (wrap-around behavior)"""
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -293,7 +297,8 @@ def test_binary_sub_uint32_underflow(a_shape, b_shape, low_a, high_a, low_b, hig
 
 
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_sub_uint32_edge_cases(use_legacy, device):
+def test_binary_sub_uint32_edge_cases(use_legacy, device_module):
+    device = device_module
     """Test uint32 subtraction with edge cases including underflow"""
     torch_input_tensor_a = torch.tensor(
         [4294967295, 2147483647, 1000000000, 500, 0, 100, 1, 0]  # uint32 max, int32 max, large, medium, min
@@ -340,7 +345,8 @@ def test_binary_sub_uint32_edge_cases(use_legacy, device):
 
 
 # For inputs within int32 range [0, 2147483647]
-def test_binary_add_uint32_lower_edge_cases(device):
+def test_binary_add_uint32_lower_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 1147482, 2147483647, 1])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -369,7 +375,8 @@ def test_binary_add_uint32_lower_edge_cases(device):
 
 
 # For inputs outside int32 range [2147483648, 4294967295]
-def test_binary_add_uint32_upper_edge_cases(device):
+def test_binary_add_uint32_upper_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([3000000000, 2750000000, 2147483648, 4294967292, 1, 4294967295, 0])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -420,7 +427,8 @@ def test_binary_add_uint32_upper_edge_cases(device):
     ],
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_bitwise_uint32(device, ttnn_function, use_legacy):
+def test_bitwise_uint32(device_module, ttnn_function, use_legacy):
+    device = device_module
     x_torch = torch.tensor(
         [
             [1, 2, 3, 4, 5, 0],
@@ -454,7 +462,8 @@ def test_bitwise_uint32(device, ttnn_function, use_legacy):
     ],
 )
 @pytest.mark.parametrize("use_legacy", [True, False])
-def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
+def test_bitwise_uint32_full_range(device_module, ttnn_function, use_legacy):
+    device = device_module
     x_values = torch.linspace(0, 4294967295, 1024, dtype=torch.float64)
     x_torch = x_values.to(dtype=torch.uint32)
 
@@ -482,7 +491,8 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
         ttnn.logical_xor,
     ],
 )
-def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
+def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor(
         [0, 1, 0, 2147483647, 2147483647, 2147483647, 1073741823, 1073741823, 4294967295, 4294967294, 4294967295]
     )
@@ -515,7 +525,8 @@ def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
 
 
 # For inputs within int32 range [0, 2147483647]
-def test_binary_mul_uint32_lower_edge_cases(device):
+def test_binary_mul_uint32_lower_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 2147483647, 1, 1073741823, 715827882, 46340])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -544,7 +555,8 @@ def test_binary_mul_uint32_lower_edge_cases(device):
 
 
 # For inputs outside int32 range [2147483648, 4294967295]
-def test_binary_mul_uint32_upper_edge_cases(device):
+def test_binary_mul_uint32_upper_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor(
         [4294967295, 1, 4294967295, 4294967294, 2147483647, 1431655765, 16777215, 65535]
     )
@@ -588,7 +600,8 @@ def test_binary_mul_uint32_upper_edge_cases(device):
     #               shape=Shape([8]), dtype=DataType::UINT32, layout=Layout::TILE)
 
 
-def test_binary_squared_difference_uint32_edge_cases(device):
+def test_binary_squared_difference_uint32_edge_cases(device_module):
+    device = device_module
     torch_input_tensor_a = torch.tensor([0, 1, 0, 5, 10, 65535, 0, 4294967295, 4294901760, 4294967295])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

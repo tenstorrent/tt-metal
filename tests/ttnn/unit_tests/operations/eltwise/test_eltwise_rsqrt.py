@@ -76,5 +76,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_eltwise_rsqrt(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def test_eltwise_rsqrt(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device_module):
+    device = device_module
     run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)

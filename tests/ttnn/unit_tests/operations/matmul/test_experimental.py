@@ -20,7 +20,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
-def test_ttnn_experimental_tensor_exp(device, height, width):
+def test_ttnn_experimental_tensor_exp(device_module, height, width):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((1, 1, height, width), -1, 1, dtype=torch.bfloat16)
@@ -39,7 +40,8 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
-def test_ttnn_matmul(device, m_size, k_size, n_size):
+def test_ttnn_matmul(device_module, m_size, k_size, n_size):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
@@ -63,7 +65,15 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_ttnn_linear(
-    device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
+    device_module,
+    input_a_is_sharded,
+    output_is_sharded,
+    m_size,
+    k_size,
+    n_size,
+    num_cores,
+    input_a_dtype,
+    input_b_dtype,
 ):
     grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -149,7 +159,8 @@ def test_ttnn_linear(
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
-def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
+def test_ttnn_matmul_dram_sharded(device_module, m_size, k_size, n_size):
+    device = device_module
     torch.manual_seed(0)
 
     dram_grid_size = device.dram_grid_size().x
@@ -226,7 +237,8 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
 
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
 @pytest.mark.parametrize("num_slices", [2])
-def test_sharded_partial_op(device, H, num_cores, num_slices):
+def test_sharded_partial_op(device_module, H, num_cores, num_slices):
+    device = device_module
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")

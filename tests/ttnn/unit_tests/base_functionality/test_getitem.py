@@ -16,7 +16,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("width", [32, 96])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("on_device", [True, False])
-def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
+def test_getitem(device_module, batch_sizes, height, width, input_layout, on_device):
+    device = device_module
     torch_input_tensor = torch.rand((*batch_sizes, height, width), dtype=torch.bfloat16)
 
     if batch_sizes:
@@ -51,7 +52,8 @@ def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
 @pytest.mark.parametrize("width", [32, 96])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("on_device", [True, False])
-def test_getitem_2d(device, height, width, input_layout, on_device):
+def test_getitem_2d(device_module, height, width, input_layout, on_device):
+    device = device_module
     torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
 
     torch_output_tensor = torch_input_tensor[:32]
@@ -80,7 +82,8 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
 @pytest.mark.parametrize("height", [32, 64])
 @pytest.mark.parametrize("width", [32, 96])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
-def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_layout):
+def test_getitem_non_tile_boundary(device_module, batch_sizes, height, width, input_layout):
+    device = device_module
     torch_input_tensor = torch.rand((*batch_sizes, height, width), dtype=torch.bfloat16)
 
     if len(torch_input_tensor.shape) == 4:

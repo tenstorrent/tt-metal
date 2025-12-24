@@ -24,8 +24,9 @@ def test_linear(
     n_size,
     use_bias,
     *,
-    device,
+    device_module,
 ):
+    device = device_module
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -85,8 +86,9 @@ def test_linear_with_core_grid(
     use_bias,
     core_grid,
     *,
-    device,
+    device_module,
 ):
+    device = device_module
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
     input_shape_a = (batch_size, 1, m_size, k_size)
@@ -142,8 +144,9 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "gelu_approx", "relu6"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
-    device, batch_size, m_size, k_size, n_size, activation
+    device_module, batch_size, m_size, k_size, n_size, activation
 ):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -180,7 +183,8 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     ],
 )
-def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_size, activation):
+def test_linear_with_compound_activation(device_module, batch_size, m_size, k_size, n_size, activation):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -206,7 +210,10 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize("activation", [None, "relu"])
-def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_size, m_size, k_size, n_size, activation):
+def test_linear_by_passing_in_1D_systolic_array_program_config(
+    device_module, batch_size, m_size, k_size, n_size, activation
+):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -232,7 +239,8 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize("m_size", [32, 512])
 @pytest.mark.parametrize("k_size", [1024, 2048])
 @pytest.mark.parametrize("n_size", [1024, 2048])
-def test_linear_fp32_acc(device, m_size, k_size, n_size):
+def test_linear_fp32_acc(device_module, m_size, k_size, n_size):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((1, m_size, k_size), dtype=torch.bfloat16)
@@ -268,7 +276,8 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
-def test_bloom_ff2_linear(device):
+def test_bloom_ff2_linear(device_module):
+    device = device_module
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
     torch_weight = torch_random((4096, 1024), -0.1, 0.1, dtype=torch.float32)
     torch_bias = torch_random((1024,), -0.01, 0.01, dtype=torch.float32)
@@ -311,8 +320,9 @@ def test_bloom_ff2_linear(device):
 @pytest.mark.parametrize("n_size", [1024, 2048])
 @pytest.mark.parametrize("activation", [None, "relu"])
 def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outout_tensor(
-    device, batch_size, m_size, k_size, n_size, activation
+    device_module, batch_size, m_size, k_size, n_size, activation
 ):
+    device = device_module
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -353,7 +363,8 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
-def test_linear_with_fp32_dest_acc_and_bias(device):
+def test_linear_with_fp32_dest_acc_and_bias(device_module):
+    device = device_module
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
     torch_input_tensor_b = torch.rand([1, 1, 1152, 384])
@@ -384,7 +395,8 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-def test_resnet50_linear(device):
+def test_resnet50_linear(device_module):
+    device = device_module
     torch.manual_seed(0)
     batch_size = 16
     input_channels = 2048
@@ -473,7 +485,8 @@ def test_resnet50_linear(device):
         ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
     ],
 )
-def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
+def test_vector_linear(device_module, shape_a, shape_b, shape_bias) -> tuple:
+    device = device_module
     """
     Test the compatibility of the torch and ttnn linear for the given operation and different
     tensor shapes.
@@ -557,7 +570,7 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("compute_config_params", [[ttnn.MathFidelity.LoFi, True, False, False, False]])
 def test_linear_yolov7(
-    device,
+    device_module,
     in0_block_w,
     out_subblock,
     out_block,
@@ -567,6 +580,7 @@ def test_linear_yolov7(
     output_dtype,
     compute_config_params,
 ):
+    device = device_module
     torch.manual_seed(0)
     nhw = 6400
     input_channels = 512
