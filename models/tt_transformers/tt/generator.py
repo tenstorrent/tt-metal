@@ -54,7 +54,7 @@ def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingPara
     Create a new SamplingParams where each list field is broadcast to a full (length-32) list,
     taking the value from `idx`. Does not mutate the input.
     """
-    slot_len = len(formatted_sampling_params.top_k)
+    slot_len = 32  # sampling only supports batch_size=32
     kwargs = {}
     for f in fields(SamplingParams):
         value = getattr(formatted_sampling_params, f.name)
@@ -64,7 +64,10 @@ def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingPara
             chosen = value[idx] if idx < len(value) else value[0]
         else:
             chosen = value
-        kwargs[f.name] = [chosen] * slot_len
+        if chosen is None:
+            kwargs[f.name] = None
+        else:
+            kwargs[f.name] = [chosen] * slot_len
     return SamplingParams(**kwargs)
 
 
@@ -312,9 +315,6 @@ class Generator:
             enable_trace = False
 
         sampling_on_device_requested = sampling_params is not None
-        formatted_sampling_params = (
-            format_sampling_params(sampling_params, 32) if sampling_on_device_requested else None
-        )
 
         # we need this here becuase of tt-metal tests
         self.warmup_model_prefill(kv_cache, enable_trace, [sampling_params])
@@ -381,10 +381,11 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
                 sampling_executed = True
-                sampling_params_per_out[idx] = _broadcast_formatted_sampling_params(formatted_sampling_params, idx)
+                sampling_params_per_out[idx] = format_sampling_params(
+                    _broadcast_formatted_sampling_params(sampling_params, idx), 32
+                )
                 prompt_tokens_per_out[idx] = prefill_ids[:, :seq_len].repeat(32, 1)
 
             if enable_trace_current_prompt:
