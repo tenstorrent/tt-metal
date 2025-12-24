@@ -1307,7 +1307,8 @@ class ModelArgs:
                 "num_workers_per_link": 2,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
-            default_sampling_ag = {
+            default_sampling_force_argmax = {
+                "allow_force_argmax": False,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1324,7 +1325,8 @@ class ModelArgs:
                         "num_workers_per_link": 1,
                         "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
                     },
-                    "sampling_ag": {
+                    "sampling_force_argmax": {
+                        "allow_force_argmax": True,
                         "num_links": 4,
                         "chunks_per_sync": 10,
                         "num_workers_per_link": 2,
@@ -1338,14 +1340,14 @@ class ModelArgs:
                 self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
                 self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
                 self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
-                    "sampling_ag"
+                    "sampling_force_argmax"
                 ]
             else:
                 self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
-                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_ag
+                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")

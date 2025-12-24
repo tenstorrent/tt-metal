@@ -8,13 +8,12 @@ from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -110,17 +109,18 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
-        is_force_argmax_sampling = self.tt_sampling._force_argmax_sampling
+        old_force_argmax_sampling = self.tt_sampling._force_argmax_sampling
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
         )
-        if self.tt_sampling._force_argmax_sampling != is_force_argmax_sampling:
+        if self.tt_sampling._force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
         if self.tt_sampling._force_argmax_sampling:
             return
+
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
         )
