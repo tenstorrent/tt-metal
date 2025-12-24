@@ -332,7 +332,23 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
+    // Normalize exponent to IEEE 754 float bits format.
+    // Detects raw integers (0 to 2^23-1) vs float bits using exponent field (bits 23-30):
+    //   - Zero exponent field → raw integer → convert to float bits
+    //   - Non-zero exponent field → already float bits → pass through
+    uint32_t exponent_bits = param0;
+    const uint32_t exp_field = (param0 >> 23) & 0xFF;
+    if (exp_field == 0 && param0 != 0) {
+        // Integer - convert numeric value to IEEE 754 float bits
+        union {
+            float f;
+            uint32_t u;
+        } conv;
+        conv.f = static_cast<float>(param0);
+        exponent_bits = conv.u;
+    }
+    // param0 == 0 is valid for both (integer 0 and float 0.0f both give 0x00000000 bits)
+    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, exponent_bits)));
 }
 
 /**

@@ -145,17 +145,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "relu_min_tile_init();",
                     fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
-            break;
         case UnaryOpType::POWER: {
+            // Kernel expects uint32_t and converts raw integers to float bits.
+            // For float: bit_cast does Bit Reinterpretation, preserves IEEE 754 representation (The bit pattern is
+            // preserved, not the numeric value) For int/uint32_t: Numerical conversion is done, then bit pattern is
+            // passed through for kernel to handle the conversion.
             uint32_t exponent;
-            if constexpr (std::is_same_v<T, uint32_t>) {
-                exponent = params[0];
-            } else if constexpr (std::is_same_v<T, float>) {
+            if constexpr (std::is_same_v<T, float>) {
                 exponent = std::bit_cast<uint32_t>(params[0]);
             } else {
-                // For other types (int32_t), convert to float first, then to bits
-                float temp = static_cast<float>(params[0]);
-                exponent = std::bit_cast<uint32_t>(temp);
+                exponent = static_cast<uint32_t>(params[0]);
             }
             return {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, exponent)};
         }

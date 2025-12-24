@@ -154,8 +154,9 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) 
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint32_t exponent) {
+    // exponent contains IEEE 754 float bits (converted by compute_kernel_api.h)
     const float pow_scalar = Converter::as_float(exponent);
-    const sfpi::vFloat pow = Converter::as_float(exponent);
+    const sfpi::vFloat pow = pow_scalar;
     if (pow_scalar == 0.0f) {
         // x^0 = 1 for all x
         for (int d = 0; d < ITERATIONS; d++) {
@@ -176,7 +177,7 @@ inline void calculate_power_iterative(const uint32_t exponent) {
             sfpi::dst_reg++;
         }
     } else if (pow_scalar == 3.0f) {
-// x^3 = x * x * x
+        // x^3 = x * x * x
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
@@ -185,14 +186,14 @@ inline void calculate_power_iterative(const uint32_t exponent) {
         }
     } else if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
-        for (int d = 0; d < 8; d++) {
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
             sfpi::dst_reg[0] = _sfpu_unary_power<true>(base, pow);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
-        for (int d = 0; d < 8; d++) {
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
             sfpi::dst_reg[0] = _sfpu_unary_power<false>(base, pow);
             sfpi::dst_reg++;
