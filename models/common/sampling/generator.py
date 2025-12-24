@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
+    force_argmax: bool
 
 
 class SamplingGenerator:
@@ -65,8 +66,8 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool, log_probs_on: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on)
+    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
+        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -80,9 +81,10 @@ class SamplingGenerator:
         for key, slot in self._trace_states.items():
             if slot["id"] is not None:
                 logger.debug(
-                    "Resetting sampling trace (penalties=%s, log_probs=%s, trace_id=%s)",
+                    "Resetting sampling trace (penalties=%s, log_probs=%s, force_argmax=%s, trace_id=%s)",
                     key.penalties_on,
                     key.log_probs_on,
+                    key.force_argmax,
                     slot["id"],
                 )
         self._trace_states.clear()
@@ -108,12 +110,17 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
+        is_force_argmax_sampling = self.tt_sampling._force_argmax_sampling
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
         )
+        if self.tt_sampling._force_argmax_sampling != is_force_argmax_sampling:
+            self.reset_trace()
+        if self.tt_sampling._force_argmax_sampling:
+            return
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
         )
@@ -169,8 +176,9 @@ class SamplingGenerator:
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
+        force_argmax = self.tt_sampling._force_argmax_sampling
 
-        key, slot = self._trace_slot(penalties_on, log_probs_on)
+        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
         logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(
@@ -228,6 +236,7 @@ class SamplingGenerator:
 
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
+        force_argmax = self.tt_sampling._force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
@@ -237,7 +246,7 @@ class SamplingGenerator:
                 tt_out_tok=tt_out_tok,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, log_probs_on)
+            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
