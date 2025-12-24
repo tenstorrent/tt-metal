@@ -1869,6 +1869,141 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     assert_with_pcc(torch_output_tensor, output, 0.999)
 
 
+@pytest.mark.parametrize("transpose_a", [True, False])
+@pytest.mark.parametrize("transpose_b", [True, False])
+@pytest.mark.parametrize(
+    "b, s, m, k, n, program_config",
+    [
+        (1, 1, 1024, 64, 512, None),
+        (2, 1, 1024, 64, 512, None),
+        (
+            2,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(1, 2),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32,
+                per_core_N=512 // 32,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(2, 1),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32 // 2,
+                per_core_N=512 // 32,
+            ),
+        ),
+        (
+            1,
+            2,
+            4096,
+            32,
+            256,
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(4, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=8,
+                per_core_N=8,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32,
+                per_core_N=512 // 32 // 8,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(1, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1024 // 32 // 8,
+                per_core_N=512 // 32,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+        ),
+        (
+            1,
+            1,
+            1024,
+            64,
+            512,
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1024 // 32 // 8,
+                per_core_N=512 // 32 // 8,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            ),
+        ),
+    ],
+)
+def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, transpose_b, program_config):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((b, s, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((b, s, k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    if transpose_a:
+        torch_input_tensor_a = torch_input_tensor_a.transpose(-1, -2)
+    if transpose_b:
+        torch_input_tensor_b = torch_input_tensor_b.transpose(-1, -2)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.matmul(
+        input_tensor_a, input_tensor_b, transpose_a=transpose_a, transpose_b=transpose_b, program_config=program_config
+    )
+    output = ttnn.to_torch(output)
+
+    assert len(output.shape) == len(torch_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+
+
 ##########################
 # MODEL SPECIFIC MATMULS #
 ##########################
