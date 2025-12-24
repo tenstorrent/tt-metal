@@ -145,7 +145,7 @@ class Generator:
         self,
         kv_cache,
         enable_trace,
-        sampling_params=None,
+        sampling_params=[None],
     ):
         if self.already_warmed_up_prefill:
             return
@@ -153,13 +153,8 @@ class Generator:
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
-        # Because sampling params is not traced jointly, we don't actually need to warm up for each combination
-        all_sampling_params = sampling_params if sampling_params is not None else [None]
-        one_sampling_param = [all_sampling_params[0]]
-
         for model_id in range(self.data_parallel):
             # each model sees each sampling_params at least once
-            use_sampling_params = all_sampling_params
             for supported_length in sequence_lengths_to_warmup:
                 # When model_id = 0, we compile all operators for the first time
                 # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
@@ -189,8 +184,7 @@ class Generator:
                         "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
                     )
                     break
-
-                for param in use_sampling_params:
+                for param in sampling_params:
                     self.prefill_forward_text(
                         warmup_tokens,
                         page_table_warmup,
@@ -201,7 +195,6 @@ class Generator:
                         model_id,
                         param,
                     )
-                use_sampling_params = one_sampling_param  # don't need to re-run all params for each supported length
 
     def _capture_trace_prefill(
         self,
@@ -324,7 +317,7 @@ class Generator:
         )
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        self.warmup_model_prefill(kv_cache, enable_trace, [sampling_params])
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -423,6 +416,8 @@ class Generator:
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             if sampling_enabled:
+                # Ensure prefill/logits ops are complete before running sampling + host reads.
+                ttnn.synchronize_device(self.model[model_id].mesh_device)
                 logits_dram = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
                 per_request_params = sampling_params_per_out[idx]
@@ -436,6 +431,7 @@ class Generator:
                     logits_dram,
                     enable_trace=False,
                 )
+
                 tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
                 tokens_host = tokens_host[(last_token_idx % 32)]
                 log_probs_host = (
@@ -448,10 +444,13 @@ class Generator:
                 output_tokens[idx] = tokens_host
                 if log_probs_host is not None:
                     output_log_probs[idx] = log_probs_host
+                logits_dram.deallocate(True)
             else:
+                # Ensure prefill ops complete before host readback.
+                ttnn.synchronize_device(self.model[model_id].mesh_device)
                 logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 output_logits[idx] = self.model[model_id].process_output_prefill(
-                    logits.cpu(blocking=False), last_token_idx=(int(prompt_lens[idx]) % 32)
+                    logits.cpu(blocking=True), last_token_idx=(int(prompt_lens[idx]) % 32)
                 )
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
