@@ -19,6 +19,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      build-artifact-name:
+        required: true
+        type: string
       enable-watcher:
         required: false
         type: boolean
@@ -61,6 +64,9 @@ on:
         required: true
         type: string
       wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
         required: true
         type: string
       merge-gate-call:
@@ -139,6 +145,7 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
