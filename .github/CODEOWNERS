@@ -12,6 +12,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-infra
+.github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -301,7 +302,7 @@ models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/co
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
-models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/t3000/sentence_bert @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
