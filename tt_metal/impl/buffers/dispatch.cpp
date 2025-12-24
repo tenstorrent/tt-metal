@@ -818,6 +818,11 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
+    // Mock devices don't have real hardware to read from, skip actual dispatch
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
     tt::tt_metal::DeviceCommandCalculator calculator;
