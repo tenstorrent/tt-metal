@@ -203,6 +203,10 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
         [(1, 4), (1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
@@ -251,6 +255,7 @@ def test_wan_transformer_model(
     load_cache: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    dit_unit_test: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -275,9 +280,13 @@ def test_wan_transformer_model(
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
 
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
-    )
+    if dit_unit_test:
+        torch_model = TorchWanTransformer3DModel(num_layers=1)
+        num_layers = torch_model.config.num_layers
+    else:
+        torch_model = TorchWanTransformer3DModel.from_pretrained(
+            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        )
     torch_model.eval()
 
     # Create CCL manager
@@ -309,6 +318,7 @@ def test_wan_transformer_model(
         text_dim=text_dim,
         freq_dim=freq_dim,
         ffn_dim=ffn_dim,
+        num_layers=num_layers,
         cross_attn_norm=cross_attn_norm,
         eps=eps,
         rope_max_seq_len=rope_max_seq_len,

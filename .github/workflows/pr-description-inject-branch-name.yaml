@@ -1,0 +1,34 @@
+name: Inject git branch into PR description
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+
+permissions:
+  pull-requests: write
+
+jobs:
+  update-description:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update PR Description
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const branchName = pr.head.ref;
+            const placeholder = "{{branch_name}}";
+            let body = pr.body || "";
+
+            if (body.includes(placeholder)) {
+              const newBody = body.replaceAll(placeholder, branchName);
+
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                body: newBody
+              });
+            }
