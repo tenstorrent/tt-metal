@@ -8,11 +8,7 @@
 
 namespace ckernel::sfpu {
 
-<<<<<<< HEAD
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-=======
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
->>>>>>> b47cee158f (silu fix)
 inline void calculate_silu() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -31,14 +27,6 @@ inline void calculate_silu() {
     }
 }
 
-<<<<<<< HEAD
-inline void silu_init() {
-    _init_reciprocal_<false, false>();
-=======
-template <bool APPROXIMATION_MODE>
-inline void silu_init() {
-    sigmoid_init<false>();
->>>>>>> b47cee158f (silu fix)
-}
+inline void silu_init() { _init_reciprocal_<false, false>(); }
 
 }  // namespace ckernel::sfpu

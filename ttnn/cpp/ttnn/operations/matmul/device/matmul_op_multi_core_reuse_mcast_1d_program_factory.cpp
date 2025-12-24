@@ -2594,14 +2594,6 @@ inline void override_gather_in0_program_parameters(
         const auto& core = override_variables.cores[i];
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
-<<<<<<< HEAD
-        /* in1 */
-=======
-    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-    for (uint32_t i = 0; i < override_variables.cores.size(); ++i) {
-        const auto& core = override_variables.cores[i];
-        auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
->>>>>>> 1c568022c9 (no pf + all bf16)
         writer_runtime_args[1] = src_buffer_b->address();
     }
 }
