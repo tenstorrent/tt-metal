@@ -3,7 +3,9 @@
 import torch
 from torch import nn
 from transformers import AutoModelForImageClassification
+from transformers.models.vit.modeling_vit import ViTSelfAttention
 
+from models.tt_symbiote.modules.attention import TTNNViTSelfAttention
 from models.tt_symbiote.modules.linear import TTNNLinear
 from models.tt_symbiote.modules.normalization import TTNNLayerNorm
 from models.tt_symbiote.utils.device_management import set_device
@@ -16,6 +18,7 @@ def test_vit(device):
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
         nn.LayerNorm: TTNNLayerNorm,
+        ViTSelfAttention: TTNNViTSelfAttention,
     }
     register_module_replacement_dict(model, nn_to_ttnn, model_config={"program_config_ffn": {}})
     set_device(model, device)

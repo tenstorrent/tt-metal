@@ -324,8 +324,7 @@ class TTNNBottleneck(TTNNModule):
         )
         self.conv3 = TTNNConv2dBNNHWC.from_torch(self.torch_layer.conv3, self.torch_layer.bn3)
         self.relu = TTNNReLU()
-        self.nchw_to_nhwc_permute = TTNNPermute(perm=[0, 2, 3, 1])
-        self.nhwc_to_nchw_permute = TTNNPermute(perm=[0, 3, 1, 2])
+        self.permute = TTNNPermute()
 
     @classmethod
     def from_torch(cls, bottleneck: "torchvision.models.resnet.Bottleneck") -> "TTNNBottleneck":
@@ -341,9 +340,9 @@ class TTNNBottleneck(TTNNModule):
         """Forward pass through Bottleneck block."""
         if self.downsample is not None:
             identity = x
-            x = self.nchw_to_nhwc_permute(x)
+            x = self.permute(x, perm=[0, 2, 3, 1])
         else:
-            x = self.nchw_to_nhwc_permute(x)
+            x = self.permute(x, perm=[0, 2, 3, 1])
             identity = x
         out = self.conv1(x)
         out = self.conv2(out)
@@ -356,8 +355,8 @@ class TTNNBottleneck(TTNNModule):
             if identity.to_ttnn.device() != out.to_ttnn.device():
                 identity = ttnn.to_device(identity.to_ttnn, out.to_ttnn.device())
 
-            identity = self.nchw_to_nhwc_permute(identity)
+            identity = self.permute(identity, perm=[0, 2, 3, 1])
         out += identity
         out = self.relu(out)
-        out = self.nhwc_to_nchw_permute(out)
+        out = self.permute(out, perm=[0, 3, 1, 2])
         return out
