@@ -12,6 +12,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
+#include "llk_unpack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -38,7 +39,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           false /*is_int_en*/,
           true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
 #endif
 }
 
@@ -95,13 +96,13 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -173,7 +174,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
 // while the *_no_pack variants do not configure the packer, testing has shown that this call is
 // still necessary to ensure the data type is properly updated
 #ifdef ARCH_BLACKHOLE
-    PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
+    PACK((_llk_pack_init_<false, false, true>(
         pack_dst_format[new_icb],
         get_output_face_r_dim(new_icb),
         get_output_tile_c_dim(new_icb),
@@ -300,7 +301,7 @@ ALWI void unpack_tilizeA_B_block(
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
 #endif
 }
 
