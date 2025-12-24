@@ -47,32 +47,39 @@ void RunFillUpAllBuffers(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
-    tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = kernel_defines});
-    std::vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
+    // tt_metal::CreateKernel(
+    //     program,
+    //     "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
+    //     all_cores,
+    //     tt_metal::DataMovementConfig{
+    //         .processor = tt_metal::DataMovementProcessor::RISCV_1,
+    //         .noc = tt_metal::NOC::RISCV_1_default,
+    //         .defines = kernel_defines});
+    // std::vector<uint32_t> trisc_kernel_args = {};
+    // tt_metal::CreateKernel(
+    //     program,
+    //     "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
+    //     all_cores,
+    //     tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    for (auto core : eth_cores) {
-        tt_metal::CreateKernel(
-            program,
-            "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
-            (CoreCoord){core.x, core.y},
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
-    }
+    // for (auto core : eth_cores) {
+    //     tt_metal::CreateKernel(
+    //         program,
+    //         "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
+    //         (CoreCoord){core.x, core.y},
+    //         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
+    // }
 
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
-        for (int it = 0; it < 4; ++it) {
+        int num_its = 2;
+        log_info(
+            tt::LogMetal,
+            "Enqueuing mesh workload with fast dispatch {} {} times. expect {} zones",
+            num_its,
+            DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT,
+            num_its * (DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT) * loop_count);
+        for (int it = 0; it < num_its; ++it) {
             for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
                 // Enqueue the same mesh workload multiple times to generate profiler traffic
                 distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
@@ -90,9 +97,11 @@ int main() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        // int device_id = 0;
-        std::shared_ptr<distributed::MeshDevice> mesh_device =
-            distributed::MeshDevice::create(distributed::MeshDeviceConfig{tt::tt_fabric::MeshShape(1, 2)});
+        int device_id = 0;
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+        // std::shared_ptr<distributed::MeshDevice> mesh_device =
+        //     distributed::MeshDevice::create(distributed::MeshDeviceConfig{tt::tt_fabric::MeshShape(1, 1)});
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 

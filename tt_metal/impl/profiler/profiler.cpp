@@ -999,6 +999,8 @@ void dumpDeviceResultsToCSV(
         return;
     }
 
+    int num_elements_written = 0;
+
     for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
@@ -1031,11 +1033,15 @@ void dumpDeviceResultsToCSV(
                     marker.line,
                     marker.file,
                     meta_data_str);
+
+                num_elements_written++;
             }
         }
     }
 
     log_file_ofs.close();
+
+    log_info(tt::LogMetal, "Wrote {} elements to CSV file", num_elements_written);
 }
 
 bool isGalaxyMMIODevice(IDevice* device) {
@@ -1278,10 +1284,6 @@ void DeviceProfiler::resetControlBuffers(
             control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0];
         // Reset active indices to zero
         this->active_dram_buffer_per_core_risc_map[virtual_core].clear();
-        log_info(
-            LogMetal,
-            "Reset control buffer {}",
-            core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0]);
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
@@ -1553,6 +1555,17 @@ void DeviceProfiler::readRiscProfilerResults(
                 }
             }
         }
+        // Count total markers inserted for this core
+        int total_markers_for_core = 0;
+        for (const auto& [risc, markers] : device_markers_for_core) {
+            total_markers_for_core += markers.size();
+        }
+        log_info(
+            tt::LogMetal,
+            "Read {} elements from device profiler, Inserted {} markers ({} RISC types)",
+            deviceTraceCounterRead,
+            total_markers_for_core,
+            device_markers_for_core.size());
     }
 
     if (!skipReadingDeviceTraceCounter()) {
@@ -1950,13 +1963,31 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         this->generateAnalysesForDeviceMarkers(device_markers_vec);
     }
 
-    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
+    // Only write to CSV during final dump, not during mid-run dumps
+    // Mid-run dumps should accumulate markers for the final dump
+    if (!is_mid_run_dump) {
+        this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
+    }
 
     this->pushTracyDeviceResults(device_markers_vec);
 
     this->thread_pool->wait();
+    {
+        int totalMarkers = 0;
+        for (const auto& [core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
+                totalMarkers += device_markers.size();
+            }
+        }
+        log_info(tt::LogMetal, "Total markers: {}", totalMarkers);
+    }
 
-    this->device_markers_per_core_risc_map.clear();
+    // Only clear markers during final dump, not during mid-run dumps
+    // Mid-run dumps should accumulate markers for the final dump
+    if (!is_mid_run_dump) {
+        this->device_markers_per_core_risc_map.clear();
+    }
+
 #endif
 }
 
@@ -2310,13 +2341,18 @@ void DeviceProfiler::destroyTracyContexts() {
 #endif
 }
 
-void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::pollDebugDumpResults(
+    IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll) {
 #if defined(TRACY_ENABLE)
     if (!getDeviceProfilerState() || !getDeviceDebugDumpEnabled()) {
         return;
     }
 
     TT_ASSERT(device_id == device->id());
+
+    // Populate hash_to_zone_src_locations before processing markers
+    // This is needed so that getMarkerDetails can look up zone names, source files, and line numbers
+    hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
 
     readControlBuffers(device, virtual_cores, true);
 
@@ -2337,6 +2373,7 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
         temp_control_buffers[virtual_core] = core_control_buffers.at(virtual_core);
         bool index_0_present = false;
         bool index_1_present = false;
+        bool has_data_to_process = false;
         bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
 
         for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
@@ -2355,7 +2392,42 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
             const uint8_t control_buffer_dram_addr_index = risc_type_to_control_buffer_dram_address_offset(risc_type);
             const uint8_t control_buffer_host_index_index = risc_type_to_control_buffer_host_index_offset(risc_type);
             const DeviceAddr dram_buffer_address = temp_control_buffers[virtual_core][control_buffer_dram_addr_index];
-            if (dram_buffer_address != kernel_profiler::DRAM_PROFILER_ADDRESS_STALLED) {
+
+            // Check if buffer has data by looking at HOST_BUFFER_END_INDEX
+            const uint32_t buffer_end_index = temp_control_buffers[virtual_core][control_buffer_host_index_index];
+            const bool buffer_has_data = buffer_end_index > 0;
+
+            if (dram_buffer_address == kernel_profiler::DRAM_PROFILER_ADDRESS_STALLED) {
+                // Buffer is stalled - switch to the other buffer
+                // Save the buffer end index before resetting it, so we can read this buffer later during final poll
+                const uint32_t stalled_buffer_end_index =
+                    temp_control_buffers[virtual_core][control_buffer_host_index_index];
+                if (stalled_buffer_end_index > 0) {
+                    inactive_buffer_end_indices[virtual_core][risc_type][active_dram_buffer_index] =
+                        stalled_buffer_end_index;
+                }
+
+                const uint8_t next_active_dram_buffer_index = 1 - active_dram_buffer_index;
+                temp_control_buffers[virtual_core][control_buffer_dram_addr_index] =
+                    this->getProfilerDramBufferAddress(next_active_dram_buffer_index);
+                temp_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
+                stalled_risc_types[virtual_core].push_back(risc_type);
+                has_data_to_process = true;
+
+                // Note: Do not use the writeToCoreControlBuffer function as it will overwrite the entire control
+                // buffer. We only want to update the fields for the stalled riscs.
+                const auto dram_profiler_address_offset = risc_type_to_control_buffer_dram_address_offset(risc_type);
+                const DeviceAddr addr =
+                    getControlVectorAddress(device, virtual_core) + (dram_profiler_address_offset * sizeof(uint32_t));
+                // Need to use write_reg to guarantee a single write to the control buffer
+                MetalContext::instance().get_cluster().write_reg(
+                    &temp_control_buffers[virtual_core][control_buffer_dram_addr_index],
+                    tt_cxy_pair(device->id(), virtual_core),
+                    addr);
+            } else if (buffer_has_data) {
+                has_data_to_process = true;
+            } else {
+                // Buffer has no data and is not stalled - nothing to do
                 // This should match, otherwise it means something went out of sync with the host and device
                 TT_ASSERT(
                     dram_buffer_address == this->getProfilerDramBufferAddress(active_dram_buffer_index),
@@ -2367,30 +2439,11 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
                     dram_buffer_address,
                     this->getProfilerDramBufferAddress(active_dram_buffer_index),
                     active_dram_buffer_index);
-                continue;
             }
-
-            // Set a new DRAM buffer address for this risc and reset the host (dram) index
-            const uint8_t next_active_dram_buffer_index = 1 - active_dram_buffer_index;
-            temp_control_buffers[virtual_core][control_buffer_dram_addr_index] =
-                this->getProfilerDramBufferAddress(next_active_dram_buffer_index);
-            temp_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
-            stalled_risc_types[virtual_core].push_back(risc_type);
-
-            // Note: Do not use the writeToCoreControlBuffer function as it will overwrite the entire control buffer.
-            // We only want to update the fields for the stalled riscs.
-            const auto dram_profiler_address_offset = risc_type_to_control_buffer_dram_address_offset(risc_type);
-            const DeviceAddr addr =
-                getControlVectorAddress(device, virtual_core) + (dram_profiler_address_offset * sizeof(uint32_t));
-            // Need to use write_reg to guarantee a single write to the control buffer
-            MetalContext::instance().get_cluster().write_reg(
-                &temp_control_buffers[virtual_core][control_buffer_dram_addr_index],
-                tt_cxy_pair(device->id(), virtual_core),
-                addr);
         }
 
-        // No stalled riscs, nothing to do
-        if (stalled_risc_types[virtual_core].empty()) {
+        // Process this core if it has stalled riscs or data to process
+        if (!has_data_to_process) {
             continue;
         }
 
@@ -2411,12 +2464,182 @@ void DeviceProfiler::pollDebugDumpResults(IDevice* device, const std::vector<Cor
     if (!virtual_cores_to_process_dram_index_0.empty()) {
         readProfilerBuffer(device, 0, true);
         processResults(device, virtual_cores_to_process_dram_index_0);
+
+        // Reset HOST_BUFFER_END_INDEX for cores that were processed but not stalled
+        // Only reset during final poll - during periodic polling, keep the index so we can track data accumulation
+        if (is_final_poll) {
+            for (const auto& virtual_core : virtual_cores_to_process_dram_index_0) {
+                bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
+                for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
+                    // Skip TENSIX_RISC_AGG and handle ethernet cores same as main loop
+                    if (risc_type == tracy::RiscType::TENSIX_RISC_AGG ||
+                        (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                        (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                        continue;
+                    }
+                    if (stalled_risc_types[virtual_core].empty() ||
+                        std::find(
+                            stalled_risc_types[virtual_core].begin(),
+                            stalled_risc_types[virtual_core].end(),
+                            risc_type) == stalled_risc_types[virtual_core].end()) {
+                        // This RISC was processed but not stalled - reset its HOST_BUFFER_END_INDEX
+                        const uint8_t control_buffer_host_index_index =
+                            risc_type_to_control_buffer_host_index_offset(risc_type);
+                        const DeviceAddr addr = getControlVectorAddress(device, virtual_core) +
+                                                (control_buffer_host_index_index * sizeof(uint32_t));
+                        uint32_t zero = 0;
+                        MetalContext::instance().get_cluster().write_reg(
+                            &zero, tt_cxy_pair(device->id(), virtual_core), addr);
+                        // Update our local copy
+                        core_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
+                    }
+                }
+            }
+        }
     }
     if (!virtual_cores_to_process_dram_index_1.empty()) {
         readProfilerBuffer(device, 1, true);
         processResults(device, virtual_cores_to_process_dram_index_1);
+
+        // Reset HOST_BUFFER_END_INDEX for cores that were processed but not stalled
+        // Only reset during final poll - during periodic polling, keep the index so we can track data accumulation
+        if (is_final_poll) {
+            for (const auto& virtual_core : virtual_cores_to_process_dram_index_1) {
+                bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
+                for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
+                    // Skip TENSIX_RISC_AGG and handle ethernet cores same as main loop
+                    if (risc_type == tracy::RiscType::TENSIX_RISC_AGG ||
+                        (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                        (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                        continue;
+                    }
+                    if (stalled_risc_types[virtual_core].empty() ||
+                        std::find(
+                            stalled_risc_types[virtual_core].begin(),
+                            stalled_risc_types[virtual_core].end(),
+                            risc_type) == stalled_risc_types[virtual_core].end()) {
+                        // This RISC was processed but not stalled - reset its HOST_BUFFER_END_INDEX
+                        const uint8_t control_buffer_host_index_index =
+                            risc_type_to_control_buffer_host_index_offset(risc_type);
+                        const DeviceAddr addr = getControlVectorAddress(device, virtual_core) +
+                                                (control_buffer_host_index_index * sizeof(uint32_t));
+                        uint32_t zero = 0;
+                        MetalContext::instance().get_cluster().write_reg(
+                            &zero, tt_cxy_pair(device->id(), virtual_core), addr);
+                        // Update our local copy
+                        core_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
+                    }
+                }
+            }
+        }
     }
+
+    // During final poll, read the active buffer and any inactive buffers that have saved indices
+    // This ensures we capture all remaining data from both iterations
+    if (is_final_poll && !virtual_cores.empty()) {
+        // Re-read control buffers to get latest state
+        readControlBuffers(device, virtual_cores, true);
+
+        // Collect which buffer indices need to be read
+        std::set<uint8_t> buffer_indices_to_read;
+
+        // Add the active buffer for each core/RISC
+        for (const auto& virtual_core : virtual_cores) {
+            bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
+            for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
+                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    continue;
+                }
+                const uint8_t active_dram_buffer_index =
+                    this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type];
+                buffer_indices_to_read.insert(active_dram_buffer_index);
+            }
+        }
+
+        // Add any inactive buffers that have saved indices (from when they stalled)
+        for (const auto& [virtual_core, risc_map] : inactive_buffer_end_indices) {
+            for (const auto& [risc_type, buffer_map] : risc_map) {
+                for (const auto& [buffer_index, end_index] : buffer_map) {
+                    if (end_index > 0) {
+                        buffer_indices_to_read.insert(buffer_index);
+                    }
+                }
+            }
+        }
+
+        // Read and process each buffer index that has data
+        for (uint8_t buffer_index : buffer_indices_to_read) {
+            // For each core and RISC type, determine what buffer end index to use
+            for (const auto& virtual_core : virtual_cores) {
+                bool is_eth = MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id());
+                for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
+                    if (risc_type == tracy::RiscType::TENSIX_RISC_AGG ||
+                        (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                        (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                        continue;
+                    }
+
+                    const uint8_t control_buffer_host_index_index =
+                        risc_type_to_control_buffer_host_index_offset(risc_type);
+                    const uint8_t active_dram_buffer_index =
+                        this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type];
+
+                    // Determine what buffer end index to use for this buffer_index
+                    uint32_t buffer_end_index_to_use = 0;
+
+                    if (buffer_index == active_dram_buffer_index) {
+                        // This is the active buffer - use current control buffer value
+                        buffer_end_index_to_use = core_control_buffers[virtual_core][control_buffer_host_index_index];
+                    } else {
+                        // This is the inactive buffer - check if we have a saved index (from when it stalled)
+                        auto it = inactive_buffer_end_indices[virtual_core][risc_type].find(buffer_index);
+                        if (it != inactive_buffer_end_indices[virtual_core][risc_type].end()) {
+                            buffer_end_index_to_use = it->second;
+                        }
+                        // If no saved index, buffer_end_index_to_use remains 0 and won't be processed
+                    }
+
+                    // Temporarily set the buffer end index in the control buffer
+                    // This allows readRiscProfilerResults to process the buffer's data
+                    if (buffer_end_index_to_use > 0) {
+                        core_control_buffers[virtual_core][control_buffer_host_index_index] = buffer_end_index_to_use;
+                    }
+                }
+            }
+
+            // Read and process this buffer index
+            readProfilerBuffer(device, buffer_index, true);
+            processResults(device, virtual_cores);
+        }
+
+        // Clear saved buffer end indices after processing
+        inactive_buffer_end_indices.clear();
+    }
+
+    // Log marker count before dump
+    {
+        int totalMarkers = 0;
+        for (const auto& [core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
+                totalMarkers += device_markers.size();
+            }
+        }
+        log_info(tt::LogMetal, "pollDebugDumpResults: Total markers before dump: {}", totalMarkers);
+    }
+
     dumpDeviceResults(/*is_mid_run_dump=*/true);
+
+    // Log marker count after dump
+    {
+        int totalMarkers = 0;
+        for (const auto& [core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
+                totalMarkers += device_markers.size();
+            }
+        }
+        log_info(tt::LogMetal, "pollDebugDumpResults: Total markers after dump: {}", totalMarkers);
+    }
 
     // Commit the updated control buffers to our host state
     for (const auto& [virtual_core, risc_types] : stalled_risc_types) {

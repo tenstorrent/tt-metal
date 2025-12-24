@@ -765,7 +765,8 @@ bool onlyProfileDispatchCores(const ProfilerReadState state) {
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
-void ReadDeviceProfilerResults(
+// Shared implementation for reading device profiler results
+static void ReadDeviceProfilerResultsImpl(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
@@ -773,12 +774,6 @@ void ReadDeviceProfilerResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
-        return;
-    }
-
-    // Manual reading of device profiler results is not supported when there is already another thread reading the
-    // results
-    if (getDeviceDebugDumpEnabled()) {
         return;
     }
 
@@ -835,6 +830,30 @@ void ReadDeviceProfilerResults(
         profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
 #endif
+}
+
+void ReadDeviceProfilerResults(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
+#if defined(TRACY_ENABLE)
+    if (getDeviceDebugDumpEnabled()) {
+        return;
+    }
+
+    ReadDeviceProfilerResultsImpl(device, virtual_cores, state, metadata);
+#endif
+}
+
+void ReadDeviceProfilerResultsInternal(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    // Note: This function bypasses the getDeviceDebugDumpEnabled() check
+    // It is intended only for use by ProfilerStateManager during cleanup
+    ReadDeviceProfilerResultsImpl(device, virtual_cores, state, metadata);
 }
 
 bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {

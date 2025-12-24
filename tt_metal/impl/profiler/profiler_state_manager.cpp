@@ -46,10 +46,10 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value());
     }
 
-    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
-        // Using 2 buffers so half the bank size to keep overall profiler size the same
-        dram_bank_size_per_risc_bytes_single_program /= 2;
-    }
+    // if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+    //     // Using 2 buffers so half the bank size to keep overall profiler size the same
+    //     dram_bank_size_per_risc_bytes_single_program /= 2;
+    // }
 
     const uint32_t dram_bank_size_per_risc_bytes =
         dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
@@ -80,6 +80,7 @@ void ProfilerStateManager::cleanup_device_profilers() {
     for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
         threads[i] = std::thread([it]() {
             DeviceProfiler& profiler = it->second;
+            log_info(tt::LogMetal, "Dumping device profiler results during cleanup dumpDeviceResults");
             profiler.dumpDeviceResults();
             profiler.destroyTracyContexts();
         });
@@ -142,24 +143,55 @@ void ProfilerStateManager::start_debug_dump_thread(
                                            active_devices = std::move(active_devices),
                                            virtual_cores_map = std::move(virtual_cores_map)]() {
         while (true) {
-            auto process_devices = [&]() {
+            {
                 std::lock_guard<std::recursive_mutex> lock{this->device_profiler_map_mutex};
                 for (auto* device : active_devices) {
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()));
+                    // Only process stalled buffers during periodic polling
+                    profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/false);
                 }
-            };
-
-            process_devices();
+            }
 
             constexpr auto interval = std::chrono::milliseconds(1000);
             std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
             if (this->stop_debug_dump_thread_cv.wait_for(
                     lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {
-                // One more time to ensure all data is read before exiting
-                process_devices();
+                log_info(tt::LogMetal, "Reading device profiler results during cleanup");
+                for (auto* device : active_devices) {
+                    // First, call pollDebugDumpResults one final time to process any remaining data
+                    // This ensures all markers are captured even if buffers never stalled
+                    {
+                        auto profiler_it = this->device_profiler_map.find(device->id());
+                        TT_ASSERT(profiler_it != this->device_profiler_map.end());
+                        DeviceProfiler& profiler = profiler_it->second;
+                        // Final poll: process all buffers with data, even if not stalled
+                        profiler.pollDebugDumpResults(
+                            device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
+                    }
+
+                    // Then read any remaining data using the standard read path
+                    constexpr auto state = ProfilerReadState::LAST_FD_READ;
+                    detail::ReadDeviceProfilerResultsInternal(device, virtual_cores_map.at(device->id()), state, {});
+
+                    auto profiler_it = this->device_profiler_map.find(device->id());
+                    TT_ASSERT(profiler_it != this->device_profiler_map.end());
+                    DeviceProfiler& profiler = profiler_it->second;
+                    if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+                        profiler.processResults(
+                            device,
+                            virtual_cores_map.at(device->id()),
+                            state,
+                            ProfilerDataBufferSource::DRAM_AND_L1,
+                            {});
+                    } else {
+                        profiler.processResults(
+                            device, virtual_cores_map.at(device->id()), state, ProfilerDataBufferSource::DRAM, {});
+                    }
+
+                    // cleanup_device_profilers() handles the final dump
+                }
                 break;
             }
         }

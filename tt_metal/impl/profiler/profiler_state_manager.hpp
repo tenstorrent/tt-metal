@@ -24,6 +24,14 @@ class RunTimeOptions;
 
 namespace tt_metal {
 
+namespace detail {
+void ReadDeviceProfilerResultsInternal(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata);
+}  // namespace detail
+
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes();
 

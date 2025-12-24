@@ -131,6 +131,10 @@ private:
     // buffering.
     std::map<CoreCoord, std::map<tracy::RiscType, bool>> active_dram_buffer_per_core_risc_map;
 
+    // Map to store buffer end indices for inactive buffers (before they're reset)
+    // Key: (core, risc_type, buffer_index) -> buffer_end_index
+    std::map<CoreCoord, std::map<tracy::RiscType, std::map<uint8_t, uint32_t>>> inactive_buffer_end_indices;
+
     DeviceAddr getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const;
 
     // Read all control buffers
@@ -314,7 +318,7 @@ public:
 
     // Read control buffer for each core, check if the host buffer for any risc is full. If it's full,
     // swap the active DRAM buffer to unblock the risc and then read out the buffer
-    void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
 bool useFastDispatch(IDevice* device);
