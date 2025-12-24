@@ -8,6 +8,8 @@ import torch
 
 import ttnn
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "shape",

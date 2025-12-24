@@ -12,6 +12,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 from itertools import product
 from models.common.utility_functions import comp_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "input_shapes",

@@ -5,6 +5,8 @@
 from loguru import logger
 import pytest
 
+pytestmark = pytest.mark.use_module_device
+
 import torch
 
 import ttnn
