@@ -10,10 +10,10 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
@@ -85,11 +85,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
@@ -119,6 +116,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
+constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -131,6 +129,10 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
 static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 using RelayClientType =
     CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>;
 
@@ -718,7 +720,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
     bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
-        uint32_t length = sub_cmd_ptr->length;
+        // CQDispatchWritePackedLargeSubCmd always stores length - 1, so add 1 to get the actual length
+        // This avoids the need to handle the special case where 65536 bytes overflows to 0
+        uint32_t length = sub_cmd_ptr->length_minus1 + 1;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
@@ -1220,6 +1224,10 @@ void kernel_main() {
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1269,14 +1277,11 @@ void kernel_main() {
             fabric_worker_buffer_index_sem,
             fabric_mux_status_address,
             my_fabric_sync_status_addr,
-            my_dev_id,
-            to_dev_id,
             to_mesh_id,
             ew_dim,
-            router_direction,
             fabric_header_rb_base,
             num_hops,
-            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #endif
     }
     bool done = false;

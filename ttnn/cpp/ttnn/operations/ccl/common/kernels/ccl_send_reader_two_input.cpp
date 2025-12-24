@@ -5,7 +5,7 @@
 // NOTE: This should ideally be merged with `ccl_send_reader` when we are able to support compile time args
 //       that don't require macros to function
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/buffer_types.hpp>

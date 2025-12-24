@@ -11,13 +11,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_e75,
-    profiler,
-    tt_tensors_to_torch_tensors,
-)
+from models.common.utility_functions import is_e75, profiler, tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -202,7 +196,6 @@ def run_test_FalconCausalLM_end_to_end(
 
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     # Regenerate input ids and attention_mask on device
     tt_input_ids, tt_attention_mask = get_inputs_on_device(
@@ -342,8 +335,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
 
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-    disable_persistent_kernel_cache()
 
     run_test_FalconCausalLM_end_to_end(
         mesh_device,

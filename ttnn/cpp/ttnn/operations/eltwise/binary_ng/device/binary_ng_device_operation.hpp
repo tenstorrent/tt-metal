@@ -40,6 +40,7 @@ struct BinaryNgDeviceOperation {
         std::optional<DataType> dtype;
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        std::optional<CoreRangeSet> sub_core_grids;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         bool is_sfpu = false;
         bool is_quant_op = false;
@@ -70,13 +71,13 @@ struct BinaryNgDeviceOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& c);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& c);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -101,7 +102,8 @@ struct BinaryNgDeviceOperation {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value);
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -115,7 +117,8 @@ struct BinaryNgDeviceOperation {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value);
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng

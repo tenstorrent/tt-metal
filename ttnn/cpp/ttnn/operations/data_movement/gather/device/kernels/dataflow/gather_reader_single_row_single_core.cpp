@@ -4,9 +4,7 @@
 
 #include "gather_common.hpp"
 
-#include "dataflow_api.h"
-#include <tt-metalium/constants.hpp>
-
+#include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 
 /*
@@ -113,6 +111,7 @@ void kernel_main() {
     const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
     const uint32_t tile_width = get_arg_val<uint32_t>(2);
     const uint32_t tile_height = get_arg_val<uint32_t>(3);
+    const uint32_t core_id = get_arg_val<uint32_t>(4);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -146,8 +145,7 @@ void kernel_main() {
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate
-        const uint32_t h = core_loop * total_number_of_cores +
-                           get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+        const uint32_t h = core_loop * total_number_of_cores + core_id;
 
         for (uint32_t w = 0; w < Wt_index; w++) {
             // Read index data

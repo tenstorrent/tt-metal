@@ -29,12 +29,12 @@ while IFS= read -r FILE; do
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
-	tt_metal/sfpi-info.sh)
-	    # Read in by a cmake file
+        tt_metal/sfpi-info.sh)
+            # Read in by a cmake file
             CMAKE_CHANGED=true
             ;;
-	tt_metal/sfpi-version)
-	    # Read in by a cmake file
+        tt_metal/sfpi-version)
+            # Read in by a cmake file
             CMAKE_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
@@ -65,7 +65,7 @@ while IFS= read -r FILE; do
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tools/**/*.@(h|hpp|c|cpp))
+        tools/**/*.@(h|hpp|c|cpp|py))
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -79,7 +79,7 @@ while IFS= read -r FILE; do
             MODELS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml)
+        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml|.github/workflows/fabric-cpu-only-tests-impl.yaml)
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

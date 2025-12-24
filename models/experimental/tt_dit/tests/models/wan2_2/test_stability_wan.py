@@ -14,13 +14,13 @@ import os
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
         "2x4sp0tp1",
@@ -29,7 +29,20 @@ import os
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_stability(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology):
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
+)
+def test_stability(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, width, height
+):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -42,8 +55,8 @@ def test_stability(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic
         cfg_parallel=None,
     )
     vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
     )
     # Test parameters
     prompts = [
@@ -58,8 +71,6 @@ def test_stability(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic
     ]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
-    height = 480
-    width = 832
     num_frames = 81
     num_inference_steps = 40
 
@@ -78,6 +89,7 @@ def test_stability(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     while True:

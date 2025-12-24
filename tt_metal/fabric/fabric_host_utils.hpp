@@ -5,9 +5,9 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -18,7 +18,11 @@
 #include <functional>
 #include <unordered_set>
 #include <optional>
+#include <filesystem>
+
 namespace tt::tt_fabric {
+
+class TopologyMapper;
 
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
@@ -47,5 +51,10 @@ struct IntraMeshAdjacencyMap {
     std::uint32_t ns_size{};         // North-South size (rows)
     std::uint32_t ew_size{};         // East-West size (columns)
 };
+
+// Serialize chip IDs to mesh coordinates mapping to a YAML file
+// Uses TopologyMapper to get the mapping between logical and physical chip IDs
+void serialize_mesh_coordinates_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric

@@ -8,10 +8,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
@@ -48,5 +47,37 @@ uint32_t get_batch_size(const T& shape) {
     return result;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+/**
+ * @brief Creates a CBDescriptor from a sharded tensor.
+ *
+ * This function simplifies CB creation for sharded tensors by automatically deriving:
+ * - total_size: From tensor's packed buffer size
+ * - core_ranges: From tensor's shard spec grid
+ * - format_descriptors: From CB index, tensor dtype, and page size
+ * - buffer: From tensor's buffer pointer
+ *
+ * @param cb_index The CB ID to use for this circular buffer
+ * @param tensor The sharded tensor to derive CB configuration from
+ * @return CBDescriptor with all fields populated from the tensor
+ *
+ * Example usage (replaces manual calculation of all CB fields):
+ * @code
+ *   // Old way (manual):
+ *   auto act_df = datatype_to_dataformat_converter(device_input_tensor.dtype());
+ *   uint32_t tile_size = tt::tile_size(act_df);
+ *   uint32_t page_size = round_up_to_mul32(tile_size);
+ *   uint32_t num_tiles = calculate_tiles_from_shard(...);
+ *   CBDescriptor cb = {
+ *       .total_size = num_tiles * page_size,
+ *       .core_ranges = all_cores,
+ *       .format_descriptors = {{in_cb_id, act_df, page_size}},
+ *       .buffer = device_input_tensor.buffer(),
+ *   };
+ *
+ *   // New way (automatic):
+ *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
+ * @endcode
+ */
+CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor);
+
+}  // namespace tt::tt_metal

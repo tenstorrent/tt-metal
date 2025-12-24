@@ -29,10 +29,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto& output_grad = tensor_args.output_grad;
-    auto& input = tensor_args.input;
-    auto& mean = tensor_args.mean;
-    auto& rstd = tensor_args.rstd;
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input = tensor_args.input;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
 
     const std::optional<const Tensor>& gamma_grad = output_tensor.at(0);
     const std::optional<const Tensor>& beta_grad = output_tensor.at(1);
@@ -158,10 +158,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "reader_moreh_layer_norm_backward_gamma_beta_grad.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
 
@@ -180,7 +180,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(is_lastdim_layer_norm),
         static_cast<uint32_t>(is_groupnorm)};
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp";
 
@@ -273,13 +273,13 @@ void MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::override_runt
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto input_buffer = tensor_args.input.buffer();
-    auto mean_buffer = tensor_args.mean.buffer();
-    auto rstd_buffer = tensor_args.rstd.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* mean_buffer = tensor_args.mean.buffer();
+    auto* rstd_buffer = tensor_args.rstd.buffer();
 
-    auto gamma_grad_buffer = tensor_return_value.at(0).has_value() ? tensor_return_value.at(0)->buffer() : nullptr;
-    auto beta_grad_buffer = tensor_return_value.at(1).has_value() ? tensor_return_value.at(1)->buffer() : nullptr;
+    auto* gamma_grad_buffer = tensor_return_value.at(0).has_value() ? tensor_return_value.at(0)->buffer() : nullptr;
+    auto* beta_grad_buffer = tensor_return_value.at(1).has_value() ? tensor_return_value.at(1)->buffer() : nullptr;
 
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;

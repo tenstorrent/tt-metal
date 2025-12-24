@@ -1,16 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/argmax_op.hpp"
+#include "device/argmax_device_operation.hpp"
+#include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/decorators.hpp"
 
 #include <utility>
-
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -20,15 +17,8 @@ namespace ttnn::operations::reduction {
    The output tensor is filled with NAN values.
 */
 static Tensor zero_volume_argmax(
-    const Tensor& input_tensor, const std::optional<int> dim, const bool keepdim, const MemoryConfig& memory_config) {
-    auto argmax_op = ArgMax{
-        tt::tt_metal::DataType::UINT32,
-        dim,
-        keepdim,
-        /*sub_core_grids=*/std::nullopt,
-        /*use_multicore=*/false,
-        /*output_mem_config=*/tt::tt_metal::MemoryConfig()};
-    auto output_shape = argmax_op.get_output_shape(input_tensor);
+    const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim, const MemoryConfig& memory_config) {
+    auto output_shape = argmax::get_output_shape(input_tensor, dim, keepdim);
 
     return ttnn::full(
         ttnn::Shape(output_shape),
@@ -41,10 +31,10 @@ static Tensor zero_volume_argmax(
 
 ttnn::Tensor ArgMaxOperation::invoke(
     const Tensor& input_tensor,
-    const std::optional<int> dim,
-    const bool keepdim,
+    const std::optional<int>& dim,
+    bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const bool use_muticore,
+    bool use_multicore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     auto input_shape = input_tensor.logical_shape();
@@ -67,12 +57,15 @@ ttnn::Tensor ArgMaxOperation::invoke(
             output_memory_config);
     }
 
-    return tt::tt_metal::operation::run(
-               ArgMax{tt::tt_metal::DataType::UINT32, dim, keepdim, sub_core_grids, use_muticore, output_memory_config},
-               {input_tensor},
-               {},
-               {std::move(optional_output_tensor)})
-        .at(0);
+    return ttnn::prim::argmax(
+        input_tensor,
+        tt::tt_metal::DataType::UINT32,
+        dim,
+        keepdim,
+        sub_core_grids,
+        use_multicore,
+        output_memory_config,
+        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::reduction

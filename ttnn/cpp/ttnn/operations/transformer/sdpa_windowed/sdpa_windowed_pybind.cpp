@@ -13,7 +13,7 @@
 namespace ttnn::operations::transformer {
 
 void py_bind_sdpa_windowed(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Windowed scaled dot product attention. This is similar to the standard SDPA but instead of
         accepting an explicit attention mask, it accepts cumulative window sequence lengths and builds

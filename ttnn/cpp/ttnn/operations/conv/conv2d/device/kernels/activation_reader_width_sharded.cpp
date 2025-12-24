@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "conv_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 constexpr uint32_t weight_size_h = get_compile_time_arg_val(5);
@@ -204,11 +204,6 @@ void kernel_main() {
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
 #ifndef SKIP_MCAST
-            uint32_t act_w_outer_i = 0;
-
-            uint32_t sender_noc_x = 0;
-            uint32_t sender_noc_y = 0;
-
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 if (act_w_outer_i == this_core_id) {
@@ -259,8 +254,13 @@ void kernel_main() {
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
-                    uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
+                    // Compute sender's logical coordinates from iteration index
+                    uint32_t sender_logical_x = act_w_outer_i % num_cores_x;
+                    uint32_t sender_logical_y = act_w_outer_i / num_cores_x;
+
+                    // Lookup physical coordinates
+                    uint32_t sender_x = act_mcast_x_lookup[sender_logical_x];
+                    uint32_t sender_y = act_mcast_y_lookup[sender_logical_y];
 
                     // Atomic increment source core counter
                     uint64_t act_mcast_sender_semaphore_noc_addr =
@@ -272,12 +272,6 @@ void kernel_main() {
                 }
 
                 cb_push_back(cb_id_act, act_block_num_tiles);
-
-                sender_noc_x++;
-                if (sender_noc_x >= num_cores_x) {
-                    sender_noc_x = 0;
-                    sender_noc_y++;
-                }
 
             }  // num_input_cores
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);

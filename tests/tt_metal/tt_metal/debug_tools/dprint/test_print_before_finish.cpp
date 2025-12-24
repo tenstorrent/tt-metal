@@ -40,7 +40,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
@@ -78,12 +78,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            DPrintMeshFixture::dprint_file_name,
-            expected_output
-        )
-    );
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, expected_output));
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {

@@ -163,8 +163,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
@@ -191,7 +191,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -209,6 +211,22 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
+    # LayerNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp
+    # LayerNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp
     # CrossEntropy
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
@@ -292,9 +310,9 @@ if(NOT TARGET TT::Metalium)
             "$ENV{TT_METAL_HOME}/tt_metal"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
             "$ENV{TT_METAL_HOME}/tt_metal/api/"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
             "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
@@ -375,6 +393,9 @@ else()
     message(STATUS "Metalium targets already exists")
 endif()
 
+# Include helper functions for flatbuffer generation
+include(flatbuffers)
+
 add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
@@ -391,6 +412,9 @@ find_package(
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
+
+# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
+target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
 target_link_libraries(
     ttml
@@ -412,14 +436,46 @@ target_link_libraries(
         Boost::container
         tt-logger
         simde::simde
+        FlatBuffers::FlatBuffers
 )
+
+# Add include directory for TTNN::Core's generated flatbuffer headers
+# These are needed because tensor_flatbuffer.hpp includes tensor_generated.h
+if(TARGET TTNN::Core)
+    # Building with tt-metal from source - get binary directory
+    get_target_property(TTNN_CORE_BINARY_DIR TTNN::Core BINARY_DIR)
+    if(TTNN_CORE_BINARY_DIR)
+        target_include_directories(ttml SYSTEM PRIVATE ${TTNN_CORE_BINARY_DIR}/flatbuffers)
+        message(STATUS "Added TTNN::Core flatbuffers directory: ${TTNN_CORE_BINARY_DIR}/flatbuffers")
+    endif()
+else()
+    # Building with installed tt-metal
+    # Try to get include directories from TTNN::TTNN which should include the flatbuffers path
+    # If the generated headers are installed, they should be in the include directories
+    get_target_property(TTNN_INCLUDES TTNN::TTNN INTERFACE_INCLUDE_DIRECTORIES)
+    if(TTNN_INCLUDES)
+        # Check if any of the include directories contain flatbuffers
+        # This is a fallback - ideally the headers should be in a standard location
+        message(STATUS "TTNN::Core not found, checking TTNN::TTNN include directories for flatbuffers")
+        # Note: If headers are not found, this may indicate an installation issue with tt-metal
+    endif()
+endif()
+
+# Generate flatbuffer header for ttml_metadata.fbs
+# Must be done after target_link_libraries so ttml has access to TTNN::TTNN's include directories
+set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_metadata.fbs)
+set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
+
+GENERATE_FBS_HEADER(${FLATBUFFERS_SCHEMA} TARGET ttml OUTPUT_DIR ${FLATBUFFER_GENERATED_DIR})
+
+# Add generated header to target sources and include directory
+target_sources(ttml PRIVATE ${FBS_GENERATED_HEADER_FILE})
+target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
 message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
-message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_joint_sdpa_program_factory.hpp"
-#include "ring_joint_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 
 #include <optional>
 #include <cmath>
@@ -13,36 +12,36 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
 
-// implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks ring_joint_sdpa(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& gathered_input_tensor_k,
-    const Tensor& gathered_input_tensor_v,
-    const Tensor& joint_tensor_q,
-    const Tensor& joint_tensor_k,
-    const Tensor& joint_tensor_v,
-    const Tensor& output_tensor,
-    const Tensor& joint_output_tensor,
-    const Tensor& lse_output_tensor,
-    std::size_t logical_n,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    std::size_t ring_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<RingSDPAFusedOpSignaler>& sdpa_fused_op_signaler) {
+RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(args, coord, tensor_args, output_tensors);
+        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
+}
+
+RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
     /*
     Q: B x NH x N/num_devices x DH
     K: B x NH x N x DH
@@ -55,6 +54,81 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     logical_n is the unpadded length of the gathered tensor. depending on device id, Q logical length
     may be less than padded length. K, V are gathered, so logical_n tells the true length of K and V.
     */
+
+    log_debug(tt::LogOp, "DEBUG: create_at is called");
+
+    const auto& input_tensor_q = tensor_args.input_q;
+    const auto& input_tensor_k = tensor_args.input_k;
+    const auto& input_tensor_v = tensor_args.input_v;
+
+    const auto& joint_tensor_q = tensor_args.joint_q;
+    const auto& joint_tensor_k = tensor_args.joint_k;
+    const auto& joint_tensor_v = tensor_args.joint_v;
+
+    const auto& gathered_input_tensor_k = tensor_args.gathered_k;
+    const auto& gathered_input_tensor_v = tensor_args.gathered_v;
+
+    auto& output_tensor = output_tensors.output;
+    auto& joint_output_tensor = output_tensors.joint_output;
+    auto& lse_output_tensor = output_tensors.lse_output;
+
+    std::size_t q_chunk_size = args.get_q_chunk_size();
+    std::size_t k_chunk_size = args.get_k_chunk_size();
+
+    tt::tt_metal::Program program{};
+
+    auto* mesh_device = input_tensor_q.device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : nullptr;
+
+    std::vector<IDevice*> devices_to_use = {};
+    // User specified the cluster-axis. Derive devices based on the current coordinate
+    // and the cluster-axis.
+    const auto& mesh_view = input_tensor_q.device()->get_view();
+    devices_to_use = (args.all_gather_struct.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
+                                                                        : mesh_view.get_devices_on_row(coord[0]);
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < args.all_gather_struct.ring_size; ++i) {
+        if (devices_to_use.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            } else if (args.all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(args.all_gather_struct.ring_size - 1);
+            }
+            if (i != args.all_gather_struct.ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
+            } else if (args.all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices_to_use.at(0);
+            }
+        }
+    }
+
+    auto scale = args.scale;
+    if (not scale.has_value()) {
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
+    }
+
+    std::optional<detail::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = detail::RingSDPAFusedOpSignaler();
+
+    auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
+        args.all_gather_struct.ring_size, device_index, args.all_gather_struct.topology);
+
+    // This is how ring_joint_sdpa expects the number of forward and backward writes
+    uint32_t forward_writes_expected, backward_writes_expected;
+    if (args.all_gather_struct.topology == ttnn::ccl::Topology::Linear) {
+        forward_writes_expected = num_targets_backward;
+        backward_writes_expected = num_targets_forward;
+    } else {
+        TT_FATAL(args.all_gather_struct.topology == ttnn::ccl::Topology::Ring, "Topology must be Linear or Ring");
+        forward_writes_expected = num_targets_forward - 1;
+        backward_writes_expected = num_targets_backward - 1;
+    }
+    // Minimally use matmul fused op signaler
+    sdpa_fused_op_signaler->init_all_gather(
+        args.all_gather_struct.ring_size, device_index, forward_writes_expected, backward_writes_expected);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -96,7 +170,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     don't affect attention of unpadded tokens.
     In causal case, the causal mask takes care of masking K pad tokens.
     */
-    const bool use_joint_mask = (logical_n != global_N) || (padded_Lk != L);
+    const bool use_joint_mask = (args.logical_n != global_N) || (padded_Lk != L);
 
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
@@ -104,7 +178,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     [[maybe_unused]] const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
     const uint32_t N_k_num_chunks_local = local_N / k_chunk_size;
     const uint32_t L_k_num_chunks = padded_Lk / k_chunk_size;
-    const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);
+    const uint32_t global_logical_NK_chunks = tt::div_up(args.logical_n, k_chunk_size);
     const uint32_t global_padded_NK_chunks = global_N / k_chunk_size;
 
     log_debug(tt::LogOp, "B: {}", B);
@@ -124,7 +198,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     log_debug(tt::LogOp, "local_Nt: {}", local_Nt);
     log_debug(tt::LogOp, "global_Nt: {}", global_Nt);
     log_debug(tt::LogOp, "logical_Lt: {}", logical_Lt);
-    log_debug(tt::LogOp, "logical_n: {}", logical_n);
+    log_debug(tt::LogOp, "logical_n: {}", args.logical_n);
     log_debug(tt::LogOp, "global_N: {}", global_N);
 
     // Log chunking parameters
@@ -143,36 +217,32 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     log_debug(tt::LogOp, "use_joint_mask: {}", use_joint_mask);
 
-    // Program program = CreateProgram();
-
-    IDevice* device = input_tensor_q.device();
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
 
-    CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+    CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                          : mesh_device->compute_with_storage_grid_size();
     bool exp_approx_mode =
-        program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
+        args.program_config.has_value()
+            ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     // Init fused op signaler
-    TT_FATAL(sdpa_fused_op_signaler.has_value(), "SDPA fused op signaler must be provided");
-    sdpa_fused_op_signaler->init_fused_op(program, device, core_grid);
+    sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
-    log_debug(tt::LogOp, "device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
+    log_debug(
+        tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
     log_debug(tt::LogOp, "grid_size: {}", grid_size);
 
     TT_FATAL(
-        num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
+        num_cores <= mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y,
         "Provided grid must not contain more cores than the device. Got {} cores, expected at most {} cores.",
         num_cores,
-        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+        mesh_device->compute_with_storage_grid_size().x * mesh_device->compute_with_storage_grid_size().y);
 
     /**
      * This parallelization scheme is efficient because it divides the global work,
@@ -282,6 +352,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
+    // Reduce ops can use granularity of dst_size/2
+    const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
+    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    TT_FATAL(
+        reduce_granularity == (1 << log2_reduce_granularity),
+        "reduce_granularity must be a power of 2. Got {}.",
+        reduce_granularity);
+
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
@@ -291,6 +369,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -317,7 +397,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         padded_Lqt,
         padded_Lkt,
         num_cores,
-        ring_size,
+        args.ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
         global_logical_NK_chunks,
@@ -337,8 +417,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
     // bug in the mask generation code, which would mask a full, valid chunk
     // with -inf.
-    const uint32_t mask_chunk_0 =
-        (logical_n != global_N) ? (logical_n / k_chunk_size) : (uint32_t)(-1);  // idx of last chunk in first sequence
+    const uint32_t mask_chunk_0 = (args.logical_n != global_N) ? (args.logical_n / k_chunk_size)
+                                                               : (uint32_t)(-1);  // idx of last chunk in first sequence
     const uint32_t mask_chunk_1 =
         (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
 
@@ -356,7 +436,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         logical_Lt,
         padded_Lqt,
         padded_Lkt,
-        logical_n,
+        args.logical_n,
         L,
         num_cores,
         packed_identity_scalar,
@@ -364,7 +444,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         (uint32_t)use_joint_mask,
         mask_chunk_0,
         mask_chunk_1,
-        ring_size,
+        args.ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
         global_logical_NK_chunks,
@@ -397,7 +477,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         (uint32_t)use_joint_mask,
         mask_chunk_0,
         mask_chunk_1,
-        ring_size,
+        args.ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
         global_logical_NK_chunks,
@@ -414,6 +494,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
+    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     auto reader_kernels_id = CreateKernel(
@@ -502,13 +584,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // lse input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_6, stats_df}})
-                            .set_page_size(tt::CBIndex::c_6, stats_tile_size);
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
-                            .set_page_size(tt::CBIndex::c_7, im_tile_size);
+    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // column identity input
@@ -562,8 +644,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // lse output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * out_tile_size, {{tt::CBIndex::c_17, out_df}})
-                             .set_page_size(tt::CBIndex::c_17, out_tile_size);
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -632,67 +714,119 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            // Get addresses for regular tensors
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto gathered_k_buffer = input_tensors.at(3).buffer();
-            auto gathered_v_buffer = input_tensors.at(4).buffer();
-            auto joint_q_buffer = input_tensors.at(5).buffer();
-            auto joint_k_buffer = input_tensors.at(6).buffer();
-            auto joint_v_buffer = input_tensors.at(7).buffer();
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
+        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
 
-            // Get addresses for output tensors
-            auto out_buffer = output_tensors.at(0).buffer();
-            auto joint_out_buffer = output_tensors.at(1).buffer();
-            auto lse_buffer = output_tensors.at(2).buffer();
+    all_gather_fused_op_signaler->init_fused_op(
+        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
+        sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t gathered_k_addr = gathered_k_buffer->address();
-            uint32_t gathered_v_addr = gathered_v_buffer->address();
-            uint32_t joint_q_addr = joint_q_buffer->address();
-            uint32_t joint_k_addr = joint_k_buffer->address();
-            uint32_t joint_v_addr = joint_v_buffer->address();
-            uint32_t out_addr = out_buffer->address();
-            uint32_t joint_out_addr = joint_out_buffer->address();
-            uint32_t lse_addr = lse_buffer->address();
+    std::vector<Tensor> all_gather_input_tensors = {
+        input_tensor_k,
+        input_tensor_v,
+    };
+    std::vector<Tensor> all_gather_output_tensors = {
+        gathered_input_tensor_k,
+        gathered_input_tensor_v,
+    };
+    auto all_gather_program_with_callbacks = ring_attention_all_gather_async_multi_core_with_workers_helper(
+        program,  // Must pass ring_joint_sdpa's program
+        all_gather_input_tensors,
+        target_device,
+        forward_device,
+        backward_device,
+        all_gather_output_tensors,
+        args.all_gather_struct.dim,
+        args.all_gather_struct.num_links,
+        args.all_gather_struct.ring_size,
+        device_index,
+        args.all_gather_struct.topology,
+        args.all_gather_struct.semaphore,
+        args.all_gather_struct.sub_device_id,
+        all_gather_fused_op_signaler,
+        args.ccl_core_grid_offset);
 
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-
-                // Update reader args
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-                reader_args[3] = gathered_k_addr;
-                reader_args[4] = gathered_v_addr;
-                reader_args[5] = joint_q_addr;
-                reader_args[6] = joint_k_addr;
-                reader_args[7] = joint_v_addr;
-
-                // Update writer args
-                writer_args[0] = out_addr;
-                writer_args[1] = joint_out_addr;
-                writer_args[2] = lse_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(all_gather_program_with_callbacks.program),
+        {num_cores,
+         grid_size,
+         reader_kernels_id,
+         writer_kernels_id,
+         compute_kernels_id,
+         all_gather_program_with_callbacks.override_runtime_arguments_callback}};
 }
 
-}  // namespace ttnn::operations::transformer::detail
+void RingJointSDPAProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+
+        if (shared_vars.all_gather_callback.has_value()) {
+            shared_vars.all_gather_callback.value()(
+                &args.all_gather_struct,
+                program,
+                {tensor_args.input_k, tensor_args.input_v},      /*input_tensors*/
+                {},                                              /*optional_input_tensors*/
+                {tensor_args.gathered_k, tensor_args.gathered_v} /*output_tensors*/
+            );
+        }
+
+        // Get addresses for regular tensors
+        auto* q_buffer = tensor_args.input_q.buffer();
+        auto* k_buffer = tensor_args.input_k.buffer();
+        auto* v_buffer = tensor_args.input_v.buffer();
+        auto* gathered_k_buffer = tensor_args.gathered_k.buffer();
+        auto* gathered_v_buffer = tensor_args.gathered_v.buffer();
+        auto* joint_q_buffer = tensor_args.joint_q.buffer();
+        auto* joint_k_buffer = tensor_args.joint_k.buffer();
+        auto* joint_v_buffer = tensor_args.joint_v.buffer();
+
+        // Get addresses for output tensors
+        auto* out_buffer = output_tensors.output.buffer();
+        auto* joint_out_buffer = output_tensors.joint_output.buffer();
+        auto* lse_buffer = output_tensors.lse_output.buffer();
+
+        uint32_t q_addr = q_buffer->address();
+        uint32_t k_addr = k_buffer->address();
+        uint32_t v_addr = v_buffer->address();
+        uint32_t gathered_k_addr = gathered_k_buffer->address();
+        uint32_t gathered_v_addr = gathered_v_buffer->address();
+        uint32_t joint_q_addr = joint_q_buffer->address();
+        uint32_t joint_k_addr = joint_k_buffer->address();
+        uint32_t joint_v_addr = joint_v_buffer->address();
+        uint32_t out_addr = out_buffer->address();
+        uint32_t joint_out_addr = joint_out_buffer->address();
+        uint32_t lse_addr = lse_buffer->address();
+
+        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+
+        for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
+            CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+
+            // Update reader args
+            reader_args[0] = q_addr;
+            reader_args[1] = k_addr;
+            reader_args[2] = v_addr;
+            reader_args[3] = gathered_k_addr;
+            reader_args[4] = gathered_v_addr;
+            reader_args[5] = joint_q_addr;
+            reader_args[6] = joint_k_addr;
+            reader_args[7] = joint_v_addr;
+
+            // Update writer args
+            writer_args[0] = out_addr;
+            writer_args[1] = joint_out_addr;
+            writer_args[2] = lse_addr;
+        }
+    }
+}
+
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program

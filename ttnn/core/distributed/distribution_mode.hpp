@@ -9,8 +9,7 @@
 #include <optional>
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace ttnn {
-namespace distributed {
+namespace ttnn::distributed {
 
 // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device
 enum class DistributionMode {
@@ -32,5 +31,4 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> compute_distribution_to_m
     const tt::tt_metal::distributed::MeshShape& distribution_shape,
     const tt::tt_metal::distributed::MeshShape& mesh_shape);
 
-}  // namespace distributed
-}  // namespace ttnn
+}  // namespace ttnn::distributed

@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/lightmetal_binary.hpp>
-#include <tt-metalium/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <string>
 #include <utility>
@@ -28,14 +29,16 @@ using namespace tt;
 // light metal binary replay executor, and runs it, returning pass (0) or fail (1).
 
 int main(int argc, char* argv[]) {
+    using namespace tt::tt_metal::experimental::lightmetal;
+
     // Process cmdline arguments
     std::string program_filename = argv[0];
     TT_FATAL(argc == 2, "Invalid number of supplied arguments. Usage: {} <binary_file>", program_filename.c_str());
     std::string binary_filename = argv[1];
 
     // Read the Light Metal Binary file into blob, transfer ownership and execute it.
-    auto binary = tt::tt_metal::LightMetalBinary::load_from_file(binary_filename);
-    tt::tt_metal::LightMetalReplay lm_replay(std::move(binary));
+    auto binary = LightMetalBinary::load_from_file(binary_filename);
+    LightMetalReplay lm_replay(std::move(binary));
 
     if (!lm_replay.run()) {
         log_fatal(tt::LogMetalTrace, "Light Metal Binary {} failed to execute or encountered errors.", binary_filename);

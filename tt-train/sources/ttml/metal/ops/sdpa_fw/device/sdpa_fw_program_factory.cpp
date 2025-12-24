@@ -8,7 +8,7 @@
 #include <cmath>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -60,7 +60,6 @@ constexpr uint32_t kSingleTileBuffer = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -274,9 +273,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
-
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -335,13 +331,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     if (use_attn_mask) {
         defines[kUseAttnMaskDefKey] = "1";
-    }
-
-    // TODO(vmelnykov): #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
-    // Currently, this define is only used to support L1 accumulation when fp32_dest_acc_en = false.
-    // It should be removed once L1 accumulation is properly fixed for fp32_dest_acc_en = true.
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
     }
 
     SDPAForwardKernels kernels;
@@ -484,7 +473,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

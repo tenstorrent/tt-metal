@@ -23,7 +23,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     using namespace tt::tt_metal;
 
     Program program{};
-    auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad = tensor_args.output_grad;
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
@@ -93,10 +93,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     std::vector<uint32_t> writer_compile_time_args{};
     TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
 
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
@@ -114,7 +114,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
         unpack_to_dest_mode[tt::CBIndex::c_25] = UnpackToDestMode::UnpackToDestFp32;
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";
 
     const auto compute_kernel_1_id = CreateComputeKernel(
@@ -215,8 +215,8 @@ void MorehBiasAddBackwardOperation::MultiCoreProgramFactory::override_runtime_ar
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto bias_grad_buffer = tensor_return_value.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* bias_grad_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
