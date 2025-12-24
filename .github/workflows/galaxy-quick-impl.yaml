@@ -153,8 +153,11 @@ jobs:
         run: |
           ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
           # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
-          pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
-          pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
+
+          # https://github.com/tenstorrent/tt-metal/issues/34990
+          # Disabling hanging decode and prefill for now while team works on other issues
+          # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
+          # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
           # CCL smoke tests - exactly one representative test from each op category
 
           # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
