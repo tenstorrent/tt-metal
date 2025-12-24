@@ -213,29 +213,29 @@ class TTSampling(LightweightModule):
         else:
             self._force_argmax_sampling = False
 
-        """Update sampling parameters (k, p, temperature) dynamically."""
-        self.k_tensor_new = ttnn.from_torch(
-            torch.tensor(k),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.p_tensor_new = ttnn.from_torch(
-            torch.tensor(p),
-            device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.temp_tensor_new = ttnn.from_torch(
-            torch.tensor(temp),
-            device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+            """Update sampling parameters (k, p, temperature) dynamically."""
+            self.k_tensor_new = ttnn.from_torch(
+                torch.tensor(k),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.p_tensor_new = ttnn.from_torch(
+                torch.tensor(p),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.temp_tensor_new = ttnn.from_torch(
+                torch.tensor(temp),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
 
-        ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
-        ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
-        ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+            ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
+            ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
+            ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
         self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
