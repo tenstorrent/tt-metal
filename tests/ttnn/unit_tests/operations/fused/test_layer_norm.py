@@ -117,7 +117,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("w", [64, 127, 519])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -402,3 +402,43 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
         assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
         assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+
+
+@pytest.mark.parametrize("h", [32, 2999, 32 * 64 + 18])
+@pytest.mark.parametrize("w", [31, 487, 3821])
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
+    """
+    Test layer norm on a tensor that is padded with zeros
+    in the width dimension.
+    Compare against analytic layer norm calculation: (x - mean) / sqrt(var + eps)
+    """
+
+    torch.manual_seed(191919)
+
+    # Fill a random number of columns with ones
+    non_zero_columns = torch.randint(1, w + 1, (1,)).item()
+    torch_input_tensor = torch.zeros((h, w), dtype=dtype)
+    torch_input_tensor[:, :non_zero_columns] = torch.ones((h, non_zero_columns), dtype=dtype)
+
+    # Convert to TTNN tensor
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.Layout.TILE,
+        device=device,
+    )
+
+    # Run layer norm
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_ttnn = ttnn.layer_norm(
+        tt_input_tensor,
+        program_config=program_config,
+    )
+    output_ttnn = ttnn.to_torch(output_ttnn)
+
+    # Compute golden layer normoutput
+    golden = ttnn.get_golden_function(ttnn.layer_norm)
+    golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
+
+    assert_output_accuracy(golden_output, output_ttnn)
