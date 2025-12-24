@@ -133,7 +133,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'",
-            13_506_772,
+            13_112_562,
             "sdxl_clip_encoder_1",
             "sdxl_clip_encoder_1",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
