@@ -103,18 +103,24 @@ tensor_return_value_t NlpCreateHeadsSegformerDeviceOperation::create_output_tens
         create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device())};
 }
 
-std::tuple<
-    NlpCreateHeadsSegformerDeviceOperation::operation_attributes_t,
-    NlpCreateHeadsSegformerDeviceOperation::tensor_args_t>
-NlpCreateHeadsSegformerDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
+
+namespace ttnn::prim {
+
+std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_segformer(
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    return {
-        operation_attributes_t{
-            .output_mem_config = output_mem_config,
-        },
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors}};
+    using OperationType = ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::
+        NlpCreateHeadsSegformerDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = output_mem_config,
+    };
+    auto tensor_args =
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
+}  // namespace ttnn::prim
