@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
@@ -11,6 +12,20 @@
 #include <enchantum/enchantum.hpp>
 
 using namespace tt::tt_metal;
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    using OperationType = ttnn::operations::data_movement::reshard::ReshardDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = memory_config,
+        },
+        OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
+}
+}  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement::reshard {
 
@@ -218,18 +233,6 @@ ReshardDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {tensor_args.input}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
-}
-
-std::tuple<ReshardDeviceOperation::operation_attributes_t, ReshardDeviceOperation::tensor_args_t>
-ReshardDeviceOperation::invoke(
-    const Tensor& input_tensor,
-    const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return {
-        operation_attributes_t{
-            .output_mem_config = memory_config,
-        },
-        tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor}};
 }
 
 }  // namespace ttnn::operations::data_movement::reshard
