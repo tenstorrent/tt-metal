@@ -182,7 +182,7 @@ def test_avg_pool2d_dram_post_commit(
     shard_scheme,
     in_dtype,
 ):
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2dDRAMSliceWidth)
+    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
 
     run_avg_pool2d(
         device=device,
