@@ -149,7 +149,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 }
 
 ParallelConfig determine_parallel_config(
-    const TensorMemoryLayout shard_layout,
+    TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,
@@ -157,11 +157,12 @@ ParallelConfig determine_parallel_config(
     uint32_t output_channels,
     uint32_t input_channels_alignment,
     const CoreCoord& compute_grid_size,
-    ShardOrientation block_shard_orientation,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
     bool is_shard_height_tile_multiple,
     bool is_shard_width_tile_multiple,
-    uint32_t act_block_h_override) {
+    uint32_t act_block_h_override,
+    uint32_t groups) {
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
@@ -523,6 +524,19 @@ bool is_1d_deptwise_conv(
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
+bool is_2d_depthwise_conv(
+    uint32_t groups,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_height,
+    uint32_t kernel_width,
+    uint32_t image_width) {
+    bool is_depthwise = groups == input_channels && groups == output_channels;
+    bool is_2d_conv = !is_1d_conv(kernel_width, image_width);
+    bool is_actual_conv = kernel_height > 1 || kernel_width > 1;  // Not 1x1 conv
+    return is_depthwise && is_2d_conv && is_actual_conv;
+}
+
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
     bool skip_act_mcast = false;
     bool skip_weights_mcast = false;
@@ -555,7 +569,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<ParallelConfig>& input_tensor_parallel_config,
-    std::optional<uint32_t> act_block_h_override) {
+    std::optional<uint32_t> act_block_h_override,
+    uint32_t groups) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
@@ -575,7 +590,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
             !is_mm_conv,
             true,
             true,
-            act_block_h_override.value_or(0));
+            act_block_h_override.value_or(0),
+            groups);
     }
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -765,7 +781,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard) {
+    bool auto_shard,
+    uint32_t groups) {
     ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
     bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
     auto compute_grid_size = device->compute_with_storage_grid_size();

@@ -521,8 +521,8 @@ void kernel_main() {
         }
         noc_async_read_barrier();
 
-        tt::data_movement::common::print_bf16_pages(get_write_ptr(weight_cb_id), 32, 32);
-        // fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
+        // tt::data_movement::common::print_bf16_pages(get_write_ptr(weight_cb_id), 32, 32);
+        //  fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
         cb_push_back(weight_cb_id, 1);
     }
 
