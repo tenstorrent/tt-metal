@@ -181,24 +181,25 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
 }  // namespace ttnn::operations::moreh::moreh_softmax_backward
 
 namespace ttnn::prim {
-    ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation::tensor_return_value_t
-    moreh_softmax_backward(
-        const Tensor& output_tensor,
-        const Tensor& output_grad_tensor,
-        uint32_t dim,
-        const std::optional<Tensor>& input_grad_tensor,
-        const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op,
-        const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-        using OperationType = ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation;
-        auto operation_attributes = OperationType::operation_attributes_t{
-            dim,
-            op,
-            strategy,
-            memory_config.value_or(output_tensor.memory_config()),
-            init_device_compute_kernel_config(output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-        auto tensor_args = OperationType::tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor};
-        return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
-    }
-    }  // namespace ttnn::prim
+ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation::tensor_return_value_t
+moreh_softmax_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& input_grad_tensor,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using OperationType = ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        op,
+        strategy,
+        memory_config.value_or(output_tensor.memory_config()),
+        init_device_compute_kernel_config(
+            output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

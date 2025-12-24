@@ -97,7 +97,7 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
 
     return ret;
 }
-} // namespace ttnn::operations::moreh::moreh_sgd
+}  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t moreh_sgd(

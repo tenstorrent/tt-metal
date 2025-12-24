@@ -101,7 +101,7 @@ tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_progra
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.layout());
 }
-} // namespace ttnn::operations::data_movement::interleaved_to_sharded_partial
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation::tensor_return_value_t

@@ -351,7 +351,7 @@ SoftmaxDeviceOperation::create_op_performance_model(
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim,
-    tt::tt_metal::MemoryConfig output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
     // Constants
@@ -430,7 +430,7 @@ Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
-    tt::tt_metal::MemoryConfig output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
@@ -610,7 +610,6 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*numeric_stable=*/numeric_stable);
 }
 }  // namespace ttnn::operations::normalization::softmax
-
 
 namespace ttnn::prim {
 ttnn::operations::normalization::softmax::SoftmaxDeviceOperation::tensor_return_value_t softmax(

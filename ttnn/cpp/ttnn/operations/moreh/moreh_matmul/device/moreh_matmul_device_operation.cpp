@@ -169,7 +169,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
             output_shape_wo_padding,
             output_shape));
 }
-} // namespace ttnn::operations::moreh::moreh_matmul
+}  // namespace ttnn::operations::moreh::moreh_matmul
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value_t moreh_matmul(

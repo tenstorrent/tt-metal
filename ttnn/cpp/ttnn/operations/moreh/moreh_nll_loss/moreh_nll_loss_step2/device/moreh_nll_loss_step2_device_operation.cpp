@@ -110,7 +110,6 @@ MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceO
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
 
 namespace ttnn::prim {

@@ -178,7 +178,7 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-} // namespace ttnn::operations::kv_cache
+}  // namespace ttnn::operations::kv_cache
 
 namespace ttnn::prim {
 ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(

@@ -95,7 +95,7 @@ ShardedToInterleavedDeviceOperation::create_op_performance_model(
         {tensor_args.input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
-} // namespace ttnn::operations::data_movement::sharded_to_interleaved
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(

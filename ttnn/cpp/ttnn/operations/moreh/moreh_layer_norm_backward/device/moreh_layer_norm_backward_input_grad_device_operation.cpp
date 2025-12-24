@@ -49,7 +49,7 @@ MorehLayerNormBackwardInputGradOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
-} // namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad
+}  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation::

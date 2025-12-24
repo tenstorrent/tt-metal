@@ -118,7 +118,7 @@ auto MorehAdamOperation::compute_program_hash(
     operation_attributes_without_step_and_lr.lr = 0.0f;
     return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
-} // namespace ttnn::operations::moreh::moreh_adam
+}  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t moreh_adam(

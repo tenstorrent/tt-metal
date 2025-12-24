@@ -126,7 +126,7 @@ MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_o
     return result;
 }
 
-} // namespace ttnn::operations::moreh::moreh_layer_norm
+}  // namespace ttnn::operations::moreh::moreh_layer_norm
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation::tensor_return_value_t moreh_layer_norm(

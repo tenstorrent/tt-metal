@@ -52,7 +52,7 @@ MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::cr
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-} // namespace ttnn::operations::moreh::moreh_norm_backward
+}  // namespace ttnn::operations::moreh::moreh_norm_backward
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor_return_value_t moreh_norm_backward(

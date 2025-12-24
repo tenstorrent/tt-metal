@@ -105,7 +105,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.target_tensor.device());
 }
 
-} // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackwardDeviceOperation::

@@ -58,6 +58,5 @@ struct TestHangOp {
     }
 };
 
-constexpr auto hang_device_operation =
-ttnn::register_operation<"ttnn::hang_device_operation", ttnn::TestHangOp>();
-} // namespace ttnn
+constexpr auto hang_device_operation = ttnn::register_operation<"ttnn::hang_device_operation", ttnn::TestHangOp>();
+}  // namespace ttnn

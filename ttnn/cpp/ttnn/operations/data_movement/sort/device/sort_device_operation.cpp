@@ -147,7 +147,7 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
         create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),  // Index tensor
     };
 }
-} // namespace ttnn::operations::data_movement::sort
+}  // namespace ttnn::operations::data_movement::sort
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::sort::SortDeviceOperation::tensor_return_value_t sort(

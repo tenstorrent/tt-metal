@@ -12,7 +12,6 @@
 namespace ttnn::operations::examples {
 
 void bind_example_multiple_return_operation(py::module& module) {
-
     bind_registered_operation(
         module,
         ttnn::composite_example_multiple_return,

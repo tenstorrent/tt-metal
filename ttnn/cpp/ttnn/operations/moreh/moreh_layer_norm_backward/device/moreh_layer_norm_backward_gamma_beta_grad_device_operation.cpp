@@ -54,7 +54,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
     return result;
 }
 
-} // namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad
+}  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad::MorehLayerNormBackwardGammaBetaGradOperation::

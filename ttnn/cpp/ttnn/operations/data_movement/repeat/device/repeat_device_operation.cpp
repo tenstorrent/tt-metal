@@ -84,7 +84,7 @@ RepeatDeviceOperation::create_op_performance_model(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
-} // namespace ttnn::operations::data_movement::repeat
+}  // namespace ttnn::operations::data_movement::repeat
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::repeat::RepeatDeviceOperation::tensor_return_value_t repeat(

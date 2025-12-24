@@ -106,7 +106,7 @@ MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
-} // namespace ttnn::operations::moreh::moreh_nll_loss_backward
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation::tensor_return_value_t

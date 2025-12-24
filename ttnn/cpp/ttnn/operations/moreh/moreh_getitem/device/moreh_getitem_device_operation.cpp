@@ -167,7 +167,7 @@ MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-} // namespace ttnn::operations::moreh::moreh_getitem
+}  // namespace ttnn::operations::moreh::moreh_getitem
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(

@@ -43,14 +43,14 @@ struct SoftmaxDeviceOperation {
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim = -1,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
 Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);

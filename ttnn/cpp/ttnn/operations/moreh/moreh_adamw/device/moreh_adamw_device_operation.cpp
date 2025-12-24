@@ -169,7 +169,6 @@ ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_v
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-
     using OperationType = ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation;
     return ttnn::device_operation::detail::launch_on_device<OperationType>(
         OperationType::operation_attributes_t{
@@ -181,7 +180,8 @@ ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_v
             .step = step.value_or(0),
             .amsgrad = amsgrad.value_or(false),
             .memory_config = memory_config.value_or(param_in.memory_config()),
-            .compute_kernel_config = init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            .compute_kernel_config = init_device_compute_kernel_config(
+                param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         OperationType::tensor_args_t{
             .param_in = param_in,
             .grad = grad,

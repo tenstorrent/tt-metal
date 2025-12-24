@@ -153,7 +153,7 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     }
     return result;
 }
-} // namespace ttnn::operations::moreh::moreh_group_norm
+}  // namespace ttnn::operations::moreh::moreh_group_norm
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_return_value_t moreh_group_norm(

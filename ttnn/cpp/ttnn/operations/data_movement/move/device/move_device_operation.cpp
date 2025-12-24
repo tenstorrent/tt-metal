@@ -64,11 +64,12 @@ ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_
     const ttnn::operations::data_movement::move::MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
     using OperationType = ttnn::operations::data_movement::move::MoveDeviceOperation;
     bool backwards = false;
-    if (move_op_parallelization_strategy ==ttnn::operations::data_movement::move::MoveOpParallelizationStrategy::MULTI_CORE) {
+    if (move_op_parallelization_strategy ==
+        ttnn::operations::data_movement::move::MoveOpParallelizationStrategy::MULTI_CORE) {
         Buffer* src_buffer = input_tensor.buffer();
         Buffer* dst_buffer = output_tensor.buffer();
         const bool src_and_dst_in_l1 = src_buffer->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                                        dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1;
+                                       dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1;
         const uint32_t src_base = src_buffer->address();
         const uint32_t dst_base = dst_buffer->address();
         const uint32_t copy_size_bytes = dst_buffer->size();

@@ -88,10 +88,9 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 
 }  // namespace ttnn::operations::data_movement
 
-
 namespace ttnn::operations::data_movement::slice {
 
-    void SliceDeviceOperation::validate_on_program_cache_miss(
+void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
