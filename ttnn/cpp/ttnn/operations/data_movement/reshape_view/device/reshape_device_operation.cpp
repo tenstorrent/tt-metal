@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
@@ -84,18 +85,20 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
                                                        : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
 }
 
-std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
-ReshapeDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_value_t reshape(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::reshape::ReshapeDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
-        tensor_args_t{input}};
+        OperationType::tensor_args_t{input});
 }
+}  // namespace ttnn::prim
 
 }  // namespace ttnn::operations::data_movement::reshape

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ternary_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 #include "ternary_op_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -495,9 +496,12 @@ bool TernaryDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
-TernaryDeviceOperation::invoke(
-    TernaryOpType op_type,
+}  // namespace ttnn::operations::ternary
+
+namespace ttnn::prim {
+
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -505,17 +509,19 @@ TernaryDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // Detect broadcast type for TTT variant
-    TernaryBroadcastType broadcast_type =
-        get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
 
-    operation_attributes_t attributes{
+    // Detect broadcast type for TTT variant
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type =
+        ttnn::operations::ternary::get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    OperationType::operation_attributes_t attributes{
         .ternary_op_type = op_type,
-        .ternary_variant = TernaryVariant::TTT,
+        .ternary_variant = ttnn::operations::ternary::TernaryVariant::TTT,
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
+        .worker_grid = ttnn::operations::ternary::get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
@@ -523,18 +529,17 @@ TernaryDeviceOperation::invoke(
         .scalar_input_b = std::nullopt,
     };
 
-    tensor_args_t args{
+    OperationType::tensor_args_t args{
         .input_tensor_a = input_a,
         .input_tensor_b = input_b,
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return {attributes, args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
 }
 
-std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
-TernaryDeviceOperation::invoke(
-    TernaryOpType op_type,
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
@@ -543,22 +548,24 @@ TernaryDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // This invoke variant is only for operations that need a scalar parameter with TTT variant
+    using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
+
+    // This variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
-        op_type == TernaryOpType::ADDCMUL,
-        "This invoke variant with scalar parameter is only supported for ADDCMUL operation");
+        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL,
+        "This variant with scalar parameter is only supported for ADDCMUL operation");
 
     // Detect broadcast type for TTT variant
-    TernaryBroadcastType broadcast_type =
-        get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type =
+        ttnn::operations::ternary::get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
-    operation_attributes_t attributes{
+    OperationType::operation_attributes_t attributes{
         .ternary_op_type = op_type,
-        .ternary_variant = TernaryVariant::TTT,
+        .ternary_variant = ttnn::operations::ternary::TernaryVariant::TTT,
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
+        .worker_grid = ttnn::operations::ternary::get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
@@ -566,18 +573,17 @@ TernaryDeviceOperation::invoke(
         .scalar_input_b = std::nullopt,
     };
 
-    tensor_args_t args{
+    OperationType::tensor_args_t args{
         .input_tensor_a = input_a,
         .input_tensor_b = input_b,
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return {attributes, args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
 }
 
-std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
-TernaryDeviceOperation::invoke(
-    TernaryOpType op_type,
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
     const Tensor& input_a,
     const Tensor& input_b,
     float scalar_c,
@@ -585,34 +591,35 @@ TernaryDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    // Detect broadcast type for TTS variant
-    TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape());
+    using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
 
-    operation_attributes_t attributes{
+    // Detect broadcast type for TTS variant
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(input_a.logical_shape(), input_b.logical_shape());
+
+    OperationType::operation_attributes_t attributes{
         .ternary_op_type = op_type,
-        .ternary_variant = TernaryVariant::TTS,
+        .ternary_variant = ttnn::operations::ternary::TernaryVariant::TTS,
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, nullptr, optional_output_tensor, sub_core_grids),
+        .worker_grid = ttnn::operations::ternary::get_worker_grid(input_a, &input_b, nullptr, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_b = scalar_c,
     };
 
-    tensor_args_t args{
+    OperationType::tensor_args_t args{
         .input_tensor_a = input_a,
         .input_tensor_b = input_b,
         .input_tensor_c = std::nullopt,
         .optional_output_tensor = optional_output_tensor};
 
-    return {attributes, args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
 }
 
-std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
-TernaryDeviceOperation::invoke(
-    TernaryOpType op_type,
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
     const Tensor& input_a,
     float scalar_b,
     const Tensor& input_c,
@@ -620,28 +627,30 @@ TernaryDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_c.logical_shape());
+    using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
 
-    operation_attributes_t attributes{
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(input_a.logical_shape(), input_c.logical_shape());
+
+    OperationType::operation_attributes_t attributes{
         .ternary_op_type = op_type,
-        .ternary_variant = TernaryVariant::TST,
+        .ternary_variant = ttnn::operations::ternary::TernaryVariant::TST,
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_c.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, nullptr, &input_c, optional_output_tensor, sub_core_grids),
+        .worker_grid = ttnn::operations::ternary::get_worker_grid(input_a, nullptr, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_c.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar_b,
     };
 
-    tensor_args_t args{
+    OperationType::tensor_args_t args{
         .input_tensor_a = input_a,
         .input_tensor_b = std::nullopt,
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return {attributes, args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
 }
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::prim

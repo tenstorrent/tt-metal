@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "concat_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
@@ -187,22 +188,23 @@ ConcatDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<ConcatDeviceOperation::operation_attributes_t, ConcatDeviceOperation::tensor_args_t>
-ConcatDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::concat::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using OperationType = ttnn::operations::data_movement::concat::ConcatDeviceOperation;
     uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
-
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .dim = normalized_dim,
             .groups = groups,
             .output_mem_config = output_mem_config,
         },
-        tensor_args_t{.input_tensors = input_tensors}};
+        OperationType::tensor_args_t{.input_tensors = input_tensors});
 }
+}  // namespace ttnn::prim
 
 }  // namespace ttnn::operations::data_movement::concat
 

@@ -44,18 +44,14 @@ struct MoveDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const Tensor& output_tensor,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const MoveOpParallelizationStrategy& move_op_parallelization_strategy);
 };
 
 }  // namespace ttnn::operations::data_movement::move
 
-// Register the operation in ttnn::prim namespace
 namespace ttnn::prim {
-constexpr auto move =
-    ttnn::register_operation<"ttnn::prim::move", ttnn::operations::data_movement::move::MoveDeviceOperation>();
+ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_t move(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const MoveOpParallelizationStrategy& move_op_parallelization_strategy);
 }  // namespace ttnn::prim
