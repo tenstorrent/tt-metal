@@ -13,6 +13,8 @@ import numpy as np
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("convert_to_device", [True, False])
 @pytest.mark.parametrize(

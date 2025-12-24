@@ -7,6 +7,8 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 @pytest.mark.parametrize(
