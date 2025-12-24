@@ -722,7 +722,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         } else {
             total_out_nhw_processed = core_i * max_out_nhw_per_core;
         }
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
+        uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
         std::vector<uint32_t> args = {out_nhw_this_core};
 
         if (return_indices) {
