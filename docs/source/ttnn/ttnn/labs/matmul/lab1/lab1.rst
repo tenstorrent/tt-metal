@@ -196,13 +196,13 @@ Introduction to Tenstorrent Architecture
 Tenstorrent's devices are a line of AI accelerator devices that are typically delivered as PCIe cards attached to a standard host.
 In this model, the host CPU runs a standard C++ host program. In the host program, developers can use the TT-Metalium C++ API to configure the accelerator,
 allocate memory on the device, and dispatch kernels, which are also written in C++, to Tensix cores.
-High-level view of Tenstorrent device in the system is shown in figure 2786:
+High-level view of Tenstorrent device in the system is shown in figure 1:
 
-.. figure:: images/tensix_device_on_card.png
-   :width: 600
+.. figure:: images/tensix_device_on_card.jpg
+   :width: 900
    :alt: High-level View of Tenstorrent device on PCIe card
 
-   Figure 2786: High-level View of Tenstorrent device on PCIe card
+   Figure 1: High-level View of Tenstorrent device on PCIe card
 
 PCIe card contains one or more Tensix devices, each device consisting of a Tensix processor and a dedicated DRAM.
 Note that the device DRAM is separate from the system (host) DRAM and explicit communication is required to transfer data between them.
@@ -243,23 +243,23 @@ which was still stored in row-major order.
 An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
 This **tiled memory layout** is the main memory layout used by the Tenstorrent architecture.
 
-Consider an example 9x4 matrix. In row-major layout, this matrix is stored in memory as shown in figure 366:
+Consider an example 9x4 matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
 
 .. figure:: images/row_major_layout.png
    :width: 600
    :alt: Row-major layout of a 9x4 matrix
 
-   Figure 366: Row-major layout of a 9x4 matrix
+   Figure 2: Row-major layout of a 9x4 matrix
 
 Numbers in the matrix indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
 
-In tiled memory layout with tile size 3x2, this matrix is stored in memory as shown in Fgiure 11:
+In tiled memory layout with tile size 3x2, this matrix is stored in memory as shown in Figure 3:
 
 .. figure:: images/tiled_layout.png
    :width: 600
    :alt: Tiled layout of a 9x4 matrix
 
-   Figure 366: Tiled layout of a 9x4 matrix
+   Figure 3: Tiled layout of a 9x4 matrix
 
 
 Once again, the numbers in the matrix indicate memory addresses that the corresponding element is stored at.
@@ -384,10 +384,10 @@ Note that the circular buffers typically contain only a small number of tiles at
    :alt: Kernel data flow through circular buffers
    :align: center
 
-   Figure 1: Kernel data flow through circular buffers
+   Figure 4: Kernel data flow through circular buffers
 
 .. note::
-   **Note:** This image has known issues. Writer should be Kernel 1, not Kernel 0. Think of them as pipes!
+   **Note:** This image has known issues. Writer should be Kernel 1, not Kernel 0. Also grammar in "Think of them as pipes"!
 
 Each kernel interacts with the buffers as follows:
 
@@ -397,13 +397,13 @@ Each kernel interacts with the buffers as follows:
 - **Writer kernel:** Waits for the computed results to appear in the buffer before writing them to the output location (e.g. device DRAM).
 
 This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
-pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 2.
+pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 5.
 
 .. figure:: images/tensix_core.png
    :width: 600
    :alt: Top-level diagram of Tensix Core
 
-   Figure 2: Top-level diagram of Tensix Core
+   Figure 5: Top-level diagram of Tensix Core
 
 Tensix Core consists of four major parts:
 
@@ -894,8 +894,8 @@ Profiling is disabled by default, but can be enabled by setting the ``TT_METAL_D
 when launching the binary.
 With this flag set, the runtime collects device-side profiling data for any kernels that contain ``DeviceZoneScopedN`` scopes,
 plus a few predefined zones including ``*RISC-FW`` and ``*RISC-KERNEL`` that measure firmware and full-kernel durations.
-Note that this file uses names BRISC and NCRISC for the two RISC-V processors that control routers (RISC-V 0 and RISCV-4 in Figure 2),
-and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 2).
+Note that this file uses names BRISC and NCRISC for the two RISC-V processors that control routers (RISC-V 0 and RISCV-4 in Figure 5),
+and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 5).
 
 When the program finishes and closes the device via ``mesh_device->close()``, the runtime automatically pulls the profiling data
 from the device and writes it to a CSV log file on the host. The CSV file is named ``profile_log_device.csv`` and is stored
@@ -982,9 +982,9 @@ Consider the concrete example shown in the following figure.
    :width: 600
    :alt: Tiled Matrix Multiplication Example
 
-   Figure 3: Tiled Matrix Multiplication Example
+   Figure 6: Tiled Matrix Multiplication Example
 
-Figure 3 shows an example where A is a 9x4 matrix, and B is a 4x6 matrix. If we choose 3x2 tiles for matrix A, we
+Figure 6 shows an example where A is a 9x4 matrix, and B is a 4x6 matrix. If we choose 3x2 tiles for matrix A, we
 can divide A into six tiles A0 through A5, each of shape 3x2. The figure shows labeling of the tiles in row major order, which is exactly how tiled layout
 works on Tenstorrent architecture. We can similarly divide B into four tiles B0 through B3, each of shape 2x3 (note that number of rows in B's tiles must match
 the number of columns in A's tiles)
@@ -1063,82 +1063,3 @@ You will need to make the following changes:
 
 8. Profile the performance of the implementation, taking note of the total execution time on the device. This will be useful to compare
    against future labs when we optimize the implementation for performance.
-
-
-Scrap Heap
-==========
-
-(LEFTOVER TEXT THAT MAY COME HANDY LATER)
-
-
-
-Can use https://docs.google.com/document/d/1hDHsGggjAUm6GR-sAfmOAf4C98CMe6NAMl3D-xuyUlc/edit?tab=t.0 for some images
-
-
-Terminology
------------
-
-Device
-------
-Each device contains a number of Tensix cores and a dedicated DRAM, which is separate from the system (host) DRAM.
-Device in Tensix documentation can often refer to both the Tensix processor and its accompanying DRAM.
-
-Tensix Core
------------
-
-The Tensix core is the main processing unit of the Tensix processor.
-It is a custom-designed processor for matrix multiplication and other linear algebra operations.
-
-Mention that kernels are JIT compiled and errors will not be caught at compile time (and also no rebiuilding required if only kernel code is changed).
-
-Show example TT program that does something simple (e.g. elementwise operation) to illustrate the flow.
-
-Walk through binary OP Example
-(Use Cursor to transform existing example into  "tensor" version)
-
-Emphasize how async read only needs the number of the tile to read, not the actual address.
-
-
-Intentionally introduce a bug or two and then ask students to use TT-specific debugging features to debug and find the issue.
-Main purpose here is for students to learn to use these debugging features
-
-Ask students to transform the example program to single core matrix multiply
-
-Profile its performance so it can be used for comparison against future labs.
-
-
-Memory Layout and Tiling
-========================
-
-Loop tiling changes memory access pattern without changing the underlying data layout.
-An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
-This is called **tiled memory layout** and is the main memory layout used by the Tenstorrent architecture.
-
-Consider the following matrix:
-
-.. code-block:: cpp
-
-   [a00  a01  a02  a03]
-   [a10  a11  a12  a13]
-   [a20  a21  a22  a23]
-   [a30  a31  a32  a33]
-   [a40  a41  a42  a43]
-   [a50  a51  a52  a53]
-   [a60  a61  a62  a63]
-   [a70  a71  a72  a73]
-   [a80  a81  a82  a83]
-
-In row-major layout, this matrix is stored in memory as:
-
-.. code-block:: cpp
-
-   [a00][a01][a02][a03][a10][a11][a12][a13][a20] ... [a80][a81][a82][a83]
-
-In tiled memory layout with tile size 3x2, this matrix is stored in memory as:
-
-.. code-block:: cpp
-
-   [a00][a01][a10][a11][a20][a21][a02][a03][a12][a13][a22][a23][a30] ... [a82][a83]
-
-.. note::
-   Add an image of a tiled memory layout here.
