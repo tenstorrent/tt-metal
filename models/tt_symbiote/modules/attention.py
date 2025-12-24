@@ -1,7 +1,6 @@
 """Attention mechanism implementations for TTNN."""
 
 import torch
-from transformers.models.vit.modeling_vit import ViTSelfAttention
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
@@ -29,7 +28,7 @@ class TTNNViTSelfAttention(TTNNModule):
         self.core_grid = core_grid if core_grid is not None else ttnn.CoreGrid(y=8, x=8)
 
     @classmethod
-    def from_torch(cls, self_attention: ViTSelfAttention):
+    def from_torch(cls, self_attention: "ViTSelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
         new_self_attention = TTNNViTSelfAttention(
             hidden_size=self_attention.config.hidden_size,
@@ -79,6 +78,7 @@ class TTNNViTSelfAttention(TTNNModule):
         """Forward pass through ViT self-attention."""
         assert head_mask is None, "head_mask is not supported in TTNNViTSelfAttention"
         assert not output_attentions, "output_attentions is not supported in TTNNViTSelfAttention"
+        original_dtype = hidden_states.dtype
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
@@ -136,4 +136,5 @@ class TTNNViTSelfAttention(TTNNModule):
         context_layer = ttnn.transformer.concatenate_heads(
             context_layer,
         )
+        context_layer = ttnn.typecast(context_layer, original_dtype)
         return (context_layer,)
