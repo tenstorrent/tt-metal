@@ -22,7 +22,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include <numeric>
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -652,16 +651,14 @@ static Tensor conv_group_weight_zero_pad_helper(
                 for (int k = 0; k < original_weight_shape[2]; k++) {
                     for (int m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
-                        auto indices = ttnn::SmallVector<int>{curr_batch_idx, j, k, m};
-                        auto value_flat_input_index = std::inner_product(
-                            indices.begin(), indices.end(), original_strides.begin(), std::size_t{0});
+                        auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto new_channel_idx = new_channel_start_idx + j;
-                        auto output_indices = ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, m};
-                        auto output_flat_input_index = std::inner_product(
-                            output_indices.begin(), output_indices.end(), output_strides.begin(), std::size_t{0});
+                        auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<uint32_t>{new_batch_idx, new_channel_idx, k, m}, output_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -707,17 +704,11 @@ static Tensor conv_depthwise_weight_bcast_helper(
                     for (int j = in_start; j < in_end; j++) {
                         for (int k = 0; k < output_weight_shape[2]; k++) {
                             for (int l = 0; l < output_weight_shape[3]; l++) {
-                                auto indices = ttnn::SmallVector<int>{i, 0, k, l};
-                                auto value_flat_input_index = std::inner_product(
-                                    indices.begin(), indices.end(), original_strides.begin(), std::size_t{0});
+                                auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                    ttnn::SmallVector<uint32_t>{i, 0, k, l}, original_strides);
                                 auto value = conv_weight_tensor_buffer[value_flat_input_index];
-
-                                auto output_indices = ttnn::SmallVector<int>{i, j, k, l};
-                                auto output_flat_input_index = std::inner_product(
-                                    output_indices.begin(),
-                                    output_indices.end(),
-                                    output_strides.begin(),
-                                    std::size_t{0});
+                                auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                    ttnn::SmallVector<uint32_t>{i, j, k, l}, output_strides);
                                 output_buffer[output_flat_input_index] = value;
                             }
                         }
@@ -805,6 +796,8 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
         uint32_t out_channels_per_group = original_weight_shape[1];
         uint32_t in_channels_per_group = in_channels / num_groups;
 
+        auto original_weight_strides = compute_strides(original_weight_shape);
+        auto output_weight_strides = compute_strides(output_weight_shape);
         for (int i = 0; i < original_weight_shape[0]; i++) {  // in_channels
             // Find which group this input channel belongs to
             auto group_id = i / in_channels_per_group;
@@ -817,12 +810,12 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
                     for (int w = 0; w < original_weight_shape[3]; w++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, c, h, w}, compute_strides(original_weight_shape));
+                            ttnn::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, global_out_channel, h, w}, compute_strides(output_weight_shape));
+                            ttnn::SmallVector<uint32_t>{i, global_out_channel, h, w}, output_weight_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
