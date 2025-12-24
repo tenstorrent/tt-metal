@@ -153,11 +153,12 @@ std::map<std::string, std::string> get_defines(
     if (input_dtype.has_value() && output_dtype.has_value() && is_typecast(*input_dtype, *output_dtype)) {
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0, "SFPU_OP_CHAIN_0 already defined");
 
-        auto in_dataformat = (uint32_t)datatype_to_dataformat_converter(input_dtype.value());
-        auto out_dataformat = (uint32_t)datatype_to_dataformat_converter(output_dtype.value());
+        auto in_dataformat = static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype.value()));
+        auto out_dataformat = static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype.value()));
         defines.insert(
             {"SFPU_OP_CHAIN_0",
-             fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
+             fmt::format(
+                 "typecast_tile_init<{0}u, {1}u>(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
         defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
     }
 
