@@ -14,6 +14,7 @@ struct TilizeUntilizeSharedVariables {
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores;  // Ordered list of cores for runtime arg updates
     uint32_t num_cores = 0;
 };
 
