@@ -1629,6 +1629,23 @@ OperationParameterExtractors.register_extractor(
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 
+# Register paged_update_cache extractor (reuse paged_scaled extractor since structure is similar)
+OperationParameterExtractors.register_extractor(
+    "paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+
 # Register max_pool2d extractor
 OperationParameterExtractors.register_extractor(
     "max_pool2d",
