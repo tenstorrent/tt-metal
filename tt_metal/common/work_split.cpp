@@ -17,8 +17,7 @@
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) {
     uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
@@ -153,116 +152,163 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     const uint32_t target_num_cores,
     const CoreRangeSet& sub_core_grids,
     const bool row_wise = false) {
-    // If target_num_cores is 0 or input_corerangeset is empty, return empty CoreRangeSet
     TT_FATAL(target_num_cores > 0, "Target number of cores must be greater than 0");
     TT_FATAL(
         target_num_cores <= sub_core_grids.num_cores(),
-        "Target number of cores {} is greater than total number of available cores {}",
+        "Target number of cores {} is greater than total available cores {}",
         target_num_cores,
         sub_core_grids.num_cores());
 
-    // Validate that the start core is contained within the entire CoreRangeSet
-    TT_FATAL(sub_core_grids.contains(start_core), "Start core must be contained within the input CoreRangeSet");
+    TT_FATAL(sub_core_grids.contains(start_core), "Start core must be inside sub_core_grids");
 
-    std::vector<CoreRange> result_coreranges;
-    bool start_core_found = false;
-    CoreCoord current_start_core = start_core;
-    CoreCoord current_end_core = start_core;
-    uint32_t remaining_cores = target_num_cores;
+    std::vector<CoreRange> result;
+    uint32_t remaining = target_num_cores;
 
-    auto process_row_wise = [&](const CoreRange& subcoregrid) {
-        uint32_t subcoregrid_width = subcoregrid.grid_size().x;
+    bool in_active_grid = false;
+    CoreCoord cur_start = start_core;
+    CoreCoord cur_end = start_core;
 
-        for (uint32_t y = current_start_core.y; y <= subcoregrid.end_coord.y; ++y) {
-            if (remaining_cores == 0) {
-                break;
-            }
+    // ------------ Helpers -------------
 
-            uint32_t current_width =
-                std::min(static_cast<uint32_t>(subcoregrid.end_coord.x - current_start_core.x + 1), remaining_cores);
-
-            if (current_width < subcoregrid_width) {
-                if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
-                }
-
-                current_end_core = CoreCoord(current_start_core.x + current_width - 1, y);
-                remaining_cores -= current_width;
-
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(current_start_core.x, y), CoreCoord(current_end_core.x, y)));
-
-                current_start_core = CoreCoord(subcoregrid.start_coord.x, y + 1);
-                current_end_core = current_start_core;
-            } else {
-                current_end_core = CoreCoord(subcoregrid.end_coord.x, y);
-                remaining_cores -= current_width;
-            }
-        }
-
-        if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+    auto emit_current_range = [&](bool force = false) {
+        if (force || (cur_start.x <= cur_end.x && cur_start.y <= cur_end.y)) {
+            result.emplace_back(cur_start, cur_end);
         }
     };
 
-    auto process_col_wise = [&](const CoreRange& subcoregrid) {
-        uint32_t subcoregrid_height = subcoregrid.grid_size().y;
+    // Row-wise consumption (left to right, then next row)
+    auto process_row = [&](const CoreRange& grid) {
+        uint32_t y = cur_start.y;
 
-        for (uint32_t x = current_start_core.x; x <= subcoregrid.end_coord.x; ++x) {
-            if (remaining_cores == 0) {
-                break;
-            }
+        for (; y <= grid.end_coord.y && remaining > 0; ++y) {
+            uint32_t row_start_x = (y == cur_start.y) ? cur_start.x : grid.start_coord.x;
+            uint32_t row_end_x = grid.end_coord.x;
 
-            uint32_t current_height =
-                std::min(static_cast<uint32_t>(subcoregrid.end_coord.y - current_start_core.y + 1), remaining_cores);
+            uint32_t row_width = row_end_x - row_start_x + 1;
+            uint32_t take = std::min(row_width, remaining);
 
-            if (current_height < subcoregrid_height) {
-                if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
-                }
+            cur_start = {row_start_x, y};
+            cur_end = {row_start_x + take - 1, y};
 
-                current_end_core = CoreCoord(x, current_start_core.y + current_height - 1);
-                remaining_cores -= current_height;
-
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(x, current_start_core.y), CoreCoord(x, current_end_core.y)));
-
-                current_start_core = CoreCoord(x + 1, subcoregrid.start_coord.y);
-                current_end_core = current_start_core;
-            } else {
-                current_end_core = CoreCoord(x, subcoregrid.end_coord.y);
-                remaining_cores -= current_height;
-            }
+            emit_current_range(true);
+            remaining -= take;
         }
 
-        if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
-        }
+        // Prepare start for next grid
+        cur_start = {grid.start_coord.x, grid.start_coord.y};
+        cur_end = cur_start;
     };
 
-    // Iterate over subcoregrids and process based on row_wise
-    for (const auto& subcoregrid : sub_core_grids.ranges()) {
-        if (subcoregrid.contains(start_core)) {
-            start_core_found = true;
-        } else {
-            if (!start_core_found) {
+    // Column-wise consumption (top to bottom, then next column)
+    auto process_col = [&](const CoreRange& grid) {
+        uint32_t x = cur_start.x;
+
+        for (; x <= grid.end_coord.x && remaining > 0; ++x) {
+            uint32_t col_start_y = (x == cur_start.x) ? cur_start.y : grid.start_coord.y;
+            uint32_t col_end_y = grid.end_coord.y;
+
+            uint32_t col_height = col_end_y - col_start_y + 1;
+            uint32_t take = std::min(col_height, remaining);
+
+            cur_start = {x, col_start_y};
+            cur_end = {x, col_start_y + take - 1};
+
+            emit_current_range(true);
+            remaining -= take;
+        }
+
+        // Prepare start for next grid
+        cur_start = {grid.start_coord.x, grid.start_coord.y};
+        cur_end = cur_start;
+    };
+
+    // ------------ Main Loop -------------
+
+    for (const auto& grid : sub_core_grids.ranges()) {
+        if (!in_active_grid) {
+            if (!grid.contains(start_core)) {
                 continue;
-            } else {
-                current_start_core = subcoregrid.start_coord;
-                current_end_core = current_start_core;
             }
+
+            // First active grid
+            in_active_grid = true;
+            cur_start = start_core;
+            cur_end = start_core;
+        } else {
+            // Move to the next grid cleanly
+            cur_start = grid.start_coord;
+            cur_end = cur_start;
         }
 
         if (row_wise) {
-            process_row_wise(subcoregrid);
+            process_row(grid);
         } else {
-            process_col_wise(subcoregrid);
+            process_col(grid);
+        }
+
+        if (remaining == 0) {
+            break;
         }
     }
 
-    TT_FATAL(remaining_cores == 0, "Failed to split target number of cores into CoreRangeSet");
+    auto merge_rectangles = [&](std::vector<CoreRange>& ranges, bool row_wise) {
+        if (ranges.empty()) {
+            return;
+        }
 
-    return CoreRangeSet(std::move(result_coreranges));
+        std::vector<CoreRange> merged;
+        merged.reserve(ranges.size());
+
+        // Start with first range
+        CoreRange cur = ranges[0];
+
+        for (size_t i = 1; i < ranges.size(); i++) {
+            const CoreRange& nxt = ranges[i];
+
+            if (row_wise) {
+                // Merge consecutive rows with identical x-span
+                bool same_x_span = (cur.start_coord.x == nxt.start_coord.x) && (cur.end_coord.x == nxt.end_coord.x);
+
+                bool consecutive_row =
+                    nxt.start_coord.y == cur.end_coord.y + 1 && nxt.end_coord.y == cur.end_coord.y + 1;
+
+                if (same_x_span && consecutive_row) {
+                    // Expand rectangle downward
+                    cur.end_coord.y = nxt.end_coord.y;
+                    continue;
+                }
+            } else {
+                // Merge consecutive columns with identical y-span
+                bool same_y_span = (cur.start_coord.y == nxt.start_coord.y) && (cur.end_coord.y == nxt.end_coord.y);
+
+                bool consecutive_col =
+                    nxt.start_coord.x == cur.end_coord.x + 1 && nxt.end_coord.x == cur.end_coord.x + 1;
+
+                if (same_y_span && consecutive_col) {
+                    // Expand rectangle sideways
+                    cur.end_coord.x = nxt.end_coord.x;
+                    continue;
+                }
+            }
+
+            // If cannot merge, push current and start new
+            merged.push_back(cur);
+            cur = nxt;
+        }
+
+        // Push last accumulated range
+        merged.push_back(cur);
+
+        ranges = std::move(merged);
+    };
+
+    TT_FATAL(remaining == 0, "Failed to assign all {} requested cores", target_num_cores);
+
+    // Merge consecutive rectangular ranges
+    merge_rectangles(result, row_wise);
+
+    // Return merged CoreRangeSet
+    return CoreRangeSet(std::move(result));
 }
 
 std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
@@ -439,5 +485,4 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

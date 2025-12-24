@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "fabric_host_utils.hpp"
 
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -21,6 +22,10 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <filesystem>
+#include <fstream>
+#include <yaml-cpp/yaml.h>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 
@@ -29,13 +34,13 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 }
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (fabric_config) {
         // Issue: 32146, Special case for T3k WH devices to use Mesh fabric type instead of Torus_XY
         // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
                 return FabricType::TORUS_XY;
             }
             return FabricType::MESH;
@@ -120,8 +125,9 @@ void set_routing_mode(uint16_t routing_mode) {
     // Validate topology flags are orthogonal
     TT_FATAL(
         __builtin_popcount(
-            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
+            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
+                            ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
 
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(
@@ -130,8 +136,9 @@ void set_routing_mode(uint16_t routing_mode) {
 
     // Validate 2D can't be used with LINE or RING
     TT_FATAL(
-        !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
-        "2D routing mode cannot be combined with LINE or RING topology");
+        !(routing_mode & ROUTING_MODE_2D) ||
+            !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
+        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     control_plane.set_routing_mode(routing_mode);
@@ -149,6 +156,8 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
     } else if (topology == Topology::Linear) {
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology == Topology::NeighborExchange) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     } else if (topology == Topology::Torus) {
@@ -157,6 +166,46 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
 
     mode |= ROUTING_MODE_LOW_LATENCY;
     set_routing_mode(mode);
+}
+
+void serialize_mesh_coordinates_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    // Ensure output directory exists
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    // Get the mapping from TopologyMapper
+    const auto& mapping = topology_mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+    const auto& mesh_graph = topology_mapper.get_mesh_graph();
+
+    // Write to file using emitter with Flow style for inline sequences
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "chips";
+    emitter << YAML::Value << YAML::BeginMap;
+
+    // Emit each chip with flow style for the coordinate array
+    for (const auto& [fabric_node_id, physical_chip_id] : mapping) {
+        MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        emitter << YAML::Key << physical_chip_id;
+        emitter << YAML::Value;
+        emitter << YAML::Flow << YAML::BeginSeq;
+        for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
+            emitter << mesh_coord[dim];
+        }
+        emitter << YAML::EndSeq;
+    }
+
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

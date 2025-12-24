@@ -209,10 +209,10 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                               const std::vector<ttnn::Tensor>& input_tensors,
                                               const std::vector<std::optional<const ttnn::Tensor>>&,
                                               const std::vector<ttnn::Tensor>& output_tensors) {
-        auto src_dram_buffer_a = input_tensors.at(0).buffer();
-        auto src_dram_buffer_b = input_tensors.at(1).buffer();
+        auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         uint32_t num_blocks_read = 0;
         for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
@@ -239,11 +239,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     return {std::move(program), override_runtime_args_callback};
 }
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -263,7 +259,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = ttnn::get_batch_size(ashape);
+    uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / TILE_WIDTH;
     uint32_t Nt = bshape[-1] / TILE_WIDTH;
@@ -322,8 +318,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
         out_buffer);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

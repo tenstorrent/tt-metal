@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # import diffusers.models.transformers.transformer_flux as reference
+import os
 import diffusers as reference
 import pytest
 import torch
@@ -25,9 +26,13 @@ from time import time
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        # BH Onnly
+        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
+        # WH Only
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        # BH and WH
         pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
         pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
         pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
@@ -174,9 +179,14 @@ def test_single_transformer_block(
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
         pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
@@ -207,6 +217,7 @@ def test_transformer(
     prompt_seq_len: int,
     id: str,
     model_location_generator,
+    dit_unit_test: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
@@ -214,14 +225,17 @@ def test_transformer(
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
-    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
-    torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
+    if dit_unit_test:
+        torch_model = reference.FluxTransformer2DModel(num_layers=1, num_single_layers=1)
+    else:
+        model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+        torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 
     head_dim = torch_model.config.attention_head_dim
     num_heads = torch_model.config.num_attention_heads
-    in_channels = torch_model.in_channels
+    in_channels = torch_model.config.in_channels
     joint_attention_dim = torch_model.config.joint_attention_dim
     pooled_projection_dim = torch_model.config.pooled_projection_dim
     with_guidance_embeds = torch_model.config.guidance_embeds
@@ -262,7 +276,13 @@ def test_transformer(
     )
 
     if not cache.initialize_from_cache(
-        tt_model, torch_model, "Flux.1-dev", "transformer", parallel_config, tuple(submesh_device.shape), "bf16"
+        tt_model,
+        torch_model.state_dict(),
+        "Flux.1-dev",
+        "transformer",
+        parallel_config,
+        tuple(submesh_device.shape),
+        "bf16",
     ):
         logger.info(
             "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."

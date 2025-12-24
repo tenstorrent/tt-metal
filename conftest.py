@@ -315,12 +315,16 @@ def device(request, device_params):
     if is_tg_cluster() and not device_id:
         device_id = first_available_tg_device()
 
+    original_default_device = ttnn.GetDefaultDevice()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     yield device
 
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
 
 
@@ -337,7 +341,7 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
+def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
@@ -352,7 +356,12 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
         if fabric_tensix_config is None:
             fabric_tensix_config = get_default_fabric_tensix_config()
 
-        ttnn.set_fabric_config(fabric_config, reliability_mode, None, fabric_tensix_config)  # num_planes
+        if fabric_manager is None:
+            fabric_manager = ttnn.FabricManagerMode.DEFAULT
+
+        ttnn.set_fabric_config(
+            fabric_config, reliability_mode, None, fabric_tensix_config, ttnn.FabricUDMMode.DISABLED, fabric_manager
+        )
 
 
 def get_default_fabric_tensix_config():
@@ -410,7 +419,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -617,8 +627,14 @@ def reset_default_device(request):
         yield
         return
     device = ttnn.GetDefaultDevice()
+
     yield
-    ttnn.SetDefaultDevice(device)
+
+    if device is not None:
+        ttnn.SetDefaultDevice(device)
+    elif "device" in request.fixturenames:
+        # if the test used a device, but there was no default device, we need to clear the default device
+        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
@@ -995,7 +1011,6 @@ def _watchdog_main(parent_pid, cmd_queue):
             expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
             if expired:
                 logger.debug(f"Watchdog detected timeout for {expired}")
-                run_debug_script()
                 logger.debug(f"Watchdog killing parent process {parent_pid}")
                 os.kill(parent_pid, signal.SIGKILL)
                 break
@@ -1093,41 +1108,6 @@ def pytest_timeout_set_timer(item, settings):
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
-
-
-def run_debug_script():
-    """Run the tt-triage.py debug script to check system state before cleanup."""
-
-    # Check if ttexalens module is available
-    try:
-        import ttexalens
-    except ImportError:
-        logger.warning(
-            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
-        )
-        return
-
-    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
-
-    if not os.path.exists(debug_script_path):
-        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
-        return
-
-    try:
-        logger.info("Running debug script to check system state")
-        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
-        extra_env = {
-            "LD_LIBRARY_PATH": None,
-        }
-        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
-
-        logger.info(f"Debug script status: {debug_result.returncode}")
-        if debug_result.stdout:
-            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
-        if debug_result.stderr:
-            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
-    except Exception as e:
-        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):

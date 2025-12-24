@@ -8,7 +8,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_math_common.h"
@@ -43,16 +43,6 @@ inline void llk_math_dest_section_done() {
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    _llk_math_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_math_release_tile(std::uint32_t operand) {
-    _llk_math_release_tile_<mail2math, mail2pack>();
 }
 
 inline void llk_math_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }

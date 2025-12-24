@@ -30,9 +30,9 @@ The tests use the Mesh Device API with fast dispatch mode:
 | pages_per_transaction     | uint32_t              | Size of the issued noc transactions in pages. |
 | bytes_per_page            | uint32_t              | Size of a page in bytes. Arbitrary value with a minimum of flit size per architecture. |
 | l1_data_format            | DataFormat            | Data format data that will be moved. |
-| virtual_channel           | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
-| noc                       | N/A                   | Specify which NOC to use for the test, (1) Use only one specified NOC, (2) Use both NOCs (TODO)|
-| posted                    | N/A                   | Posted flag. Determines if write is posted or non-posted (TODO)|
+| num_virtual_channels      | uint32_t              | Number of virtual channels to cycle through (must be > 1 for cycling). |
+| noc_id                    | NOC                   | Specify which NOC to use for the test. |
+| use_2_0_api               | bool                  | Determines if the test uses the experimental device 2.0 API. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
@@ -52,7 +52,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Kernels:

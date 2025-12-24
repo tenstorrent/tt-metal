@@ -47,8 +47,8 @@ void validate_pool2d(
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
         TT_FATAL(
-            kernel_h * kernel_w <= 9,
-            "only kernel sizes less than or equal to 9 are supported, got {}x{}",
+            kernel_h * kernel_w <= 32,
+            "only kernel sizes less than or equal to 32 are supported, got {}x{}",
             kernel_h,
             kernel_w);
 
@@ -95,9 +95,9 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto& sliding_window_config = op_attr.sliding_window_config_;
-    auto& out_mem_config = op_attr.memory_config_;
-    auto& output_dtype = op_attr.output_dtype_;
+    const auto& sliding_window_config = op_attr.sliding_window_config_;
+    const auto& out_mem_config = op_attr.memory_config_;
+    const auto& output_dtype = op_attr.output_dtype_;
 
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];

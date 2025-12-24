@@ -7,7 +7,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "mod_div_lib.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -21,6 +22,63 @@
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
+
+/**
+ * @brief Transposes a block of tiles from one circular buffer to another.
+ *
+ * This function reads a block of tiles from the input circular buffer (cb), performs a width-height
+ * (WH) transpose on each tile, and writes the transposed tiles to the output circular buffer.
+ * The operation is performed in blocks of `block_size` tiles for efficiency, with a separate loop
+ * at the end to handle any leftover tiles when the total tile count is not divisible by
+ * `block_size`. The default block size is 4, since there are guaranteed to be 4 tiles in the dst
+ *               regs irrespective of dst sync mode or data format.
+ *
+ * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
+ * @tparam block_size The number of tiles in each block to be transposed.
+ * @param in0_transpose_cb_id Circular buffer ID to read the original tiles from.
+ * @param in0_cb_id Circular buffer ID to which the transposed tiles are written.
+ */
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
+FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
+    constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
+    constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
+    // Lets do 2 passes: One loop until last and one last for the left overs
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        cb_wait_front(in0_transpose_cb_id, block_size);
+        tile_regs_acquire();
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+        }
+        tile_regs_commit();
+        cb_pop_front(in0_transpose_cb_id, block_size);
+
+        cb_reserve_back(in0_cb_id, block_size);
+        tile_regs_wait();
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+            pack_tile(tile_idx, in0_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(in0_cb_id, block_size);
+    }
+
+    if constexpr (last_block_size > 0) {
+        cb_wait_front(in0_transpose_cb_id, last_block_size);
+        tile_regs_acquire();
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+        }
+        tile_regs_commit();
+        cb_pop_front(in0_transpose_cb_id, last_block_size);
+
+        cb_reserve_back(in0_cb_id, last_block_size);
+        tile_regs_wait();
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+            pack_tile(tile_idx, in0_cb_id);
+        }
+        tile_regs_release();
+        cb_push_back(in0_cb_id, last_block_size);
+    }
+}
 
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
@@ -110,14 +168,19 @@ void MAIN {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
+    constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(17);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in0_cb_id = in0_transpose_tile ? tt::CBIndex::c_10 : tt::CBIndex::c_0;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
+    // When in0 needs to be transposed, the original data is read from c_0 (in0_transpose_cb_id),
+    // transposed, and the result is written to c_10 (in0_cb_id), which is then used as input for
+    // the matmul call.
+    constexpr uint32_t in0_transpose_cb_id = tt::CBIndex::c_0;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
@@ -177,6 +240,18 @@ void MAIN {
                         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                     }
 #endif
+
+                    if constexpr (in0_transpose_tile) {
+                        transpose_wh_init_short(in0_transpose_cb_id);
+                        PACK((pack_reconfig_data_format(in0_cb_id)));
+#ifdef PACKER_L1_ACC
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
+                        mm_block_init_short(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                        PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+                    }
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
@@ -277,6 +352,10 @@ void MAIN {
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
                                 } else if (block == 1) {
+                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                } else if (in0_transpose_tile) {
+                                    // For each block, l1_acc would have been enabled during the
+                                    // transpose stage. So let us put it back here.
                                     PACK((llk_pack_reconfig_l1_acc(1)));
                                 }
 #endif

@@ -20,9 +20,8 @@
 #include <unordered_set>
 #include <utility>
 
-
-#include "control_plane.hpp"
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -31,9 +30,11 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
+#include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
@@ -201,8 +202,12 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
 }
+
+bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
+
+bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
@@ -317,6 +322,21 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+
+    // Cache IOMMU status (expensive to query repeatedly)
+    this->iommu_enabled_ = false;
+    this->noc_mapping_enabled_ = false;
+    if (this->target_type_ == tt::TargetDevice::Silicon) {
+        const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
+        if (!mmio_ids.empty()) {
+            ChipId mmio_id = *mmio_ids.begin();
+            auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+            if (pci) {
+                this->iommu_enabled_ = pci->is_iommu_enabled();
+                this->noc_mapping_enabled_ = pci->is_mapping_buffer_to_noc_supported();
+            }
+        }
+    }
 }
 
 void Cluster::assert_risc_reset() {
@@ -413,14 +433,15 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
 
+    // May block waiting for other processes to release the device.
+    this->driver_->start_device(device_params);
+
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
             ll_api::configure_static_tlbs(
                 this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
         }
     }
-
-    this->driver_->start_device(device_params);
 }
 
 Cluster::~Cluster() {
@@ -539,7 +560,7 @@ void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
             continue;
         }
         this->virtual_routing_to_profiler_flat_id_.insert({board_type, {}});
-        auto& soc_desc = this->get_soc_desc(chip_id);
+        const auto& soc_desc = this->get_soc_desc(chip_id);
         for (const auto& core_to_profiler_id : soc_desc.physical_routing_to_profiler_flat_id) {
             this->virtual_routing_to_profiler_flat_id_.at(board_type)
                 .insert(
@@ -580,7 +601,7 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
         TT_THROW("Undefined conversion for core type.");
     }
 
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
     }
@@ -595,7 +616,7 @@ tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair
     return tt_cxy_pair(logical_coordinate.chip, xy_virtual_coord);
 }
 CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, CoreCoord physical_coord) const {
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
         soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
@@ -609,7 +630,7 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
             "Conversion requested to Physical Coordinates. Please note that Physical Coordinates are not expected to "
             "be used in tt-metal APIs.");
     }
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
@@ -843,17 +864,35 @@ void Cluster::read_sysmem(
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
 
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
+    ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->allocate_sysmem_buffer(sysmem_buffer_size, map_to_noc);
+}
+
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
+    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
+}
+
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    umd::semver_t sw(umd::semver_t::from_eth_fw_tag(sw_version)), fw_first_eth_core(umd::semver_t::from_eth_fw_tag(fw_versions.at(0)));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
-        sw.str(),
-        fw_first_eth_core.str(),
+        sw.to_string(),
+        fw_first_eth_core.to_string(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        umd::tt_version fw(fw_version);
+        umd::semver_t fw(umd::semver_t::from_eth_fw_tag(fw_version));
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
@@ -1364,6 +1403,14 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
         }
     }
     return is_external_cable;
+}
+
+uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        return this->hal_.get_dma_alignment();
+    } else {
+        return 1;
+    }
 }
 
 }  // namespace tt

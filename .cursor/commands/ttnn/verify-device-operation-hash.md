@@ -438,7 +438,7 @@ Use this checklist to verify your hash implementation:
 
 **Build:**
 ```bash
-./build_metal.sh -c -e --debug --without-python-bindings
+./build_metal.sh -c -e --debug
 ```
 
 **Test:**

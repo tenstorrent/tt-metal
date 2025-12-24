@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
-#include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "hostdevcommon/kernel_structs.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
@@ -16,23 +18,6 @@ constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_13;
 constexpr auto cb_bcast_dampening_idx = tt::CBIndex::c_14;
 constexpr auto cb_bcast_wd_idx = tt::CBIndex::c_15;
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
-
-template <typename AddrGen>
-inline void read_tiles(
-    const uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    const uint32_t start_tile_idx,
-    const uint32_t block_size,
-    const uint32_t current_block_size,
-    const uint32_t tile_size_bytes) {
-    // Reads `num_tiles` tiles from DRAM starting at logical tile index `start_tile` into circular buffer `cb_idx`.
-    cb_reserve_back(cb_idx, block_size);
-    uint32_t l1_write_addr = get_write_ptr(cb_idx);
-    for (uint32_t k = 0; k < current_block_size; ++k) {
-        noc_async_read_tile(start_tile_idx + k, addr_gen, l1_write_addr);
-        l1_write_addr += tile_size_bytes;
-    }
-}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -69,10 +54,13 @@ void kernel_main() {
         uint32_t tiles_left = end_tile - tile_idx;
         uint32_t current_block_size = std::min(block_size, tiles_left);
 
-        read_tiles(cb_param_in_idx, param_in_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
-        read_tiles(cb_grad_idx, grad_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+        read_tiles_by_row</* UseBarrier = */ false>(
+            cb_param_in_idx, param_in_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
+        read_tiles_by_row</* UseBarrier = */ false>(
+            cb_grad_idx, grad_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
 #if USE_MOMENTUM
-        read_tiles(cb_momentum_in_idx, momentum_in_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+        read_tiles_by_row</* UseBarrier = */ false>(
+            cb_momentum_in_idx, momentum_in_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
 #endif
         noc_async_read_barrier();
         cb_push_back(cb_param_in_idx, block_size);

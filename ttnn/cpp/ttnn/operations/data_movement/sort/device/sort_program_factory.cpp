@@ -30,9 +30,9 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
-    auto input_buffer = tensor_args.input_tensor.buffer();
-    auto value_buffer = output_tensors.at(0).buffer();
-    auto index_buffer = output_tensors.at(1).buffer();
+    auto* input_buffer = tensor_args.input_tensor.buffer();
+    auto* value_buffer = output_tensors.at(0).buffer();
+    auto* index_buffer = output_tensors.at(1).buffer();
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
@@ -43,7 +43,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     constexpr uint32_t cb_in_units = 2 * num_cb_unit;  // Total number of circular buffer units
 
     // Calculate the number of cores available for computation
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -250,9 +250,9 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto value_tensor_buffer = output_tensors.at(0).buffer();
-    auto index_tensor_buffer = output_tensors.at(1).buffer();
+    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* value_tensor_buffer = output_tensors.at(0).buffer();
+    auto* index_tensor_buffer = output_tensors.at(1).buffer();
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
@@ -307,9 +307,9 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
     const uint32_t packer_unpacker_sync_tile_size = tile_size(packer_unpacker_sync_cb_data_format);
 
-    auto input_buffer = tensor_args.input_tensor.buffer();
-    auto value_buffer = output_tensors.at(0).buffer();
-    auto index_buffer = output_tensors.at(1).buffer();
+    auto* input_buffer = tensor_args.input_tensor.buffer();
+    auto* value_buffer = output_tensors.at(0).buffer();
+    auto* index_buffer = output_tensors.at(1).buffer();
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
@@ -319,7 +319,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const uint32_t Wt = input_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
-    const auto device = tensor_args.input_tensor.device();
+    auto* const device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores_physical = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
     const uint32_t total_number_of_cores_virtual = rounddown_pow2(total_number_of_cores_physical);
@@ -420,7 +420,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     Tensor physical_core_lookup_table_tensor =
         Tensor::from_vector(std::move(physical_core_lookup_table_data), physical_core_lookup_table_spec);
     physical_core_lookup_table_tensor = physical_core_lookup_table_tensor.to_device(device);
-    const auto physical_core_lookup_table_tensor_buffer = physical_core_lookup_table_tensor.buffer();
+    auto* const physical_core_lookup_table_tensor_buffer = physical_core_lookup_table_tensor.buffer();
     const tt::DataFormat physical_core_lookup_table_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(physical_core_lookup_table_tensor.dtype());
     const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
@@ -610,10 +610,10 @@ void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    const auto value_tensor_buffer = output_tensors.at(0).buffer();
-    const auto index_tensor_buffer = output_tensors.at(1).buffer();
-    const auto device = tensor_args.input_tensor.device();
+    auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* const value_tensor_buffer = output_tensors.at(0).buffer();
+    auto* const index_tensor_buffer = output_tensors.at(1).buffer();
+    auto* const device = tensor_args.input_tensor.device();
 
     // Lookup tensor data with physical core coordinates
     std::vector<uint32_t> physical_core_lookup_table_data;
@@ -655,8 +655,13 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
+            // Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least two tiles per
+            // core to perform sorting operations. Maximum is capped at 128 tiles (power of 2) based on hardware memory
+            // constraints, ensuring that tiles can fit into a single core's available memory.
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
-            return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            constexpr uint32_t MAX_TILES_PER_CORE = 128;
+            const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            return std::min(MAX_TILES_PER_CORE, max_val);
         }
         case CrossCoreDataExchangeSortSlicingStrategy::FILL_CORES_FIRST:
         default: {
@@ -695,9 +700,9 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
-    const auto input_buffer = tensor_args.input_tensor.buffer();
-    const auto value_buffer = output_tensors.at(0).buffer();
-    const auto index_buffer = output_tensors.at(1).buffer();
+    auto* const input_buffer = tensor_args.input_tensor.buffer();
+    auto* const value_buffer = output_tensors.at(0).buffer();
+    auto* const index_buffer = output_tensors.at(1).buffer();
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
@@ -707,7 +712,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const uint32_t Wt = input_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -953,9 +958,9 @@ void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    const auto value_tensor_buffer = output_tensors.at(0).buffer();
-    const auto index_tensor_buffer = output_tensors.at(1).buffer();
+    auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* const value_tensor_buffer = output_tensors.at(0).buffer();
+    auto* const index_tensor_buffer = output_tensors.at(1).buffer();
 
     auto& coordinator_core_runtime_args = GetRuntimeArgs(
         cached_program.program,

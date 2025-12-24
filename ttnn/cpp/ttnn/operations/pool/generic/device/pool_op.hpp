@@ -12,14 +12,12 @@
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations {
-namespace pool {
+namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {
@@ -72,7 +70,7 @@ struct Pool2D {
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
+            const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
         static void override_runtime_arguments(
@@ -107,8 +105,7 @@ struct Pool2D {
         uint32_t memory_used);
 };
 
-}  // namespace pool
-}  // namespace ttnn::operations
+}  // namespace ttnn::operations::pool
 
 namespace ttnn::prim {
 constexpr auto pool2d = ttnn::register_operation<"ttnn::prim::pool2d", ttnn::operations::pool::Pool2D>();

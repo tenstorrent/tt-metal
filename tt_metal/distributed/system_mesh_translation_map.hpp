@@ -5,18 +5,14 @@
 #pragma once
 
 #include <mesh_coord.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <stdint.h>
 #include <tuple>
 
-namespace tt {
-namespace tt_metal {
-namespace distributed {
+namespace tt::tt_metal::distributed {
 template <typename T>
 class MeshContainer;
-}  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::distributed {
 

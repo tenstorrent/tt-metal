@@ -90,8 +90,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
     log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
@@ -123,10 +123,14 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     tt::tt_metal::CreateKernel(
         program,
@@ -146,7 +150,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         unary_reader_kernel_id,
         all_cores,
         {
-            (uint32_t)(num_tile_per_core),
+            static_cast<uint32_t>(num_tile_per_core),
         });
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
@@ -161,8 +165,8 @@ void TypecastShardedProgramFactory::override_runtime_arguments(
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
