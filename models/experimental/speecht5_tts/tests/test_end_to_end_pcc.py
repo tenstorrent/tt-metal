@@ -268,9 +268,7 @@ def test_end_to_end_pcc():
     )
 
     ttnn_postnet_output = ttnn_postnet(decoder_output_ttnn)
-    # Handle tuple return
-    if isinstance(ttnn_postnet_output, tuple):
-        ttnn_postnet_output = ttnn_postnet_output
+    # Postnet always returns a 3-tuple: (pre_postnet, post_postnet, stop_logits)
     ttnn_pre_postnet = ttnn.to_torch(ttnn_postnet_output[0])
     ttnn_post_postnet = ttnn.to_torch(ttnn_postnet_output[1])
     ttnn_stop_logits = ttnn.to_torch(ttnn_postnet_output[2])

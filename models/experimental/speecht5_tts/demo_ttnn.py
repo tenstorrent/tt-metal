@@ -24,6 +24,7 @@ import ttnn
 import soundfile as sf
 import pytest
 import os
+import time
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
 
@@ -158,18 +159,14 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Encoder forward pass (with timing)
+    # Encoder forward pass
     encoder_start = time.time()
     if enable_trace and generator is not None:
-        # Use trace execution for faster inference
         seq_len = ttnn_input_ids.shape[1]
         encoder_output = generator._execute_encoder_trace(seq_len, ttnn_input_ids)
     else:
-        # Use regular execution
         encoder_output = ttnn_encoder(ttnn_input_ids)[0]
     encoder_time = time.time() - encoder_start
-
-    # No KV cache for this demo
 
     # Initialize decoder sequence
     batch_size = token_ids.shape[0]
@@ -182,82 +179,45 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    spectrogram_ttnn = None  # Will be built incrementally on device
-    # Maximum steps for generation (default: 100)
-
-    # Autoregressive generation loop with detailed timing
+    spectrogram_ttnn = None
+    steps_completed = 0
     total_decoder_time = 0.0
     total_postnet_time = 0.0
-    total_conversion_time = 0.0
-    total_concat_time = 0.0
-    steps_completed = 0
 
-    # Complete decoder loop timing
+    # Autoregressive generation loop
     decoder_loop_start = time.time()
     for step in range(max_steps):
-        # Show progress every 20 steps
         if (step + 1) % 20 == 0 or step == 0:
             if warmup_mode:
                 print(f"   Warm-up: Step {step+1}/{max_steps}", end="", flush=True)
             else:
                 print(f"   Inference: Step {step+1}/{max_steps}", end="", flush=True)
 
-        # Decoder step (with detailed timing breakdown)
+        # Decoder step
         decoder_start = time.time()
 
-        # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
-        decoder_inference_start = time.time()
         if enable_trace and generator is not None:
-            # Use trace execution for faster inference
             current_seq_len = output_sequence_ttnn.shape[1]
             decoder_hidden_states = generator._execute_decoder_trace(
                 current_seq_len, output_sequence_ttnn, encoder_output, ttnn_speaker_embeddings
             )
-            # Note: Detailed timing not available in trace mode
         else:
-            # Use regular execution
-            if (
-                step < 1 and not warmup_mode
-            ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-                decoder_hidden_states = ttnn_decoder(
-                    decoder_input_values=output_sequence_ttnn,
-                    encoder_hidden_states=encoder_output,
-                    speaker_embeddings=ttnn_speaker_embeddings,
-                )
-            else:
-                decoder_hidden_states = ttnn_decoder(
-                    decoder_input_values=output_sequence_ttnn,
-                    encoder_hidden_states=encoder_output,
-                    speaker_embeddings=ttnn_speaker_embeddings,
-                )
-        decoder_inference_time = time.time() - decoder_inference_start
-
-        # PHASE 2: Memory management
-        memory_mgmt_start = time.time()
-        memory_mgmt_time = time.time() - memory_mgmt_start
+            decoder_hidden_states = ttnn_decoder(
+                decoder_input_values=output_sequence_ttnn,
+                encoder_hidden_states=encoder_output,
+                speaker_embeddings=ttnn_speaker_embeddings,
+            )
 
         decoder_time = time.time() - decoder_start
         total_decoder_time += decoder_time
 
-        # Postnet (with detailed timing)
+        # Postnet
         postnet_start = time.time()
 
-        # PHASE 1: Postnet inference (conv layers + stop logits)
-        postnet_inference_start = time.time()
         if enable_trace and generator is not None:
-            # Use trace execution for faster inference
             mel_before, mel_after, stop_logits = generator._execute_postnet_trace(decoder_hidden_states)
         else:
-            # Use regular execution
-            if (
-                step < 1 and not warmup_mode
-            ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-                mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
-            else:
-                mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
-        postnet_inference_time = time.time() - postnet_inference_start
-
-        # PHASE 2: Memory management (completed)
+            mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
 
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
@@ -269,9 +229,6 @@ def generate_speech_ttnn(
         any_stop_scalar = ttnn.sum(should_stop)
         if ttnn.to_torch(any_stop_scalar).item() > 0:
             break
-
-        # ========== Device-only operations ==========
-        conversion_start = time.time()
 
         # Extract new mel frames (device-only)
         current_seq_len = output_sequence_ttnn.shape[1]
@@ -308,27 +265,24 @@ def generate_speech_ttnn(
 
         steps_completed += 1
 
-        # Complete progress message
         if (step + 1) % 20 == 0:
             print(" ✓", flush=True)
 
     # End decoder loop timing
     decoder_loop_time = time.time() - decoder_loop_start
 
-    # Transfer final spectrogram from device to host (only final transfer)
+    # Transfer final spectrogram from device to host
     if spectrogram_ttnn is not None:
         final_spectrogram = ttnn.to_torch(spectrogram_ttnn)
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
 
-    # Performance Analysis (silently collected for final summary)
-
     # Generate audio (skip in warmup mode)
     if not warmup_mode:
-        print("\\n🎵 Generating final audio...")
+        print("\n🎵 Generating final audio...")
         speech = vocoder(final_spectrogram)
     else:
-        speech = torch.zeros(1, 16000)  # Dummy output for warmup mode
+        speech = torch.zeros(1, 16000)
 
     # Cleanup TTNN tensors
     ttnn.deallocate(ttnn_input_ids)
@@ -339,23 +293,21 @@ def generate_speech_ttnn(
         ttnn.deallocate(spectrogram_ttnn)
 
     if return_stats:
-        # Calculate TTFT (Time To First Token) and token/sec
-        ttft = encoder_time  # Encoder processes input to generate first context
+        # Calculate performance metrics
+        ttft = encoder_time
         avg_token_time = decoder_loop_time / max(steps_completed, 1) if steps_completed > 0 else 0
         token_per_sec = 1.0 / avg_token_time if avg_token_time > 0 else 0
 
         stats = {
             "steps_completed": steps_completed,
             "final_seq_len": current_seq_len,
-            "ttft": ttft,  # Time To First Token (encoder time)
-            "avg_token_time": avg_token_time,  # Average time per token (decoder + postnet)
-            "token_per_sec": token_per_sec,  # Tokens per second
+            "ttft": ttft,
+            "avg_token_time": avg_token_time,
+            "token_per_sec": token_per_sec,
             "encoder_time": encoder_time,
             "decoder_loop_time": decoder_loop_time,
             "total_decoder_time": total_decoder_time,
             "total_postnet_time": total_postnet_time,
-            "total_conversion_time": total_conversion_time,
-            "total_concat_time": total_concat_time,
         }
         return speech, stats
     else:

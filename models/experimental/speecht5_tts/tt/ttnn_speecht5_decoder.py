@@ -801,7 +801,7 @@ class TTNNSpeechT5Decoder:
         encoder_hidden_states: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
         timing_details: bool = False,
-    ) -> ttnn.Tensor:
+    ):
         """
         Forward pass with comprehensive L1 memory management.
 
@@ -809,10 +809,13 @@ class TTNNSpeechT5Decoder:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
-            timing_details: If True, return (output, timing_dict)
+            timing_details: If True, return tuple (output, timing_dict)
 
         Returns:
-            hidden_states: [batch, seq_len, hidden_size] or (hidden_states, timing_dict)
+            If timing_details=False:
+                hidden_states: [batch, seq_len, hidden_size]
+            If timing_details=True:
+                Tuple of (hidden_states, timing_dict)
         """
         import time
 
