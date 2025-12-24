@@ -117,7 +117,7 @@ class SamplingGenerator:
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
         )
-        #
+
         self._penalties_active = not (
             self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
             and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])

@@ -159,7 +159,6 @@ class Transformer(LightweightModule):
         if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
         logits = self.lm_head(logits)
-        # logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
     def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
