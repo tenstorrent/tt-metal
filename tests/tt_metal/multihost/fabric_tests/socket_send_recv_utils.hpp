@@ -74,4 +74,6 @@ void test_multi_mesh_multi_conn_bidirectional(
     uint32_t data_size,
     SystemConfig system_config);
 
+uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::MeshId recv_mesh_id);
+
 }  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

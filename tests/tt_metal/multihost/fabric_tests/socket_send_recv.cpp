@@ -231,8 +231,19 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-TEST_F(SplitGalaxyMeshDeviceFixture, CustomContextValidation) {
+TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
     // Create a SubContext with sender rank = 0 and receiver rank = 2
+    // This validates that the Distributed Context Rank Translation functionality
+    // supported by sockets works correctly.
+    // Test 1:
+    // Ranks corresponding to the sub context will be passed into the socket config.
+    // Mesh Ids will be derived based on the translated values of these ranks.
+    // Test 2:
+    // Mesh Ids will be passed into the socket config. A translation table converting
+    // their global host ranks to the sub context ranks will be generated.
+    // Test 3:
+    // An Invalid Socket Connection (that uses coordinates outside the sub context) will be passed into the socket
+    // config.
     using namespace tt_metal::distributed::multihost;
     std::vector<int> handshake_ranks = {0, 2};
     auto parent_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
@@ -240,67 +251,85 @@ TEST_F(SplitGalaxyMeshDeviceFixture, CustomContextValidation) {
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
 
+    auto invalid_socket_connection = tt_metal::distributed::SocketConnection(
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)),
+        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), tt_metal::CoreCoord(0, 0)));
+
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
 
     if (parent_context->rank() == Rank{0}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
-        tt_metal::distributed::SocketConfig socket_config(
+        tt_metal::distributed::SocketConfig socket_config_0(
             {socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
-        auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+        tt_metal::distributed::SocketConfig socket_config_1(
+            {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_2(
+            {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        auto send_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
+        auto send_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
     } else if (parent_context->rank() == Rank{2}) {
         auto sub_context = parent_context->create_sub_context(handshake_ranks);
-        tt_metal::distributed::SocketConfig socket_config(
+        tt_metal::distributed::SocketConfig socket_config_0(
             {socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
-        auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
+        tt_metal::distributed::SocketConfig socket_config_1(
+            {socket_connection}, socket_mem_config, MeshId{0}, MeshId{1}, sub_context);
+        tt_metal::distributed::SocketConfig socket_config_2(
+            {invalid_socket_connection}, socket_mem_config, Rank{0}, Rank{1}, sub_context);
+        auto recv_socket_0 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_0);
+        auto recv_socket_1 = tt_metal::distributed::MeshSocket(mesh_device_, socket_config_1);
+        EXPECT_THROW(tt_metal::distributed::MeshSocket(mesh_device_, socket_config_2), std::exception);
     }
     parent_context->barrier();
 }
 
-TEST_F(SplitGalaxyMeshDeviceFixture, SocketSanity) {
+// Generate a random pairing of sender and receiver device coordinates.
+std::vector<tt_metal::distributed::SocketConnection> generate_random_socket_connections(
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
+    tt_fabric::MeshId sender_mesh_id,
+    tt_fabric::MeshId recv_mesh_id) {
+    std::mt19937 gen = std::mt19937(sync_seed_across_ranks(sender_mesh_id, recv_mesh_id));
+    auto mesh_device_shape = mesh_device->shape();
+    auto sender_core = CoreCoord(0, 0);
+    auto recv_core = CoreCoord(0, 0);
+
+    std::set<MeshCoordinate> generated_sender_device_coords;
+    std::set<MeshCoordinate> generated_recv_device_coords;
+    std::vector<tt_metal::distributed::SocketConnection> socket_connections;
+
+    while (generated_sender_device_coords.size() < mesh_device_shape[0] * mesh_device_shape[1]) {
+        auto sender_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
+        auto recv_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
+        while (generated_sender_device_coords.find(sender_device_coord) != generated_sender_device_coords.end()) {
+            sender_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
+        }
+        while (generated_recv_device_coords.find(recv_device_coord) != generated_recv_device_coords.end()) {
+            recv_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
+        }
+        generated_sender_device_coords.insert(sender_device_coord);
+        generated_recv_device_coords.insert(recv_device_coord);
+        socket_connections.push_back(tt_metal::distributed::SocketConnection(
+            tt_metal::distributed::MeshCoreCoord(sender_device_coord, sender_core),
+            tt_metal::distributed::MeshCoreCoord(recv_device_coord, recv_core)));
+    }
+    return socket_connections;
+}
+
+TEST_F(SplitGalaxyMeshDeviceFixture, BigMeshSocketRandomConnections) {
     auto& metal_context = tt::tt_metal::MetalContext::instance();
     const auto& distributed_context = metal_context.global_distributed_context();
 
-    auto sender_logical_coord_0 = CoreCoord(0, 0);
-    auto recv_logical_coord_0 = CoreCoord(0, 0);
-    auto sender_logical_coord_1 = CoreCoord(1, 1);
-    auto recv_logical_coord_1 = CoreCoord(1, 1);
-
-    tt_metal::distributed::SocketConnection socket_connection_0(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), sender_logical_coord_0),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord_0));
-
-    tt_metal::distributed::SocketConnection socket_connection_1(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), sender_logical_coord_1),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 3), recv_logical_coord_1));
-
-    tt_metal::distributed::SocketConnection socket_connection_2(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 1), sender_logical_coord_0),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(3, 1), recv_logical_coord_0));
-
-    tt_metal::distributed::SocketConnection socket_connection_3(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(1, 3), sender_logical_coord_1),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(1, 3), recv_logical_coord_1));
-
-    tt_metal::distributed::SocketConnection socket_connection_4(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 1), sender_logical_coord_1),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(2, 3), recv_logical_coord_0));
-
-    tt_metal::distributed::SocketConnection socket_connection_5(
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(2, 3), sender_logical_coord_0),
-        tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 1), recv_logical_coord_1));
-
-    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, 1024);
-
+    uint32_t socket_fifo_size = 1024;
     auto sender_mesh_id = tt::tt_fabric::MeshId{0};
     auto recv_mesh_id = tt::tt_fabric::MeshId{1};
+    uint32_t data_size = 8192;
+    uint32_t page_size = 64;
+    uint32_t num_txns = 20;
+
+    auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, socket_fifo_size);
 
     tt_metal::distributed::SocketConfig socket_config(
-        {socket_connection_0,
-         socket_connection_1,
-         socket_connection_2,
-         socket_connection_3,
-         socket_connection_4,
-         socket_connection_5},
+        {generate_random_socket_connections(mesh_device_, sender_mesh_id, recv_mesh_id)},
         socket_mem_config,
         sender_mesh_id,
         recv_mesh_id);
@@ -310,10 +339,10 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSanity) {
 
     if (local_mesh_binding[0] == sender_mesh_id) {
         auto send_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
-        test_socket_send_recv(mesh_device_, send_socket, 1024, 64, 20, std::nullopt);
+        test_socket_send_recv(mesh_device_, send_socket, data_size, page_size, num_txns, std::nullopt);
     } else {
         auto recv_socket = tt_metal::distributed::MeshSocket(mesh_device_, socket_config);
-        test_socket_send_recv(mesh_device_, recv_socket, 1024, 64, 20, std::nullopt);
+        test_socket_send_recv(mesh_device_, recv_socket, data_size, page_size, num_txns, std::nullopt);
     }
     distributed_context.barrier();
 }
