@@ -65,6 +65,7 @@ def run_attention_component(
 
     # Compare outputs
     passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.95)
+    logger.info(f"Attention test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -90,6 +91,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
 
     # Compare outputs
     passing, output = run_component_comparison(tt_output, ref_output, mesh_device, pcc_threshold=0.99)
+    logger.info(f"RMS norm test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"RMS norm test failed. Output: {output}"
 
 
@@ -113,6 +115,7 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     # Compare outputs
     for tt_output, reference_output in zip(tt_router_scores, router_scores):
         passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.945)
+        logger.info(f"TopK router test: {'passed' if passing else 'failed'} with output: {output}")
         assert passing, f"TopK router test failed. Output: {output}"
 
 
@@ -163,6 +166,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
+    logger.info(f"Experts test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"Experts test failed. Output: {output}"
 
 
@@ -185,6 +189,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.88)
 
+    logger.info(f"MLP test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"MLP test failed. Output: {output}"
 
 
@@ -401,7 +406,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         passing, output = run_component_comparison(
             tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         )
-        logger.info(f"Decoder layer test: {passing} with output: {output}")
+        logger.info(f"Decoder layer test: {'passed' if passing else 'failed'} with output: {output}")
         assert passing, f"Decoder layer test failed. Output: {output}"
 
     tested_modules = [m for m in modules_to_test if m != "router" or seq_len == 1]
