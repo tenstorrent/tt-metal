@@ -8,6 +8,7 @@ import re
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
+from conan.tools.files import update_conandata
 
 
 class TTNNConan(ConanFile):
@@ -58,6 +59,11 @@ class TTNNConan(ConanFile):
         "!**/*.Dockerfile",
         "!**/__pycache__/**",
     ]
+
+    def export(self):
+        self.git_commit = subprocess.check_output("git rev-parse --short=10 HEAD", shell=True).decode().strip()
+        self.output.info("Captured git commit: {}".format(self.git_commit))
+        update_conandata(self, {"scm": {"commit": self.git_commit}})
 
     def set_version(self):
         _version = subprocess.check_output("git describe --abbrev=0 --tags", shell=True).decode().strip()
@@ -115,12 +121,41 @@ class TTNNConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure(variables={"VERSION_NUMERIC": self.version})
+        cmake.configure(variables={"VERSION_NUMERIC": self.version, "VERSION_HASH": self.conan_data["scm"]["commit"]})
         cmake.build()
 
     def package(self):
         cmake = CMake(self)
         cmake.install()
+
+        # Core components (always installed)
+        components = [
+            "metalium-runtime",  # tt_stl, tt_metal libraries, jitapi, hw files, fabric, etc.
+            "metalium-dev",  # Headers, CMake config files (tt-metalium-config.cmake), third-party headers
+            "ttnn-runtime",  # tt-nn library, kernels, operation libraries
+            "ttnn-dev",  # tt-nn headers, CMake config files (tt-nn-config.cmake), operation headers
+            "jit-build",  # JIT runtime files (sfpi)
+        ]
+
+        # Optional components based on build options
+        if self.options.build_examples:
+            components.extend(
+                [
+                    "metalium-examples",  # Programming examples
+                    "ttnn-examples",  # TTNN examples
+                ]
+            )
+
+        if self.options.build_tests:
+            components.extend(
+                [
+                    "metalium-validation",  # Validation tools
+                    "ttnn-validation",  # TTNN validation tools
+                ]
+            )
+
+        for component in components:
+            cmake.install(component=component)
 
     def package_info(self):
         # # If profiler(Tracy) is enabled, we need to propagate additional compiler flags to the user of the library

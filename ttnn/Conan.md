@@ -300,7 +300,7 @@ The TT-NN Conan recipe (`conanfile.py`) is located at the root of the repository
 
 When consuming the package, Conan automatically sets:
 
-- `TT_METAL_HOME` - Points to the package installation directory
+- `TT_METAL_RUNTIME_ROOT` - Points to the package installation directory
 
 ### Exported Libraries
 
