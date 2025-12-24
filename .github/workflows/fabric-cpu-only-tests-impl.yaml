@@ -6,9 +6,6 @@ on:
       arch:
         required: true
         type: string
-      runner-label:
-        required: true
-        type: string
       timeout:
         required: false
         type: number
