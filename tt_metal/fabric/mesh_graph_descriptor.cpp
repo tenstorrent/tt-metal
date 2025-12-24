@@ -164,7 +164,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
-MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) : top_level_id_(other.top_level_id_) {
+MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) : mesh_instances_(other.mesh_instances_), top_level_id_(other.top_level_id_) {
     // Deep copy the protobuf object
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(*other.proto_);
 
