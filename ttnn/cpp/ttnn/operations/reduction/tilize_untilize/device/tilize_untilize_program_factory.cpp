@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 namespace ttnn::operations::reduction::program {
 
@@ -60,29 +61,38 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
 
     // Stick (row) dimensions
     uint32_t stick_size = tensor_width * input.element_size();
-    uint32_t num_sticks = (tensor_height * batch_size);
 
-    // Device and core setup - single core for template simplicity
-    CoreCoord core = {0, 0};
-    CoreRange core_range(core, core);
-    CoreRangeSet all_cores(core_range);
+    // Device and core setup - multi-core work distribution
+    IDevice* device = input.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+
+    // Split work across cores using height-based 1D parallelization
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
+        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+
+    bool has_cliff = !core_range_cliff.empty();
+    auto cores = corerange_to_cores(all_cores);
 
     // ============================================================
-    // CIRCULAR BUFFER CREATION (from spec "Circular Buffer Requirements" table)
-    // CB_in (c_0): Row-major input staging - num_tiles_per_row tiles
-    // CB_tiled (c_1): Tiled intermediate - num_tiles_per_row tiles
-    // CB_out (c_16): Row-major output staging - num_tiles_per_row tiles
+    // CIRCULAR BUFFER CREATION
+    // Double-buffered for multi-core pipelining when processing 2+ blocks
+    // CB_in (c_0): Row-major input staging
+    // CB_tiled (c_1): Tiled intermediate (single-buffered, tilize->untilize is atomic)
+    // CB_out (c_16): Row-major output staging
     // ============================================================
+
+    // Double-buffer CB_in and CB_out when processing multiple blocks for pipelining
+    uint32_t cb_num_tiles = (nblocks_per_core > 1) ? num_tiles_per_row * 2 : num_tiles_per_row;
 
     // CB_in (c_0): Input circular buffer for row-major data from reader
     uint32_t cb_in_id = tt::CBIndex::c_0;
-    uint32_t cb_in_num_tiles = num_tiles_per_row;
     tt::tt_metal::CircularBufferConfig cb_in_config =
-        tt::tt_metal::CircularBufferConfig(cb_in_num_tiles * input_tile_size, {{cb_in_id, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb_num_tiles * input_tile_size, {{cb_in_id, input_cb_data_format}})
             .set_page_size(cb_in_id, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_config);
 
     // CB_tiled (c_1): Intermediate circular buffer for tiled data
+    // Single-buffered - tilize->untilize happens atomically per block
     uint32_t cb_tiled_id = tt::CBIndex::c_1;
     uint32_t cb_tiled_num_tiles = num_tiles_per_row;
     tt::tt_metal::CircularBufferConfig cb_tiled_config =
@@ -92,14 +102,13 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
 
     // CB_out (c_16): Output circular buffer for row-major data to writer
     uint32_t cb_out_id = tt::CBIndex::c_16;
-    uint32_t cb_out_num_tiles = num_tiles_per_row;
     tt::tt_metal::CircularBufferConfig cb_out_config =
-        tt::tt_metal::CircularBufferConfig(cb_out_num_tiles * output_tile_size, {{cb_out_id, output_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb_num_tiles * output_tile_size, {{cb_out_id, output_cb_data_format}})
             .set_page_size(cb_out_id, output_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
     // ============================================================
-    // KERNEL CREATION (Stage 6)
+    // KERNEL CREATION
     // ============================================================
 
     // Compile-time args for reader kernel
@@ -111,7 +120,9 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Compile-time args for compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {num_blocks, num_tiles_per_row};
+    // num_tiles_per_row is compile-time (constant across all cores)
+    // num_blocks is runtime (varies per core to handle cliff)
+    std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_row};
 
     // Create reader kernel (RISCV_0 / BRISC / NOC0)
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -129,19 +140,41 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    // Create compute kernel
+    // Create compute kernel - single kernel handles all cores (full + cliff)
+    // num_blocks passed as runtime arg to handle varying block counts
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/tilize_untilize/device/kernels/compute/tilize_untilize_compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
-    // Set runtime args
-    // Reader: src_addr, num_sticks, start_stick_id
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), num_sticks, 0});
+    // ============================================================
+    // SET PER-CORE RUNTIME ARGUMENTS
+    // ============================================================
 
-    // Writer: dst_addr, num_blocks, start_stick_id
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_blocks, 0});
+    uint32_t row_start_id = 0;
+
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const CoreCoord& core = cores[i];
+
+        // Determine block count for this core (cliff core gets remainder)
+        bool is_cliff_core = has_cliff && (i == ncores - 1);
+        uint32_t blocks_for_this_core = is_cliff_core ? nblocks_per_core_cliff : nblocks_per_core;
+        uint32_t sticks_for_this_core = blocks_for_this_core * TILE_HEIGHT;
+
+        // Reader: src_addr, num_sticks, start_stick_id
+        tt::tt_metal::SetRuntimeArgs(
+            program, reader_kernel_id, core, {src_buffer->address(), sticks_for_this_core, row_start_id});
+
+        // Writer: dst_addr, num_blocks, start_stick_id
+        tt::tt_metal::SetRuntimeArgs(
+            program, writer_kernel_id, core, {dst_buffer->address(), blocks_for_this_core, row_start_id});
+
+        // Compute: num_blocks (runtime arg to handle cliff)
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {blocks_for_this_core});
+
+        row_start_id += sticks_for_this_core;
+    }
 
     return {
         std::move(program),
@@ -150,7 +183,8 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
             .compute_kernel_id = compute_kernel_id,
             .writer_kernel_id = writer_kernel_id,
             .all_cores = all_cores,
-            .num_cores = 1}};
+            .cores = cores,
+            .num_cores = ncores}};
 }
 
 void TilizeUntilizeProgramFactory::override_runtime_arguments(
@@ -165,9 +199,9 @@ void TilizeUntilizeProgramFactory::override_runtime_arguments(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    // Update reader kernel runtime args (address at index 0)
-    auto cores = corerange_to_cores(shared_vars.all_cores);
-    for (const auto& core : cores) {
+    // Update buffer addresses for all cores
+    // Only the address (index 0) needs updating; other args are unchanged
+    for (const auto& core : shared_vars.cores) {
         {
             auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
