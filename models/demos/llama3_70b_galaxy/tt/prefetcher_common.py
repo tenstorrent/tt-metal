@@ -80,7 +80,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
             # Note: For Qwen3-32B on Galaxy, we are seeing bad PCC when using 728 tiles, investigation is ongoing for why 728 tiles is not sufficient
             # We are using 800 tiles as a workaround for now (Issue: https://github.com/tenstorrent/tt-metal/issues/34413)
-            self.global_cb_size = 800 * 1088 if is_qwen else 728 * 1088
+            self.global_cb_size = 800 * 1024 if is_qwen else 728 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             # self.global_circular_buffer = ttnn.create_global_circular_buffer(
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
