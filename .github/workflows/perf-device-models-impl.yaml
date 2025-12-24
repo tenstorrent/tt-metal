@@ -155,7 +155,7 @@ jobs:
             )
           ]')
 
-          echo "[info] Matrix after model filtering:"
+          echo "[info] Filtered matrix:"
           echo "$filtered_matrix" | jq .
 
           # Filter matrix based on selected architectures
