@@ -83,7 +83,10 @@ class TTSampling(LightweightModule):
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Force argmax sampling
-        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
+        if (k is not None and k[0] == 1) and (p is not None and p[0] == 1.0) and (temp is not None and temp[0] == 1.0):
+            self._force_argmax_sampling = True
+        else:
+            self._force_argmax_sampling = False
         if self._force_argmax_sampling:
             self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
             self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
@@ -191,10 +194,14 @@ class TTSampling(LightweightModule):
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         # Force argmax sampling
-        self._force_argmax_sampling = (k == None) and (p == None) and (temp == None)
+        if (k is not None and k[0] == 1) and (p is not None and p[0] == 1.0) and (temp is not None and temp[0] == 1.0):
+            self._force_argmax_sampling = True
+        else:
+            self._force_argmax_sampling = False
+
         if self._force_argmax_sampling:
-            self.num_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
-            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+            self.num_gather_links = 4
+            self.ag_topology = ttnn.Topology.Ring
             return
 
         """Update sampling parameters (k, p, temperature) dynamically."""
