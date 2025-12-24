@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
+#include "compute_kernel_api/state_tracker.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -29,6 +30,7 @@ namespace ckernel {
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(
     uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
+    PACK(state_configure(cbid));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
@@ -49,7 +51,7 @@ ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
  * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
  * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate tranpose is set  | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs

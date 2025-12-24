@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
 #include "llk_math_matmul_api.h"
@@ -24,6 +25,9 @@ namespace ckernel {
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
+
     // Pass through uses A2D and potentially direct unpack to dest.
     const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
     const bool enable_unpack_to_dest = data_copy_type == A2D;
@@ -194,9 +198,10 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * | icb1           | The indentifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31     | True     |
  * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31     | False    |
  */
- // clang-format on
+// clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    PACK(state_configure(icb0, icb1, ocb));
     if constexpr (tBcastOp == ELWMUL) {
         MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
     } else {
@@ -300,6 +305,7 @@ ALWI void mul_tiles_bcast(
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init_with_operands<ELWADD, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -309,6 +315,7 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -319,6 +326,7 @@ ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
  * executed correctly.
  */
 ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::SCALAR, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -329,6 +337,7 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
  * correctly.
  */
 ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -352,6 +361,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * correctly.
  */
 ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -361,6 +371,7 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
 ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -371,6 +382,7 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
  * correctly.
  */
 ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init_with_operands<ELWSUB, BroadcastType::COL, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -381,6 +393,7 @@ ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
  * executed correctly.
  */
 ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
+    PACK(state_configure(icb0, icb1));
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::SCALAR, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
