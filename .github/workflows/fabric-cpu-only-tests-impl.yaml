@@ -23,7 +23,7 @@ on:
 jobs:
   fabric-cpu-unit-tests:
     name: ${{ inputs.arch }} fabric cpu unit tests
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-small-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
