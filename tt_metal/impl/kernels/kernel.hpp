@@ -78,7 +78,7 @@ public:
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-    uint32_t dispatch_class() { return this->dispatch_class_; }
+    uint32_t dispatch_class() const { return this->dispatch_class_; }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -94,7 +94,7 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
 
     void validate_runtime_args_size(
-        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
+        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
     void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
     void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 

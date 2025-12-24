@@ -18,11 +18,11 @@ struct ParallelConfig {
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 
-    bool operator==(const ParallelConfig& other) {
+    bool operator==(const ParallelConfig& other) const {
         return (
             grid == other.grid && shard_scheme == other.shard_scheme && shard_orientation == other.shard_orientation);
     }
-    bool operator!=(const ParallelConfig& other) { return !(*this == other); }
+    bool operator!=(const ParallelConfig& other) const { return !(*this == other); }
 
     std::size_t get_hash() const {
         return std::hash<std::string>{}(

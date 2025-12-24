@@ -432,15 +432,17 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     }
 }
 
-bool MatmulFusedOpSignaler::is_all_gather() { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
+bool MatmulFusedOpSignaler::is_all_gather() const { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
 
-bool MatmulFusedOpSignaler::is_reduce_scatter() { return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER; }
+bool MatmulFusedOpSignaler::is_reduce_scatter() const {
+    return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER;
+}
 
-bool MatmulFusedOpSignaler::is_llama_reduce_scatter() {
+bool MatmulFusedOpSignaler::is_llama_reduce_scatter() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER;
 }
 
-bool MatmulFusedOpSignaler::is_llama_all_gather() {
+bool MatmulFusedOpSignaler::is_llama_all_gather() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER;
 }
 
