@@ -853,7 +853,7 @@ bool DeviceManager::close_device(ChipId device_id) {
     return this->close_devices(devices_to_close);
 }
 
-bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
+bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/, bool is_mesh_device) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
@@ -884,9 +884,11 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // TODO(MO): Remove when legacy non-mesh device is removed
-    for (const ChipId device_id : devices_to_close) {
-        IDevice* device = get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
+    if (!is_mesh_device) {
+        for (const ChipId device_id : devices_to_close) {
+            IDevice* device = get_active_device(device_id);
+            detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
+        }
     }
 
     dispatch_firmware_active_ = false;
