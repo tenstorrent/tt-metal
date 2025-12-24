@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sum_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <cstdint>
 
@@ -122,20 +123,23 @@ MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensor
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehSumOperation::operation_attributes_t, MorehSumOperation::tensor_args_t> MorehSumOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t moreh_sum(
     const Tensor& input,
-    const int64_t dim,
-    const bool keepdim,
+    int64_t dim,
+    bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {
-            dim,
-            keepdim,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        {input, output}};
+    using OperationType = ttnn::operations::moreh::moreh_sum::MorehSumOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        keepdim,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_sum
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::moreh::moreh_sum {
