@@ -120,6 +120,13 @@ from ttnn._ttnn.multi_device import (
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
+    Rank,
+    Size,
+    init_distributed_context,
+    is_initialized as distributed_context_is_initialized,
+    get_rank as distributed_context_get_rank,
+    get_size as distributed_context_get_size,
+    barrier as distributed_context_barrier,
 )
 
 from ttnn._ttnn.events import (
@@ -145,7 +152,14 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManagerMode,
+    set_fabric_config,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -232,6 +246,8 @@ from ttnn.types import (
     DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
+    RuntimeArgs,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
     cb_descriptor_from_sharded_tensor,
@@ -268,7 +284,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *

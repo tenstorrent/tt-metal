@@ -54,11 +54,6 @@ public:
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
@@ -280,6 +275,11 @@ public:
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
+    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
@@ -288,7 +288,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
-    DataType dtype,
+    DataType data_type,
     Layout layout,
     IDevice* device,
     const MemoryConfig& memory_config = MemoryConfig{},

@@ -767,6 +767,111 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 }
 
 /*
+Helper function to aid in converting grouped weight tensor for conv_transpose2d
+This is different from conv_group_weight_zero_pad_helper because conv_transpose2d weights have shape:
+[in_channels, out_channels/groups, H, W] and we need to expand dimension 1 to out_channels
+with proper zero padding based on which group each input channel belongs to.
+*/
+template <typename T>
+static Tensor conv_transpose2d_group_weight_zero_pad_helper(
+    const Tensor& weight,
+    const ttnn::Shape& original_weight_shape,
+    const ttnn::Shape& output_weight_shape,
+    uint32_t num_groups,
+    DataType output_dtype) {
+    auto pad_weight = [&original_weight_shape, &output_weight_shape, num_groups, output_dtype](
+                          const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
+        auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
+        auto output_buffer = std::vector<T>(output_weight_shape.volume());
+
+        // For conv_transpose2d: [in_channels, out_channels/groups, H, W] -> [in_channels, out_channels, H, W]
+        // Each input channel i belongs to group g = i / (in_channels/groups)
+        // The local output channel c (0 to out_channels/groups-1) maps to global output channel:
+        // global_out_channel = g * (out_channels/groups) + c
+        uint32_t in_channels = original_weight_shape[0];
+        uint32_t out_channels_per_group = original_weight_shape[1];
+        uint32_t in_channels_per_group = in_channels / num_groups;
+
+        for (int i = 0; i < original_weight_shape[0]; i++) {  // in_channels
+            // Find which group this input channel belongs to
+            auto group_id = i / in_channels_per_group;
+
+            for (int c = 0; c < original_weight_shape[1]; c++) {  // out_channels/groups
+                // Calculate the global output channel index
+                int global_out_channel = group_id * out_channels_per_group + c;
+
+                for (int h = 0; h < original_weight_shape[2]; h++) {
+                    for (int w = 0; w < original_weight_shape[3]; w++) {
+                        // Get value from original weight tensor
+                        auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{i, c, h, w}, compute_strides(original_weight_shape));
+                        auto value = conv_weight_tensor_buffer[value_flat_input_index];
+
+                        // Copy value to output tensor at the adjusted position
+                        auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{i, global_out_channel, h, w}, compute_strides(output_weight_shape));
+                        output_buffer[output_flat_input_index] = value;
+                    }
+                }
+            }
+        }
+        return tt::tt_metal::HostBuffer(std::move(output_buffer));
+    };
+
+    const TensorSpec output_spec(
+        output_weight_shape,
+        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    return convert_tensor<T>(weight, pad_weight, output_spec);
+}
+
+/*
+Converts convolution weights for conv_transpose2d to grouped layout with padded zeros
+This function will take in a weight tensor with shape [in_channels, out_channels // groups, H, W] and return a newly
+allocated output tensor with shape [in_channels, out_channels, H, W]
+The extra channels in shape[1] will be padded with 0 at the appropriate positions based on group membership.
+This is used BEFORE transform_weights_for_conv_transpose2d to properly handle grouped convolutions.
+*/
+Tensor convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
+    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
+    // Define output tensor shape
+    // Input: [in_channels, out_channels/groups, H, W]
+    // Output: [in_channels, out_channels, H, W] where out_channels = (out_channels/groups) * num_groups
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
+    ttnn::Shape output_conv_weight_tensor_shape{
+        original_conv_weight_tensor_shape[0],
+        original_conv_weight_tensor_shape[1] * num_groups,
+        original_conv_weight_tensor_shape[2],
+        original_conv_weight_tensor_shape[3]};
+
+    const static std::
+        unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, uint32_t, DataType)>>
+            to_w_tile_layout_map = {
+                {DataType::INT32, &conv_transpose2d_group_weight_zero_pad_helper<int32_t>},
+                {DataType::FLOAT32, &conv_transpose2d_group_weight_zero_pad_helper<float>},
+                {DataType::BFLOAT16, &conv_transpose2d_group_weight_zero_pad_helper<bfloat16>},
+                {DataType::UINT16, &conv_transpose2d_group_weight_zero_pad_helper<uint16_t>},
+                {DataType::BFLOAT8_B, &conv_transpose2d_group_weight_zero_pad_helper<float>},
+                {DataType::UINT32, &conv_transpose2d_group_weight_zero_pad_helper<uint32_t>},
+                {DataType::BFLOAT4_B, &conv_transpose2d_group_weight_zero_pad_helper<uint32_t>},
+            };
+
+    if (tt_metal::is_device_tensor(conv_weight_tensor)) {
+        log_warning(
+            tt::LogOp,
+            "Prepare weights for ConvTranspose2D with groups > 1 expects weights on host, but they are on device. The "
+            "op will move them back to host.");
+    }
+    return convert_tensor_to_tiled_layout_common(
+        tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                                       : conv_weight_tensor,
+        output_dtype,
+        to_w_tile_layout_map,
+        original_conv_weight_tensor_shape,
+        output_conv_weight_tensor_shape,
+        num_groups);
+}
+
+/*
 Converts convolution weights to depthwise layout
 This function will take in a weight tensor with shape [out_channels, 1, H, W] and return a newly
 allocated output tensor with shape [out_channels, act_block_h, H, W] The extra channels in shape[1] are repeated
@@ -1094,7 +1199,7 @@ static uint32_t calculate_out_channels_padded(uint32_t out_channels, const Paral
 }
 
 static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -1145,14 +1250,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    bool is_dram_conv = (dram_slice_config_.has_value() &&
-                         dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) ||
-                        (!dram_slice_config_.has_value() && !input_memory_config.is_l1());
-
+    auto conv_execution_path =
+        determine_conv2d_execution_path(input_memory_config.buffer_type() == BufferType::L1, dram_slice_config_);
     // Conv1D doesn't support DRAM
-    is_dram_conv = is_dram_conv && !is_conv1d;
+    bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
-    if (is_dram_conv) {
+    if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
@@ -1210,6 +1313,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
             dram_slice_config,
             conv2d_slice_attr->name());
+        if (dram_slice_config.num_slices == 1) {
+            log_info(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
+            is_dram_conv = false;
+        }
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
@@ -1241,6 +1348,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                           kernel_size[1] - padding_n4[2];
             padding_n4[3] = 0;  // No padding on right for sliced width
         }
+        input_memory_config = conv2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
     }
 
     auto opt_conv_op_block_config = get_opt_block_config(
@@ -1307,7 +1418,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             mm_conv,
             device->compute_with_storage_grid_size(),
             input_layout,
-            BufferType::L1,
+            is_dram_conv ? BufferType::DRAM : BufferType::L1,
             parallel_config,
             conv_config.act_block_h_override);
 
@@ -1354,15 +1465,13 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width,
-        mm_conv && auto_shard,
+        mm_conv && (auto_shard || is_dram_conv),
+        out_channels,
         has_bias,
-        true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
-        kernel_size,
-        orig_stride,
-        padding_n4);
+        orig_stride);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
@@ -1470,9 +1579,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
         weight_tensor_ = ttnn::to_dtype(weight_tensor_, params.weights_bias_dtype.value());
     }
 
-    if (params.parameters_on_device) {
-        weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
-    }
+    // Always move parameters to device
+    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
     return weight_tensor_;
 }
@@ -1520,13 +1628,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     // Prepare weights
     ttnn::Tensor weight_tensor_prepared = prepare_conv_weights_internal(weight_tensor, params, device);
 
-    // Use original out_channels for bias preparation (consistent with weight preparation validation)
-    const auto& original_weights_shape = weight_tensor.logical_shape();
-    uint32_t out_channels = original_weights_shape[0];
-
     // Prepare bias if provided
     std::optional<ttnn::Tensor> bias_tensor_prepared =
-        prepare_conv_bias_internal(bias_tensor, out_channels, params, weight_tensor_prepared.dtype(), device);
+        prepare_conv_bias_internal(bias_tensor, params.out_channels, params, weight_tensor_prepared.dtype(), device);
 
     return {weight_tensor_prepared, bias_tensor_prepared};
 }
@@ -1562,7 +1666,6 @@ ttnn::Tensor prepare_conv_weights(
     }
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     if (!conv_config.weights_dtype.has_value()) {
         log_warning(
@@ -1572,6 +1675,9 @@ ttnn::Tensor prepare_conv_weights(
             "conv_weights_dtype is set to the same dtype before calling prepare_bias.");
         conv_config.weights_dtype = weight_tensor.dtype();
     }
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
     // Use common setup function to get configuration parameters
     Conv2dWeightsBiasPrepConfig params = setup_conv_prep_config(
         input_memory_config,
@@ -1620,9 +1726,11 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
 
     // Use common setup function to get configuration parameters
     auto params = setup_conv_prep_config(

@@ -120,6 +120,7 @@ public:
 
     static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -137,6 +138,7 @@ public:
         }
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
@@ -378,7 +380,7 @@ enum NocSendType : uint8_t {
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& pair_ordered_dirs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 

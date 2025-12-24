@@ -9,7 +9,7 @@
 #include "ckernel_template.h"
 #include "cpack_common.h"
 #include "ckernel_globals.h"
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 
 #include "llk_io.h"
 #include "llk_defs.h"
@@ -23,6 +23,7 @@
  * LLK PACK
  *************************************************************************/
 
+// TODO NC: Remove as the part of tt-metal#34499
 template <bool untilize = false, bool zero_output = false>
 inline void llk_pack_mop_config(const uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
@@ -31,7 +32,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
+    _llk_pack_mop_config_<untilize, zero_output>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
@@ -111,41 +112,6 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
     llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
-inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
-    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
-
-    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile,
-        pack_params->relu_config.val);
-}
-
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    bool untilize = false,
-    ReluType relu_type = ReluType::NO_RELU,
-    std::uint32_t relu_threshold = 0>
-inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output) {
-    llk_pack_params_t llk_pack_params = {
-        .pack_output = pack_output,
-        .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
-}
-
 template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -154,7 +120,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
+    _llk_pack_init_<untilize, zero_output>(
         pack_dst_format[output_id], pack_src_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, true);
 }
 
@@ -345,8 +311,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, diagonal>(
-        face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, untilize>(face_r_dim, narrow_tile);
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
@@ -355,8 +320,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, untilize>(
-        face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>
@@ -381,7 +345,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, DstTileFaceLayout::RowMajor>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -391,6 +355,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         narrow_tile);
 }
 
+// TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
