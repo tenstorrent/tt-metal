@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <memory>
 
 namespace ttnn::operations::rand {

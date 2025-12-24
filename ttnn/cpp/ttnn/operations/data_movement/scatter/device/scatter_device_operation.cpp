@@ -92,7 +92,7 @@ ttnn::Tensor scatter(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const ScatterReductionType& reduction,
+    const operations::data_movement::scatter::ScatterReductionType& reduction,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::data_movement::scatter::ScatterDeviceOperation;
     return ttnn::device_operation::detail::launch_on_device<OperationType>(

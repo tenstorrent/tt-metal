@@ -101,6 +101,8 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         input_tensor.padded_shape());
 }
 
+}  // namespace ttnn::operations::data_movement::reshape_on_device
+
 namespace ttnn::prim {
 ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation::tensor_return_value_t reshape_on_device(
     const Tensor& input_tensor,
@@ -113,5 +115,3 @@ ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation::tens
         OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::reshape_on_device

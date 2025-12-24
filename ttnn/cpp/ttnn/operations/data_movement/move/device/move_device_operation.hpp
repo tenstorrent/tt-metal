@@ -53,5 +53,5 @@ ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const MoveOpParallelizationStrategy& move_op_parallelization_strategy);
+    const ttnn::operations::data_movement::move::MoveOpParallelizationStrategy& move_op_parallelization_strategy);
 }  // namespace ttnn::prim

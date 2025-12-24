@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_device_op.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 

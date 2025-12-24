@@ -42,10 +42,10 @@ namespace ttnn::prim {
 ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation::tensor_return_value_t
 layernorm_pre_all_gather(
     const Tensor& input,
-    ttnn::operations::normalization::layernorm::LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     DataType dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    const ttnn::operations::normalization::layernorm::LayerNormDistributedDefaultProgramConfig& program_config,
+    const ttnn::operations::normalization::LayerNormDistributedDefaultProgramConfig& program_config,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim

@@ -184,6 +184,7 @@ Tensor PadDeviceOperation::create_output_tensors(
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
+}  // namespace ttnn::operations::data_movement::pad
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t pad(
@@ -202,5 +203,3 @@ ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t 
         OperationType::tensor_args_t{input, preallocated_output});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::pad

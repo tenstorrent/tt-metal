@@ -63,7 +63,7 @@ struct TransposeDeviceOperation {
 namespace ttnn::prim {
 ttnn::Tensor transpose(
     const Tensor& input_tensor,
-    TransposeOpDim dim,
+    ttnn::operations::data_movement::transpose::TransposeOpDim dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value);
 }  // namespace ttnn::prim

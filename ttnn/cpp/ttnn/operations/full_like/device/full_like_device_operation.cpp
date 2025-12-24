@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::full_like {

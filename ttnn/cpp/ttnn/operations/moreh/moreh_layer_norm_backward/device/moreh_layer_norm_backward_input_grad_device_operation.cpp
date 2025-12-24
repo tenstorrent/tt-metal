@@ -49,6 +49,8 @@ MorehLayerNormBackwardInputGradOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
+} // namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation::
     tensor_return_value_t
@@ -72,5 +74,3 @@ ttnn::operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBac
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad {

@@ -110,6 +110,9 @@ MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceO
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
+
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation::tensor_return_value_t
 moreh_nll_loss_step2(
@@ -132,5 +135,3 @@ moreh_nll_loss_step2(
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_nll_loss_step2 {

@@ -57,6 +57,7 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), output_grad.device());
 }
+} // namespace ttnn::operations::moreh::moreh_mean_backward
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor_return_value_t moreh_mean_backward(
@@ -78,5 +79,3 @@ ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_mean_backward {

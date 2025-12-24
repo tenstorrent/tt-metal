@@ -88,31 +88,10 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 
 }  // namespace ttnn::operations::data_movement
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
-    const Tensor& input,
-    const ttnn::Shape& slice_start,
-    const ttnn::Shape& slice_end,
-    const ttnn::Shape& step,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    bool use_tensor_args,
-    std::optional<Tensor> start_tensor,
-    std::optional<Tensor> end_tensor,
-    const std::optional<uint32_t>& slice_dim,
-    const std::optional<uint32_t>& num_devices,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::slice::SliceDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        OperationType::operation_attributes_t{
-            slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
-        OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
-}
-}  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement::slice {
 
-void SliceDeviceOperation::validate_on_program_cache_miss(
+    void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
@@ -294,3 +273,25 @@ SliceDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::data_movement::slice
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
+    const Tensor& input,
+    const ttnn::Shape& slice_start,
+    const ttnn::Shape& slice_end,
+    const ttnn::Shape& step,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool use_tensor_args,
+    std::optional<Tensor> start_tensor,
+    std::optional<Tensor> end_tensor,
+    const std::optional<uint32_t>& slice_dim,
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& preallocated_output) {
+    using OperationType = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
+        OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
+}
+}  // namespace ttnn::prim

@@ -105,6 +105,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.target_tensor.device());
 }
 
+} // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackwardDeviceOperation::
     tensor_return_value_t
@@ -126,5 +128,3 @@ ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreduce
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {

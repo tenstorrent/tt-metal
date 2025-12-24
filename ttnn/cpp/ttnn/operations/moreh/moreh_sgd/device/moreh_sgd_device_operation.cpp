@@ -97,6 +97,7 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
 
     return ret;
 }
+} // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t moreh_sgd(
@@ -129,5 +130,3 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_sgd {

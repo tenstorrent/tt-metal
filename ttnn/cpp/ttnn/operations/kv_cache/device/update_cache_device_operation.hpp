@@ -44,6 +44,6 @@ ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update
     uint32_t batch_idx,
     uint32_t update_index,
     uint32_t batch_offset,
-    UpdateCacheOpType op_type,
+    ttnn::operations::kv_cache::UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

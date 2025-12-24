@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -192,13 +192,13 @@ layernorm_post_all_gather(
     const Tensor& stats,
     const std::optional<Tensor>& gamma,
     const std::optional<Tensor>& beta,
-    ttnn::operations::normalization::layernorm::LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     float eps,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const ttnn::operations::normalization::layernorm::LayerNormDistributedDefaultProgramConfig& program_config) {
+    const ttnn::operations::normalization::LayerNormDistributedDefaultProgramConfig& program_config) {
     using OperationType =
         ttnn::operations::normalization::layernorm_post_all_gather::LayerNormPostAllGatherDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{

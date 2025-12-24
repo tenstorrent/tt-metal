@@ -106,6 +106,8 @@ MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
+} // namespace ttnn::operations::moreh::moreh_nll_loss_backward
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation::tensor_return_value_t
 moreh_nll_loss_backward(
@@ -129,5 +131,3 @@ moreh_nll_loss_backward(
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_nll_loss_backward {

@@ -129,6 +129,8 @@ MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::crea
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input->device());
 }
 
+} // namespace ttnn::operations::moreh::moreh_sum_backward
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
     const Tensor& output_grad,
@@ -148,5 +150,3 @@ ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_r
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_sum_backward {

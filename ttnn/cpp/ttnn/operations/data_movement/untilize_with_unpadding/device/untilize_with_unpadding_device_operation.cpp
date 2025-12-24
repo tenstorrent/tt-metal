@@ -201,6 +201,7 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t untilize_with_unpadding(
@@ -227,5 +228,3 @@ ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingD
         OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding

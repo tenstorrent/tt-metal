@@ -80,14 +80,14 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
 namespace ttnn::prim {
 
 ttnn::operations::normalization::softmax::SoftmaxDeviceOperation::tensor_return_value_t softmax(
-    ttnn::operations::normalization::softmax::SoftmaxOperationType softmax_type,
+    ttnn::operations::normalization::SoftmaxOperationType softmax_type,
     const Tensor& input_tensor,
     int8_t dim = -1,
     const std::optional<const Tensor>& mask = std::nullopt,
     std::optional<float> scale = std::nullopt,
     bool inplace = false,
     tt::tt_metal::MemoryConfig output_mem_config = {},
-    ttnn::operations::normalization::softmax::SoftmaxProgramConfig program_config = {},
+    ttnn::operations::normalization::SoftmaxProgramConfig program_config = {},
     bool is_causal_mask = false,
     DeviceComputeKernelConfig compute_kernel_config = {},
     bool is_scale_causal_mask_hw_dims_softmax = false,

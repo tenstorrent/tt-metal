@@ -67,6 +67,8 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_a.device());
 }
 
+}  // namespace ttnn::operations::moreh::moreh_dot
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t moreh_dot(
     const Tensor& input_a,
@@ -84,5 +86,3 @@ ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t mor
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_dot {

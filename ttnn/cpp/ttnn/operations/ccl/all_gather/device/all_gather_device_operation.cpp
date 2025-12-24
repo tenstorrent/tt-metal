@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "all_gather_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::ccl {

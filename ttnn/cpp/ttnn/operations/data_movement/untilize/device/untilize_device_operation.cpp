@@ -246,32 +246,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     return program::UntilizeMultiCoreProgramFactory{};
 }
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
-    const Tensor& input,
-    tt::tt_metal::MemoryConfig output_mem_config,
-    bool use_multicore,
-    bool use_pack_untilize,
-    bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
-    bool enough_space_height,
-    uint32_t pf_type) {
-    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        OperationType::operation_attributes_t{
-            .output_mem_config = std::move(output_mem_config),
-            .use_multicore = use_multicore,
-            .use_pack_untilize = use_pack_untilize,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
-            .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
-        OperationType::tensor_args_t{.input = input});
-}
-}  // namespace ttnn::prim
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(
     const UntilizeDeviceOperation::operation_attributes_t& op_attr,
@@ -302,3 +276,29 @@ UntilizeDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+    const Tensor& input,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    std::optional<CoreRangeSet> sub_core_grids,
+    bool enough_space_width,
+    bool enough_space_height,
+    uint32_t pf_type) {
+    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = std::move(output_mem_config),
+            .use_multicore = use_multicore,
+            .use_pack_untilize = use_pack_untilize,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .sub_core_grids = std::move(sub_core_grids),
+            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
+            .pf_type = pf_type},
+        OperationType::tensor_args_t{.input = input});
+}
+}  // namespace ttnn::prim

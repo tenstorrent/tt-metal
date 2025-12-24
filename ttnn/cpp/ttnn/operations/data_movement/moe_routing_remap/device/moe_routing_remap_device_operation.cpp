@@ -68,6 +68,7 @@ MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOpera
     return tensor_args.optional_output_routing_weights.value_or(
         create_device_tensor(output_spec, tensor_args.input_routing_weights.device()));
 }
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation::tensor_return_value_t moe_routing_remap(
@@ -89,5 +90,3 @@ ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation::tensor_return_v
             .optional_output_routing_weights = optional_output_routing_weights});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement

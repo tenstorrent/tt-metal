@@ -7,7 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "mesh_partition_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 

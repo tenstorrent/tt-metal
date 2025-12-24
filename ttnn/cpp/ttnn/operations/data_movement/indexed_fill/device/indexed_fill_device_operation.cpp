@@ -71,6 +71,7 @@ IndexedFillDeviceOperation::create_op_performance_model(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::indexed_fill
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
@@ -92,5 +93,3 @@ ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tenso
         });
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::indexed_fill

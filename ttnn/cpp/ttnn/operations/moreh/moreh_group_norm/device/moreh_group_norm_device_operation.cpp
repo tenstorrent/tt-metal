@@ -153,6 +153,7 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     }
     return result;
 }
+} // namespace ttnn::operations::moreh::moreh_group_norm
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_return_value_t moreh_group_norm(
@@ -182,5 +183,3 @@ ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_retur
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_group_norm {

@@ -4,7 +4,7 @@
 
 #include "layernorm_device_operation.hpp"
 
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
@@ -415,11 +415,11 @@ ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_re
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& residual_input_tensor,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::layer_norm::LayerNormProgramConfig& program_config,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
-    ttnn::operations::normalization::layer_norm::LayerNormType norm_type,
-    ttnn::operations::normalization::layer_norm::DistributedLayerNormStage distributed_norm_stage,
+    ttnn::operations::normalization::LayerNormType norm_type,
+    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats) {
     using OperationType = ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{

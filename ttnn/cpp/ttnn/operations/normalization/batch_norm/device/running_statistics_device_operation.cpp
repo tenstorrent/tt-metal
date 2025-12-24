@@ -4,7 +4,7 @@
 
 #include "running_statistics_device_operation.hpp"
 
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "batch_norm_utils.hpp"

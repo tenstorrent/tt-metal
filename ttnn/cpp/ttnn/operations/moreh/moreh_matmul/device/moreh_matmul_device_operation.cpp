@@ -169,6 +169,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
             output_shape_wo_padding,
             output_shape));
 }
+} // namespace ttnn::operations::moreh::moreh_matmul
 
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value_t moreh_matmul(
@@ -190,5 +191,3 @@ ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_matmul {

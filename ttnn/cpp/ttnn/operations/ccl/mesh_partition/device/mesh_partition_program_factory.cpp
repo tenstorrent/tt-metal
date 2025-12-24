@@ -4,6 +4,7 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -82,7 +83,24 @@ auto compute_slice_parameters(
         ends,
         strides);
 
-    return SliceOp::invoke(
+
+    auto slice_arg_func = [](auto input, auto slice_start, auto slice_end, auto step, auto output_mem_config, auto use_tensor_args){
+        return std::make_tuple(
+            SliceOp::operation_attributes_t{
+                .slice_start = slice_start,
+                .slice_end=slice_end, .step=step,
+                .output_mem_config=output_mem_config,
+                .use_tensor_args=use_tensor_args,
+                .slice_dim=std::nullopt,
+                .num_devices=std::nullopt,
+                .sub_core_grids=std::nullopt},
+            SliceOp::tensor_args_t{
+                .input=input,
+                .start_tensor=std::nullopt,
+                .end_tensor=std::nullopt,
+                .preallocated_output=std::nullopt});
+    };
+    return slice_arg_func(
         tensor_args.input_tensor,
         begins,
         ends,

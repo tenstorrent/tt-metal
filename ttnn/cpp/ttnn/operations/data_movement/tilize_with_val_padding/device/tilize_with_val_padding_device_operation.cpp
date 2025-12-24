@@ -141,6 +141,8 @@ TilizeWithValPaddingDeviceOperation::tensor_return_value_t TilizeWithValPaddingD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
+}  // namespace ttnn::operations::data_movement
+
 namespace ttnn::prim {
 ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
     const Tensor& input_tensor,
@@ -167,5 +169,3 @@ ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_ret
         OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement

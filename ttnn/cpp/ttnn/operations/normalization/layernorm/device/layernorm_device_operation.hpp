@@ -51,12 +51,12 @@ ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_re
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& residual_input_tensor,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::layer_norm::LayerNormProgramConfig& program_config,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype = std::nullopt,
-    ttnn::operations::normalization::layer_norm::LayerNormType norm_type =
-        ttnn::operations::normalization::layer_norm::LayerNormType::LAYERNORM,
-    ttnn::operations::normalization::layer_norm::DistributedLayerNormStage distributed_norm_stage =
-        ttnn::operations::normalization::layer_norm::DistributedLayerNormStage::NOT_DISTRIBUTED,
+    ttnn::operations::normalization::LayerNormType norm_type =
+        ttnn::operations::normalization::LayerNormType::LAYERNORM,
+    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage =
+        ttnn::operations::normalization::DistributedLayerNormStage::NOT_DISTRIBUTED,
     const std::optional<const Tensor>& stats = std::nullopt);
 }  // namespace ttnn::prim

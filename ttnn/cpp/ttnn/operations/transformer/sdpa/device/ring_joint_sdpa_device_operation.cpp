@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -306,7 +306,7 @@ ring_joint_scaled_dot_product_attention(
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     const std::size_t logical_n,
-    SDPAProgramConfig program_config,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,

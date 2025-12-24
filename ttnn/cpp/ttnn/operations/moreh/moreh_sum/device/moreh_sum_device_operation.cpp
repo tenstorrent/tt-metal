@@ -123,6 +123,8 @@ MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensor
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
+} // namespace ttnn::operations::moreh::moreh_sum
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t moreh_sum(
     const Tensor& input,
@@ -141,5 +143,3 @@ ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t mor
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_sum {

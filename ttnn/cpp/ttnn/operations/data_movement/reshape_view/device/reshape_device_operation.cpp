@@ -84,6 +84,7 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
                                                        : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
 }
+} // namespace ttnn::operations::data_movement::reshape
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_value_t reshape(
@@ -100,5 +101,3 @@ ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_
         OperationType::tensor_args_t{input});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::reshape

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::pool::grid_sample {

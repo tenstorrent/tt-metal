@@ -54,6 +54,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
     return result;
 }
 
+} // namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad::MorehLayerNormBackwardGammaBetaGradOperation::
     tensor_return_value_t
@@ -77,5 +79,3 @@ ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad::MorehLayerNo
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {

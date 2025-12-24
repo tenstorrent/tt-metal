@@ -13,20 +13,6 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
-    const Tensor& input_tensor,
-    const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    using OperationType = ttnn::operations::data_movement::reshard::ReshardDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        OperationType::operation_attributes_t{
-            .output_mem_config = memory_config,
-        },
-        OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
-}
-}  // namespace ttnn::prim
-
 namespace ttnn::operations::data_movement::reshard {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -236,3 +222,17 @@ ReshardDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::data_movement::reshard
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    using OperationType = ttnn::operations::data_movement::reshard::ReshardDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = memory_config,
+        },
+        OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
+}
+}  // namespace ttnn::prim

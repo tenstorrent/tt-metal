@@ -7,7 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "moe_expert_token_remap_device_operation.hpp"
-#include "ttnn/api/ttnn/device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 

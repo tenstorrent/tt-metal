@@ -45,6 +45,8 @@ MorehClipGradNormStep1Operation::tensor_return_value_t MorehClipGradNormStep1Ope
     return tensor_args.tmp_pow_sum;
 };
 
+} // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1
+
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_clip_grad_norm_step1::MorehClipGradNormStep1Operation::tensor_return_value_t
 moreh_clip_grad_norm_step1(
@@ -64,5 +66,3 @@ moreh_clip_grad_norm_step1(
     return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1 {

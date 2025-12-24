@@ -51,6 +51,7 @@ tensor_return_value_t NonZeroIndicesDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<1>(output_specs), tensor_args.input.device()),
     };
 }
+}  // namespace ttnn::operations::data_movement::nonzero
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
@@ -61,5 +62,3 @@ ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_
         OperationType::tensor_args_t{.input = input_tensor});
 }
 }  // namespace ttnn::prim
-
-}  // namespace ttnn::operations::data_movement::nonzero

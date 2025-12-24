@@ -50,6 +50,6 @@ ttnn::Tensor scatter(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const ScatterReductionType& opt_reduction,
+    const ttnn::operations::data_movement::scatter::ScatterReductionType& opt_reduction,
     const std::optional<CoreRangeSet>& sub_core_grid);
-}
+}  // namespace ttnn::prim
