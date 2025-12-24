@@ -1112,6 +1112,75 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def _extract_paged_update_cache_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for paged_update_cache operation
+
+        Extracts:
+        - arg0: cache_tensor (input_a)
+        - arg1: input_tensor (input_b)
+        - arg2: update_idxs_tensor (optional, often empty) - skip
+        - arg3: page_table_indices (input_c, INT32)
+        - arg4: nullopt - skip
+        - arg5: page_table (input_d, INT32)
+        """
+        try:
+            params = {}
+
+            # Extract input tensor configs from specific positions
+            input_configs = []
+            tensor_positions = [0, 1, 3, 5]  # cache, input, page_table_indices, page_table
+
+            for arg_idx in tensor_positions:
+                if len(config) > arg_idx:
+                    arg = config[arg_idx]
+                    if isinstance(arg, dict):
+                        arg_key = f"arg{arg_idx}"
+                        if arg_key in arg:
+                            tensor_config = OperationParameterExtractors.extract_tensor_config(arg[arg_key])
+                            if tensor_config:
+                                input_configs.append(tensor_config)
+
+            # Build params dict
+            if len(input_configs) >= 3:  # Need at least cache, input, and page_table_indices
+                # arg0: cache tensor
+                params["input_shape"] = input_configs[0].shape
+                params["input_a_dtype"] = input_configs[0].dtype.replace("DataType::", "")
+                params["input_a_layout"] = input_configs[0].layout.replace("Layout::", "")
+                params["input_a_memory_config"] = input_configs[0].memory_config
+
+                # arg1: input tensor
+                params["input_b_shape"] = input_configs[1].shape
+                params["input_b_dtype"] = input_configs[1].dtype.replace("DataType::", "")
+                params["input_b_layout"] = input_configs[1].layout.replace("Layout::", "")
+                params["input_b_memory_config"] = input_configs[1].memory_config
+
+                # arg3: page_table_indices
+                params["input_c_shape"] = input_configs[2].shape
+                params["input_c_dtype"] = input_configs[2].dtype.replace("DataType::", "")
+                params["input_c_layout"] = input_configs[2].layout.replace("Layout::", "")
+                params["input_c_memory_config"] = input_configs[2].memory_config
+
+                # arg5: page_table (if present)
+                if len(input_configs) > 3:
+                    params["input_d_shape"] = input_configs[3].shape
+                    params["input_d_dtype"] = input_configs[3].dtype.replace("DataType::", "")
+                    params["input_d_layout"] = input_configs[3].layout.replace("Layout::", "")
+                    params["input_d_memory_config"] = input_configs[3].memory_config
+
+                # Use cache tensor's memory config as output
+                params["output_memory_config"] = input_configs[0].memory_config
+
+                return params
+
+            return None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting paged_update_cache parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
     def _extract_paged_scaled_dot_product_attention_decode_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for paged_scaled_dot_product_attention_decode operation
 
@@ -1629,20 +1698,20 @@ OperationParameterExtractors.register_extractor(
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 
-# Register paged_update_cache extractor (reuse paged_scaled extractor since structure is similar)
+# Register paged_update_cache extractor (custom extractor for arg positions 0,1,3,5)
 OperationParameterExtractors.register_extractor(
     "paged_update_cache",
-    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 OperationParameterExtractors.register_extractor(
     "experimental::paged_update_cache",
-    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 OperationParameterExtractors.register_extractor(
     "ttnn::experimental::paged_update_cache",
-    extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 
