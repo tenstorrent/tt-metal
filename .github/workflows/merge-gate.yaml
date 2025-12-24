@@ -318,6 +318,28 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
+  fabric-cpu-only-unit-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0 },
+        ]
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.any-code-changed == 'true'
@@ -363,7 +385,7 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
