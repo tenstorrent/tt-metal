@@ -5,6 +5,7 @@
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
@@ -21,6 +22,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -74,8 +76,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    const auto src_buffer = device_input_tensor.buffer();
-    const auto dst_buffer = device_output_tensor.buffer();
+    auto* const src_buffer = device_input_tensor.buffer();
+    auto* const dst_buffer = device_output_tensor.buffer();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
@@ -97,7 +99,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         src_buffer->address(),
         dst_buffer->address(),
     };
-    const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{runtime_args}};  // single-core
+    const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{{0, 0}, runtime_args}};  // single-core
 
     KernelDescriptor kernel_descriptor = {
         .kernel_source = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
@@ -203,12 +205,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     const KernelDescriptor::CompileTimeArgs compute_ct_args = {1, num_tile_per_core};
 
     // calculate data movement runtime arguments: every core has the same runtime args
-    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
     for (uint32_t i = 0; i < num_cores_x * num_cores_y; i++) {
         uint32_t core_x = i / num_cores_y;
         uint32_t core_y = i % num_cores_y;
-        reader_rt_args_per_core[core_x][core_y] = {num_tile_per_core};
+        reader_rt_args_per_core.push_back({{core_x, core_y}, {num_tile_per_core}});
     }
 
     KernelDescriptor reader_kernel_descriptor = {
@@ -260,8 +261,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     auto device_output_tensor = tt::tt_metal::create_device_tensor(device_input_tensor_a.tensor_spec(), this->device_);
 
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange all_cores_range = {
         CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
     CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
@@ -328,12 +327,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         grid_to_cores(num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
-    KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
-    KernelDescriptor::RuntimeArgs compute_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
+    KernelDescriptor::RuntimeArgs writer_rt_args_per_core;
+    KernelDescriptor::RuntimeArgs compute_rt_args_per_core;
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t core_x = core.x;
@@ -351,21 +347,25 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
             block_size_per_core = block_size_per_core_group_2;
         }
 
-        reader_rt_args_per_core[core_x][core_y] = {
-            device_input_tensor_a.buffer()->address(),
-            device_input_tensor_b.buffer()->address(),
-            num_tiles_per_core,
-            num_tiles_read,  // start_id
-            0,               // block_height = 0 when not sharded
-            0,               // block_width = 0 when not sharded
-            0,               // num_cores_y = 0 when not sharded
-        };
-        writer_rt_args_per_core[core_x][core_y] = {
-            device_output_tensor.buffer()->address(),
-            num_tiles_per_core,
-            num_tiles_read  // start_id
-        };
-        compute_rt_args_per_core[core_x][core_y] = {block_cnt_per_core, block_size_per_core};
+        reader_rt_args_per_core.push_back(
+            {{core_x, core_y},
+             {
+                 device_input_tensor_a.buffer()->address(),
+                 device_input_tensor_b.buffer()->address(),
+                 num_tiles_per_core,
+                 num_tiles_read,  // start_id
+                 0,               // block_height = 0 when not sharded
+                 0,               // block_width = 0 when not sharded
+                 0,               // num_cores_y = 0 when not sharded
+             }});
+        writer_rt_args_per_core.push_back(
+            {{core_x, core_y},
+             {
+                 device_output_tensor.buffer()->address(),
+                 num_tiles_per_core,
+                 num_tiles_read  // start_id
+             }});
+        compute_rt_args_per_core.push_back({{core_x, core_y}, {block_cnt_per_core, block_size_per_core}});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -550,10 +550,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
-    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
-    KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
-        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
+    KernelDescriptor::RuntimeArgs writer_rt_args_per_core;
 
     // setup reader/writer runtime args
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -570,28 +568,29 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        reader_rt_args_per_core[core_x][core_y] = {
-            src0_addr,
-            src1_addr,
-            Mt,
-            Kt,
-            Nt,
-            MtKt,
-            KtNt,
-            B,
-            uint32_t(bcast_batch),
-            num_tiles_written,
-            num_output_tiles_per_core,
-            MtNt};
+        reader_rt_args_per_core.push_back(
+            {{core_x, core_y},
+             {src0_addr,
+              src1_addr,
+              Mt,
+              Kt,
+              Nt,
+              MtKt,
+              KtNt,
+              B,
+              uint32_t(bcast_batch),
+              num_tiles_written,
+              num_output_tiles_per_core,
+              MtNt}});
 
-        writer_rt_args_per_core[core_x][core_y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
+        writer_rt_args_per_core.push_back({{core_x, core_y}, {dst_addr, num_output_tiles_per_core, num_tiles_written}});
 
         log_info(
             tt::LogTest,
             "core: {}, reader_rt_args {}, writer_rt_args {}",
             core,
-            reader_rt_args_per_core[core_x][core_y],
-            writer_rt_args_per_core[core_x][core_y]);
+            reader_rt_args_per_core.back().second,
+            writer_rt_args_per_core.back().second);
 
         num_tiles_written += num_output_tiles_per_core;
     }
@@ -724,11 +723,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     // only core (0, 0) is used
     const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
         device_input_tensor.buffer()->address(), num_tiles, src_bank_id};
-    const KernelDescriptor::RuntimeArgs reader_rt_args_per_core = {{reader_rt_args}};
+    const KernelDescriptor::RuntimeArgs reader_rt_args_per_core = {{{0, 0}, reader_rt_args}};
 
     const KernelDescriptor::CoreRuntimeArgs writer_rt_args = {
         device_output_tensor.buffer()->address(), num_tiles, dst_bank_id};
-    const KernelDescriptor::RuntimeArgs writer_rt_args_per_core = {{writer_rt_args}};
+    const KernelDescriptor::RuntimeArgs writer_rt_args_per_core = {{{0, 0}, writer_rt_args}};
 
     KernelDescriptor reader_kernel_descriptor = {
         .kernel_source =
@@ -753,7 +752,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .core_ranges = device_cores,
         .compile_time_args = {num_tiles, 1},
         .defines = sfpu_defines,
-        .runtime_args = {{{}}},
+        .runtime_args = {{{0, 0}, {}}},
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
     };
@@ -820,7 +819,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                                   "reader_unary_interleaved_start_id.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = reader_ct_args,
-                 .runtime_args = {{{device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .runtime_args = {{{0, 0}, {device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
                  .config = tt::tt_metal::ReaderConfigDescriptor{},
              },
              {
@@ -828,7 +827,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                                   "writer_unary_interleaved_start_id.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = writer_ct_args,
-                 .runtime_args = {{{device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .runtime_args = {{{0, 0}, {device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
                  .config = tt::tt_metal::WriterConfigDescriptor{},
              },
              {
@@ -836,7 +835,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                  .core_ranges = device_cores,
                  .compile_time_args = {num_tiles, 1},
                  .defines = sfpu_defines,
-                 .runtime_args = {{{}}},
+                 .runtime_args = {{{0, 0}, {}}},
                  .config = tt::tt_metal::ComputeConfigDescriptor{},
              }},
         .semaphores = {},
@@ -873,8 +872,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     Tensor device_output_tensor_2 =
         tt::tt_metal::create_device_tensor(device_input_tensor_2.tensor_spec(), this->device_);
 
-    program_descriptor.kernels[0].runtime_args[0][0] = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
-    program_descriptor.kernels[1].runtime_args[0][0] = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[0].runtime_args[0].first = {0, 0};
+    program_descriptor.kernels[0].runtime_args[0].second = {device_input_tensor_2.buffer()->address(), num_tiles, 0};
+    program_descriptor.kernels[1].runtime_args[0].first = {0, 0};
+    program_descriptor.kernels[1].runtime_args[0].second = {device_output_tensor_2.buffer()->address(), num_tiles, 0};
 
     ttnn::generic_op(std::vector{device_input_tensor_2, device_output_tensor_2}, program_descriptor);
     Tensor golden_2 = ttnn::exp(device_input_tensor_2);
@@ -885,6 +886,119 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         this->device_->num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit with new addresses, got {}",
         this->device_->num_program_cache_entries());
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
+    // Test that valid semaphore IDs work correctly
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 1,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
+    // Test that semaphore ID exceeding NUM_SEMAPHORES (16) throws an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = CoreRangeSet(core_range);
+
+    SemaphoreDescriptor invalid_sem_descriptor = {
+        .id = NUM_SEMAPHORES,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = device_cores,
+        .initial_value = 0,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {invalid_sem_descriptor},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
+    // Test that duplicate semaphore IDs on overlapping cores throw an error
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    // Overlap on core (0, 0)
+    CoreRange core_range_1 = {CoreCoord(0, 0), CoreCoord(0, 1)};
+    CoreRange core_range_2 = {CoreCoord(0, 0), CoreCoord(1, 0)};
+
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_1),
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_2),
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
+    };
+
+    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
+    // Test that same semaphore ID on non-overlapping cores is allowed
+    log_info(tt::LogTest, "Running {}", __func__);
+
+    CoreRangeSet cores_0 = CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    CoreRangeSet cores_1 = CoreRangeSet(CoreRange({1, 0}, {1, 0}));
+
+    SemaphoreDescriptor sem_on_core_0 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_0,
+        .initial_value = 0,
+    };
+    SemaphoreDescriptor sem_on_core_1 = {
+        .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = cores_1,
+        .initial_value = 1,
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {},
+        .semaphores = {sem_on_core_0, sem_on_core_1},
+        .cbs = {},
+    };
+
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
 }  // namespace ttnn::operations::generic::test

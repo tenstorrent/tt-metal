@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_untilize_with_unpadding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
@@ -46,15 +46,18 @@ void bind_untilize_with_unpadding(py::module& module) {
                const ttnn::Shape& output_tensor_end,
                const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
-               bool use_pack_untilize) {
-                return self(input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
+               bool use_pack_untilize,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(
+                    input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("output_tensor_end"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("use_multicore") = true,
-            py::arg("use_pack_untilize") = true});
+            py::arg("use_pack_untilize") = true,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

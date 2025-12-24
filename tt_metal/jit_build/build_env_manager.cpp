@@ -24,6 +24,9 @@
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -192,8 +195,8 @@ const JitBuildState& BuildEnvManager::get_kernel_build_state(
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
     auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
-    auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
-    return {kernel_build_states.begin() + b_id, count};
+    const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
+    return {kernel_build_states.begin() + b_id, static_cast<size_t>(count)};
 }
 
 BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(

@@ -160,6 +160,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index + 1], self.tt_sigma_next_step)
 
     def create_ttnn_timesteps(self, timesteps):
+        self.torch_timesteps = timesteps
         self.timesteps = []
         for t in timesteps:
             self.timesteps.append(

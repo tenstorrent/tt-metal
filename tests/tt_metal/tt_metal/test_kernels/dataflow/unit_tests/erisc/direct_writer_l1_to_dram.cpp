@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on NCRISC or
@@ -21,6 +21,10 @@ void kernel_main() {
     // DRAM NOC dst address
     std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_buffer_dst_addr);
 
-    noc_async_write(local_eth_l1_addr_base, dram_buffer_dst_noc_addr, dram_buffer_size);
-    noc_async_write_barrier();
+    experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
+    experimental::CoreLocalMem<std::uint32_t> src_l1(local_eth_l1_addr_base);
+
+    noc.async_write(src_l1, dst_dram, dram_buffer_size, {}, {.bank_id = dram_bank_id, .addr = dram_buffer_dst_addr});
+    noc.async_write_barrier();
 }

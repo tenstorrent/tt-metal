@@ -6,7 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
@@ -54,9 +54,13 @@ uint32_t default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
+    uint32_t num_mux_cores_per_direction_per_link,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    if (sub_core_grid.has_value()) {
+        subdevice_core_range_set = subdevice_core_range_set.intersection(sub_core_grid.value());
+    }
     uint32_t num_cores = subdevice_core_range_set.num_cores();
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
@@ -66,8 +70,14 @@ uint32_t default_workers(
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ccl::Topology::Ring ? 2 : 1);
-    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+    // At a single packet size (4KB) we should just have one worker with the optimal packet size and save on mux
+    // overheads At 256KB we observe that the perf improves if we have four workers per link
+    constexpr double DATA_THRESHOLD = 256.0 * 1024;
+    constexpr double SINGLE_PACKET_THRESHOLD = 4.0 * 1024;
+    if (data_moved_per_link_bytes > DATA_THRESHOLD) {
         candidate_worker_counts = {4, 2, 1};
+    } else if (data_moved_per_link_bytes <= SINGLE_PACKET_THRESHOLD) {
+        candidate_worker_counts = {1};
     } else {
         candidate_worker_counts = {2, 1};
     }
@@ -206,7 +216,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -230,7 +241,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         num_workers_per_link,
         num_buffers_per_channel,
         CoreCoord(0, 0),
-        reverse_order);
+        reverse_order,
+        sub_core_grid);
 }
 
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
@@ -254,12 +266,13 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
@@ -288,7 +301,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_links,
         ring_size,
         num_directions_per_link,
-        num_mux_cores_per_direction_per_link));
+        num_mux_cores_per_direction_per_link,
+        sub_core_grid));
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
@@ -334,9 +348,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
-
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
@@ -381,8 +394,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
-    // scatter-write currently only supports 2 distinct noc addresses
-    uint32_t max_target_noc_addresses_per_packet = 2;
+    // scatter-write currently supports 4 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 4;
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
@@ -769,7 +782,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Call the builder to create the program and get artifacts
     auto
         [reader_kernel_ids,
@@ -800,7 +814,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
                 core_grid_offset,
-                reverse_order);
+                reverse_order,
+                sub_core_grid);
 
     // Create the callback using the artifacts returned by the builder
     auto override_runtime_arguments_callback =
@@ -860,7 +875,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }

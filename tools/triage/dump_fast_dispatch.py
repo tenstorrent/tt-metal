@@ -14,7 +14,8 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, run_script
+from triage import ScriptConfig, triage_field, run_script, log_check
+from ttexalens.elf.variable import RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -23,12 +24,13 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
 from inspector_data import run as get_inspector_data, InspectorData
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "metal_device_id_mapping"],
 )
 
 
@@ -50,16 +52,22 @@ class DumpWaitGlobalsData:
     x: int | None = triage_field("x", verbose=2)
     y: int | None = triage_field("y", verbose=2)
     last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
+    # Number of extra pages available in the circular buffer that are not included in cb_fence_
+    sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
-def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
+def _read_symbol_value(
+    elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True
+) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_access.
 
     Returns None if the symbol cannot be read.
     """
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
-    except Exception:
+    except Exception as e:
+        if check_value:
+            log_check(False, f"Failed to read symbol {symbol} from kernel {elf_obj.elf_file_path} with error {str(e)}")
         return None
 
 
@@ -107,18 +115,20 @@ class MultiCategoryCoreLookup:
 
 
 # This function builds a lookup map for core info for a given kernel name
-def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
+def build_core_lookup_map(
+    inspector_data: InspectorData, metal_device_id_mapping: MetalDeviceIdMapping
+) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
     """
-    Build lookup map for core info for a given kernel name
+    Build lookup map for core info for a given kernel name using unique_id as chip key.
 
-    Returns a dictionary mapping (chip, x, y) to a MultiCategoryCoreLookup object
+    Returns a dictionary mapping (unique_id, x, y) to a MultiCategoryCoreLookup object
     MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     """
     # Get all core info from inspector data
     all_cores = inspector_data.getAllDispatchCoreInfos()
 
     # Convert to dictionary for faster lookup
-    # key is (chip, x, y) and value is a MultiCategoryCoreLookup object
+    # key is (unique_id, x, y) and value is a MultiCategoryCoreLookup object
     # MultiCategoryCoreLookup object contains dispatch_info, dispatch_s_info, and prefetch_info
     lookup: dict[tuple[int, int, int], MultiCategoryCoreLookup] = {}
 
@@ -126,7 +136,12 @@ def build_core_lookup_map(inspector_data: InspectorData) -> dict[tuple[int, int,
         category = category_group.category  # "dispatch", "dispatchS", or "prefetch"
 
         for core_entry in category_group.entries:
-            key = (core_entry.key.chip, core_entry.key.x, core_entry.key.y)
+            # core_entry.key.chip is metal device_id
+            metal_device_id = core_entry.key.chip
+            unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
+
+            # Use unique_id as the key
+            key = (unique_id, core_entry.key.x, core_entry.key.y)
 
             # Get or create entry for this core
             if key not in lookup:
@@ -155,39 +170,53 @@ def read_wait_globals(
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
 
+    # Skipping because we cannot read NCRISC private memory on wormhole
+    if risc_name == "ncrisc" and location.device.is_wormhole():
+        return None
+
     # If no kernel loaded, nothing to read
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
         return None
     assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = RiscDebugMemoryAccess(location.noc_block.get_risc_debug(risc_name), ensure_halted_access=False)
+    is_dispatcher_kernel = (
+        dispatcher_core_data.kernel_name == "cq_dispatch"
+        or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"
+    )
     # Inline: read wait-related globals directly from ELF
-    last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access)
-    last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access)
-    last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
+    last_wait_count = _read_symbol_value(
+        kernel_elf, "last_wait_count", loc_mem_access, check_value=is_dispatcher_kernel
+    )
+    last_wait_stream = _read_symbol_value(
+        kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
+    )
+    last_event = _read_symbol_value(
+        kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
+    )
     try:
         circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
-    except:
+    except Exception:
+        if dispatcher_core_data.kernel_name == "cq_dispatch":
+            log_check(False, f"Failed to read circular_buffer_fence for kernel {dispatcher_core_data.kernel_name}")
         circular_buffer_fence = None
-    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
+    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=is_dispatcher_kernel)
 
-    def get_const_value(name: str) -> int | None:
+    def get_const_value(name: str, check_value: bool = True) -> int | None:
         try:
             value = kernel_elf.get_constant(name)
             assert isinstance(value, int)
             return value
         except Exception:
+            if check_value:
+                log_check(False, f"Failed to read constant {name} for kernel {dispatcher_core_data.kernel_name}")
             return None
 
-    stream_addr0 = None
-    stream_addr1 = None
-    stream_width = None
-
-    stream_addr0 = get_const_value("stream_addr0")
-    stream_addr1 = get_const_value("stream_addr1")
-    stream_width = get_const_value("stream_width")
+    stream_addr0 = get_const_value("stream_addr0", check_value=is_dispatcher_kernel)
+    stream_addr1 = get_const_value("stream_addr1", check_value=is_dispatcher_kernel)
+    stream_width = get_const_value("stream_width", check_value=is_dispatcher_kernel)
 
     wait_stream_value = None
     if stream_addr0 is not None and stream_addr1 is not None and last_wait_stream is not None:
@@ -197,17 +226,40 @@ def read_wait_globals(
             stream_addr0 + stream_stride_bytes * last_wait_stream,
         )
 
+        if is_dispatcher_kernel:
+            log_check(
+                wait_stream_value is not None,
+                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}",
+            )
+
     if last_wait_count is not None and stream_width is not None:
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
 
+    # Compute sem_minus_local for dispatcher kernels by reading the live semaphore and subtracting local_count_
+    sem_minus_local: int | None = None
+    try:
+        if dispatcher_core_data.kernel_name == "cq_dispatch":
+            my_dispatch_cb_sem_id = int(kernel_elf.get_constant("my_dispatch_cb_sem_id"))
+            fd_core_type_idx = int(kernel_elf.get_constant("fd_core_type_idx"))
+
+            # sem_l1_base is a firmware global array of L1 pointers; index by core type
+            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+            sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
+            local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
+
+            # Two's-complement 32-bit wrapping difference
+            delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
+            sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except Exception:
+        log_check(False, f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}")
+        # Leave as None if any lookups fail
+        sem_minus_local = None
+
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
-    # This device._id might mismatch with the tt_cxy_pair::chip_id
-    # due to TT_METAL_VISIBLE_DEVICES env variable
-    # Avoid using UMD device id in tt-triage because of the mapping problem
-    # TODO: replace device._id with unique_id once it's available
-    chip_id = location._device._id
+    # Use unique_id instead of device._id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
+    chip_id = location._device.unique_id
     x, y = virtual_coord
 
     # Lookup core info for the given kernel name based on virtual coordinates
@@ -231,8 +283,9 @@ def read_wait_globals(
         y=y,
         worker_type=getattr(core_info, "workType", None),
         cq_id=getattr(core_info, "cqId", None),
-        servicing_device_id=getattr(core_info, "servicingDeviceId", None),
+        servicing_device_id=getattr(core_info, "servicingMetalDeviceId", None),
         last_event_issued_to_cq=getattr(core_info, "eventID", None),
+        sem_minus_local=sem_minus_local,
     )
 
 
@@ -247,35 +300,31 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
 
-    # Get inspector data
+    # Get inspector data and device ID mapping
     inspector_data = get_inspector_data(args, context)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     # Build lookup map for core info for a given kernel name
-    core_lookup = build_core_lookup_map(inspector_data)
+    core_lookup = build_core_lookup_map(inspector_data, metal_device_id_mapping)
 
     # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
     dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
-    # Map chip ID to device for lookup
-    chip_to_device = {device._id: device for device in run_checks.devices}
 
-    # Go through all cores in the core_lookup
+    # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
-    for (chip, x, y), info in core_lookup.items():
+    for (chip_unique_id, x, y), info in core_lookup.items():
         if not info.has_any_info():
             continue
 
+        device = run_checks.get_device_by_unique_id(chip_unique_id)
         # Create OnChipCoordinate for this dispatcher core location
-        device = chip_to_device.get(chip)
-        # TODO: Handle chip ID mapping issues when inspector chip != device._id
-        # due to TT_METAL_VISIBLE_DEVICES. This will be resolved when unique_id
-        # is available instead of device._id
         location = OnChipCoordinate(x, y, "translated", device)
 
         # Check all RISC cores at this location for dispatcher kernels
         noc_block = location._device.get_block(location)
         for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
                 dispatcher_core_data.kernel_name is not None
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names

@@ -4,14 +4,12 @@
 
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-// #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 #include <tt_stl/reflection.hpp>
@@ -21,10 +19,11 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 
 using namespace tt::constants;
 
-namespace ttnn::operations::upsample {
+namespace ttnn::operations::pool::upsample::program {
 using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
@@ -59,12 +58,16 @@ Tensor HaloTensorCreation(const Tensor& input) {
     return halo_output;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
-    const Tensor& input,
-    Tensor& output,
-    const uint32_t scale_factor_h,
-    const uint32_t scale_factor_w,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input = tensor_args.input_tensor;
+    auto& output = output_tensor;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+
     Program program = tt::tt_metal::CreateProgram();
     IDevice* device = input.device();
 
@@ -84,6 +87,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t output_nsticks = output.physical_volume() / output.padded_shape()[-1];
     uint32_t input_nsticks = input.physical_volume() / input.padded_shape()[-1];
 
+    uint32_t batch_size = input.padded_shape()[0];
+    uint32_t in_h = input.padded_shape()[1];
     uint32_t in_w = input.padded_shape()[2];
     uint32_t out_w = output.padded_shape()[2];
 
@@ -158,15 +163,15 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t in_cb_npages = halo_shard_shape[0];
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
 
-    auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
+    auto [halo_cb_id, cb_src0] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
 
     // first intermediate CB
     uint32_t in1_cb_pagesize =
         std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
-    uint32_t in_cb_id1 = next_cb_index++;
+    uint32_t tilize_reduce_cb_0 = next_cb_index++;
     tt::tt_metal::create_cb(
-        in_cb_id1,
+        tilize_reduce_cb_0,
         program,
         all_cores,
         in1_cb_pagesize,
@@ -174,9 +179,9 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
     // second intermediate CB
-    uint32_t in_cb_id2 = next_cb_index++;
+    uint32_t tilize_reduce_cb_1 = next_cb_index++;
     tt::tt_metal::create_cb(
-        in_cb_id2,
+        tilize_reduce_cb_1,
         program,
         all_cores,
         in_cb_pagesize,
@@ -202,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
-    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
+    log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
     log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
@@ -214,42 +219,70 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     // Kernels
     // computation needed for the bilinear kernel. Passing them as an argument.
+    // Convert to fixed-point Q16.16 format on host for better compile-time optimization in kernel
+    // NOTE: These constants must match those in fixed_point_arithmetic.h to ensure consistency
+    constexpr int32_t FIXED_POINT_SHIFT = 16;
+    constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
+
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
     float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
     float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
-    uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
-    uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);
-    uint32_t y_index_u32 = *reinterpret_cast<uint32_t*>(&y_index);
-    uint32_t x_index_compute_u32 = *reinterpret_cast<uint32_t*>(&x_index_compute);
+    // Convert to fixed-point Q16.16 format for kernel
+    int32_t scale_h_inv_fixed = (int32_t)(scale_h_inv * FIXED_ONE);
+    int32_t scale_w_inv_fixed = (int32_t)(scale_w_inv * FIXED_ONE);
+    int32_t y_index_fixed = (int32_t)(y_index * FIXED_ONE);
+    int32_t x_index_compute_fixed = (int32_t)(x_index_compute * FIXED_ONE);
+
+    // Cast to uint32_t for passing as compile-time args
+    uint32_t scale_h_inv_u32 = static_cast<uint32_t>(scale_h_inv_fixed);
+    uint32_t scale_w_inv_u32 = static_cast<uint32_t>(scale_w_inv_fixed);
+    uint32_t y_index_u32 = static_cast<uint32_t>(y_index_fixed);
+    uint32_t x_index_compute_u32 = static_cast<uint32_t>(x_index_compute_fixed);
 
     uint32_t num_input_width_blocks =
         std::ceil((float)(input_shape[3]) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH));
+
     std::vector<uint32_t> reader_compile_time_args = {
-        in_cb_id,
-        in_cb_id1,
-        in_scalar_cb_id1,
-        scale_h_inv_u32,
-        scale_w_inv_u32,
-        y_index_u32,
-        x_index_compute_u32,
-        1,
-        num_input_width_blocks,
-        input_block_size_bytes,
+        input_stick_nbytes,             // [0] stick_nbytes
+        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
+        scale_factor_h,                 // [2] scale_h
+        scale_factor_w,                 // [3] scale_w
+        in_w,                           // [4] in_w
+        out_w,                          // [5] out_w
+        in_h,                           // [6] in_h
+        halo_cb_id,                     // [7] halo_cb_id
+        tilize_reduce_cb_0,             // [8] tilize_reduce_cb_0
+        in_scalar_cb_id1,               // [9] in_scalar_cb_id
+        scale_h_inv_u32,                // [10] scale_h_inv_comp
+        scale_w_inv_u32,                // [11] scale_w_inv_comp
+        y_index_u32,                    // [12] y_starting_coordinate_u32
+        x_index_compute_u32,            // [13] x_starting_coordinate_u32
+        1,                              // [14] is_reader
+        num_input_width_blocks,         // [15] blocks
+        input_block_size_bytes,         // [16] input_block_size_bytes
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
-        in_cb_id,
-        in_cb_id2,
-        in_scalar_cb_id2,
-        scale_h_inv_u32,
-        scale_w_inv_u32,
-        y_index_u32,
-        x_index_compute_u32,
-        0,
-        num_input_width_blocks,
-        input_block_size_bytes,
+        // Former runtime args (now compile-time)
+        input_stick_nbytes,             // [0] stick_nbytes
+        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
+        scale_factor_h,                 // [2] scale_h
+        scale_factor_w,                 // [3] scale_w
+        in_w,                           // [4] in_w
+        out_w,                          // [5] out_w
+        in_h,                           // [6] in_h
+        halo_cb_id,                     // [7] halo_cb_id
+        tilize_reduce_cb_1,             // [8] tilize_reduce_cb_1
+        in_scalar_cb_id2,               // [9] in_scalar_cb_id
+        scale_h_inv_u32,                // [10] scale_h_inv_comp
+        scale_w_inv_u32,                // [11] scale_w_inv_comp
+        y_index_u32,                    // [12] y_starting_coordinate_u32
+        x_index_compute_u32,            // [13] x_starting_coordinate_u32
+        0,                              // [14] is_reader (0 for writer)
+        num_input_width_blocks,         // [15] blocks
+        input_block_size_bytes,         // [16] input_block_size_bytes
     };
 
     std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
@@ -261,8 +294,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
     std::vector<uint32_t> compute_compile_time_args = {
-        in_cb_id1,
-        in_cb_id2,
+        tilize_reduce_cb_0,
+        tilize_reduce_cb_1,
         in_scalar_cb_id1,
         in_scalar_cb_id2,
         out_cb_id,
@@ -291,22 +324,12 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    uint32_t batch_size = input.padded_shape()[0];
-    uint32_t in_h = input.padded_shape()[1];
-
-    // runtime args
-    uint32_t reader_nargs = 8;
+    // runtime args - now only start_input_row_in_image_id remains
+    uint32_t reader_nargs = 1;
     std::vector<uint32_t> reader_rt_args(reader_nargs);
-    reader_rt_args[0] = input_stick_nbytes;
-    reader_rt_args[1] = input_nsticks_per_core / in_w;
-    reader_rt_args[2] = scale_factor_h;
-    reader_rt_args[3] = scale_factor_w;
-    reader_rt_args[4] = in_w;
-    reader_rt_args[5] = out_w;
-    reader_rt_args[6] =
-        0;  // denotes the position (index) of the first row of the input shard in its corresponding batch
-            // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
-    reader_rt_args[7] = in_h;
+    reader_rt_args[0] = 0;  // start_input_row_in_image_id: denotes the position (index) of the first row of the input
+                            // shard in its corresponding batch Note: the first row of the input shard corresponds to
+                            // the second row (index 1) in the halo shard
 
     uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
 
@@ -315,7 +338,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
-            reader_rt_args[6] = start_input_row_in_image_id;
+            reader_rt_args[0] = start_input_row_in_image_id;         // Now at index 0 (only runtime arg)
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
             start_input_row_in_image_id += num_rows_per_core;
@@ -325,21 +348,33 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         TT_FATAL(false, "Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [reader_kernel, writer_kernel, cb_src0, out_cb](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto halo_in = HaloTensorCreation(input_tensors.at(0));
-        auto src_buffer = halo_in.buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel = reader_kernel,
+            .writer_kernel = writer_kernel,
+            .cb_src0 = cb_src0,
+            .out_cb = out_cb,
+        }};
 }
 
-}  // namespace ttnn::operations::upsample
+void UpsampleBilinearProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    auto& out_cb = cached_program.shared_variables.out_cb;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    auto halo_in = HaloTensorCreation(input_tensor);
+    auto* src_buffer = halo_in.buffer();
+    auto* dst_buffer = output_tensor.buffer();
+
+    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+}
+
+}  // namespace ttnn::operations::pool::upsample::program

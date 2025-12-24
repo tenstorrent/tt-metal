@@ -12,40 +12,206 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
         default: "in-service"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate Matrix
+        id: set-matrix
+        run: |
+          FULL_MATRIX=$(jq -n -c '[
+            {
+              "name": "t3k_falcon7b_tests",
+              "model": "falcon7b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon7b_tests",
+              "timeout": 90,
+              "owner_id": "U05RWH3QUPM" # Salar Hosseini
+            },
+            {
+              "name": "t3k_falcon40b_tests",
+              "model": "falcon40b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon40b_tests",
+              "timeout": 50,
+              "owner_id": "U053W15B6JF" # Djordje Ivanovic
+            },
+            {
+              "name": "t3k_llama3_tests",
+              "model": "llama3",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_tests",
+              "timeout": 60,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k_llama3_vision_tests",
+              "model": "llama3_vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_vision_tests",
+              "timeout": 45,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k_llama3_90b_vision_tests",
+              "model": "llama3_90b_vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_90b_vision_tests",
+              "timeout": 20,
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k_llama3_70b_tests",
+              "model": "llama3_70b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3_70b_tests",
+              "timeout": 60,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k_resnet50_tests",
+              "model": "resnet50",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_resnet50_tests",
+              "timeout": 50,
+              "owner_id": "U0837MYG788" # Marko Radosavljevic
+            },
+            {
+              "name": "t3k_sentence_bert_tests",
+              "model": "sentence_bert",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_sentence_bert_tests",
+              "timeout": 75,
+              "owner_id": "U045U3DEKM4" # Mohamed Bahnas (Aniruddha Tupe)
+            },
+            {
+              "name": "t3k sd35_large tests",
+              "model": "sd35_large",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_sd35large_tests",
+              "timeout": 60,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k flux1-dev tests",
+              "model": "flux1-dev",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_flux1_tests",
+              "timeout": 60,
+              "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k motif tests",
+              "model": "motif",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_motif_tests",
+              "timeout": 25,
+              "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k_mistral_tests",
+              "model": "mistral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mistral_tests",
+              "timeout": 90,
+              "owner_id": "U0896VBAKFC" # Pratikkumar Prajapati
+            },
+            {
+              "name": "t3k_mixtral_tests",
+              "model": "mixtral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mixtral_tests",
+              "timeout": 50,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k_whisper_tests",
+              "model": "whisper",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_whisper_tests",
+              "timeout": 90,
+              "owner_id": "U088413NP0Q" # Ashai Reddy
+            },
+            {
+              "name": "t3k_qwen3_tests",
+              "model": "qwen3",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen3_tests",
+              "timeout": 60,
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
+            },
+            {
+              "name": "t3k_qwen25_tests",
+              "model": "qwen25",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen25_tests",
+              "timeout": 90,
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
+            },
+            {
+              "name": "t3k_qwen25_vl_tests",
+              "model": "qwen25_vl",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen25_vl_tests",
+              "timeout": 30,
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k_gemma3_tests",
+              "model": "gemma3",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gemma3_tests",
+              "timeout": 30,
+              "owner_id": "U08TJ70UFRT" # Harry Andrews
+            },
+            {
+              "name": "t3k_wan2.2_tests",
+              "model": "wan22",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_wan22_tests",
+              "timeout": 45,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k_mochi_tests",
+              "model": "mochi",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mochi_tests",
+              "timeout": 60,
+              "owner_id": "U09ELB03XRU" # Stephen Osborne
+            }
+          ]')
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          else
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
+            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+          fi
+
   t3000-demo-tests:
+    needs: generate-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Harry Zhou
-          { name: "t3k llama3_load_checkpoints tests", arch: wormhole_b0, cmd: run_t3000_llama3_load_checkpoints_tests, timeout: 30, owner_id: U07RY6B5FLJ}, #Gongyu Wang
-          { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U053W15B6JF}, #Djordje Ivanovic
-          { name: "t3k_llama3_tests", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
-          { name: "t3k_llama3_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_vision_tests, timeout: 45, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k_llama3_90b_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_90b_vision_tests, timeout: 20, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_resnet50_tests", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 50, owner_id: U0837MYG788}, # Marko Radosavljevic
-          { name: "t3k_sentence_bert_tests", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
-          { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k flux1-dev tests", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 30, owner_id: U08TED0JM9D}, #Samuel Adesoye
-          { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 90, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-          # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
-          # This requirements and comment removed when https://github.com/tenstorrent/tt-metal/pull/22608 merges.
-          { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
-          { name: "t3k_qwen25_vl_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_tests, timeout: 30, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          { name: "t3k_gemma3_tests", arch: wormhole_b0, cmd: run_t3000_gemma3_tests, timeout: 30, owner_id: U08TJ70UFRT},  # Harry Andrews
-          { name: "t3k_wan2.2_tests", arch: wormhole_b0, cmd: run_t3000_wan22_tests, timeout: 45, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          { name: "t3k_mochi_tests", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 60, owner_id: U09ELB03XRU}, # Stephen Osborne
-        ]
-
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -66,15 +232,20 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -105,7 +276,7 @@ jobs:
 
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

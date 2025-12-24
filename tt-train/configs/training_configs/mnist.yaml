@@ -7,4 +7,5 @@ training_config:
   weight_decay: 0.0
   is_eval: false
   model_save_interval: 500
-  model_path: "/tmp/mnist_mlp.msgpack"
+  model_config: "configs/model_configs/mlp_config.yaml"
+  model_path: "/tmp/mnist_mlp"

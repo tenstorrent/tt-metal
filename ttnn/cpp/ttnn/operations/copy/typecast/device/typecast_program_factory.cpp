@@ -53,8 +53,8 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -87,12 +87,16 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
-    auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+    const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     tt::tt_metal::CreateKernel(
         program,
@@ -164,8 +168,8 @@ void TypecastProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -244,8 +248,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -265,8 +269,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {
-        (uint32_t)nblocks_per_core,  // per_core_block_cnt
-        (uint32_t)ntiles_per_block,  // per_block_ntiles // per_core_block_size
+        static_cast<uint32_t>(nblocks_per_core),  // per_core_block_cnt
+        static_cast<uint32_t>(ntiles_per_block),  // per_block_ntiles // per_core_block_size
         src0_cb_index,
         output_cb_index};
 
@@ -278,12 +282,16 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
-    auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+    const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     tt::tt_metal::CreateKernel(
         program,
@@ -330,8 +338,8 @@ void TypecastSubgridProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     {
         auto& runtime_args_by_core = GetRuntimeArgs(program, typecast_reader_kernel_id);

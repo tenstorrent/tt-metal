@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,7 +22,7 @@ struct TraceDescriptor;
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct Command;
+class Command;
 struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;
@@ -51,9 +51,7 @@ using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::experimental::lightmetal::detail {
 class LightMetalReplayImpl {
 public:
     // Constructor
@@ -65,23 +63,23 @@ public:
     // Executor functions for all traced host API calls (commands)
     // Trace APIs are no longer supported due to trace API deprecation. See Issue #24955
     void execute(const tt::tt_metal::flatbuffer::Command* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
+    void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd);
 
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
@@ -123,7 +121,7 @@ public:
 private:
     // Workload related members
     LightMetalBinary binary_;
-    const flatbuffer::LightMetalBinary* fb_binary_;
+    const flatbuffer::LightMetalBinary* fb_binary_{nullptr};
     bool show_reads_ = false;
     bool disable_checking_ = false;
 
@@ -137,5 +135,4 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
 };
 
-}  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal::detail

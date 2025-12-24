@@ -34,10 +34,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include "kernel.hpp"
+#include <impl/debug/watcher_server.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace fs = std::filesystem;
 
@@ -113,8 +112,7 @@ Kernel::Kernel(
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
-    common_runtime_args_count_(0),
-    max_runtime_args_per_core_(0),
+
     core_with_max_runtime_args_({0, 0}),
     defines_(defines) {
     this->register_kernel_with_watcher();
@@ -214,8 +212,7 @@ void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
-    // pass default noc mode as eth does not need it, just for compile to pass
-    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 std::string_view DataMovementKernel::get_compiler_opt_level() const {
@@ -267,7 +264,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
 
 std::vector<std::string> Kernel::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
     for (int i = 0; i < this->expected_num_binaries(); i++) {
@@ -325,10 +322,12 @@ std::string DataMovementKernel::config_hash() const {
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
-    return fmt::format("eth_{}_{}_{}",
+    return fmt::format(
+        "eth_{}_{}_{}_{}",
+        enchantum::to_string(this->config_.processor),
         enchantum::to_string(this->config_.noc),
-        this->config_.eth_mode,
-        this->config_.processor);
+        enchantum::to_string(this->config_.noc_mode),
+        enchantum::to_string(this->config_.eth_mode));
 }
 
 std::string ComputeKernel::config_hash() const {
@@ -431,9 +430,10 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     //                  Should this check only be enabled in debug mode?
     TT_ASSERT(
         this->is_on_logical_core(logical_core),
-        "Cannot set runtime args for core {} since kernel {} is not placed on it!",
+        "Cannot set runtime args for core {} since kernel {} is not placed on it. core range set: {}!",
         logical_core.str(),
-        this->name());
+        this->name(),
+        core_range_set_.str());
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 
@@ -741,6 +741,4 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     return os;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

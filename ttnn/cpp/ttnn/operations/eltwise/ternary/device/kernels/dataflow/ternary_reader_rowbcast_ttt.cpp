@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -52,14 +52,17 @@ void kernel_main() {
     const uint32_t start_tile_id = start_id;   // start tile id
     const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
 
-    constexpr auto cb_id_src = tt::CBIndex::c_0;    // predicate CB
-    constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // true tensor CB
-    constexpr auto cb_id_src_c = tt::CBIndex::c_2;  // false tensor CB
+    // CB IDs from compile-time args (indices 0, 1, 2) - unified layout
+    constexpr auto cb_id_src = get_compile_time_arg_val(0);    // predicate CB
+    constexpr auto cb_id_src_b = get_compile_time_arg_val(1);  // true tensor CB
+    constexpr auto cb_id_src_c = get_compile_time_arg_val(2);  // false tensor CB
 
-    // Compile-time args layout mirrors column broadcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    // TensorAccessorArgs start at index 3 (after CB IDs) - unified layout
+    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+    constexpr auto src2_args =
+        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 #if SRC_SHARDED_A
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
@@ -83,7 +86,7 @@ void kernel_main() {
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = 0;
+    constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

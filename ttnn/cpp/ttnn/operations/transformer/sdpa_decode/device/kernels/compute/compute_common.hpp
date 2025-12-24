@@ -363,7 +363,16 @@ void calculate_exponential_first_column(int scale_bf16) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::vFloat result;
+            if constexpr (!DST_ACCUM_MODE) {
+                // bfloat16-accurate implementation of exp ( < 1 ULP)
+                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
+            } else {
+                // float32 version of exp (< 150 float32 ULP)
+                // this is more accurate than exp_21f, but also slower
+                result = ckernel::sfpu::_sfpu_exp_61f_(val);
+            }
+
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -466,10 +475,10 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE>
+template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
-        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, (int)VectorMode::C, scale_bf16);
+        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
 
@@ -512,7 +521,7 @@ void correction_block(
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
         copy_tile(cb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE>(0, scale_bf16)));
+        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
         pack_tile(dst_reg_0, cb_exp_max_diff);
         pack_tile(dst_reg_1, cb_exp_max_diff_2);
         pack_tile(dst_reg_2, cb_cur_max);

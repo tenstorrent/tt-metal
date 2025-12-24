@@ -151,11 +151,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +183,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
@@ -239,6 +239,130 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
 }
 ```
 
+#### Step 4a: Mesh Workload Factories (When `mesh_coords` Filtering is Needed)
+
+If your operation supports `mesh_coords` filtering (i.e., only executing on specific mesh coordinates), you need to create separate mesh workload factories. This is required because the infrastructure's `MeshWorkloadFactoryAdapter` creates programs for ALL tensor coordinates, ignoring `mesh_coords`.
+
+**Pattern**: Create a separate factory that only implements `MeshWorkloadFactoryConcept` (not `ProgramFactoryConcept`), following the dropout example.
+
+**Example - Dropout Pattern:**
+
+```cpp
+// In program factory header:
+struct DropoutProgramFactory {
+    using shared_variables_t = DropoutSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(...);
+    static void override_runtime_arguments(...);
+};
+
+struct DropoutMeshWorkloadFactory {
+    using shared_variables_t = DropoutSharedVariables;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+```
+
+**Implementation:**
+
+```cpp
+// In program factory .cpp:
+DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    // Filter coordinates based on mesh_coords if provided
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords_opt = operation_attributes.mesh_coords;
+
+    // Create programs for each coordinate in tensor_coords (filtered by mesh_coords if provided)
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
+            if (mesh_coords_opt.has_value()) {
+                const auto& mesh_coords_set = mesh_coords_opt.value();
+                if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
+                    continue;  // Skip this coordinate
+                }
+            }
+
+            // Create a program for this specific coordinate using the base factory
+            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+            auto cached_program = DropoutProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
+            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+        }
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void DropoutMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    DropoutProgramFactory program_factory;
+
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+
+        ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
+            program_factory,
+            program,
+            shared_variables,
+            operation_attributes,
+            *(coordinate_range.begin()),
+            tensor_args,
+            tensor_return_value);
+    }
+}
+```
+
+**Update variant and select_program_factory:**
+
+```cpp
+// In device operation header:
+using program_factory_t = std::variant<
+    program::DropoutProgramFactory,
+    program::DropoutMeshWorkloadFactory>;
+
+// In device operation .cpp:
+DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
+    if (args.mesh_coords.has_value()) {
+        return program::DropoutMeshWorkloadFactory{};
+    } else {
+        return program::DropoutProgramFactory{};
+    }
+}
+```
+
+**Why this pattern?** The infrastructure's `dispatch_to_mesh_workload_factory` checks `ProgramFactoryConcept` first. If your factory satisfies both concepts, it gets wrapped by the adapter (which doesn't filter by `mesh_coords`). By using a separate factory that only implements `MeshWorkloadFactoryConcept`, the infrastructure uses the direct path, giving you control over coordinate filtering.
+
+**Real examples:**
+- `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.{hpp,cpp}`
+- `ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_program_factory.{hpp,cpp}`
+- `ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fill_cache/paged_fill_cache_program_factory.{hpp,cpp}`
+- `ttnn/cpp/ttnn/operations/experimental/paged_cache/device/fused_update_cache/paged_*_fused_update_cache_program_factory.{hpp,cpp}`
+
 ### Step 5: Implement Validation
 
 Unless the old device operation provides a separate `validate_on_cache_hit`, implement `validate_on_cache_miss` and call it from `validate_on_cache_hit`.
@@ -288,7 +412,7 @@ return ttnn::prim::embedding(input_tensor, weight, ...);
 
 ### Step 7: Create Program Factory
 
-To define `shared_params_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
+To define `shared_variables_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
 
 **Example - Old program factory lambda:**
 
@@ -323,18 +447,18 @@ auto override_runtime_args_callback = [
 };
 ```
 
-**Lambda capture → `shared_params_t`:**
+**Lambda capture → `shared_variables_t`:**
 
-The lambda's capture list becomes `shared_params_t`:
+The lambda's capture list becomes `shared_variables_t`:
 
 ```cpp
-struct shared_params_t {
+struct shared_variables_t {
     uint32_t num_cores_x;
     uint32_t num_cores_y;
     KernelHandle reader_kernel_id;
     KernelHandle writer_kernel_id;
     std::vector<CoreCoord> cores;
-    // Note: 'device' is typically not needed in shared_params_t
+    // Note: 'device' is typically not needed in shared_variables_t
 };
 ```
 
@@ -377,18 +501,38 @@ void EmbeddingProgramFactory::override_runtime_arguments(
 
 Hash is based on operation attributes and input arguments and helps reuse already compiled programs.
 
-**What to include in hash:**
+Note, the default legacy implementation hashes both operation attributes and input tensors.
+Tensor hash includes:
+ - Storage variant index (0 or 1)
+ - Logical shape dimensions (vector of uint32_t)
+- Data type (DataType enum)
+- Page config variant index (0 or 1)
+- Tile configuration (from page config)
+- Memory layout (TensorMemoryLayout enum)
+- Buffer type (BufferType enum)
+- Shard spec (optional ShardSpec)
+- ND shard spec (optional NdShardSpec)
+- Created with ND shard spec flag (bool)
+- Alignment dimensions (vector of uint32_t)
+
+**If the legacy operation does not implement `compute_program_hash`**,
+Do not implement `compute_program_hash` in the newly-migrated operation, because we want to mimic how the legacy was hashed.
+
+**If the legacy operation implements `compute_program_hash`**,
+Include everything that was in the legacy into the new hash. Make sure to include `tensor_args` as a whole.
+
+**What must be included in hash:**
+Anything that affects the compiled kernel binary:
 - Setup of Circular Buffers
 - Kernels and cores used
 - Compile-time arguments/defines
 - Operation attributes that affect program structure
 
 **What to exclude from hash:**
+Anything that has no effect on compiled binaries (runtime arguments)
 - Buffer addresses
 - Offsets
 - Number of tiles to process (runtime arguments)
-
-**If the legacy operation does not implement `compute_program_hash`**, the default behavior is to hash both attributes and input tensors. The new operation works the same, so no need to implement this function if it wasn't implemented before.
 
 **Example migration:**
 
@@ -454,10 +598,20 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 
 Great examples of operations migrated to TMP:
 
-Dropout operation: `ttnn/cpp/ttnn/operations/experimental/dropout`
-PRs:
+**Dropout operation**: `ttnn/cpp/ttnn/operations/experimental/dropout`
+- Demonstrates mesh workload factory pattern for `mesh_coords` filtering
+- PRs:
   - https://github.com/tenstorrent/tt-metal/pull/11793
   - https://github.com/tenstorrent/tt-metal/pull/11956
+
+**Paged Cache operations**: `ttnn/cpp/ttnn/operations/experimental/paged_cache/device/`
+- `update_cache/`, `fill_cache/`, `fused_update_cache/` all demonstrate mesh workload factory pattern
+- Shows how to handle multiple factory variants (tiled vs row_major for fused_update_cache)
+
+**Send Async operations**: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/`
+- Demonstrates another mesh workload factory example
+- PRs:
+  - https://github.com/tenstorrent/tt-metal/pull/33005
 
 ---
 
@@ -468,7 +622,7 @@ PRs:
 To build the project with debug symbols (without Python bindings for faster builds during development):
 
 ```bash
-./build_metal.sh -c -e --debug --without-python-bindings
+./build_metal.sh -c -e --debug
 ```
 
 ### Running Tests
@@ -500,6 +654,7 @@ Use this checklist to ensure all steps are completed:
 - [ ] **Step 4**: Implemented `compute_output_specs`
 - [ ] **Step 5**: [Optional] Implemented `create_output_tensors` (if legacy had it)
 - [ ] **Step 6**: Implemented `select_program_factory` returning correct variant type
+- [ ] **Step 6a**: [If needed] Created separate mesh workload factory for `mesh_coords` filtering support
 - [ ] **Step 7**: Implemented `validate_on_program_cache_miss`
 - [ ] **Step 8**: [Optional] Implemented `validate_on_program_cache_hit` (if legacy had it)
 - [ ] **Step 9**: Registered prim in `ttnn::prim` namespace
@@ -521,6 +676,7 @@ Use this checklist to ensure all steps are completed:
 2. **Including runtime-only values in hash**: Only hash compile-time constants that affect program structure
 3. **Not including values that affect the program structure in hash**: Every parameter that has an effect on program structure must be taken into account in the hash
 4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
+5. **Mesh workload factories not working with `mesh_coords`**: If your operation supports `mesh_coords` filtering, you MUST create a separate mesh workload factory. The infrastructure's `MeshWorkloadFactoryAdapter` will create programs for ALL tensor coordinates, ignoring `mesh_coords`. Only factories that implement `MeshWorkloadFactoryConcept` (and NOT `ProgramFactoryConcept`) will use the direct path that allows coordinate filtering.
 
 ---
 

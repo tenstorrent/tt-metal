@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "create_qkv_heads_program_factory.hpp"
 #include "create_qkv_heads_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -11,23 +12,27 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads::program {
 
-static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
-    const Tensor& input_tensor,
-    const std::vector<uint32_t>&& heads_per_group,
-    const uint32_t head_dim,
-    const uint32_t groups,
-    std::vector<Tensor>& output,
-    bool transpose_k) {
-    // groups = kv_heads usually
-    // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
+CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
+    auto& [output_q, output_k, output_v] = output;
+
+    const uint32_t num_q_heads = operation_attributes.num_q_heads;
+    const uint32_t num_kv_heads = operation_attributes.num_kv_heads;
+    const uint32_t head_dim = operation_attributes.head_dim;
+    const bool transpose_k = operation_attributes.transpose_k_heads;
+
+    // Compute heads_per_group
+    std::vector<uint32_t> heads_per_group = {num_q_heads / num_kv_heads, 1, 1};
+    const uint32_t groups = num_kv_heads;
+
+    // Validation
     TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
-    TT_FATAL(
-        heads_per_group.size() == output.size() && output.size() == 3,
-        "heads_per_group size ({}) and output size ({}) must both equal 3",
-        heads_per_group.size(),
-        output.size());
+    TT_FATAL(heads_per_group.size() == 3, "heads_per_group size ({}) must equal 3", heads_per_group.size());
 
     const uint32_t total_heads_per_group =
         std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0u);  // num q heads + 2 * num_kv_heads
@@ -76,8 +81,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     uint32_t K = input_shape[3];
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
-    uint32_t block_wt = Kt / num_w_cores;  // number of tiles in width dimension  - multiple tiles per head, multiple
-                                           // heads per group, multiple tensors in group, multiple groups per cores
+    uint32_t block_wt = Kt / num_w_cores;
 
     TT_FATAL(
         Mt % num_h_cores == 0,
@@ -85,7 +89,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         input_shape[0],
         input_shape[2],
         num_h_cores);
-    uint32_t block_ht = Mt / num_h_cores;  // number of tiles in each each batch*seq_len dimension
+    uint32_t block_ht = Mt / num_h_cores;
     TT_FATAL(
         input_shape[2] % (block_ht * TILE_HEIGHT) == 0,
         "Per core work load must be within a batch. The sequence length {} and elements in each height shard {} must "
@@ -105,7 +109,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         l1_size);
 
     std::vector<uint32_t> num_tiles_per_group;
-    num_tiles_per_group.reserve(output.size());
+    num_tiles_per_group.reserve(3);
     for (uint32_t heads : heads_per_group) {
         num_tiles_per_group.push_back(heads * head_dim / TILE_WIDTH);
     }
@@ -139,18 +143,21 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     if (transpose_k) {
         reader_defines["TRANSPOSE_K_HEADS"] = "1";
     }
-    tt_metal::CreateKernel(
+    auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/device/kernels/"
         "reader_create_qkv_heads_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
+    tt_metal::KernelHandle compute_kernel_id = 0;
+    bool has_compute_kernel = false;
     if (transpose_k) {
+        has_compute_kernel = true;
         std::vector<uint32_t> compute_args = {
             (std::uint32_t)block_ht * num_tiles_per_group[1] * groups_per_block,  // number of K tiles
         };
-        tt_metal::CreateKernel(
+        compute_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
             "compute/transpose_wh_sharded.cpp",
@@ -172,17 +179,17 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     // q sharded
     auto c_out0_config = tt::tt_metal::CircularBufferConfig(q_size, {{CBIndex::c_16, data_format}})
                              .set_page_size(CBIndex::c_16, single_tile_size)
-                             .set_globally_allocated_address(*output[0].buffer());
+                             .set_globally_allocated_address(*output_q.buffer());
     auto cb_out0_id = CreateCircularBuffer(program, all_cores, c_out0_config);
     // k sharded
     auto c_out1_config = tt::tt_metal::CircularBufferConfig(k_size, {{CBIndex::c_17, data_format}})
                              .set_page_size(CBIndex::c_17, single_tile_size)
-                             .set_globally_allocated_address(*output[1].buffer());
+                             .set_globally_allocated_address(*output_k.buffer());
     auto cb_out1_id = CreateCircularBuffer(program, all_cores, c_out1_config);
     // v sharded
     auto c_out2_config = tt::tt_metal::CircularBufferConfig(v_size, {{CBIndex::c_18, data_format}})
                              .set_page_size(CBIndex::c_18, single_tile_size)
-                             .set_globally_allocated_address(*output[2].buffer());
+                             .set_globally_allocated_address(*output_v.buffer());
     auto cb_out2_id = CreateCircularBuffer(program, all_cores, c_out2_config);
 
     if (transpose_k) {
@@ -191,69 +198,43 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         CreateCircularBuffer(program, all_cores, c_im0_config);
     }
 
-    auto override_runtime_args_callback = [cb_in0_id, cb_out0_id, cb_out1_id, cb_out2_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto in0_buffer = input_tensors.at(0).buffer();
-        auto out0_buffer = output_tensors.at(0).buffer();
-        auto out1_buffer = output_tensors.at(1).buffer();
-        auto out2_buffer = output_tensors.at(2).buffer();
-
-        UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_out0_id, *out0_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_out1_id, *out1_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        CreateQKVHeadsSharedVariables{
+            .reader_kernel_id = reader_kernel_id,
+            .compute_kernel_id = compute_kernel_id,
+            .cb_in0_id = cb_in0_id,
+            .cb_out0_id = cb_out0_id,
+            .cb_out1_id = cb_out1_id,
+            .cb_out2_id = cb_out2_id,
+            .all_cores = all_cores,
+            .has_compute_kernel = has_compute_kernel,
+        }};
 }
 
-/**
- * Combined QKV
- *
- * m = num_KV_heads
- * p = num_Q_heads
- * n = p/m
- * i = head index for K/V, corresponding Q group for K/V
- *
- * input: [nQi Ki Vi for i in [0, m)] repeated for the sequence length
- * dims: [B, 1, S, H] Hi = [nQi Ki Vi] for all i kv heads = ((n + 2)*head_dim)
- *
- * output: 3 separate tensors organized by heads
- * [Qs,j for j in [0, p] and s in [0,S)]
- * dims: [B, p, S, head_dim] (all nQi in the KVi group are stacked together, p = n*m)
- *
- * [Ks,i for i in [0, m) and s in [0,S)]
- * dims: [B, m, S, head_dim]
- *
- * [Vs,i for i in [0, m) and s in [0,S)]
- * dims: [B, m, S, head_dim]
- *
- * Tiles stay the same Vi,s[x:x+32] to Vi+32,s[x:x+32] stays in one tile, but now instead of nQi,s and Ki,s tiles there
- * is Vi,s-1 and Vi,s+1
- *
- * Shard across each i kv head group (width sharding) and then shard across each token s (height sharding)
- * Each block: B x [nQi Ki Vi]s (shard across flattened heads and sequence length)
- *
- * Combined batch/sequence sharding is possible too...that may best be left as an extension
- */
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(
-    const Tensor& input_tensor_qkv,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool transpose_k_heads,
-    std::vector<Tensor>& output,
-    CoreCoord compute_with_storage_grid_size) {
-    TT_FATAL(
-        num_q_heads % num_kv_heads == 0,
-        "num q heads {} / num kv heads {} needs to be a whole number",
-        num_q_heads,
-        num_kv_heads);
-    return create_heads_combined_qkv_sharded(
-        input_tensor_qkv, {num_q_heads / num_kv_heads, 1, 1}, head_dim, num_kv_heads, output, transpose_k_heads);
+void CreateQKVHeadsProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
+    auto& [output_q, output_k, output_v] = output;
+
+    auto& program = cached_program.program;
+    auto& cb_in0_id = cached_program.shared_variables.cb_in0_id;
+    auto& cb_out0_id = cached_program.shared_variables.cb_out0_id;
+    auto& cb_out1_id = cached_program.shared_variables.cb_out1_id;
+    auto& cb_out2_id = cached_program.shared_variables.cb_out2_id;
+
+    auto* in0_buffer = input_tensor.buffer();
+    auto* out0_buffer = output_q.buffer();
+    auto* out1_buffer = output_k.buffer();
+    auto* out2_buffer = output_v.buffer();
+
+    UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_out0_id, *out0_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_out1_id, *out1_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
 }
-}  // namespace ttnn::operations::experimental::transformer
+
+}  // namespace ttnn::operations::experimental::create_qkv_heads::program

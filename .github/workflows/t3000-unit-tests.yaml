@@ -2,6 +2,30 @@ name: "(T3K) T3000 unit tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - falcon7b
+          - falcon40b
+          - llama3-small
+          - llama3.2-11b
+          - llama3.2-11b-vision
+          - n300 mesh llama3.2-11b-vision
+          - llama3.2-90b-vision
+          # - llama3.1-70b
+          - llama3.2-90b
+          - mistral
+          - mixtral
+          - grok
+          - unet shallow
+          - qwen25_vl
+          - gemma3-small
+          - dits
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
 
@@ -26,3 +50,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}

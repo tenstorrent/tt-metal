@@ -1,80 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
+#include "prod_nc_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+namespace tt::operations::primary {
 
-namespace tt {
+namespace {
 
-using namespace constants;
-namespace operations {
-namespace primary {
-
-////////////////////////////////////////////////////////////////////////////
-//                         Prod
-////////////////////////////////////////////////////////////////////////////
-void Prod::validate(const std::vector<Tensor>& inputs) const {
-    TT_FATAL((dim >= 0 && dim <= 3), "dim should be 0 - 3");
-    const auto& input = inputs.at(0);
-    const auto& output = inputs.at(1);
-
-    auto input_shape = input.padded_shape();
-    TT_FATAL((input_shape.rank() == 4), "rank should be 4, got rank: {}", input_shape.rank());
-    const auto& output_shape = output.padded_shape();
-    auto input_shape_wo_padding = input.logical_shape();
-
-    if (dim == 0 || dim == 1) {
-        input_shape[dim] = 1;
-        input_shape_wo_padding[dim] = 1;
-    }
-
-    for (int i = 0; i < input_shape.rank(); ++i) {
-        TT_FATAL(
-            input_shape[i] == output_shape[i],
-            "Input and output shapes must match at dimension {}, got input: {} vs output: {}",
-            i,
-            input_shape[i],
-            output_shape[i]);
-        // TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i], "Error");
-    }
-}
-
-std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& inputs) const {
-    // Inplace
-    return {};
-}
-
-std::vector<TensorSpec> Prod::compute_output_specs(const std::vector<Tensor>&) const {
-    // Inplace
-    return {};
-}
-
-operation::ProgramWithCallbacks Prod::create_program(
-    const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
-    auto& input = inputs.at(0);
-    auto& output = inputs.at(1);
-
-    return prod_nc_format(input, output, dim);
-}
-
-ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& dim) {
+ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, int64_t dim) {
     auto output_shape = input_shape;
     switch (dim) {
         case 0:
         case 1: output_shape[dim] = 1; break;
         default: TT_THROW("Unsupported dim {} for prod nc op", dim);
     }
-
     return output_shape;
 }
 
-inline Tensor create_output_tensor(
+Tensor create_output_tensor(
     const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_FATAL(
-        input_tensor.storage_type() == StorageType::DEVICE,
+        input_tensor.storage_type() == tt_metal::StorageType::DEVICE,
         "Input tensor must be stored on device. Storage type: {}",
         input_tensor.storage_type());
     return create_device_tensor(
@@ -86,7 +33,7 @@ inline Tensor create_output_tensor(
 
 // output as arg
 Tensor prod_(const Tensor& input, const Tensor& output, const int64_t& dim) {
-    operation::run(Prod{.dim = dim}, {input, output});
+    ttnn::prim::prod_nc(input, output, dim);
     return output;
 }
 
@@ -96,9 +43,11 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
     auto output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    operation::run(Prod{.dim = dim}, {input, output});
+    ttnn::prim::prod_nc(input, output, dim);
     return output;
 }
+
+}  // namespace
 
 Tensor prod_nc(
     const Tensor& input,
@@ -121,6 +70,4 @@ Tensor prod_nc(
     return output;
 }
 
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // namespace tt::operations::primary
