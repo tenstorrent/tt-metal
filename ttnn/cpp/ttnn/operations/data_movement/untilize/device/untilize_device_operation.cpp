@@ -274,7 +274,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
 
                     // Compute grid area and initial blocks-per-core using integer math.
-                    // const uint32_t grid_area = grid_size.x * grid_size.y;
                     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
 
                     // Adjust nblocks_per_core and determine the optimal block size.
