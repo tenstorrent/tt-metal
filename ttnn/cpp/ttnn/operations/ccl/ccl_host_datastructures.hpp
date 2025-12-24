@@ -31,13 +31,13 @@ struct EriscDatamoverConfig {
     static constexpr std::size_t eth_word_size_bytes = 16;
     static constexpr bool enable_merged_payload_and_channel_sync = true;
     static std::size_t get_eth_channel_sync_size_bytes();
-    uint32_t get_edm_handshake_address();
+    uint32_t get_edm_handshake_address() const;
     static std::size_t get_semaphores_region_size(std::size_t num_edm_channels);
     static std::size_t get_semaphores_region_start_offset(std::size_t num_edm_channels);
-    uint32_t get_semaphores_base_address(std::size_t num_edm_channels);
+    uint32_t get_semaphores_base_address(std::size_t num_edm_channels) const;
     static uint32_t get_buffers_region_start_offset(std::size_t num_edm_channels);
     static std::size_t get_eth_word_size();
-    uint32_t get_buffers_base_address(std::size_t num_edm_channels);
+    uint32_t get_buffers_base_address(std::size_t num_edm_channels) const;
     uint32_t compute_buffer_size(
         std::size_t num_edm_channels,
         std::size_t num_buffers_per_channel = 1,

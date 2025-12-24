@@ -85,6 +85,7 @@ LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* d
 }
 
 // Needs access to BufferMap, so part of LightMetalReplay class
+// NOLINTNEXTLINE(readability-make-member-function-const)
 std::shared_ptr<RuntimeArgs> LightMetalReplayImpl::rt_args_from_flatbuffer(
     const FlatbufferRuntimeArgVector flatbuffer_args) {
     auto runtime_args = std::make_shared<RuntimeArgs>();
@@ -445,6 +446,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->global_id());
     TT_FATAL(
@@ -463,6 +465,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteC
     remove_bufer_from_map(cmd->global_id());
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
@@ -483,6 +486,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
     // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
@@ -547,6 +551,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -570,6 +575,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -626,6 +632,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 }
 
 // Verification command to compare readback of a buffer with golden from either capture or user expected values.
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,

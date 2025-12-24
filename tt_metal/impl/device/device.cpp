@@ -673,8 +673,10 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {

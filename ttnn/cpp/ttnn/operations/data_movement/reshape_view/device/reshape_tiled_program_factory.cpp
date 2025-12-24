@@ -110,7 +110,7 @@ struct TileIterator {
 
     auto operator*() { return std::make_tuple(this->h(), this->w()); }
 
-    uint32_t size() { return (tile_end_h + 1) * (tile_end_w + 1); }
+    uint32_t size() const { return (tile_end_h + 1) * (tile_end_w + 1); }
 
 protected:
     const uint32_t& start_h;
@@ -121,9 +121,9 @@ protected:
     const uint32_t tile_end_w;
     bool first{true};
 
-    uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() const { return start_h + tile_idx_h; }
 
-    uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() const { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(

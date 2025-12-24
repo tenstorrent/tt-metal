@@ -55,7 +55,7 @@ public:
             mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
     }
     int NumDevices() { return this->devices_.size(); }
-    bool IsSlowDispatch() { return this->slow_dispatch_; }
+    bool IsSlowDispatch() const { return this->slow_dispatch_; }
 
 protected:
     tt::ARCH arch_{tt::ARCH::Invalid};

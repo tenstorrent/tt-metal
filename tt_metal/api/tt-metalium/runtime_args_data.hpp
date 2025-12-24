@@ -32,6 +32,7 @@ struct RuntimeArgsData {
         return true;
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     std::uint32_t& operator[](std::size_t index) noexcept {
         TT_ASSERT(in_bounds(index));
         return this->rt_args_data[index];
@@ -42,6 +43,7 @@ struct RuntimeArgsData {
         return this->rt_args_data[index];
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     std::uint32_t& at(std::size_t index) {
         if (!in_bounds(index)) {
             throw std::out_of_range(
@@ -60,6 +62,7 @@ struct RuntimeArgsData {
         return this->rt_args_data[index];
     }
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     std::uint32_t* data() noexcept { return rt_args_data; }
 
     const std::uint32_t* data() const noexcept { return rt_args_data; }

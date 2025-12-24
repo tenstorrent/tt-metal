@@ -147,6 +147,7 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     distributed_context_->barrier();
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshSocketTestContext::setup_fabric_configuration() {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 
