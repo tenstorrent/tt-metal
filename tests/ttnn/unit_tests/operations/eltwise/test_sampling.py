@@ -185,6 +185,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     [
         [1, 1, 32, 32 * 8],  # llama on TG and T3K
         [1, 1, 32, 32 * 2],  # llama on N300
+        [1, 1, 32, 19456],  # Qwen on TG
     ],
 )
 @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
@@ -207,7 +208,9 @@ def test_sampling_callback(shape, k, p, seed, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        [1, 1, 32, 32 * 2],  # llama on N300
+        # [1, 1, 32, 32 * 2],  # llama on N300
+        # [1, 1, 32, 16 * 1024],  # llama on TG and T3K
+        [1, 1, 32, 32 * 8],  # Qwen on TG
     ],
 )
 @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k

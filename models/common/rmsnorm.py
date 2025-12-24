@@ -45,7 +45,7 @@ class RMSNorm(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
-        eps: float = 1e-05,
+        eps: float = 1e-06,
         add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
@@ -113,7 +113,7 @@ class RMSNorm(LightweightModule):
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 

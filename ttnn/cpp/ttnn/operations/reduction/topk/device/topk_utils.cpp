@@ -22,9 +22,12 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     uint32_t start_split_size =
         static_cast<uint32_t>(width / tt::constants::TILE_WIDTH / largest_power_of_two(max_cores)) *
         tt::constants::TILE_WIDTH;
+    auto is_power_of_two = [](uint32_t value) { return value != 0 && (value & (value - 1)) == 0; };
+
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint32_t rem = width % split_size;
         uint32_t num_cores = (width / split_size) + (rem > 0);
+        uint32_t split_tiles = split_size / tt::constants::TILE_WIDTH;
         uint32_t memory_cost_gather = 2 * num_cores * (value_tile_size + index_tile_size);
         uint32_t memory_cost_local = (split_size / tt::constants::TILE_WIDTH) * (value_tile_size + index_tile_size);
         uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
@@ -46,8 +49,11 @@ std::optional<TopKCoreConfig> find_topk_core_config(
                 }
             }
         }
+        bool power_of_two_split = is_power_of_two(split_tiles);
+        bool power_of_two_cores = is_power_of_two(num_cores);
         if (num_cores <= max_cores && memory_cost_gather + (memory_cost_local * num_cores) < (l1_size * num_cores) &&
-            num_cores > 1 && split_size >= min_dim && contiguous_cores_available && rem == 0) {
+            num_cores > 1 && split_size >= min_dim && contiguous_cores_available && rem == 0 && power_of_two_split &&
+            power_of_two_cores) {
             TopKCoreConfig config;
             config.num_cores = static_cast<uint16_t>(num_cores);
             config.split_size = static_cast<uint16_t>(split_size);

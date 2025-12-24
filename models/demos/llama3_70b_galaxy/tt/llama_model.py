@@ -133,9 +133,12 @@ class TtTransformer(LightweightModule):
             if not self.args.is_qwen:
                 self.setup_prefill()
             self.is_prefill_setup = True
-
-        if mode == "decode":
-            self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+            # Switch back to decode mode if needed (to restore decode prefetcher with tensors)
+            if mode == "decode":
+                self.switch_mode("decode")
+        elif mode == "decode":
+            if not self.args.is_qwen:
+                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
@@ -627,9 +630,10 @@ class TtTransformer(LightweightModule):
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
                 # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                if not self.args.is_qwen:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    self.prefetcher_setup.create_global_cb()
 
         else:
             if self.is_decode_setup:
@@ -659,7 +663,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
+        if mode == "decode" and not self.args.is_qwen:
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -686,13 +690,8 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == "decode" and not self.args.is_qwen:
             ttnn.deallocate(garbage_tensor)
-
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
-            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
-                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
-            )
 
         if mode == "prefill":
             return x

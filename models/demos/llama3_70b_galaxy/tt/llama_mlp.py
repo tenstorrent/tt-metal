@@ -68,7 +68,7 @@ class TtLlamaMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
-            cache_file_name=cache_name(name),
+            # cache_file_name=cache_name(name),
         )
 
         as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
@@ -89,10 +89,10 @@ class TtLlamaMLP(LightweightModule):
 
         # sharded
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            "w1_sharded", ttnn.bfloat16, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat16, dim=w2_dim)
+        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat16, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
             "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
@@ -107,7 +107,7 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and not tt_ccl.is_qwen:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
@@ -120,67 +120,123 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+        w1_out = ttnn.linear(
             x,
             self.w1,
-            self.w3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            use_noc1_only=False,
         )
 
+        w1_out_reduced = self.tt_ccl.line_all_reduce(
+            w1_out,
+            cluster_axis=1,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            use_optimal_ccl_for_llama=False,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(w1_out)
+
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            compute_kernel_config=self.args.compute_kernel_config_lofi
+            if self.four_bit_mlp
+            else self.args.compute_kernel_config_hifi2,
+            dtype=ttnn.bfloat16,
+            program_config=pc_1_3,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1_3 else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        )
         ttnn.deallocate(x)
 
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+        w3_out_reduced = self.tt_ccl.line_all_reduce(
             w3_out,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            use_optimal_ccl_for_llama=False,
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(w3_out)
 
-        ff1ff3 = ttnn.mul(
-            w1_out_reduced,
+        w1_out_reduced_silu = ttnn.silu(w1_out_reduced)
+        # 1. -x
+        # x_neg = ttnn.multiply(
+        #     w1_out_reduced,
+        #     -1.0,
+        #     memory_config=w1_out_reduced.memory_config(),
+        #     dtype=ttnn.bfloat16,
+        # )
+        # x_neg_interleaved = ttnn.sharded_to_interleaved(
+        #     x_neg,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,  # or DRAM, but L1 is fine
+        # )
+
+        # # 2. exp(-x)
+        # x_exp = ttnn.exp(
+        #     x_neg_interleaved,
+        #     fast_and_approximate_mode=False,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     sub_core_grids=self.args.sub_core_grids,
+        # )
+        # ttnn.deallocate(x_neg_interleaved)
+
+        # # 3. 1 + exp(-x)  (this is where sub_core_grids *does* apply)
+        # x_exp_plus_one = ttnn.add(
+        #     x_exp,
+        #     1.0,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     sub_core_grids=self.args.sub_core_grids,
+        # )
+        # ttnn.deallocate(x_exp)
+
+        # x_exp_plus_one_sharded = ttnn.to_memory_config(x_exp_plus_one, w1_out_reduced.memory_config())
+
+        # # 4. sigmoid(x) = 1 / (1 + exp(-x))
+        # sigmoid_x_sharded = ttnn.reciprocal(
+        #     x_exp_plus_one_sharded,
+        # )
+        # ttnn.deallocate(x_exp_plus_one_sharded)
+
+        # # 5. SiLU(x) = x * sigmoid(x)
+        # w1_out_reduced_silu = ttnn.mul(
+        #     sigmoid_x_sharded,
+        #     w1_out_reduced,
+        #     memory_config=w1_out_reduced.memory_config(),
+        #     dtype=ttnn.bfloat16,  # or leave default
+        # )
+        # ttnn.deallocate(sigmoid_x_sharded)
+        # ttnn.deallocate(w1_out_reduced)
+
+        # 7. Now ff1ff3 = SiLU(w1) * w3 on sharded tensors
+        w2_in = ttnn.mul(
+            w1_out_reduced_silu,
             w3_out_reduced,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
+            memory_config=w3_out_reduced.memory_config(),
         )
-
+        ttnn.deallocate(w1_out_reduced_silu)
         ttnn.deallocate(w3_out_reduced)
-        ttnn.deallocate(w1_out_reduced)
-
-        w2_in = self.tt_ccl.line_all_gather(
-            ff1ff3,
-            dim=3,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
-
-        ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             program_config=pc_2,
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
         w2_out_reduced = self.tt_ccl.line_all_reduce(

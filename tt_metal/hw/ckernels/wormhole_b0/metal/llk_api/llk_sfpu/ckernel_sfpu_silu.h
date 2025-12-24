@@ -27,8 +27,6 @@ inline void calculate_silu() {
     }
 }
 
-inline void silu_init() {
-    _init_reciprocal_<false, false>();
-}
+inline void silu_init() { _init_reciprocal_<false, false>(); }
 
 }  // namespace ckernel::sfpu

@@ -326,7 +326,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
+                math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
                 dst_full_sync_en=True,
@@ -896,10 +896,10 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             )
 
             # Useful core grid based on batch size
@@ -1042,6 +1042,7 @@ class TtQwenModelArgs(TtModelArgs):
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
+                prefetch=False,
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
@@ -1088,6 +1089,7 @@ class TtQwenModelArgs(TtModelArgs):
                 10240 // 8,
                 self.dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             # Use padded K and N
@@ -1109,6 +1111,7 @@ class TtQwenModelArgs(TtModelArgs):
                 5120 // 4,  # K = 1280
                 3840,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
@@ -1118,6 +1121,7 @@ class TtQwenModelArgs(TtModelArgs):
                 3200,
                 6144 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -1540,7 +1544,7 @@ class TtQwenModelArgs(TtModelArgs):
             x = ttnn.from_torch(
                 x,
                 device=self.mesh_device if not on_host else None,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
                 memory_config=input_mem_cfg if not on_host else None,

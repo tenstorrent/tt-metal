@@ -54,7 +54,7 @@ class DistributedNorm(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def forward(self, x, res, mode):
@@ -72,6 +72,7 @@ class DistributedNorm(LightweightModule):
                 tt_ccl=self.tt_ccl,
                 output_mem_config=self.norm.output_mem_config,
                 ccl_topology=self.ccl_topology,
+                compute_kernel_config=self.ln_cfg,
             )
         else:
             return tt_distributed_rmsnorm(
