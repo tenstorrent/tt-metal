@@ -96,81 +96,6 @@ std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_positio
     return fixed_asic_position_pinnings;
 }
 
-// Generate fixed ASIC position pinnings for 6U split 8x2 topology to ensure QSFP links align with fabric mesh corner
-// nodes.
-//
-// * o
-// o o
-// o o
-// o o
-// o o
-// o o
-// o o
-// o *
-std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> get_6u_split_8x2_fixed_asic_position_pinnings(
-    size_t board_size) {
-    AsicPosition top_left_corner, bottom_right_corner;
-
-    std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> fixed_asic_position_pinnings_by_mesh;
-
-    // Mesh 0
-    top_left_corner = AsicPosition{1, 1};
-    bottom_right_corner = AsicPosition{3, 5};
-
-    fixed_asic_position_pinnings_by_mesh[MeshId{0}] = {
-        {top_left_corner, FabricNodeId(MeshId{0}, 0)},
-        {bottom_right_corner, FabricNodeId(MeshId{0}, board_size - 1)},
-    };
-
-    // Mesh 1
-    top_left_corner = AsicPosition{2, 5};
-    bottom_right_corner = AsicPosition{4, 1};
-
-    fixed_asic_position_pinnings_by_mesh[MeshId{1}] = {
-        {top_left_corner, FabricNodeId(MeshId{1}, 0)},
-        {bottom_right_corner, FabricNodeId(MeshId{1}, board_size - 1)},
-    };
-
-    return fixed_asic_position_pinnings_by_mesh;
-}
-
-// Generate fixed ASIC position pinnings for 6U split 4x4 topology to ensure QSFP links align with fabric mesh corner
-// nodes.
-//
-// * o o *
-// o o o o
-// o o o o
-// o o o *
-std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> get_6u_split_4x4_fixed_asic_position_pinnings(
-    size_t board_size) {
-    AsicPosition top_left_corner, bottom_right_corner, top_right_corner;
-
-    std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> fixed_asic_position_pinnings_by_mesh;
-
-    // Mesh
-    top_left_corner = AsicPosition{1, 1};
-    top_right_corner = AsicPosition{2, 1};
-    bottom_right_corner = AsicPosition{2, 4};
-
-    fixed_asic_position_pinnings_by_mesh[MeshId{0}] = {
-        {top_left_corner, FabricNodeId(MeshId{0}, 0)},
-        {top_right_corner, FabricNodeId(MeshId{0}, 3)},
-        {bottom_right_corner, FabricNodeId(MeshId{0}, board_size - 1)},
-    };
-
-    top_left_corner = AsicPosition{3, 4};
-    top_right_corner = AsicPosition{4, 4};
-    bottom_right_corner = AsicPosition{4, 1};
-
-    fixed_asic_position_pinnings_by_mesh[MeshId{1}] = {
-        {top_left_corner, FabricNodeId(MeshId{1}, 0)},
-        {top_right_corner, FabricNodeId(MeshId{1}, 3)},
-        {bottom_right_corner, FabricNodeId(MeshId{1}, board_size - 1)},
-    };
-
-    return fixed_asic_position_pinnings_by_mesh;
-}
-
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -547,13 +472,6 @@ void ControlPlane::init_control_plane(
             fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
         }
 
-        // If using the 8x2 MGD use the 8x2 fixed ASIC position pinnings
-        else if (mesh_graph_desc_file.find("dual_8x2_mesh_graph_descriptor.textproto") != std::string::npos) {
-            fixed_asic_position_pinnings_by_mesh = get_6u_split_8x2_fixed_asic_position_pinnings(board_size);
-        }
-
-        else if (mesh_graph_desc_file.find("dual_4x4_mesh_graph_descriptor.textproto") != std::string::npos) {
-            fixed_asic_position_pinnings_by_mesh = get_6u_split_4x4_fixed_asic_position_pinnings(board_size);
         // Add MGD pinnings to the topology mapper
         auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
         for (const auto& [pos, fabric_node] : pinnings) {
@@ -564,8 +482,7 @@ void ControlPlane::init_control_plane(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
-            fixed_asic_position_pinnings_by_mesh);
+            fixed_asic_position_pinnings);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }

@@ -901,6 +901,8 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     // Verify that we found Z channels for intermesh connections
     // For 2x2 T3K with 4 channels per connection, bidirectional, we expect Z channels
     EXPECT_GT(z_channel_count, 0) << "Expected Z channels for intermesh connections with assign_z_direction";
+}
+
 TEST(MultiHost, Test6uSplit8x2ControlPlaneInit) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");

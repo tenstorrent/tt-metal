@@ -37,3 +37,22 @@ graph_descriptors {
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 3 asic_location: 5 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 0 }
+  physical_asic_position { tray_id: 2 asic_location: 5 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
