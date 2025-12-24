@@ -27,8 +27,13 @@ inline void calculate_silu() {
     }
 }
 
+template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    _init_reciprocal_<false, false>();
+    if constexpr (!APPROXIMATION_MODE) {
+        _init_sfpu_reciprocal_<false>();
+    } else {
+        _init_sfpu_reciprocal_<true>();
+    }
 }
 
 }  // namespace ckernel::sfpu
