@@ -7,8 +7,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
-#include <memory>
-#include <vector>
+#include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
@@ -20,6 +19,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 
 namespace {
 
@@ -1060,5 +1060,83 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
     EXPECT_THROW(
         { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
+}
+
+TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+
+    // Get mesh shape to compute expected coordinates
+    // t3k_mesh_graph_descriptor has device_topology { dims: [ 2, 4 ] } = 2 rows, 4 columns
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    MeshId mesh_id{0};
+    MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(mesh_shape[0], 2) << "Mesh should have 2 rows";
+    EXPECT_EQ(mesh_shape[1], 4) << "Mesh should have 4 columns";
+    EXPECT_EQ(mesh_shape.mesh_size(), 8) << "Mesh should have 8 chips total";
+
+    // Create a TopologyMapper for testing (similar to RoutingTableGeneratorTestHelper)
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+    tt::tt_fabric::LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {mesh_id};
+    local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+
+    auto topology_mapper =
+        std::make_unique<tt::tt_fabric::TopologyMapper>(mesh_graph, *physical_system_descriptor, local_mesh_binding);
+
+    // Create a temporary directory for the output file
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "test_eth_coords";
+    std::filesystem::create_directories(temp_dir);
+
+    // Serialize coordinates to file using the fabric_host_utils function
+    int rank = *distributed_context->rank();
+    std::filesystem::path output_file =
+        temp_dir / ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank) + ".yaml");
+    tt::tt_fabric::serialize_mesh_coordinates_to_file(*topology_mapper, output_file);
+
+    // Verify the file was created
+    EXPECT_TRUE(std::filesystem::exists(output_file)) << "Output file should exist: " << output_file;
+
+    // Read and verify the file contents
+    YAML::Node yaml_file = YAML::LoadFile(output_file.string());
+    EXPECT_TRUE(yaml_file["chips"]) << "File should contain 'chips' key";
+
+    const auto& chips_node = yaml_file["chips"];
+    EXPECT_TRUE(chips_node.IsMap()) << "'chips' should be a map";
+
+    // Get the mapping from topology mapper to verify physical chip IDs
+    const auto& mapping = topology_mapper->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+
+    // Verify that we have the correct number of chips
+    EXPECT_EQ(chips_node.size(), mapping.size()) << "Should have " << mapping.size() << " chips in the file";
+
+    // Verify coordinates for each physical chip ID match expected mesh coordinates
+    for (const auto& [fabric_node_id, physical_chip_id] : mapping) {
+        EXPECT_TRUE(chips_node[physical_chip_id])
+            << "Physical chip " << physical_chip_id << " should exist in the file";
+
+        const auto& coord_array = chips_node[physical_chip_id];
+        ChipId logical_chip_id = fabric_node_id.chip_id;
+        MeshCoordinate expected_coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, logical_chip_id);
+
+        // Verify coordinate values match expected mesh coordinates
+        for (size_t dim = 0; dim < expected_coord.dims(); ++dim) {
+            uint32_t actual_coord = coord_array[dim].as<uint32_t>();
+            EXPECT_EQ(actual_coord, expected_coord[dim])
+                << "Physical chip " << physical_chip_id << " (logical chip " << logical_chip_id << ") coordinate["
+                << dim << "] should be " << expected_coord[dim] << ", got " << actual_coord;
+        }
+    }
+
+    // Clean up
+    std::filesystem::remove_all(temp_dir);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
