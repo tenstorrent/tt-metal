@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
