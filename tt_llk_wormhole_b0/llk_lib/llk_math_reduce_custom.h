@@ -225,7 +225,7 @@ inline void _llk_math_reduce_block_max_row_init_()
 template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_(const uint dst_index)
 {
-    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     if constexpr (is_fp32_dest_acc_en)
     {

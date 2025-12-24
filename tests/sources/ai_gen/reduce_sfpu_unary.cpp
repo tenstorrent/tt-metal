@@ -45,8 +45,8 @@ constexpr bool row_pool                             = (REDUCE_DIM == ckernel::Re
 void run_kernel()
 {
     // Configure hardware for AB unpack (single tile per input)
-    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, within_face_16x16_transpose);
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
 
     // Initialise unpacker state machine
     _llk_unpack_AB_init_<>(FACE_R_DIM, 4, false, within_face_16x16_transpose);
@@ -80,7 +80,7 @@ void run_kernel()
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
 
     // row_pool tells HW if pooling is performed across rows (affects transpose path)
-    _llk_math_hw_configure_<false, row_pool>(formats.math, formats.math);
+    _llk_math_hw_configure_(formats.math, formats.math);
 
     //------------------------------------------------------------------
     // 1) Reduce operation
@@ -117,7 +117,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(formats.pack_dst);
+    _llk_pack_init_<false, false>(formats.pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -128,9 +128,9 @@ void run_kernel()
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_dest_init_<DstSync::SyncFull, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, false>();
+    _llk_pack_dest_init_<DstSync::SyncFull, is_fp32_dest_acc_en, false>();
 #endif
 
     _llk_packer_wait_for_math_done_();

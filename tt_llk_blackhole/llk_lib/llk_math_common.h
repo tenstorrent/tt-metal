@@ -13,8 +13,17 @@
 
 using namespace ckernel::math;
 
-template <bool untilize_en = false, bool skip_inputs = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+{
+    // Legacy mode for ZEROACC
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(1);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+    uint int8_math_enabled = ((uint)(srca_data_format & 0xF) == (uint)DataFormat::Int8) || ((uint)(srcb_data_format & 0xF) == (uint)DataFormat::Int8) ||
+                             ((uint)srca_data_format == (uint)DataFormat::Int32) || ((uint)srcb_data_format == (uint)DataFormat::Int32);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+}
+
+inline void _llk_math_reconfig_remap_(const bool remap_enable)
 {
     // Need to wait for all DEST accesses to be finished before changing
     // remap_addrs and swizzle_32b bits
@@ -25,19 +34,8 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     // Untilize mode needs dest read access with a stride of 16
     // Following bits are needed for enabling stride of 16
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(untilize_en);
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(untilize_en);
-
-    // Legacy mode for ZEROACC
-    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(1);
-
-    if constexpr (skip_inputs == false)
-    {
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        uint int8_math_enabled = ((uint)(srca_data_format & 0xF) == (uint)DataFormat::Int8) || ((uint)(srcb_data_format & 0xF) == (uint)DataFormat::Int8) ||
-                                 ((uint)srca_data_format == (uint)DataFormat::Int32) || ((uint)srcb_data_format == (uint)DataFormat::Int32);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
-    }
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(remap_enable);
+    cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(remap_enable);
 }
 
 template <DstSync Dst>

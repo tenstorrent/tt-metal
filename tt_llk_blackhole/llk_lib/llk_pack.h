@@ -69,12 +69,7 @@ inline void _llk_pack_configure_addrmod_()
     }
 }
 
-template <
-    bool untilize                = false,
-    bool zero_output             = false,
-    DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor,
-    bool write_tile_header       = true,
-    bool tilize                  = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_mop_config_(
     [[maybe_unused]] const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim           = FACE_R_DIM,
@@ -83,7 +78,6 @@ inline void _llk_pack_mop_config_(
     [[maybe_unused]] const bool partial_face = false,
     [[maybe_unused]] const bool narrow_tile  = false)
 {
-    static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!partial_face, "partial_face: this parameter is unused");
     LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
@@ -395,16 +389,7 @@ inline void _llk_pack_mop_config_(
             0,
             1));
 
-        if constexpr (write_tile_header)
-        {
-            tmp.set_end_ops(
-                TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100),                                                                 // ch0_z = 0, ch1_z = 2;
-                TT_OP_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR)); // write tile header to L1
-        }
-        else
-        {
-            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = 2;
-        }
+        tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = 2;
 
         tmp.program();
     }
@@ -465,21 +450,12 @@ inline void _llk_pack_mop_config_(
         //     tmp.set_loop_op1(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0,
         //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Close the tile
         // }
-        // Write header to l1
-        if constexpr (write_tile_header)
-        {
-            tmp.set_end_op(TT_OP_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
-        }
 
         tmp.program();
     }
 }
 
-template <
-    bool is_fp32_dest_acc_en,
-    bool is_tile_dim_reconfig_en = false,
-    DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor,
-    bool write_tile_header       = true>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -495,7 +471,7 @@ inline void _llk_pack_reconfig_data_format_(
 
     if constexpr (is_tile_dim_reconfig_en)
     {
-        _llk_pack_mop_config_<false, false, FaceLayout, write_tile_header>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+        _llk_pack_mop_config_<false, false>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
     }
 }
 
@@ -516,76 +492,8 @@ inline void _llk_pack_hw_configure_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
-inline void _llk_pack_reduce_hw_configure_(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t tile_c_dim  = TILE_C_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, untilize, false>(
-        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, relu_config);
-
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-
-    ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
-    pack_edge_offset.f.mask                             = 0x0;
-    if constexpr (dim == ReduceDim::REDUCE_ROW)
-    {
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 1] = 0x0001;
-        if constexpr (untilize)
-        {
-            pack_edge_offset.f.tile_row_set_select_pack0         = 1;
-            pack_edge_offset.f.tile_row_set_select_pack1         = 1;
-            pack_edge_offset.f.tile_row_set_select_pack2         = 1;
-            pack_edge_offset.f.tile_row_set_select_pack3         = 1;
-            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x11111111; // each packer packs 1x32 row
-        }
-        else
-        {
-            pack_edge_offset.f.tile_row_set_select_pack0         = 1;
-            pack_edge_offset.f.tile_row_set_select_pack2         = 1;
-            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
-        }
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 0] = pack_edge_offset.val;
-    }
-    else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
-    {
-        pack_edge_offset.f.tile_row_set_select_pack0         = 1;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 0]            = pack_edge_offset.val;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 1]            = 0x0001;
-        cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
-    }
-    else
-    {
-        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 0]    = pack_edge_offset.val;
-        cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32 + 1]    = 0xffff;
-
-        if constexpr (untilize)
-        {
-            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000005; // Each packer packs 1x32 row
-        }
-        else
-        {
-            cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x00000001;
-        }
-    }
-}
-
-template <
-    bool untilize                = false,
-    bool zero_output             = false,
-    DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor,
-    bool write_tile_header       = true,
-    bool tilize                  = false>
+// TODO NC: Clean up as the part of tt-metal#34587
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -596,16 +504,11 @@ inline void _llk_pack_init_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     _llk_pack_configure_addrmod_<untilize, tilize>();
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header, tilize>(
-        pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 }
 
-template <
-    bool untilize                = false,
-    bool zero_output             = false,
-    DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor,
-    bool write_tile_header       = true,
-    bool tilize                  = false>
+// TODO NC: Clean up as the part of tt-metal#34587
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -617,8 +520,7 @@ inline void _llk_pack_init_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     _llk_pack_configure_addrmod_<untilize, tilize>();
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header, tilize>(
-        pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
     set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }

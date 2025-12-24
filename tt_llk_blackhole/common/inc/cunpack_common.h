@@ -290,12 +290,10 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16);
-    if constexpr (disable_src_zero_flag)
-    {
-        src_zeroflags_disable = true;
-    }
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(src_zeroflags_disable);
+    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
+    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpA_dst_format) == static_cast<uint>(DataFormat::UInt16)) ||
+                                     (static_cast<uint>(unpB_dst_format) == static_cast<uint>(DataFormat::UInt16));
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     if ((unpA_src_format & 0x1F) == (uint)DataFormat::Fp8_e4m3)

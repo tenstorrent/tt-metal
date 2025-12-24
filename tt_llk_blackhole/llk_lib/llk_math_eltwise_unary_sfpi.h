@@ -42,7 +42,7 @@ template <SfpiTestType sfpu_op, DstSync Dst>
 inline void llk_math_eltwise_unary_sfpi(uint dst_index, uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     int face = 0;
     sfpi_test::calculate_sfpi<sfpu_op>(param0, param1, param2, param3, param4, param5);
