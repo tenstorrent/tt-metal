@@ -139,12 +139,12 @@ jobs:
           # at least one of run_wormhole or run_blackhole is true (exits with error otherwise).
           # Architecture-specific matrices (wormhole-only, blackhole-only) may be empty if that arch is not selected.
 
-          # Helper function to add an entry to a JSON array
+          # Helper function to add an entry to a JSON array (using -c for compact single-line output)
           add_entry() {
             local json="$1"
             local arch="$2"
             local label="$3"
-            echo "$json" | jq --arg arch "$arch" --arg label "$label" '. += [{"arch": $arch, "runner-label": $label}]'
+            echo "$json" | jq -c --arg arch "$arch" --arg label "$label" '. += [{"arch": $arch, "runner-label": $label}]'
           }
 
           # Matrix for tt-metal-l2-tests and didt-tests (N150, N300, P100, P150b)
