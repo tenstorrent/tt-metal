@@ -77,11 +77,7 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            # Add your ops tests here following this pattern:
-            # { name: "ops test name", cmd: "pytest path/to/ops/tests", merge_gate: true/false },
-            # Example:
-            # { name: "ops sanity tests", cmd: "pytest -n auto --timeout 300 tests/ops/sanity -xv", merge_gate: true },
-            # { name: "ops performance tests", cmd: "pytest -n auto --timeout 300 tests/ops/performance -xv", merge_gate: false },
+            { name: "ops basic tests", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations -k 'test_' -xv --tb=short", merge_gate: false },
           ]]
     steps:
       - name: Compute tests
