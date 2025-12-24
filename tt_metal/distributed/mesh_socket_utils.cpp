@@ -175,14 +175,14 @@ void validate_remote_desc(
         "Mismatch in receiver mesh ID during handshake.");
 }
 
-Tag generate_descriptor_exchange_tag(Rank peer_rank, std::optional<DistributedContextId> context_id) {
+Tag generate_descriptor_exchange_tag(tt_fabric::MeshId peer_mesh_id, std::optional<DistributedContextId> context_id) {
     // Generate a unique id to tag the exchange of socket peer
     // descriptors between the sender and receiver.
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
-    static std::unordered_map<DistributedContextId, std::unordered_map<Rank, uint32_t>> exchange_tags;
+    static std::unordered_map<DistributedContextId, std::unordered_map<tt_fabric::MeshId, uint32_t>> exchange_tags;
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
-    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_rank]++)};
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_mesh_id]++)};
 }
 }  // namespace
 
@@ -420,12 +420,12 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
 
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    auto peer_mesh_id = is_sender ? config.receiver_mesh_id.value() : config.sender_mesh_id.value();
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
-        .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
+        .exchange_tag = generate_descriptor_exchange_tag(peer_mesh_id, context_id)  // Unique tag for this exchange
     };
     return local_endpoint_desc;
 }
@@ -616,7 +616,7 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == mesh_id &&
             rank_translation_table.find(rank) != rank_translation_table.end()) {
-            ranks.push_back(rank);
+            ranks.push_back(rank_translation_table.at(rank));
         }
     }
 

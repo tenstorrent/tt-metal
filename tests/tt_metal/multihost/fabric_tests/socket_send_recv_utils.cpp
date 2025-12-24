@@ -43,6 +43,45 @@ std::string get_test_variant_name(TestVariant variant) {
     }
 }
 
+uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::MeshId recv_mesh_id) {
+    using namespace tt::tt_metal::distributed::multihost;
+    using namespace tt::tt_metal::distributed;
+    uint32_t seed;
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    std::unordered_map<Rank, Rank> rank_translation_table;
+    for (int i = 0; i < *distributed_context->size(); i++) {
+        rank_translation_table[Rank{i}] = Rank{i};
+    }
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(sender_mesh_id, rank_translation_table);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(recv_mesh_id, rank_translation_table);
+    Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
+    if (distributed_context->rank() == controller_rank) {
+        seed = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (const auto& rank : sender_ranks) {
+            if (rank == controller_rank) {
+                continue;
+            }
+            distributed_context->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                rank,
+                tt::tt_metal::distributed::multihost::Tag{0});
+        }
+        for (const auto& rank : recv_ranks) {
+            distributed_context->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                rank,
+                tt::tt_metal::distributed::multihost::Tag{0});
+        }
+    } else {
+        distributed_context->recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+            controller_rank,
+            tt::tt_metal::distributed::multihost::Tag{0});
+    }
+    log_info(tt::LogTest, "Using seed: {}", seed);
+    return seed;
+}
+
 bool test_socket_send_recv(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     tt_metal::distributed::MeshSocket& socket,
@@ -59,50 +98,12 @@ bool test_socket_send_recv(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto my_mesh_id = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0];
 
-    // Derive all ranks involved in the workload
-    std::unordered_map<Rank, Rank> rank_translation_table;
-    for (int i = 0; i < *distributed_context->size(); i++) {
-        rank_translation_table[Rank{i}] = Rank{i};
-    }
-    std::vector<Rank> sender_ranks =
-        get_ranks_for_mesh_id(socket.get_config().sender_mesh_id.value(), rank_translation_table);
-    std::vector<Rank> recv_ranks =
-        get_ranks_for_mesh_id(socket.get_config().receiver_mesh_id.value(), rank_translation_table);
-    Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
-    // Generate seed on Mesh 0 Host Rank Id 0
-    // Share this seed with all other hosts
     if (!gen.has_value()) {
-        uint32_t seed;
-        if (distributed_context->rank() == controller_rank) {
-            seed = std::chrono::steady_clock::now().time_since_epoch().count();
-            for (const auto& rank : sender_ranks) {
-                if (rank == controller_rank) {
-                    continue;
-                }
-                log_info(tt::LogTest, "Sending seed to sender rank {}", rank);
-                distributed_context->send(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-                    rank,
-                    tt::tt_metal::distributed::multihost::Tag{0});
-            }
-            for (const auto& rank : recv_ranks) {
-                log_info(tt::LogTest, "Sending seed to receiver rank {}", rank);
-                distributed_context->send(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-                    rank,
-                    tt::tt_metal::distributed::multihost::Tag{0});
-            }
-        } else {
-            log_info(tt::LogTest, "Receiving seed from controller rank {}", controller_rank);
-            distributed_context->recv(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-                controller_rank,
-                tt::tt_metal::distributed::multihost::Tag{0});
-        }
-        log_info(tt::LogTest, "Using seed: {}", seed);
+        // Synchronize seed across ranks
+        uint32_t seed = sync_seed_across_ranks(
+            socket.get_config().sender_mesh_id.value(), socket.get_config().receiver_mesh_id.value());
         gen = std::mt19937(seed);
     }
 
