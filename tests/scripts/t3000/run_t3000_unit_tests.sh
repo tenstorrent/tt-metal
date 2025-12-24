@@ -126,6 +126,7 @@ run_t3000_tt_metal_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2.yaml
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/t3k_2x2_ttswitch_rank_bindings.yaml ./build/test/tt_metal/multi_host_ttswitch_tests --gtest_filter="MeshDeviceTTSwitchFixture.*"
 
   # Big-Mesh 2x4 Regression tests
   # Tests are disabled for now due to ND hangs

@@ -120,6 +120,10 @@ public:
     // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
     MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    // Get all mesh IDs (includes switches)
+    std::vector<MeshId> get_all_mesh_ids() const;
+
+    // Get compute only mesh IDs (excludes switches)
     std::vector<MeshId> get_mesh_ids() const;
 
     // Get the chip ids for a given mesh_id
@@ -132,6 +136,8 @@ public:
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
+    // Check if a mesh_id corresponds to a switch mesh
+    bool is_switch_mesh(MeshId mesh_id) const;
 
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;

@@ -238,15 +238,24 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            // Validate that none of the fabric node IDs are on switch meshes
+            for (const auto& fabric_node_id : mapped_devices.fabric_node_ids) {
+                TT_FATAL(
+                    !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
+                    "Cannot create devices on tt-switch meshes. Fabric node {} maps to mesh_id {} which is a switch. "
+                    "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
+                    fabric_node_id,
+                    *fabric_node_id.mesh_id);
+            }
             auto mapped_devices_full_system_device_ids =
                 (*MetalContext::instance().global_distributed_context().size() > 1)
                     ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
                     : mapped_devices.device_ids;
-
             return std::make_tuple(
                 std::make_shared<ScopedDevices>(
                     mapped_devices_full_system_device_ids,
@@ -269,6 +278,12 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                 auto fabric_node_id =
                     MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
                         supplied_ids[i]);
+                TT_FATAL(
+                    !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
+                    "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
+                    "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
+                    supplied_ids[i],
+                    *fabric_node_id.mesh_id);
                 fabric_node_ids.push_back(fabric_node_id);
             }
             auto mapped_devices_full_system_device_ids =
@@ -325,6 +340,23 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    // Validate all devices are on compute meshes (not switches) before creating any resources
+    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    fabric_node_ids.reserve(device_ids.size());
+    for (const auto& device_id : device_ids) {
+        auto fabric_node_id =
+            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
+        TT_FATAL(
+            !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
+            "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
+            "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
+            device_id,
+            *fabric_node_id.mesh_id);
+        fabric_node_ids.push_back(fabric_node_id);
+    }
+
+    // Now create ScopedDevices after validation passes
     auto mapped_devices_full_system_device_ids =
         (*MetalContext::instance().global_distributed_context().size() > 1)
             ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
@@ -337,12 +369,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config);
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
-    for (const auto& device_id : device_ids) {
-        auto fabric_node_id =
-            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
-        fabric_node_ids.push_back(fabric_node_id);
-    }
 
     // Make a copy because we std::move the scoped_devices when creating MeshDevice
     const auto root_devices = scoped_devices->root_devices();
