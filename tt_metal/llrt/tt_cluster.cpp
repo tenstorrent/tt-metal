@@ -433,14 +433,15 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
 
+    // May block waiting for other processes to release the device.
+    this->driver_->start_device(device_params);
+
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
             ll_api::configure_static_tlbs(
                 this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
         }
     }
-
-    this->driver_->start_device(device_params);
 }
 
 Cluster::~Cluster() {
