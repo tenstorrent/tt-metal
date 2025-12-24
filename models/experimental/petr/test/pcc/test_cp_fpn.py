@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -7,9 +7,9 @@ import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from loguru import logger
-from models.experimental.petr.tt.ttnn_cp_fpn import ttnn_CPFPN
+from models.experimental.petr.tt.tt_cp_fpn import ttnn_CPFPN
 from models.experimental.petr.reference.cp_fpn import CPFPN
-from models.experimental.petr.tt.common import create_custom_preprocessor_cpfpn
+from models.experimental.petr.tt.model_preprocessing import create_custom_preprocessor_cpfpn
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

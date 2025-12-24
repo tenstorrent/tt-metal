@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -6,8 +7,8 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from loguru import logger
-from models.experimental.petr.tt.ttnn_positional_encoding import ttnn_SinePositionalEncoding3D
-from models.experimental.petr.tt.ttnn_petr_transformer import TTPETRTransformer
+from models.experimental.petr.tt.tt_positional_encoding import ttnn_SinePositionalEncoding3D
+from models.experimental.petr.tt.tt_petr_transformer import TTPETRTransformer
 from models.experimental.petr.reference.nms_free_coder import NMSFreeCoder
 from models.experimental.petr.tt.utils import inverse_sigmoid as ttnn_inverse_sigmoid
 from models.experimental.petr.tt.common import Conv, Conv_with_split
@@ -263,7 +264,11 @@ class ttnn_PETRHead:
                     if i == ttnn.relu:
                         sin_embed = i(sin_embed)
                     else:
-                        sin_embed = i(device, sin_embed)
+                        result = i(device, sin_embed)
+                        if isinstance(result, tuple):
+                            sin_embed, _ = result
+                        else:
+                            sin_embed = result
                 sin_embed = ttnn.permute(sin_embed, (0, 3, 1, 2))
                 sin_embed = ttnn.reshape(sin_embed, (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]))
                 pos_embed = pos_embed + sin_embed
@@ -314,13 +319,6 @@ class ttnn_PETRHead:
         masks = ttnn.from_torch(masks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)
-
-        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.bfloat16)
-        if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
-            logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
-            outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
-            outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         outputs_classes = []
         outputs_coords = []
         reference_points_cloned = ttnn.clone(reference_points)
@@ -335,33 +333,25 @@ class ttnn_PETRHead:
 
             assert reference.shape[-1] == 3
 
-            outputs_class_f32 = ttnn.from_torch(
-                ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
+            outputs_class = outs_dec[lvl : lvl + 1]
 
             for index, operation in enumerate(self.cls_branches[lvl]):
                 if operation == ttnn.linear:
-                    outputs_class_f32 = operation(
-                        outputs_class_f32,
+                    outputs_class = operation(
+                        outputs_class,
                         self.parameters["cls_branches"][lvl][index].weight,
                         bias=self.parameters["cls_branches"][lvl][index].bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
                 elif operation == ttnn.relu:
-                    outputs_class_f32 = operation(outputs_class_f32)
+                    outputs_class = operation(outputs_class)
                 elif operation == ttnn.layer_norm:
-                    outputs_class_f32 = operation(
-                        outputs_class_f32,
+                    outputs_class = operation(
+                        outputs_class,
                         weight=self.parameters["cls_branches"][lvl][index].weight,
                         bias=self.parameters["cls_branches"][lvl][index].bias,
                         memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
-
-            outputs_class = ttnn.from_torch(
-                ttnn.to_torch(outputs_class_f32).to(torch.bfloat16), dtype=ttnn.bfloat16, device=device
-            )
 
             tmp = outs_dec[lvl : lvl + 1]
             for index, operation in enumerate(self.reg_branches[lvl]):
@@ -405,23 +395,19 @@ class ttnn_PETRHead:
         all_cls_scores = ttnn.concat(outputs_classes, dim=0)
         all_bbox_preds = ttnn.concat(outputs_coords, dim=0)
 
-        all_cls_scores = ttnn.to_torch(all_cls_scores).to(torch.bfloat16)
-        all_bbox_preds = ttnn.to_torch(all_bbox_preds).to(torch.bfloat16)
-
-        if torch.isnan(all_bbox_preds).any() or torch.isinf(all_bbox_preds).any():
-            logger.error("NaN/Inf detected in all_bbox_preds before scaling!")
-            all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=50.0, neginf=-50.0)
-
-        all_bbox_preds[..., 0:1] = all_bbox_preds[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
-        all_bbox_preds[..., 1:2] = all_bbox_preds[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
-        all_bbox_preds[..., 4:5] = all_bbox_preds[..., 4:5] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
-
-        if torch.isnan(all_bbox_preds).any() or torch.isinf(all_bbox_preds).any():
-            logger.error("NaN/Inf still present after scaling!")
-            all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=51.0, neginf=-51.0)
-
-        all_cls_scores = ttnn.from_torch(all_cls_scores, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-        all_bbox_preds = ttnn.from_torch(all_bbox_preds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        all_bbox_preds_torch = ttnn.to_torch(all_bbox_preds)
+        all_bbox_preds_torch[..., 0:1] = (
+            all_bbox_preds_torch[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
+        )
+        all_bbox_preds_torch[..., 1:2] = (
+            all_bbox_preds_torch[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
+        )
+        all_bbox_preds_torch[..., 4:5] = (
+            all_bbox_preds_torch[..., 4:5] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
+        )
+        all_bbox_preds = ttnn.from_torch(
+            all_bbox_preds_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
         outs = {
             "all_cls_scores": all_cls_scores,

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -165,11 +166,14 @@ class TTPETRMultiheadAttention:
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
         attn_output = ttnn.reshape(attn_output, (tgt_len * bsz, embed_dim))
 
-        self.attn_out_proj_weight = preprocess_linear_weight(self.attn_out_proj_weight, dtype=ttnn.bfloat16)
-        self.attn_out_proj_bias = preprocess_linear_bias(self.attn_out_proj_bias, dtype=ttnn.bfloat16)
-
-        self.attn_out_proj_weight = ttnn.to_device(self.attn_out_proj_weight, self.device)
-        self.attn_out_proj_bias = ttnn.to_device(self.attn_out_proj_bias, self.device)
+        if (
+            not isinstance(self.attn_out_proj_weight, ttnn.Tensor)
+            or self.attn_out_proj_weight.storage_type() != ttnn.StorageType.DEVICE
+        ):
+            self.attn_out_proj_weight = preprocess_linear_weight(self.attn_out_proj_weight, dtype=ttnn.bfloat16)
+            self.attn_out_proj_bias = preprocess_linear_bias(self.attn_out_proj_bias, dtype=ttnn.bfloat16)
+            self.attn_out_proj_weight = ttnn.to_device(self.attn_out_proj_weight, self.device)
+            self.attn_out_proj_bias = ttnn.to_device(self.attn_out_proj_bias, self.device)
 
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
@@ -197,20 +201,20 @@ class TTFFN:
         input = x
 
         # Preprocess and move first layer weights to device
-        self.l1_weight = preprocess_linear_weight(self.l1_weight, dtype=ttnn.bfloat16)
-        self.l1_bias = preprocess_linear_bias(self.l1_bias, dtype=ttnn.bfloat16)
-        self.l1_weight = ttnn.to_device(self.l1_weight, self.device)
-        self.l1_bias = ttnn.to_device(self.l1_bias, self.device)
+        if not isinstance(self.l1_weight, ttnn.Tensor) or self.l1_weight.storage_type() != ttnn.StorageType.DEVICE:
+            self.l1_weight = preprocess_linear_weight(self.l1_weight, dtype=ttnn.bfloat16)
+            self.l1_bias = preprocess_linear_bias(self.l1_bias, dtype=ttnn.bfloat16)
+            self.l1_weight = ttnn.to_device(self.l1_weight, self.device)
+            self.l1_bias = ttnn.to_device(self.l1_bias, self.device)
 
-        # First linear
         x = ttnn.linear(x, self.l1_weight, bias=self.l1_bias)
         x = ttnn.relu(x)
 
-        # Preprocess and move second layer weights to device
-        self.l2_weight = preprocess_linear_weight(self.l2_weight, dtype=ttnn.bfloat16)
-        self.l2_bias = preprocess_linear_bias(self.l2_bias, dtype=ttnn.bfloat16)
-        self.l2_weight = ttnn.to_device(self.l2_weight, self.device)
-        self.l2_bias = ttnn.to_device(self.l2_bias, self.device)
+        if not isinstance(self.l2_weight, ttnn.Tensor) or self.l2_weight.storage_type() != ttnn.StorageType.DEVICE:
+            self.l2_weight = preprocess_linear_weight(self.l2_weight, dtype=ttnn.bfloat16)
+            self.l2_bias = preprocess_linear_bias(self.l2_bias, dtype=ttnn.bfloat16)
+            self.l2_weight = ttnn.to_device(self.l2_weight, self.device)
+            self.l2_bias = ttnn.to_device(self.l2_bias, self.device)
 
         # Second linear transformation
         x = ttnn.linear(x, self.l2_weight, bias=self.l2_bias)

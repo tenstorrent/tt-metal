@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -8,8 +9,8 @@ from loguru import logger
 import urllib.request
 import ttnn
 from models.experimental.petr.reference.petr import PETR
-from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
-from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
+from models.experimental.petr.tt.tt_petr import ttnn_PETR
+from models.experimental.petr.tt.model_preprocessing import get_parameters, generate_petr_inputs
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 
 
