@@ -66,17 +66,19 @@ def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
+    dtype=torch.bfloat16,
 ):
     if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
         torch_tensor = torch.abs(torch_tensor)
         return torch_tensor
     else:
-        if tensor_shape in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[tensor_shape]
+        cache_key = (tensor_shape, dtype)
+        if cache_key in torch_tensor_map.keys():
+            torch_tensor = torch_tensor_map[cache_key]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-            torch_tensor_map[tensor_shape] = torch_tensor
+            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
+            torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
@@ -5094,7 +5096,7 @@ def test_conv_block_sharding(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_conv_fp32_accum_auto_default(device):
+def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     """
     Test that FP32 accumulation is automatically enabled when both input and weights are FP32.
 
@@ -5115,10 +5117,10 @@ def test_conv_fp32_accum_auto_default(device):
     padding = 1
 
     # Generate random FP32 inputs
-    torch.manual_seed(42)
-    torch_input_nchw = torch.rand(batch_size, input_channels, input_height, input_width, dtype=torch.float32)
-    torch_weight = torch.rand(out_channels, input_channels, kernel_size, kernel_size, dtype=torch.float32)
-    torch_bias = torch.rand(1, 1, 1, out_channels, dtype=torch.float32)
+    torch.manual_seed(0)
+    torch_input_nchw = randomize_torch_tensor(torch_tensor_map, (batch_size, input_channels, input_height, input_width),dtype=torch.float32)
+    torch_weight = randomize_torch_tensor(torch_tensor_map, (out_channels, input_channels, kernel_size, kernel_size),dtype=torch.float32)
+    torch_bias = randomize_torch_tensor(torch_tensor_map, (1, 1, 1, out_channels),dtype=torch.float32)
 
     # Convert input to NHWC for ttnn
     torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))

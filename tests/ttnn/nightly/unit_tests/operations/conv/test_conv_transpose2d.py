@@ -337,7 +337,7 @@ def test_conv_transpose2d_fp32_accum_auto_default(device):
     output_padding = 1
 
     # Generate random FP32 inputs
-    torch.manual_seed(42)
+    torch.manual_seed(0)
     torch_input_nchw = torch.rand(batch_size, input_channels, input_height, input_width, dtype=torch.float32)
     torch_weight = torch.rand(input_channels, out_channels, kernel_size, kernel_size, dtype=torch.float32)
     torch_bias = torch.rand(1, 1, 1, out_channels, dtype=torch.float32)
