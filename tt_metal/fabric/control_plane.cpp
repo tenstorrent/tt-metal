@@ -531,6 +531,7 @@ void ControlPlane::init_control_plane(
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
         std::map<MeshId, std::vector<std::pair<AsicPosition, FabricNodeId>>> fixed_asic_position_pinnings_by_mesh;
 
+        // TODO: Remove this when preferred pinnings are supported
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
         // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
         // bisect a device.
@@ -553,6 +554,10 @@ void ControlPlane::init_control_plane(
 
         else if (mesh_graph_desc_file.find("dual_4x4_mesh_graph_descriptor.textproto") != std::string::npos) {
             fixed_asic_position_pinnings_by_mesh = get_6u_split_4x4_fixed_asic_position_pinnings(board_size);
+        // Add MGD pinnings to the topology mapper
+        auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+        for (const auto& [pos, fabric_node] : pinnings) {
+            fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
