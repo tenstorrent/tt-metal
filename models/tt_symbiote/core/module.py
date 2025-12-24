@@ -35,8 +35,10 @@ class TTNNModule:
 
     def move_weights_to_device(self):
         """Move preprocessed weights to device."""
-        assert self._preprocessed_weight, "Weights must be preprocessed before moving to device."
-        assert self.device is not None, "Device must be set before moving weights to device."
+        assert (
+            self._preprocessed_weight
+        ), f"Weights must be preprocessed for {self.module_name} before moving to device."
+        assert self.device is not None, f"Device must be set for {self.module_name} before moving weights to device."
         if not self._weights_on_device:
             self._weights_on_device = True
         else:
@@ -57,14 +59,32 @@ class TTNNModule:
     def preprocess_weights_impl(self):
         """Override to implement weight preprocessing."""
 
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.preprocess_weights()
+        return self
+
     def move_weights_to_host_impl(self):
         """Override to implement weight movement to host."""
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.move_weights_to_host()
+        return self
 
     def move_weights_to_device_impl(self):
         """Override to implement weight movement to device."""
 
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.move_weights_to_device()
+        return self
+
     def deallocate_weights_impl(self):
         """Override to implement weight deallocation."""
+        for child in self.__dict__.values():
+            if isinstance(child, TTNNModule):
+                child.deallocate_weights()
+        return self
 
     def to_device(self, device):
         """Set the device for this module."""
