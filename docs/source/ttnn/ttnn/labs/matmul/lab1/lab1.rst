@@ -196,6 +196,14 @@ Introduction to Tenstorrent Architecture
 Tenstorrent's devices are a line of AI accelerator devices that are typically delivered as PCIe cards attached to a standard host.
 In this model, the host CPU runs a standard C++ host program. In the host program, developers can use the TT-Metalium C++ API to configure the accelerator,
 allocate memory on the device, and dispatch kernels, which are also written in C++, to Tensix cores.
+High-level view of Tenstorrent device in the system is shown in figure 2786:
+
+.. figure:: images/tensix_device_on_card.png
+   :width: 600
+   :alt: High-level View of Tenstorrent device on PCIe card
+
+   Figure 2786: High-level View of Tenstorrent device on PCIe card
+
 PCIe card contains one or more Tensix devices, each device consisting of a Tensix processor and a dedicated DRAM.
 Note that the device DRAM is separate from the system (host) DRAM and explicit communication is required to transfer data between them.
 The Tensix processor contains an array of Tensix cores with network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM memory and between cores.
@@ -235,35 +243,26 @@ which was still stored in row-major order.
 An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
 This **tiled memory layout** is the main memory layout used by the Tenstorrent architecture.
 
-Consider the following 9x4 matrix:
+Consider an example 9x4 matrix. In row-major layout, this matrix is stored in memory as shown in figure 366:
 
-.. code-block:: cpp
+.. figure:: images/row_major_layout.png
+   :width: 600
+   :alt: Row-major layout of a 9x4 matrix
 
-   [a00  a01  a02  a03]
-   [a10  a11  a12  a13]
-   [a20  a21  a22  a23]
-   [a30  a31  a32  a33]
-   [a40  a41  a42  a43]
-   [a50  a51  a52  a53]
-   [a60  a61  a62  a63]
-   [a70  a71  a72  a73]
-   [a80  a81  a82  a83]
+   Figure 366: Row-major layout of a 9x4 matrix
 
-In row-major layout, this matrix is stored in memory as:
+Numbers in the matrix indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
 
-.. code-block:: cpp
+In tiled memory layout with tile size 3x2, this matrix is stored in memory as shown in Fgiure 11:
 
-   [a00][a01][a02][a03][a10][a11][a12][a13][a20] ... [a80][a81][a82][a83]
+.. figure:: images/tiled_layout.png
+   :width: 600
+   :alt: Tiled layout of a 9x4 matrix
 
-In tiled memory layout with tile size 3x2, this matrix is stored in memory as:
+   Figure 366: Tiled layout of a 9x4 matrix
 
-.. code-block:: cpp
 
-   [a00][a01][a10][a11][a20][a21][a02][a03][a12][a13][a22][a23][a30] ... [a82][a83]
-
-.. note::
-   Add an image of a tiled memory layout here.
-
+Once again, the numbers in the matrix indicate memory addresses that the corresponding element is stored at.
 Observe that all elements of a tile are stored contiguously in memory. In this tiled layout there are two "second-order" row-major orderings:
 
 1. Elements within each tile are stored in row-major order.
@@ -434,6 +433,8 @@ The function creates three Tensor objects of shape MxN using the tile layout des
 These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
 The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`.
 The vectors passed to `Tensor::from_vector` are the same input vectors that were used for the reference computation.
+Because the ``TensorSpec`` object passed to `Tensor::from_vector` specifies the tile layout, the data is automatically organized in a tiled
+memory layout when stored on the device. This is desirable because the matrix engine is optimized for operations on tiled data.
 
 The function then creates three circular buffers to enable data movement between kernels.
 A circular buffer is a FIFO buffer with configurable size.
@@ -864,38 +865,214 @@ Therefore Watcher should be disabled when doing performance benchmarking or prod
 For more information about the Watcher, refer to https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
 
 
-Profiling
----------
-
-The profiling API allows for profiling the execution of kernels running on the device.
-This is particularly useful for understanding the performance of the kernels and identifying bottlenecks.
-The profile API is controlled through environment variables on the host side.
-The environment variable ``TT_METAL_PROFILE_CORES`` specifies which cores the host-side will read profile data from,
-and whether this environment variable is defined determines whether profiling is enabled during kernel compilation.
-
-The solution was to:
-
-- Have Python environment active
-- Have WATCHER disabled
-- Have DPRINT disabled
-
-To disable DPRINT, use::
-
-   unset TT_METAL_DPRINT_CORES
+Device Performance Profiling
+----------------------------
 
 
+Metalium includes a device program profiler that measures how long sections of your device kernels take to run,
+using a scope macro called **``DeviceZoneScopedN``**.
+The profiler records timestamps on the RISC-V cores that execute your kernels and writes them to a CSV file for later analysis.
 
-Exercise 5: Debugging Metalium Kernels
-========================================
+To profile device execution time, you can add a profiling scope with ``DeviceZoneScopedN`` inside your kernel source files around the code you care about,
+typically inside the main kernel function. For example:
 
-TODO: Add instructions for introducing bugs and debugging them.
 
+   .. code-block:: cpp
+
+      #include <tools/profiler/kernel_profiler.hpp>
+
+      void kernel_main() {
+          DeviceZoneScopedN("ELTWISE-COMPUTE");
+          // existing compute code for eltwise add goes here
+      }
+
+``DeviceZoneScopedN("ELTWISE-COMPUTE")`` starts a timer when the scope is entered and stops it when the scope is exited;
+the profiler records a matching ``begin`` and ``end`` event in the device log. Each ``DeviceZoneScopedN`` introduces a small
+fixed overhead (on the order of a few tens of cycles), so it is recommended to use a handful of scopes to enclose meaningful
+regions instead of instrumenting every small block of code.
+Profiling is disabled by default, but can be enabled by setting the ``TT_METAL_DEVICE_PROFILER`` environment variable to ``1``
+when launching the binary.
+With this flag set, the runtime collects device-side profiling data for any kernels that contain ``DeviceZoneScopedN`` scopes,
+plus a few predefined zones including ``*RISC-FW`` and ``*RISC-KERNEL`` that measure firmware and full-kernel durations.
+Note that this file uses names BRISC and NCRISC for the two RISC-V processors that control routers (RISC-V 0 and RISCV-4 in Figure 2),
+and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 2).
+
+When the program finishes and closes the device via ``mesh_device->close()``, the runtime automatically pulls the profiling data
+from the device and writes it to a CSV log file on the host. The CSV file is named ``profile_log_device.csv`` and is stored
+in the ``generated/profiler/.logs/`` directory.
+
+Exercise 6: Using Device Profiling to Profile Kernels
+-----------------------------------------------------
+
+Add profiling scopes to reader kernel, writer kernel, and the compute kernel in the `lab_eltwise_binary` example program,
+making sure to use unique zone names for each kernel to differentiate the profiling results.
+
+
+   .. code-block:: bash
+
+      TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/metal_example_lab_eltwise_binary
+
+2. **Locate the CSV log file**
+
+Once the run finishes, locate the CSV log file and open it in a text editor.
+The file contains one row per profiling event. It begins with a header line that includes the chip frequency, for example:
+   .. code-block:: text
+
+      ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 72
+      PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run host ID, trace id, trace id counter, zone name, type, source line, source file, meta data
+
+
+2. **Identify your zone**
+
+   In the CSV, filter rows where the ``zone name`` column matches the string you passed to ``DeviceZoneScopedN``, for example ``ELTWISE-COMPUTE``.
+   You should see two rows per profiled scope instance one indicating ``ZONE_START`` and one indicating ``ZONE_END``.
+
+3. **Compute elapsed device time for various scopes**
+
+   Simply subtract the ``time[cycles since reset]`` values of the ``ZONE_END`` and ``ZONE_START`` rows to get the elapsed cycles for that zone,
+   then convert to seconds or nanoseconds using the chip frequency in the header.
+
+   On a single-core, single-kernel example like ``lab_eltwise_binary``, this gives you a good estimate of the
+   **total device execution time** for the region wrapped by your ``DeviceZoneScopedN`` scope.
+
+   Do the same computation using the built-in ``*RISC-KERNEL`` zone, which measures the full lifetime of ``kernel_main`` on that RISC
+   for each kernel launch.
+
+Key caveats and good practices
+------------------------------
+
+* **Do not mix the profiler with DPRINT or watcher.** The device profiler, kernel debug print (DPRINT), and watcher features all consume
+the same limited on-chip SRAM. Only one should be enabled at a time.
+Concretely, do not set ``TT_METAL_DEVICE_PROFILER``, ``TT_METAL_DPRINT_CORES``, and ``TT_METAL_WATCHER`` together.
+
+* **Remember the measurement overhead.** Each ``DeviceZoneScopedN`` scope adds a small constant timing overhead (tens of cycles) for start
+and end bookkeeping. This is negligible at the scale of typical kernels, but if you instrument a very short inner loop it can slightly
+distort the apparent timing, so keep zones at a coarse-enough granularity.
+Furthermore, when doing performance profiling, enabling DPRINT or Watcher would impact performance, yielding results not reflective of the actual performance.
+
+* **Clock alignment limitations.** Within a single Tensix core, all RISCs use the same clock counter, so timings are directly comparable.
+
+
+Matrix Multiplication in Metalium
+=================================
+
+Now that you have a basic understanding of how to use the Metalium APIs and building data movement and compute kernels,
+we can look at a more complex example of matrix multiplication.
+As desribed earlier, matrix multiplication can be decomposed into a series of tile multiplications, through tiling.
+In exercise 1, you implemented a tiled version of matrix multiplication by identifying appropriate indices in the input and output matrices,
+which were organized in a row-major layout, and then performing the necessary arithmetic operations on these smaller tiles.
+We will now show how the same can be achieved in Metalium, while taking advantage of the built in tiled memory layout.
+
+The key insight is that tiled matrix multiplication can be performed by considering each tile as an element of a larger matrix,
+and then performing regular matrix multiplication on these larger matrices, where each tile is multiplied by another tile using standard matrix multiplication.
+While we will not present a formal proof here, wer will illustrate how this works intuitively to allow us to write correct kernel code to perform this operation.
+
+Consider multiplication of an MxK matrix A and a KxN matrix B. The C[i, j] element of the resulting matrix C is computed as the dot product of
+row i of A, with column j of B. Dot product is computed by multiplying corresponding pairs of elements and summing them.
+Extending this idea to two neighboring elements of C[i:i+1, j], we need rows i and i+1 of A and the same column j of B.
+More generally, if we want to compute a rectangular tile C[i:i+TILE_HEIGHT, j:j+TILE_WIDTH], we must fetch the entire band of tiles in
+A covering rows i to i+TILE_HEIGHT (across all tile columns in K), and the entire band of tiles in B covering columns
+j to j+TILE_WIDTH (across all tile rows in K).
+Conceptually, we are treating the K dimension as being split into tile-sized chunks, and for each output tile we
+accumulate products over all those K-tiles.
+
+Consider the concrete example shown in the following figure.
+
+.. figure:: images/tiled_matrix_mul_example.png
+   :width: 600
+   :alt: Tiled Matrix Multiplication Example
+
+   Figure 3: Tiled Matrix Multiplication Example
+
+Figure 3 shows an example where A is a 9x4 matrix, and B is a 4x6 matrix. If we choose 3x2 tiles for matrix A, we
+can divide A into six tiles A0 through A5, each of shape 3x2. The figure shows labeling of the tiles in row major order, which is exactly how tiled layout
+works on Tenstorrent architecture. We can similarly divide B into four tiles B0 through B3, each of shape 2x3 (note that number of rows in B's tiles must match
+the number of columns in A's tiles)
+The output matrix C is 9x6 and based on chosen tile shapes for A and B must be tiled such that C's tiles have the same number of rows as A's tiles
+and the same number of columns as B's tiles.
+Each C tile is computed by summing products of one tile row of A with one tile column of B, exactly like scalar matrix multiplication,
+but with tiles instead of individual numbers. For instance, tile C0 corresponds to tile row 0 of A and tile column 0 of B, and therefore
+
+C0 = A0 * B0 + A1 * B2,
+
+where each * is an inner 3x2 by 2x3 matrix multiplication producing a 3x3 tile that is accumulated into C0.
+
+You can summarize all C tiles in a table:
+
++-----------+--------+--------+--------+--------+--------+
+| To compute| From A | From B |        | From A | From B |
++-----------+--------+--------+--------+--------+--------+
+| C0        | A0     | B0     |    +   | A1     | B2     |
++-----------+--------+--------+--------+--------+--------+
+| C1        | A0     | B1     |    +   | A1     | B3     |
++-----------+--------+--------+--------+--------+--------+
+| C2        | A2     | B0     |    +   | A3     | B2     |
++-----------+--------+--------+--------+--------+--------+
+| C3        | A2     | B1     |    +   | A3     | B3     |
++-----------+--------+--------+--------+--------+--------+
+| C4        | A4     | B0     |    +   | A5     | B2     |
++-----------+--------+--------+--------+--------+--------+
+| C5        | A4     | B1     |    +   | A5     | B3     |
++-----------+--------+--------+--------+--------+--------+
+
+If we compute the C tiles in row-major order (C0, C1, C2, C3, C4, C5), we will visit tiles of A and B in regular pattern, and that patern is exactly
+the same pattern that straightforward implementation of matrix multiplication uses, visiting one row of tiles of A with all columns of tiles of B.
+For example, as we compute C0 and C1 we start with row of tiles A0, A1 while cycling through columns of tile B0, B2 followed by B1, B3, and so on.
+From this viewpoint, we can think of A0, A1, ..., A5 as the "elements" of a 3x2 tile matrix, B0, ..., B3 as the "elements" of a 2x2 tile matrix,
+and C0, ..., C5 as the "elements" of a 3x2 tile matrix.
+The computation of C from A and B then follows the standard matrix multiplication algorithm,
+except that each "element" is itself a 2D tile, and each element-wise multiply is a small matrix multiply.
+
+This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplicaiton on two tiles in a single instruction.
+All that needs to be done is to present the tiles of A and B to the matrix engine in the correct order, and accumulate results into the correct output tile.
+
+Exercise 7: Implemetning Matrix Multiplication in Metalium
+===========================================================
+
+In this exercise, you will implement matrix multiplication on a Tenstorrent device. You can start with the lab_eltwise_binary example program and adjust it
+to perform matrix multiplication.
+Start by copying the files from the ``lab_eltwise_binary`` directory into a new directory e.g. ``lab1_matmul`` and adjusting code to perform matrix multiplication.
+You will need to make the following changes:
+
+1. Update the host program to create input vectors of appropriate sizes for matrix multiplication, and copy golden reference matrix multiplication you created in
+   exercise 1 to verify the results. similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
+   pass required parameters to kernels.
+
+2. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
+   To initialize the Tensix engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
+   applicable to elementwise operations, not to matrix multiplication).
+   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   Don't forget to accumulate the result of all multiplication results contributing to one output tile.
+
+3. Update the reader kernel to read the tiles of A and B in the correct order. The order should match the pattern of visiting one row of tiles of A
+   with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
+   not the actual memory address, so your code only needs to generate indices in the right order.
+
+4. Update the writer kernel to write the tiles of C in the correct order. The order should match the pattern of visiting tiles of C in row-major order.
+   Keep in mind that ``noc_async_write_tile`` function only requires the index of the tile to write, not the actual memory address,
+   so your code only needs to generate indices in the right order.
+
+5. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile to match whatever file and directory names you chose.
+
+6. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
+
+7. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in exercise 1.
+   Note that because of limited precision of bfloat16, the results may not be exactly the same as the golden reference, but they should be within
+   about 4% of the golden reference.
+
+8. Profile the performance of the implementation, taking note of the total execution time on the device. This will be useful to compare
+   against future labs when we optimize the implementation for performance.
 
 
 Scrap Heap
 ==========
 
 (LEFTOVER TEXT THAT MAY COME HANDY LATER)
+
+
+
+Can use https://docs.google.com/document/d/1hDHsGggjAUm6GR-sAfmOAf4C98CMe6NAMl3D-xuyUlc/edit?tab=t.0 for some images
 
 
 Terminology
