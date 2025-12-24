@@ -158,22 +158,22 @@
 [ ] ./ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/all_to_all_combine_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/ccl/mesh_partition/device/mesh_partition_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/reduce_to_root_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/rand/device/rand_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/copy/typecast/device/typecast_device_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/point_to_point/device/host/point_to_point_device_op.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/moe_expert_token_remap_device_operation.hpp
-[ ] ./ttnn/cpp/ttnn/operations/data_movement/fold/device/fold_device_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/reduce_to_root_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/rand/device/rand_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/copy/typecast/device/typecast_device_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/point_to_point/device/host/point_to_point_device_op.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/moe_expert_token_remap_device_operation.hpp
+[x] ./ttnn/cpp/ttnn/operations/data_movement/fold/device/fold_device_op.hpp
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/gather/device/gather_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/scatter/device/scatter_device_operation.hpp
 [ ] ./ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp

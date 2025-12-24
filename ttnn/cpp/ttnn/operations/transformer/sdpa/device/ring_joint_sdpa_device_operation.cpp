@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -289,8 +290,12 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     );
 }
 
-std::tuple<RingJointSDPADeviceOperation::operation_attributes_t, RingJointSDPADeviceOperation::tensor_args_t>
-RingJointSDPADeviceOperation::invoke(
+}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
+
+namespace ttnn::prim {
+
+ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation::tensor_return_value_t
+ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -312,6 +317,9 @@ RingJointSDPADeviceOperation::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType =
+        ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation;
+
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
@@ -345,26 +353,28 @@ RingJointSDPADeviceOperation::invoke(
         subdevice_id,
         cluster_axis};
 
-    return {
-        operation_attributes_t(
-            joint_strategy,
-            scale,
-            logical_n,
-            num_devices,
-            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            std::move(program_config),
-            kernel_config_val,
-            std::move(all_gather_struct),
-            ccl_core_grid_offset),
-        tensor_args_t{
-            .input_q = input_tensor_q,
-            .input_k = input_tensor_k,
-            .input_v = input_tensor_v,
-            .joint_q = joint_tensor_q,
-            .joint_k = joint_tensor_k,
-            .joint_v = joint_tensor_v,
-            .gathered_k = persistent_output_buffer_k,
-            .gathered_v = persistent_output_buffer_v}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        joint_strategy,
+        scale,
+        logical_n,
+        num_devices,
+        tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        std::move(program_config),
+        kernel_config_val,
+        std::move(all_gather_struct),
+        ccl_core_grid_offset);
+
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_q = input_tensor_q,
+        .input_k = input_tensor_k,
+        .input_v = input_tensor_v,
+        .joint_q = joint_tensor_q,
+        .joint_k = joint_tensor_k,
+        .joint_v = joint_tensor_v,
+        .gathered_k = persistent_output_buffer_k,
+        .gathered_v = persistent_output_buffer_v};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
+}  // namespace ttnn::prim

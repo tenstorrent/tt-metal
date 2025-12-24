@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_device_op.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -127,8 +128,10 @@ bool TypecastDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-std::tuple<TypecastDeviceOperation::operation_attributes_t, TypecastDeviceOperation::tensor_args_t>
-TypecastDeviceOperation::invoke(
+}  // namespace ttnn::operations::copy
+
+namespace ttnn::prim {
+ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
     const Tensor& input,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
@@ -137,8 +140,9 @@ TypecastDeviceOperation::invoke(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::copy::TypecastDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .input_dtype = input.dtype(),
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
@@ -147,7 +151,6 @@ TypecastDeviceOperation::invoke(
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
         },
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+        OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output});
 }
-
-}  // namespace ttnn::operations::copy
+}  // namespace ttnn::prim
