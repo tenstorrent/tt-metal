@@ -58,7 +58,12 @@ def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingPara
     kwargs = {}
     for f in fields(SamplingParams):
         value = getattr(formatted_sampling_params, f.name)
-        chosen = value[idx] if isinstance(value, List) else value
+        # `format_sampling_params` may convert scalar fields to 1-element lists.
+        # Treat short lists as broadcast scalars rather than per-request arrays.
+        if isinstance(value, List):
+            chosen = value[idx] if idx < len(value) else value[0]
+        else:
+            chosen = value
         kwargs[f.name] = [chosen] * slot_len
     return SamplingParams(**kwargs)
 
@@ -249,7 +254,6 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
-        # We are not appending host/device here because we never do device sampling in prefill with TTT
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -335,7 +339,6 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
-        out_list = []
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
         for idx, user_id in enumerate(empty_slots):
@@ -387,7 +390,6 @@ class Generator:
 
             # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
-                enable_trace_current_prompt = False
                 sampling_executed = True
                 sampling_params_per_out[idx] = _broadcast_formatted_sampling_params(formatted_sampling_params, idx)
                 prompt_tokens_per_out[idx] = prefill_ids[:, :seq_len].repeat(32, 1)
@@ -421,26 +423,8 @@ class Generator:
 
             # We have to dispatch copy to host to avoid corruption by the next user's prefill
             if sampling_enabled:
-                x_l1 = logits
-                logits = ttnn.to_memory_config(x_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                x_l1.deallocate(True)
-                out_list.append(ttnn.clone(logits))
-            else:
-                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                out_list.append(logits.cpu(blocking=False))
+                logits_dram = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Process the logits after all the prefill are done in data parallel mode
-        for idx, out in enumerate(out_list):
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-
-            # Ensure all copying is done
-            ttnn.synchronize_device(self.model[model_id].mesh_device)
-
-            if sampling_executed:
-                # Re-apply per-request params right before sampling so seeds/params are not overwritten by other requests.
                 per_request_params = sampling_params_per_out[idx]
                 assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
                 _apply_prefill_sampling_state(
@@ -449,7 +433,7 @@ class Generator:
                     prompt_tokens=prompt_tokens_per_out[idx],
                 )
                 tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
-                    out,
+                    logits_dram,
                     enable_trace=False,
                 )
                 tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
@@ -464,13 +448,11 @@ class Generator:
                 output_tokens[idx] = tokens_host
                 if log_probs_host is not None:
                     output_log_probs[idx] = log_probs_host
-
             else:
-                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 output_logits[idx] = self.model[model_id].process_output_prefill(
-                    out, last_token_idx=(last_token_idx % 32)
+                    logits.cpu(blocking=False), last_token_idx=(int(prompt_lens[idx]) % 32)
                 )
-
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
             return output_tokens, output_log_probs
