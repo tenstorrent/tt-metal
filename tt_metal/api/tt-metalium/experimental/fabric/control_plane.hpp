@@ -219,6 +219,13 @@ public:
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
+    // Returns true if any of the local mesh bindings correspond to a switch mesh
+    bool is_local_host_on_switch_mesh() const;
+
+    // Returns physical chip IDs for all devices belonging to switch meshes on this host
+    // Returns empty vector if no switch meshes are on this host
+    std::vector<ChipId> get_switch_mesh_device_ids() const;
+
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
 private:

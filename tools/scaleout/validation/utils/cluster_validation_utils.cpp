@@ -412,7 +412,7 @@ LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
 
 void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_metrics) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto my_rank = *distributed_context.rank();
 
     std::vector<uint8_t> serialized_link_metrics;
@@ -1061,7 +1061,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 }
 
 void point_to_point_barrier(const ResetPair& reset_pair) {
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     TT_FATAL(
         *distributed_context.rank() == reset_pair.src_rank || *distributed_context.rank() == reset_pair.dst_rank,
         "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
@@ -1119,7 +1119,7 @@ void forward_link_reset_metadata_from_controller(
     std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
     std::vector<ResetPair>& reset_pairs) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
