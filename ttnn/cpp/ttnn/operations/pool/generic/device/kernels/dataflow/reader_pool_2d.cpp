@@ -494,7 +494,39 @@ void kernel_main() {
             up_left_wrap_inc_cb_id>();
     }
     if constexpr (reader_id == 0) {
-        fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
+        // Set up TensorAccessor for proper TILED tensor reading (like conv2d kernels)
+        // Tensor accessor args start after the base 47 pool kernel args
+        constexpr auto s_weight_args = TensorAccessorArgs<47>();
+        uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(0);
+        bool is_sender = get_arg_val<uint32_t>(1) != 0;
+
+        const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
+        const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+
+        // Load real weight data using TILED tensor reading
+        // Expected weight tensor format from Stage 2: [out_channels, kernel_positions, 1, 1] in TILED format
+        // For depthwise: out_channels = in_c, kernel_positions = kernel_h * kernel_w
+        constexpr uint32_t kernel_positions = kernel_h * kernel_w;
+
+        // Reserve space in weight CB for loading
+        cb_reserve_back(weight_cb_id, 1);
+        uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
+
+        // Read weight tiles using TensorAccessor (handles TILED format correctly)
+        // For TILED format [out_channels, kernel_positions, 1, 1], we read tiles by tile_id
+        uint32_t weight_tile_id = 0;
+        for (uint32_t ch = 0; ch < in_c; ch++) {
+            for (uint32_t kpos = 0; kpos < kernel_positions; kpos++) {
+                noc_async_read_tile(weight_tile_id, s_weight, weight_l1_addr);
+                weight_l1_addr += weight_tile_nbytes;
+                weight_tile_id++;
+            }
+        }
+        noc_async_read_barrier();
+
+        tt::data_movement::common::print_bf16_pages(get_write_ptr(weight_cb_id), 32, 32);
+        // fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
+        cb_push_back(weight_cb_id, 1);
     }
 
     // initialize the scalar CB

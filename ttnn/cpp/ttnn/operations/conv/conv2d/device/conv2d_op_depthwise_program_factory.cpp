@@ -16,6 +16,7 @@
 #include <ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp>
 #include <ttnn/operations/sliding_window/sliding_window.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 // Pool-related includes for reusing pool kernels
 #include <ttnn/operations/pool/pool_utils.hpp>
@@ -500,8 +501,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
         zero_pages,                     // 43 - zero_pages (FIXED: use calculated value)
         out_cb_id,                      // 44
         out_cb_id,                      // 45 - out_idx_cb_id (point to out_cb for depthwise)
-        weight_cb_id                    // 46
+        weight_cb_id                    // 46 - weight_cb_id (for L1 storage)
     };
+
+    // Add tensor accessor args for weight buffer (similar to sharded factory)
+    // This allows the kernel to access weight data from DRAM via TensorAccessor
+    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(reader0_ct_args);
 
     // Create reader1 arguments by copying reader0 and updating reader_id
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
@@ -552,6 +557,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
         .noc = tt::tt_metal::NOC::RISCV_0_default,
         .compile_args = reader0_ct_args};
     auto reader0_kernel = CreateKernel(program, reader_kernel_path, parallel_config.grid, reader0_config);
+
+    uint64_t weight_buffer_addr = b.buffer()->address();
+
+    // TensorAccessor expects base address as single 32-bit value (like conv2d kernels)
+    std::vector<uint32_t> reader_args = {
+        static_cast<uint32_t>(weight_buffer_addr),
+        1  // weight buffer base address for TensorAccessor
+    };
+    SetRuntimeArgs(program, reader0_kernel, CoreCoord{0, 0}, reader_args);
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -632,9 +646,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
             log_debug(tt::LogOp, "Setting up runtime arguments for depthwise conv2d pool kernels");
 
             const auto& input_tensor = input_tensors.at(0);
+            // const auto& weight_tensor = input_tensors.at(1);
+
             // NOTE: output_tensor not needed since output CB is bound at creation time
 
             auto src_buffer = input_tensor.buffer();
+            // auto weight_buffer = weight_tensor.buffer();
 
             // Update circular buffer addresses for raw input (critical for pool reader)
             if (input_tensor.is_sharded()) {
@@ -646,7 +663,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
             auto reader_indices_buffer = reader_indices_on_device.buffer();
             UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb_id, *reader_indices_buffer);
 
-            log_debug(tt::LogOp, "Depthwise conv2d runtime arguments configured successfully");
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
