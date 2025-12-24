@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 /**
- * Compute kernel for tilize_untilize operation.
+ * Compute kernel for tilize_untilize operation (multi-core version).
  *
  * Data flow (per block):
  *   CB_in (c_0, row-major) -> tilize -> CB_tiled (c_1, tiled)
@@ -18,14 +18,18 @@
  * - compute_kernel_lib::tilize() handles CB_in -> CB_tiled conversion
  * - compute_kernel_lib::untilize() handles CB_tiled -> CB_out with auto pack_untilize
  *
- * IMPORTANT: Process one block at a time because CBs are sized for only one block!
+ * Multi-core support:
+ * - num_blocks is a runtime argument (varies per core, handles cliff cores)
+ * - num_tiles_per_row is compile-time (constant across all cores)
  */
 
 namespace NAMESPACE {
 void MAIN {
     // Compile-time args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(0);         // Number of tile blocks to process
-    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(1);  // Tiles per row (width in tiles)
+    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(0);  // Tiles per row (width in tiles)
+
+    // Runtime args - num_blocks varies per core (full cores vs cliff core)
+    const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     // CB indices
     constexpr uint32_t cb_in = tt::CBIndex::c_0;     // Row-major input from reader
