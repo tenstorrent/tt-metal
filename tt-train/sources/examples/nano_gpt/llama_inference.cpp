@@ -27,7 +27,8 @@ struct InferenceConfig {
 };
 
 // Create a causal attention mask for autoregressive generation
-TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t query_seq_len, uint32_t prompt_len = 0) {
+TensorPtr create_causal_mask(
+    ttnn::distributed::MeshDevice* device, const uint32_t query_seq_len, const uint32_t prompt_len = 0) {
     // Mask shape: [padded_seq_len, padded_whole_seq_len] - query_len x key_len
     const uint32_t whole_seq_len = prompt_len + query_seq_len;
     const uint32_t padded_query_len = round_up_to_tile(query_seq_len);
@@ -48,7 +49,10 @@ TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t que
 }
 
 // Sample next token using greedy decoding (argmax)
-const uint32_t sample_token(const TensorPtr& logits, int position) {
+const uint32_t sample_token(const TensorPtr& logits, const int position) {
+    if (position == 0) {
+        throw std::invalid_argument("position must be at least 1");
+    }
     const auto logits_tensor = logits->get_value();
     const auto logits_host = logits_tensor.to_vector<float>();
 
