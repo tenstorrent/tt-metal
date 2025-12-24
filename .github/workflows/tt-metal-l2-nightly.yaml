@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       architecture:
-        description: 'Architectures to run tests on. Valid inputs: ["blackhole", "wormhole_b0"] (both), ["blackhole"] (blackhole only), ["wormhole_b0"] (wormhole only)'
+        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
         required: false
         type: string
         default: '["blackhole", "wormhole_b0"]'
