@@ -16,7 +16,38 @@ from models.tt_cnn.tt.builder import (
     MaxPool2dConfiguration,
     AutoShardedStrategyConfiguration,
 )
+from models.tt_cnn.tt.pipeline import get_memory_config_for_persistent_dram_tensor
 from models.experimental.efficientdetd0.tt.custom_preprocessor import UpsampleArgs, MaxPool2dArgs, Conv2dArgs
+
+
+def prepare_sharded_inputs(device: ttnn.Device, torch_input_tensor: torch.Tensor, dtype=ttnn.bfloat16, min_channels=16):
+    N, C, H, W = torch_input_tensor.shape
+    ttnn_input_host = ttnn.from_torch(
+        torch_input_tensor,  # NCHW format
+        device=None,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    # DRAM memory config for persistent tensors
+    dram_memory_config = get_memory_config_for_persistent_dram_tensor(
+        shape=((N * min_channels * H), W),  # NCHW format
+        shard_strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        dram_grid_size=device.dram_grid_size(),
+    )
+
+    # L1 memory config for model processing
+    core_grid = device.core_grid
+    num_cores = core_grid.x * core_grid.y
+    l1_memory_config = ttnn.create_sharded_memory_config(
+        shape=((N * min_channels * H) // num_cores, W),  # Height sharded: [NCH//cores, W]
+        core_grid=device.core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    return ttnn_input_host, dram_memory_config, l1_memory_config
 
 
 def generate_conv_configuration_from_args(conv2d_args: Conv2dArgs, parameters_dict: dict, **kwargs):
@@ -98,52 +129,9 @@ class TtMaxPool2dDynamicSamePadding(TtMaxPool2d):
         self,
         configuration: MaxPool2dConfiguration,
         device: ttnn.Device,
-        use_torch_maxpool: bool = False,
     ):
         super().__init__(configuration, device)
         self.configuration = replace(self.configuration, padding=_get_dynamic_padding(self.configuration))
-        self.use_torch_maxpool = use_torch_maxpool
-        if self.use_torch_maxpool:
-            self.maxpool = torch.nn.MaxPool2d(
-                kernel_size=self.configuration.kernel_size,
-                stride=self.configuration.stride,
-                dilation=self.configuration.dilation,
-            )
-
-    def __call__(self, x):
-        if self.use_torch_maxpool:
-            x_torch = (
-                ttnn.to_torch(x)
-                .permute(0, 3, 1, 2)
-                .reshape(
-                    self.configuration.batch_size,
-                    self.configuration.channels,
-                    self.configuration.input_height,
-                    self.configuration.input_width,
-                )
-            )
-            x_padded_output_torch = torch.nn.functional.pad(x_torch, self.configuration.padding)
-            x_maxpool_output_torch = self.maxpool(x_padded_output_torch).permute(0, 2, 3, 1)
-            x = ttnn.from_torch(
-                x_maxpool_output_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            return x
-        else:
-            if not self.use_channel_slicing:
-                # No slicing
-                x = ttnn.max_pool2d(
-                    input_tensor=x,
-                    channels=self.configuration.channels,
-                    **self.get_maxpool2d_kwargs(),
-                )
-            else:
-                x = self._apply_channel_slicing(x)
-
-            return x
 
 
 class TtConv2dDynamicSamePadding(TtConv2d):
