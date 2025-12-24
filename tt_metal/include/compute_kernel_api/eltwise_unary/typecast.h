@@ -55,6 +55,9 @@ ALWI void typecast_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void typecast_tile_init() { MATH((llk_math_eltwise_unary_sfpu_typecast_init<APPROX>())); }
+template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
+ALWI void typecast_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_typecast_init<APPROX, IN_DTYPE, OUT_DTYPE>()));
+}
 
 }  // namespace ckernel

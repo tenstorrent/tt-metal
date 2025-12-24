@@ -403,12 +403,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::TYPECAST:
             TT_ASSERT(params.size() == 2, "Expected eltwise_typecast to take 2 parameters");
             return {
-                "typecast_tile_init();",
+                fmt::format(
+                    "typecast_tile_init<{0}u, {1}u>();",
+                    static_cast<uint32_t>(datatype_to_dataformat_converter((DataType)params[0])),
+                    static_cast<uint32_t>(datatype_to_dataformat_converter((DataType)params[1]))),
                 fmt::format(
                     "typecast_tile<{1}u, {2}u>({0});",
                     idst,
-                    (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
-                    (uint32_t)datatype_to_dataformat_converter((DataType)params[1]))};
+                    static_cast<uint32_t>(datatype_to_dataformat_converter((DataType)params[0])),
+                    static_cast<uint32_t>(datatype_to_dataformat_converter((DataType)params[1])))};
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
