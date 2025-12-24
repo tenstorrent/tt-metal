@@ -85,9 +85,6 @@ jobs:
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:
-      # Boolean flags for simple checks
-      run-wormhole: ${{ steps.parse.outputs.run-wormhole }}
-      run-blackhole: ${{ steps.parse.outputs.run-blackhole }}
       # Dynamic matrices for each job type
       matrix-l2-tests: ${{ steps.parse.outputs.matrix-l2-tests }}
       matrix-cpp-tests: ${{ steps.parse.outputs.matrix-cpp-tests }}
@@ -105,84 +102,112 @@ jobs:
             arch='["blackhole", "wormhole_b0"]'
           fi
 
-          # Check for each architecture
-          run_wormhole=false
-          run_blackhole=false
-          if [[ "$arch" == *"wormhole_b0"* ]]; then
-            run_wormhole=true
-          fi
-          if [[ "$arch" == *"blackhole"* ]]; then
-            run_blackhole=true
+          # Validate JSON format
+          if ! echo "$arch" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            echo "❌ Error: Invalid JSON format. Input must be a JSON array."
+            echo "   Received input: $arch"
+            echo "   Valid format: [\"blackhole\", \"wormhole_b0\"]"
+            exit 1
           fi
 
-          echo "run-wormhole=$run_wormhole" >> $GITHUB_OUTPUT
-          echo "run-blackhole=$run_blackhole" >> $GITHUB_OUTPUT
+          # Validate each architecture name using jq for exact matching
+          valid_archs='["blackhole", "wormhole_b0"]'
+          invalid_archs=$(echo "$arch" | jq -r --argjson valid "$valid_archs" '.[] | select(. as $a | $valid | index($a) | not)')
+          if [[ -n "$invalid_archs" ]]; then
+            echo "❌ Error: Invalid architecture(s) found:"
+            echo "$invalid_archs" | while read -r invalid; do
+              echo "   - '$invalid'"
+            done
+            echo "   Valid values are: blackhole, wormhole_b0"
+            echo "   Received input: $arch"
+            exit 1
+          fi
 
-          # Build dynamic matrices based on architecture selection
+          # Check for each architecture using jq for exact matching
+          run_wormhole=$(echo "$arch" | jq -r 'if index("wormhole_b0") then "true" else "false" end')
+          run_blackhole=$(echo "$arch" | jq -r 'if index("blackhole") then "true" else "false" end')
+
+          # Ensure at least one valid architecture was specified
+          if [[ "$run_wormhole" == "false" && "$run_blackhole" == "false" ]]; then
+            echo "❌ Error: No valid architectures found in input: $arch"
+            echo "   Valid values are: blackhole, wormhole_b0"
+            exit 1
+          fi
+
+          # Build dynamic matrices based on architecture selection using jq for proper JSON construction
+          # Note: Empty matrices are not possible for the main matrices because validation above ensures
+          # at least one of run_wormhole or run_blackhole is true (exits with error otherwise).
+          # Architecture-specific matrices (wormhole-only, blackhole-only) may be empty if that arch is not selected.
+
+          # Helper function to add an entry to a JSON array
+          add_entry() {
+            local json="$1"
+            local arch="$2"
+            local label="$3"
+            echo "$json" | jq --arg arch "$arch" --arg label "$label" '. += [{"arch": $arch, "runner-label": $label}]'
+          }
+
           # Matrix for tt-metal-l2-tests and didt-tests (N150, N300, P100, P150b)
-          matrix_l2=()
+          matrix_l2='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_l2+=('{"arch":"wormhole_b0","runner-label":"N150"}')
-            matrix_l2+=('{"arch":"wormhole_b0","runner-label":"N300"}')
+            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
+            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_l2+=('{"arch":"blackhole","runner-label":"P100"}')
-            matrix_l2+=('{"arch":"blackhole","runner-label":"P150b"}')
+            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
+            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
           fi
-          echo "matrix-l2-tests=[$(IFS=,; echo "${matrix_l2[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-l2-tests=$matrix_l2" >> $GITHUB_OUTPUT
 
           # Matrix for cpp-unit-tests (N150, N300, P150b, P100a)
-          matrix_cpp=()
+          matrix_cpp='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_cpp+=('{"arch":"wormhole_b0","runner-label":"N150"}')
-            matrix_cpp+=('{"arch":"wormhole_b0","runner-label":"N300"}')
+            matrix_cpp=$(add_entry "$matrix_cpp" "wormhole_b0" "N150")
+            matrix_cpp=$(add_entry "$matrix_cpp" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_cpp+=('{"arch":"blackhole","runner-label":"P150b"}')
-            matrix_cpp+=('{"arch":"blackhole","runner-label":"P100a"}')
+            matrix_cpp=$(add_entry "$matrix_cpp" "blackhole" "P150b")
+            matrix_cpp=$(add_entry "$matrix_cpp" "blackhole" "P100a")
           fi
-          echo "matrix-cpp-tests=[$(IFS=,; echo "${matrix_cpp[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-cpp-tests=$matrix_cpp" >> $GITHUB_OUTPUT
 
           # Matrix for sd-unit-tests and fast-dispatch-unit-tests (N150, N300, P150, P100)
-          matrix_sd_fd=()
+          matrix_sd_fd='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_sd_fd+=('{"arch":"wormhole_b0","runner-label":"N150"}')
-            matrix_sd_fd+=('{"arch":"wormhole_b0","runner-label":"N300"}')
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "wormhole_b0" "N150")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_sd_fd+=('{"arch":"blackhole","runner-label":"P150"}')
-            matrix_sd_fd+=('{"arch":"blackhole","runner-label":"P100"}')
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P150")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P100")
           fi
-          echo "matrix-sd-fd-tests=[$(IFS=,; echo "${matrix_sd_fd[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-sd-fd-tests=$matrix_sd_fd" >> $GITHUB_OUTPUT
 
           # Matrix for test-ttnn-tutorials (N150, P150b, P100)
-          matrix_tutorials=()
+          matrix_tutorials='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_tutorials+=('{"arch":"wormhole_b0","runner-label":"N150"}')
+            matrix_tutorials=$(add_entry "$matrix_tutorials" "wormhole_b0" "N150")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_tutorials+=('{"arch":"blackhole","runner-label":"P150b"}')
-            matrix_tutorials+=('{"arch":"blackhole","runner-label":"P100"}')
+            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P150b")
+            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100")
           fi
-          echo "matrix-tutorials=[$(IFS=,; echo "${matrix_tutorials[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
 
           # Matrix for wormhole-only jobs (N150)
-          matrix_wh=()
+          matrix_wh='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_wh+=('{"arch":"wormhole_b0","runner-label":"N150"}')
+            matrix_wh=$(add_entry "$matrix_wh" "wormhole_b0" "N150")
           fi
-          echo "matrix-wormhole-only=[$(IFS=,; echo "${matrix_wh[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-wormhole-only=$matrix_wh" >> $GITHUB_OUTPUT
 
           # Matrix for blackhole-only jobs (P150b)
-          matrix_bh=()
+          matrix_bh='[]'
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_bh+=('{"arch":"blackhole","runner-label":"P150b"}')
+            matrix_bh=$(add_entry "$matrix_bh" "blackhole" "P150b")
           fi
-          echo "matrix-blackhole-only=[$(IFS=,; echo "${matrix_bh[*]}")]" >> $GITHUB_OUTPUT
+          echo "matrix-blackhole-only=$matrix_bh" >> $GITHUB_OUTPUT
 
-          echo "Architecture input: $arch"
-          echo "Run wormhole: $run_wormhole"
-          echo "Run blackhole: $run_blackhole"
   tt-metal-l2-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]' }}
