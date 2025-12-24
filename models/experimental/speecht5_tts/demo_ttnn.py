@@ -27,7 +27,8 @@ import os
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
 
-sys.path.append("/home/ttuser/ssinghal/PR-fix/speecht5_tts/tt-metal")
+# Add tt-metal to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import (
     TTNNSpeechT5Encoder,
     TTNNEncoderConfig,
@@ -157,9 +158,6 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Import time for timing measurements
-    import time
-
     # Encoder forward pass (with timing)
     encoder_start = time.time()
     if enable_trace and generator is not None:
@@ -196,10 +194,7 @@ def generate_speech_ttnn(
 
     # Complete decoder loop timing
     decoder_loop_start = time.time()
-
     for step in range(max_steps):
-        step_start = time.time()
-
         # Show progress every 20 steps
         if (step + 1) % 20 == 0 or step == 0:
             if warmup_mode:
@@ -212,27 +207,22 @@ def generate_speech_ttnn(
 
         # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
         decoder_inference_start = time.time()
-        # print("output_sequence_ttnn", output_sequence_ttnn.shape)
         if enable_trace and generator is not None:
             # Use trace execution for faster inference
             current_seq_len = output_sequence_ttnn.shape[1]
             decoder_hidden_states = generator._execute_decoder_trace(
                 current_seq_len, output_sequence_ttnn, encoder_output, ttnn_speaker_embeddings
             )
-            if step < 1 and warmup_mode:
-                decoder_timing = {}  # Dummy timing dict for warmup mode
-            else:
-                decoder_timing = {}  # Trace execution doesn't provide detailed timing
+            # Note: Detailed timing not available in trace mode
         else:
             # Use regular execution
             if (
                 step < 1 and not warmup_mode
             ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-                decoder_hidden_states, decoder_timing = ttnn_decoder(
+                decoder_hidden_states = ttnn_decoder(
                     decoder_input_values=output_sequence_ttnn,
                     encoder_hidden_states=encoder_output,
                     speaker_embeddings=ttnn_speaker_embeddings,
-                    timing_details=True,
                 )
             else:
                 decoder_hidden_states = ttnn_decoder(
@@ -240,8 +230,6 @@ def generate_speech_ttnn(
                     encoder_hidden_states=encoder_output,
                     speaker_embeddings=ttnn_speaker_embeddings,
                 )
-                if step < 1 and warmup_mode:
-                    decoder_timing = {}  # Dummy timing dict for warmup mode
         decoder_inference_time = time.time() - decoder_inference_start
 
         # PHASE 2: Memory management
@@ -259,26 +247,17 @@ def generate_speech_ttnn(
         if enable_trace and generator is not None:
             # Use trace execution for faster inference
             mel_before, mel_after, stop_logits = generator._execute_postnet_trace(decoder_hidden_states)
-            if step < 1 and warmup_mode:
-                postnet_timing = {}  # Dummy timing dict for warmup mode
-            else:
-                postnet_timing = {}  # Trace execution doesn't provide detailed timing
         else:
             # Use regular execution
             if (
                 step < 1 and not warmup_mode
             ):  # Collect timing for first 10 steps for detailed breakdown (skip in warmup mode)
-                postnet_output, postnet_timing = ttnn_postnet(decoder_hidden_states, timing_details=True)
-                mel_before, mel_after, stop_logits = postnet_output
+                mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
             else:
                 mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
-                if step < 1 and warmup_mode:
-                    postnet_timing = {}  # Dummy timing dict for warmup mode
         postnet_inference_time = time.time() - postnet_inference_start
 
-        # PHASE 2: Memory management
-        postnet_memory_start = time.time()
-        postnet_memory_time = time.time() - postnet_memory_start
+        # PHASE 2: Memory management (completed)
 
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
@@ -395,8 +374,6 @@ def run_demo(
     """Core demo function that can be called from pytest or main."""
 
     # Create output directory if it doesn't exist
-    import os
-
     os.makedirs(output_dir, exist_ok=True)
 
     try:
