@@ -359,13 +359,6 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
         output_index_start = output_index_end + 1;
     }
 
-    for ([[maybe_unused]] auto& boundary : shard_boundaries) {
-        log_trace(
-            tt::LogOp,
-            "shard_boundary={}, input_size = {}",
-            boundary,
-            boundary.input_range.end - boundary.input_range.start);
-    };
     return shard_boundaries;
 }
 

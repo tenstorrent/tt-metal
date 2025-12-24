@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "ethernet/tunneling.h"
+#include "internal/ethernet/tunneling.h"
 #endif
 
 /**
