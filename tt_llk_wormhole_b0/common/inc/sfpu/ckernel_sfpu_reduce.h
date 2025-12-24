@@ -152,11 +152,11 @@ constexpr InstrModLoadStore get_instruction_mode()
 {
     if constexpr (format == DataFormat::Float32)
     {
-        return InstrModLoadStore::FP32;
+        return InstrModLoadStore::DEFAULT;
     }
     else if constexpr (format == DataFormat::Float16_b)
     {
-        return InstrModLoadStore::FP16B;
+        return InstrModLoadStore::DEFAULT;
     }
     else if constexpr (format == DataFormat::Int32)
     {
@@ -431,9 +431,9 @@ inline void calculate_reduce_sum_avg()
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP || INSTRUCTION_MODE == InstrModLoadStore::LO16);
-    constexpr bool is_float_mode = (INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B);
+    constexpr bool is_float_mode = (INSTRUCTION_MODE == InstrModLoadStore::DEFAULT); // float must use DEFAULT instruction mode - HW handles FP32 vs. FP16_B
 
-    static_assert(is_integer_mode || is_float_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, FP32, FP16B");
+    static_assert(is_integer_mode || is_float_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT");
 
     // Optimized approach: Process 4 iterations to handle all column combinations
     // This reduces operations by processing complementary face pairs simultaneously, less load/store operations
