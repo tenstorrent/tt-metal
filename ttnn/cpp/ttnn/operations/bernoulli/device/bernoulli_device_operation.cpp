@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bernoulli_device_operation.hpp"
+#include "ttnn/api/ttnn/device_operation.hpp"
 
 namespace ttnn::operations::bernoulli {
 
@@ -72,21 +73,24 @@ tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(const opera
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
-std::tuple<BernoulliDeviceOperation::operation_attributes_t, BernoulliDeviceOperation::tensor_args_t>
-BernoulliDeviceOperation::invoke(
+}  // namespace ttnn::operations::bernoulli
+
+namespace ttnn::prim {
+ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t bernoulli(
     const Tensor& input,
-    const uint32_t seed,
+    uint32_t seed,
     const std::optional<Tensor>& output,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            seed,
-            dtype.value_or(DataType::FLOAT32),
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input, output}};
-}
+    using OperationType = ttnn::operations::bernoulli::BernoulliDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        seed,
+        dtype.value_or(DataType::FLOAT32),
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{input, output};
 
-}  // namespace ttnn::operations::bernoulli
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim
