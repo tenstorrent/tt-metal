@@ -1051,6 +1051,23 @@ def test_conv_ws(
         (1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, HS, None),
         (1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, HS, None),
     ),
+    ids=[
+        "mlp_3x32_512x512_7x7_hs",
+        "selfattn_32x32_128x128_8x8_hs",
+        "selfattn_64x64_64x64_4x4_hs",
+        "selfattn_160x160_32x32_2x2_hs",
+        "dwconv_128x128_128x128_3x3_hs",
+        "dwconv_256x256_64x64_3x3_hs",
+        "dwconv_640x640_32x32_3x3_bs",
+        "decode_256x150_128x128_1x1_hs",
+        "decode_32x16_64x64_1x1_hs",
+        "decode_96x24_32x32_1x1_hs",
+        "segformer_576x576_8x8_ws",
+        "segformer_576x576_8x8_s2_ws",
+        "segformer_960x960_4x4_ws",
+        "decode_144x24_32x32_1x1_hs",
+        "decode_144x32_16x16_1x1_hs",
+    ],
 )
 @pytest.mark.parametrize(
     "weights_dtype",
@@ -3158,6 +3175,17 @@ def test_conv2d_model_fruit(
         (1, 9, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
 
     ),
+    ids=[
+        # Block sharded configs
+        "bs_1280x1280_32x32", "bs_1280x1280_64x64", "bs_1280x640_64x64",
+        "bs_1920x1280_32x32", "bs_1920x640_64x64", "bs_2560x1280_32x32",
+        "bs_320x640_64x64", "bs_320x320_128x128", "bs_640x1280_32x32",
+        "bs_640x640_128x128", "bs_640x640_64x64", "bs_640x320_128x128",
+        "bs_960x640_64x64", "bs_960x320_128x128",
+        "bs_320x320_128x128_s2", "bs_640x640_64x64_s2", # stride 2x2
+        # Height sharded configs
+        "hs_320x4_128x128", "hs_4x320_128x128", "hs_9x320_128x128",
+    ],
 )
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
@@ -3343,7 +3371,7 @@ def test_conv2d_sdxl_refiner(
         enable_weights_double_buffer=w_db,
     )
 
-@pytest.mark.parametrize("auto_slice", [True, False])
+@pytest.mark.parametrize("auto_slice", [True, False], ids=["auto_slice", "no_auto_slice"])
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override, throttle",
     (
@@ -3382,6 +3410,17 @@ def test_conv2d_sdxl_refiner(
         (1, 256,   256,  512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 4,   1024, 0),
         (1, 512,   512,  256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 2,   512, 0),
     ),
+    ids=[
+        # VAE Decoder configs
+        "vae_dec_128x128_1024x1024_hs", "vae_dec_256x128_1024x1024_hs", "vae_dec_256x256_1024x1024_bs", "vae_dec_256x256_512x512_bs",
+        "vae_dec_512x512_128x128_bs_none", "vae_dec_512x512_256x256_bs", "vae_dec_512x256_512x512_bs", "vae_dec_512x512_512x512_bs",
+        "vae_dec_128x3_1024x1024_hs", "vae_dec_4x512_128x128_hs_none",
+        # VAE Encoder configs
+        "vae_enc_128x256_512x512_hs", "vae_enc_256x512_256x256_bs",
+        "vae_enc_3x128_1024x1024_hs", "vae_enc_512x8_128x128_hs",
+        # Stride 2x2 configs
+        "vae_s2_128x128_1024x1024_hs", "vae_s2_256x256_512x512_bs", "vae_s2_512x512_256x256_bs",
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 @pytest.mark.timeout(120)
@@ -4756,7 +4795,7 @@ def test_conv2d_activation_reuse(
 # this test case represents the first conv in unet on WH;
 # the test case is useful since it hits case where shards on cores don't start from the beginning
 # of the row of the output image - and this happens if we divide the workload on 63 cores
-@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("enable_activation_reuse", [False, True], ids=["act_reuse_off", "act_reuse_on"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, num_cores",
