@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 import math
+import struct
 from typing import Optional
 
 import torch
@@ -11,6 +12,7 @@ from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
+    PackerReluType,
     ReduceDimension,
     ReducePool,
     format_dict,
@@ -886,7 +888,6 @@ class DataCopyGolden:
 class PackGolden:
     """
     Golden generator for pack operations with optional ReLU activation.
-
     This is similar to DataCopyGolden but includes support for ReLU configuration.
     It's implemented as a separate class to allow future pack testing extensions
     without affecting DataCopyGolden.
@@ -898,7 +899,7 @@ class PackGolden:
         data_format,
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
-        enable_relu: bool = False,
+        face_r_dim: int = 16,
     ):
         if num_faces not in [1, 2, 4]:
             raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
@@ -910,8 +911,9 @@ class PackGolden:
         tile_cnt = (height // 32) * (width // 32)
         tile_size = height * width // tile_cnt
 
-        # Fixed face_r_dim at 16. TODO: enable other dimensions.
-        elements_per_tile_needed = 16 * FACE_DIM * num_faces
+        # Calculate elements based on variable face dimensions
+        # Each face is face_r_dim × 16, and we have num_faces
+        elements_per_tile_needed = face_r_dim * FACE_DIM * num_faces
 
         if not isinstance(operand1, torch.Tensor):
             operand1 = torch.tensor(operand1, dtype=torch_format)
@@ -922,10 +924,172 @@ class PackGolden:
             :, :elements_per_tile_needed
         ].reshape(-1)
 
-        if enable_relu:
-            result = torch.relu(result)
-
         return result
+
+    @staticmethod
+    def generate_relu_config(
+        relu_type: PackerReluType,
+        relu_threshold: float,
+        intermediate_format: DataFormat,
+    ) -> int:
+        """
+        Generate a 32-bit ReLU configuration value.
+        Args:
+            relu_type: The ReLU type (NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU)
+            relu_threshold: The threshold value (default 0.0, ignored for NO_RELU and ZERO_RELU)
+            intermediate_format: The intermediate data format (determines FP16 vs BF16 encoding)
+        Returns:
+            int: 32-bit ReLU configuration value with type in lower 2 bits and threshold in upper 16 bits
+        """
+        # Start with ReLU type in lowest 2 bits
+        relu_config = relu_type.value & 0x3
+
+        if relu_type in [
+            PackerReluType.MinThresholdRelu,
+            PackerReluType.MaxThresholdRelu,
+        ]:
+            threshold_bits = PackGolden._encode_threshold_to_bits(
+                relu_threshold, intermediate_format
+            )
+            relu_config |= threshold_bits << 16
+
+        return relu_config
+
+    @staticmethod
+    def _encode_threshold_to_bits(
+        threshold: float, intermediate_format: DataFormat
+    ) -> int:
+        # FP16, FP8, BFP8a (Bfp8), BFP4a, BFP2a use FP16 interpretation
+        # TODO: Add more formats once available
+        fp16_formats = [DataFormat.Float16, DataFormat.Bfp8]
+
+        if intermediate_format in fp16_formats:
+            return (
+                torch.tensor(threshold, dtype=torch.float16).view(torch.uint16).item()
+            )
+        else:
+            # Encode as BF16 (upper 16 bits of FP32)
+            fp32_bits = struct.unpack(">I", struct.pack(">f", threshold))[0]
+            return (fp32_bits >> 16) & 0xFFFF
+
+    @staticmethod
+    def _decode_threshold_from_bits(
+        threshold_bits: int, intermediate_format: DataFormat
+    ) -> float:
+        # FP16, FP8, BFP8a (Bfp8), BFP4a, BFP2a use FP16 interpretation
+        # TODO: Add more formats once supported
+        fp16_formats = [DataFormat.Float16, DataFormat.Bfp8]
+
+        if intermediate_format in fp16_formats:
+            return (
+                torch.tensor(threshold_bits, dtype=torch.uint16)
+                .view(torch.float16)
+                .item()
+            )
+        else:
+            fp32_bits = threshold_bits << 16
+            return struct.unpack(">f", struct.pack(">I", fp32_bits))[0]
+
+    @staticmethod
+    def _extract_threshold_from_config(
+        relu_config: int, intermediate_format: DataFormat
+    ) -> float:
+        threshold_bits = (relu_config >> 16) & 0xFFFF
+        return PackGolden._decode_threshold_from_bits(
+            threshold_bits, intermediate_format
+        )
+
+    @staticmethod
+    def get_relu_type(relu_config):
+        """
+        Get the ReLU type from the configuration.
+        """
+        relu_type = PackerReluType(relu_config & 0x3)
+        return relu_type
+
+    @staticmethod
+    def get_relu_threshold(relu_config, intermediate_format):
+        """
+        Get the ReLU threshold value based on configuration.
+        The relu_config is a 32-bit value where:
+        - Lowest 2 bits: ReLU type
+        - Upper 16 bits: ReLU threshold value (as FP16 or BF16)
+        - Remaining bits: unknown/reserved
+        Args:
+            relu_config: 32-bit ReLU configuration value
+            intermediate_format: The intermediate data format that acts as an input format for Packer engine.
+        Returns:
+            float: The threshold value, or None if ReLU is disabled
+        """
+        relu_type = PackerReluType(relu_config & 0x3)
+
+        match relu_type:
+            case PackerReluType.NoRelu:
+                return None
+
+            case PackerReluType.ZeroRelu:
+                return 0.0
+
+            case PackerReluType.MinThresholdRelu | PackerReluType.MaxThresholdRelu:
+                threshold_bits = (relu_config >> 16) & 0xFFFF
+
+                # Parse threshold based on intermediate format.
+                # FP16, FP8, BFP8a (Bfp8), BFP4a, BFP2a use FP16 interpretation.
+                # TODO: add other formats once supported.
+                parse_fp16_formats = [DataFormat.Float16, DataFormat.Bfp8]
+
+                if intermediate_format in parse_fp16_formats:
+                    threshold_tensor = torch.tensor(
+                        [threshold_bits], dtype=torch.uint16
+                    ).view(torch.float16)
+                    threshold = float(threshold_tensor.item())
+                else:
+                    # BF16 interpretation (FP32 and other formats).
+                    # BF16 is essentially just the upper 16 bits of FP32, so shift left by 16.
+                    threshold_as_fp32_bits = threshold_bits << 16
+                    threshold_tensor = torch.tensor(
+                        [threshold_as_fp32_bits], dtype=torch.uint32
+                    ).view(torch.float32)
+                    threshold = float(threshold_tensor.item())
+
+                return threshold
+
+    @staticmethod
+    def apply_relu(result, relu_config, intermediate_format):
+        """
+        Apply ReLU operation based on configuration.
+        Args:
+            result: Input tensor
+        relu_config: 32-bit ReLU configuration (lowest 2 bits = type, bits 16–31 = threshold, bits 2–15 reserved)
+        intermediate_format: The intermediate data format (DataFormat enum)
+        Returns:
+            Tensor with ReLU applied
+        """
+
+        relu_type = PackGolden.get_relu_type(relu_config)
+
+        match relu_type:
+            case PackerReluType.NoRelu:
+                return result
+
+            case PackerReluType.ZeroRelu:
+                return torch.relu(result)
+
+            case PackerReluType.MinThresholdRelu:
+                threshold = PackGolden._extract_threshold_from_config(
+                    relu_config, intermediate_format
+                )
+                # Return 0 if x <= threshold, else x
+                return torch.where(
+                    result <= threshold, torch.tensor(0.0, dtype=result.dtype), result
+                )
+
+            case PackerReluType.MaxThresholdRelu:
+                threshold = PackGolden._extract_threshold_from_config(
+                    relu_config, intermediate_format
+                )
+                # Clamp between 0 and threshold
+                return torch.clamp(result, min=0.0, max=threshold)
 
 
 @register_golden

@@ -34,13 +34,18 @@ def generate_random_face(
     const_face=False,
     sfpu=True,
     face_r_dim=16,
+    negative_values=False,
 ):
     size = face_r_dim * 16  # face_r_dim rows × 16 columns
     if stimuli_format != DataFormat.Bfp8_b:
         if stimuli_format.is_integer():
-            max = 127 if stimuli_format == DataFormat.Int8 else 255
+            max_value = 127 if stimuli_format == DataFormat.Int8 else 255
+            min_value = -(max_value + 1) if negative_values else 0
             srcA_face = torch.randint(
-                low=0, high=max, size=(size,), dtype=format_dict[stimuli_format]
+                low=min_value,
+                high=max_value,
+                size=(size,),
+                dtype=format_dict[stimuli_format],
             )
         else:
             if const_face:
@@ -50,15 +55,17 @@ def generate_random_face(
             else:
                 # random for both faces
                 srcA_face = torch.rand(size, dtype=format_dict[stimuli_format])
+                if negative_values:
+                    srcA_face = srcA_face * 2 - 1  # Scaling for negative values.
                 if sfpu:
                     srcA_face += 0.1
     else:
-
-        integer_part = torch.randint(0, 3, (size,))
-        fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
         if const_face:
             srcA_face = torch.ones(size, dtype=torch.bfloat16) * const_value
         else:
+            low = -1 if negative_values else 0
+            integer_part = torch.randint(low, 3, (size,))
+            fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
             srcA_face = integer_part.to(dtype=torch.bfloat16) + fraction
 
     return srcA_face
@@ -72,11 +79,12 @@ def generate_random_face_ab(
     const_value_B=2,
     sfpu=True,
     face_r_dim=16,
+    negative_values=False,
 ):
     return generate_random_face(
-        stimuli_format_A, const_value_A, const_face, sfpu, face_r_dim
+        stimuli_format_A, const_value_A, const_face, sfpu, face_r_dim, negative_values
     ), generate_random_face(
-        stimuli_format_B, const_value_B, const_face, sfpu, face_r_dim
+        stimuli_format_B, const_value_B, const_face, sfpu, face_r_dim, negative_values
     )
 
 
@@ -130,6 +138,7 @@ def generate_stimuli(
     sfpu=True,
     face_r_dim=16,  # Add face_r_dim parameter
     num_faces=4,  # Add num_faces parameter for partial faces
+    negative_values=False,
 ):
 
     srcA = []
@@ -155,6 +164,7 @@ def generate_stimuli(
             const_value_B,
             sfpu,
             face_r_dim,
+            negative_values,
         )
         srcA.extend(face_a.tolist())
         srcB.extend(face_b.tolist())
