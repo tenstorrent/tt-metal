@@ -486,7 +486,7 @@ def test_run_max_pool_mem_config(
         device,
         tensor_map,
         ttnn.bfloat16,
-        out_memory_config=memory_config,
+        out_memory_config=out_memory_config,
     )
 
 
