@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -66,19 +67,22 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_a.device());
 }
 
-std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_args_t> MorehDotOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t moreh_dot(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<Tensor>& output,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            dtype.value_or(input_a.dtype()),
-            memory_config.value_or(input_a.memory_config()),
-            init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input_a, input_b, output}};
+    using OperationType = ttnn::operations::moreh::moreh_dot::MorehDotOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dtype.value_or(input_a.dtype()),
+        memory_config.value_or(input_a.memory_config()),
+        init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{input_a, input_b, output};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
+}  // namespace ttnn::prim
 
-}  // namespace ttnn::operations::moreh::moreh_dot
+namespace ttnn::operations::moreh::moreh_dot {
