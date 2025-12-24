@@ -298,6 +298,9 @@ run_whisper_perf() {
 
 run_speecht5_tts_func() {
 
+  # Create test reports directory for pytest XML output
+  mkdir -p generated/test_reports
+
   # SpeechT5 TTS demo - CIv2 compatible pytest test
   $PYTEST_CMD models/experimental/speecht5_tts/demo_ttnn.py::test_demo
 

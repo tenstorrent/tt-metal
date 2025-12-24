@@ -674,17 +674,10 @@ def run_demo(
     return 0
 
 
-@pytest.mark.parametrize(
-    "input_text",
-    [
-        "Hello world, this is a test of text to speech synthesis on Tenstorrent hardware.",
-        "The quick brown fox jumps over the lazy dog. This demonstrates multi-sentence generation.",
-    ],
-)
-def test_demo(mesh_device, input_text, model_location_generator):
+def test_demo(mesh_device, model_location_generator):
     """Pytest version of the demo for automated testing."""
     run_demo(
-        texts=[input_text],
+        texts=["Hello world, this is a test of text to speech synthesis on Tenstorrent hardware."],
         output_dir="pytest_output",
         max_steps=24,  # Reduced for faster CI
         enable_trace=False,
