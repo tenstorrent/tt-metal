@@ -53,7 +53,7 @@ jobs:
       - name: 🔧 Configure Conan Profile
         run: |
           conan profile detect --force
-          conan profile show default
+          conan profile show
 
       - name: 🏗️ Create and Test Conan Package
         run: |
