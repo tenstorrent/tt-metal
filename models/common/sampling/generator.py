@@ -258,7 +258,7 @@ class SamplingGenerator:
     def reset_seed(self, seed):
         for i, s in enumerate(seed):
             if s is None:
-                # set to random value to have variability
+                # set to random seed to have variability while using tensor manual_seed
                 seed[i] = random.randint(0, 1000000)
         seed = torch.tensor(seed)
         user_ids = torch.arange(seed.shape[0])
