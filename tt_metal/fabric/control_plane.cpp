@@ -455,6 +455,7 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
+        // TODO: Remove this when preferred pinnings are supported
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
         // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
         // bisect a device.
@@ -469,6 +470,13 @@ void ControlPlane::init_control_plane(
             distributed_size == 1) {  // Using full board size for UBB Galaxy
             fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
         }
+
+        // Add MGD pinnings to the topology mapper
+        auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+        for (const auto& [pos, fabric_node] : pinnings) {
+            fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
+        }
+
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
