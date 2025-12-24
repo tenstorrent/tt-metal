@@ -550,7 +550,7 @@ Result conv_transpose2d_DRAM(
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config_);
 
-    if (conv_config.deallocate_activation) {
+    if (conv_config.deallocate_activation && !input_tensor_on_device.memory_config().is_dram()) {
         input_tensor_on_device.deallocate(true);
     }
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
