@@ -707,6 +707,13 @@ class TtTransformer(LightweightModule):
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
+            # if mode == "prefill":
+            #     y = ttnn.reshape(x, (1, 32, 128, 2048))
+            #     y_torch = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).float()
+            #     for b in range(1, y_torch.shape[1]):
+            #         assert torch.allclose(
+            #             y_torch[:, 0, :, :], y_torch[:, b, :, :], atol=1e-6
+            #         ), f"Batch {b} does not match batch 0 in prefill input to layer {i}"
             x, h = layer(
                 x,
                 h,
