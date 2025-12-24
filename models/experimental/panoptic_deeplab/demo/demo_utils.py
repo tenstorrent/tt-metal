@@ -435,24 +435,195 @@ def create_panoptic_visualization(
                 color_dim = [int(c * 0.7) for c in color]
                 vis_image[class_mask] = color_dim
 
-    # Apply panoptic segmentation colors
+    # Apply panoptic segmentation colors with instance-specific variations
     # Sort segments by area (largest first) to ensure proper layering
     segments_sorted = sorted(segments_info, key=lambda x: x["area"], reverse=True)
+
     for segment in segments_sorted:
         segment_id = segment["id"]
         category_id = segment["category_id"]
+        instance_id = segment_id % label_divisor
         mask = panoptic_seg == segment_id
 
-        # Get color for this category
+        # Get base color for this category
         if category_id < len(CITYSCAPES_CATEGORIES):
-            color = CITYSCAPES_CATEGORIES[category_id]["color"]
+            base_color = np.array(CITYSCAPES_CATEGORIES[category_id]["color"], dtype=np.float32)
         else:
             # Generate stable color for unknown categories
             np.random.seed(segment_id)
-            color = np.random.randint(128, 255, 3).tolist()
+            base_color = np.array(np.random.randint(128, 255, 3), dtype=np.float32)
+
+        # Generate slightly different color for each instance
+        # Use instance_id to create deterministic color variations
+        # Apply small variations to RGB channels to create distinct but similar colors
+        np.random.seed(instance_id)  # Deterministic based on instance_id
+        variation = np.random.randint(-25, 26, 3)  # Small random variation per channel
+
+        # Apply variation while keeping color in valid range and preserving category character
+        color = base_color.astype(np.float32) + variation
+        color = np.clip(color, 0, 255).astype(np.uint8)
 
         # Apply color
         vis_image[mask] = color
+
+    # Add white borders around instances (fully surrounding each instance)
+    # Use morphological operations to detect all boundaries of each instance
+    # Use a 3x3 kernel with 2 iterations for slightly thicker borders
+    kernel = np.ones((3, 3), np.uint8)
+
+    # Create border mask that will surround all instances
+    border_mask = np.zeros((height, width), dtype=bool)
+
+    # For each unique segment, find its complete boundary
+    unique_segments = np.unique(panoptic_seg)
+    for seg_id in unique_segments:
+        if seg_id == 0 or seg_id == 255:  # Skip background and void
+            continue
+
+        # Create mask for this segment
+        seg_mask = (panoptic_seg == seg_id).astype(np.uint8) * 255
+
+        # Dilate the segment to create a border region
+        dilated_seg = cv2.dilate(seg_mask, kernel, iterations=2)
+
+        # Border pixels are where dilated segment exists but original segment does not
+        # This captures boundaries with background, void, and other instances
+        border_pixels = (dilated_seg > 0) & (panoptic_seg != seg_id)
+        border_mask |= border_pixels
+
+    # Apply white borders
+    vis_image[border_mask] = [255, 255, 255]
+
+    # Add labels to instances with overlap avoidance
+    # Draw labels on the visualization image before blending
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    font_thickness = 1
+
+    # Track placed label bounding boxes to avoid overlaps
+    placed_labels = []  # List of (x1, y1, x2, y2) bounding boxes
+
+    def check_overlap(bbox, existing_boxes, margin=5):
+        """Check if a bounding box overlaps with any existing boxes."""
+        x1, y1, x2, y2 = bbox
+        for ex_x1, ex_y1, ex_x2, ex_y2 in existing_boxes:
+            # Check if boxes overlap (with margin)
+            if not (x2 + margin < ex_x1 or x1 - margin > ex_x2 or y2 + margin < ex_y1 or y1 - margin > ex_y2):
+                return True
+        return False
+
+    for segment in segments_sorted:
+        segment_id = segment["id"]
+        category_id = segment["category_id"]
+        instance_id = segment_id % label_divisor
+        mask = panoptic_seg == segment_id
+
+        # Skip if segment is too small to label
+        if segment["area"] < 100:  # Skip very small segments
+            continue
+
+        # Calculate centroid and get all pixel coordinates for alternative positions
+        y_coords, x_coords = np.where(mask)
+        if len(y_coords) == 0:
+            continue
+
+        centroid_y = int(np.mean(y_coords))
+        centroid_x = int(np.mean(x_coords))
+
+        # Get category name
+        if category_id < len(CITYSCAPES_CATEGORIES):
+            category_name = CITYSCAPES_CATEGORIES[category_id]["name"]
+        else:
+            category_name = f"class_{category_id}"
+
+        # Create label text
+        label_text = f"{category_name}#{instance_id}"
+
+        # Get text size for background rectangle
+        (text_width, text_height), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
+
+        # Try multiple positions to avoid overlaps
+        # Start with centroid, then try positions around it
+        label_placed = False
+        padding = 2
+        box_width = text_width + 2 * padding
+        box_height = text_height + baseline + 2 * padding
+
+        # Generate candidate positions: centroid, then spiral outward
+        candidate_positions = [
+            (centroid_x, centroid_y),  # Centroid
+            (centroid_x, centroid_y - box_height - 10),  # Above
+            (centroid_x, centroid_y + box_height + 10),  # Below
+            (centroid_x - box_width - 10, centroid_y),  # Left
+            (centroid_x + box_width + 10, centroid_y),  # Right
+            (centroid_x - box_width // 2, centroid_y - box_height // 2),  # Top-left
+            (centroid_x + box_width // 2, centroid_y - box_height // 2),  # Top-right
+            (centroid_x - box_width // 2, centroid_y + box_height // 2),  # Bottom-left
+            (centroid_x + box_width // 2, centroid_y + box_height // 2),  # Bottom-right
+        ]
+
+        # Also try some random positions within the instance mask
+        if len(x_coords) > 10:
+            np.random.seed(segment_id)  # Deterministic
+            for _ in range(5):
+                idx = np.random.randint(0, len(x_coords))
+                candidate_positions.append((int(x_coords[idx]), int(y_coords[idx])))
+
+        # Try each candidate position
+        for candidate_x, candidate_y in candidate_positions:
+            # Calculate label position (centered on candidate point)
+            label_x = max(padding, min(candidate_x - text_width // 2, width - text_width - padding))
+            label_y = max(text_height + padding, min(candidate_y, height - baseline - padding))
+
+            # Check if position is within image bounds
+            if (
+                label_x + text_width + padding > width
+                or label_y + baseline + padding > height
+                or label_x < padding
+                or label_y < text_height + padding
+            ):
+                continue
+
+            # Create bounding box
+            bbox = (
+                label_x - padding,
+                label_y - text_height - padding,
+                label_x + text_width + padding,
+                label_y + baseline + padding,
+            )
+
+            # Check for overlap
+            if not check_overlap(bbox, placed_labels):
+                # Found a good position, place the label
+                # Draw background rectangle for label
+                cv2.rectangle(
+                    vis_image,
+                    (bbox[0], bbox[1]),
+                    (bbox[2], bbox[3]),
+                    (0, 0, 0),  # Black background
+                    -1,  # Filled
+                )
+
+                # Draw label text in white
+                cv2.putText(
+                    vis_image,
+                    label_text,
+                    (label_x, label_y),
+                    font,
+                    font_scale,
+                    (255, 255, 255),  # White text
+                    font_thickness,
+                    cv2.LINE_AA,
+                )
+
+                # Record this label position
+                placed_labels.append(bbox)
+                label_placed = True
+                break
+
+        # If no position found, skip this label (it's too crowded)
+        if not label_placed:
+            logger.debug(f"Skipping label for segment {segment_id} due to overlap constraints")
 
     # Create final blended visualization
     alpha = 0.6
