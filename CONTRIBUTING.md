@@ -329,7 +329,7 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Once the design has been "proven", disable watcher for performance testing.
 - To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
   - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
-  - In the kernel, `#include "debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
+  - In the kernel, `#include "api/debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
   - For more information on kernel printing, see the [Kernel Debug Print documentation](docs/source/tt-metalium/tools/kernel_print.rst).
 
 ### Debugging device hangs
