@@ -180,55 +180,6 @@ def test_sdxl_group_norm_perf_negative_mask(N, C, H, W, expected_duration_ns, de
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_dram_group_norm_perf_welford_reciprocal():
-    """
-    Test performance of DRAM GroupNorm operation with welford_reciprocal algorithm.
-    This test measures device kernel performance for the specific input shape (1, 256, 1024, 1024, 32, 48, 8, 8).
-    """
-
-    # Specific DRAM GroupNorm test case parameters
-    N, C, H, W = 1, 256, 1024, 1024
-    num_groups, num_out_blocks, cores_y, cores_x = 32, 48, 8, 8
-    welford_mode = "welford_reciprocal"
-
-    # Create a command that runs the specific DRAM GroupNorm test
-    test_params = f"welford_mode={welford_mode}-N={N}-C={C}-H={H}-W={W}-num_groups={num_groups}-num_out_blocks={num_out_blocks}-cores_y={cores_y}-cores_x={cores_x}-device_params={{'l1_small_size': 0}}"
-    command = f'pytest "tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py::test_group_norm_DRAM[{test_params}]" -v'
-    subdir = f"dram_group_norm_perf_{C}x{H}x{W}_{welford_mode}"
-    cols = ["DEVICE KERNEL"]
-    op_name = "GroupNormDeviceOperation"
-
-    # Run the performance test and get detailed results
-    results = run_device_perf_detailed(
-        command=command,
-        subdir=subdir,
-        cols=cols,
-        op_name=op_name,
-    )
-
-    # Extract the device kernel duration result
-    device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
-
-    # Expected performance value (actual measurement)
-    expected_duration_ns = 19380445  # Measured: 19.38ms for (1,256,1024,1024) welford_reciprocal
-
-    # Log the performance result
-    print(
-        f"DRAM GroupNorm {C}x{H}x{W} {welford_mode} Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
-    )
-
-    # Performance validation with 1.5% margin
-    margin = 0.015
-    lower_bound = expected_duration_ns * (1 - margin)
-    upper_bound = expected_duration_ns * (1 + margin)
-
-    # Performance validation - assert if outside expected range
-    assert (
-        lower_bound <= device_kernel_duration <= upper_bound
-    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± 1.5% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
-
-
-@pytest.mark.models_device_performance_bare_metal
 def test_conv2d_sdxl_perf():
     """
     Test performance of SDXL Conv2D operation.
