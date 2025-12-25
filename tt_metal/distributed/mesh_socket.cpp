@@ -13,32 +13,25 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-void point_to_point_barrier(
-    const std::vector<Rank>& ranks, const std::shared_ptr<multihost::DistributedContext>& distributed_context) {
-    TT_FATAL(ranks.size() == 2, "Point-to-point barrier requires exactly two ranks.");
-    TT_FATAL(ranks[0] != ranks[1], "Point-to-Point barrier cannot be used for synchronization within the same rank.");
-    TT_FATAL(
-        distributed_context->rank() == ranks[0] || distributed_context->rank() == ranks[1],
-        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
-        *ranks[0],
-        *ranks[1],
-        *distributed_context->rank());
-
-    if (distributed_context->rank() == ranks[0]) {
-        int sync_msg = 1;
-        distributed_context->ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[1], Tag{0});
-    } else {
-        int sync_msg = 0;
-        distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), ranks[0], Tag{0});
-        TT_FATAL(sync_msg == 1, "Received unexpected message during point-to-point barrier.");
+void barrier_across_send_recv_ranks(
+    const std::vector<Rank>& sender_ranks,
+    const std::vector<Rank>& recv_ranks,
+    const std::shared_ptr<multihost::DistributedContext>& distributed_context) {
+    std::vector<int> ranks;
+    ranks.reserve(sender_ranks.size() + recv_ranks.size());
+    for (const auto& sender_rank : sender_ranks) {
+        ranks.push_back(*sender_rank);
     }
+    for (const auto& recv_rank : recv_ranks) {
+        ranks.push_back(*recv_rank);
+    }
+    auto sub_context = distributed_context->create_sub_context(ranks);
+    sub_context->barrier();
 }
 
 void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
-    const auto global_distributed_context = DistributedContext::get_current_world();
+    const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     bool is_sender = global_distributed_context->rank() == global_sender_rank;
@@ -165,6 +158,9 @@ SocketConfig MeshSocket::populate_mesh_ids(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
+
+    TT_FATAL(!config_.socket_connection_config.empty(), "Socket connection config cannot be empty.");
+
     if (config_.sender_mesh_id.has_value()) {
         TT_FATAL(
             config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
@@ -172,7 +168,9 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     } else {
         this->process_host_ranks();
     }
-
+    TT_FATAL(
+        config_.sender_mesh_id.has_value() && config_.receiver_mesh_id.has_value(),
+        "Unable to determine mesh ids for socket.");
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
@@ -227,20 +225,17 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
 
     std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(config_.sender_mesh_id.value(), rank_translation_table_);
     std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
-    // Barrier across all sender and receiver ranks. This ensures that the downstream workloads using these sockst
-    for (const auto& sender_rank : sender_ranks) {
-        for (const auto& recv_rank : recv_ranks) {
-            if (context->rank() == sender_rank || context->rank() == recv_rank) {
-                point_to_point_barrier({sender_rank, recv_rank}, context);
-            }
-        }
-    }
+    // Barrier across all sender and receiver ranks. This ensures that the downstream workloads using these socket
+    // will start after the socket is initialized across all hosts.
+    barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& sender,
     const std::shared_ptr<MeshDevice>& receiver,
     const SocketConfig& base_config) {
+    TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
+
     auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
     auto recv_config_buffer = create_socket_config_buffer(receiver, config, SocketEndpoint::RECEIVER);
