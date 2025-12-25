@@ -58,10 +58,22 @@ namespace compute_kernel_lib {
  *
  * STREAMING: Tiles arrive one at a time via cb_wait_front/cb_pop_front (default)
  * PRELOADED: All tiles already present in CB, accessed via indexing
+ * PERSISTENT: Wait for all tiles upfront, indexed access, NO pop (tiles persist for reuse)
  */
 enum class ReduceInputMode {
-    STREAMING,  // Current behavior: cb_wait_front/cb_pop_front per tile
-    PRELOADED   // New: tiles already in CB, use indexing
+    STREAMING,  // cb_wait_front/cb_pop_front per tile
+    PRELOADED,  // All tiles ready upfront, use indexing
+    PERSISTENT  // Wait for all tiles, indexed access, no pop (tiles persist for reuse)
+};
+
+/**
+ * @brief Default no-op functor for post_reduce_op parameter
+ *
+ * When no custom post-reduce operation is needed, this empty functor is used.
+ * It compiles away completely due to inlining.
+ */
+struct NoOp {
+    ALWI void operator()() const {}
 };
 
 // =============================================================================
@@ -149,6 +161,18 @@ enum class ReduceInputMode {
  *   // PRELOADED mode for REDUCE_SCALAR: all tiles pre-loaded
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, ReduceInputMode::PRELOADED>(
  *       cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *
+ * @example
+ *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
+ *   // Set uninit=false since lambda calls reduce_uninit() before recip
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
+ *       true, false, ENABLE_FP32_DEST_ACC>(
+ *       cb_exps, cb_scaler, cb_out, 1, Wt, 1, 0, 0,
+ *       []() {
+ *           reduce_uninit();
+ *           recip_tile_init();
+ *           recip_tile(0);
+ *       });
  */
 template <
     PoolType reduce_type = REDUCE_OP,
@@ -156,7 +180,7 @@ template <
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     bool init = true,
     bool uninit = true,
-    bool enforce_fp32_accumulation = false>
+    typename PostReduceOp = NoOp>
 ALWI void reduce(
     uint32_t icb,
     uint32_t icb_scaler,
@@ -165,12 +189,20 @@ ALWI void reduce(
     uint32_t Wt,
     uint32_t num_batches,
     uint32_t row_chunk = 0,
-    uint32_t input_stride = 0) {
+    uint32_t input_stride = 0,
+    PostReduceOp post_reduce_op = {}) {
+// Auto-detect FP32 dest accumulation mode from compile-time define
+#ifdef ENABLE_FP32_DEST_ACC
+    constexpr bool enforce_fp32_accumulation = (ENABLE_FP32_DEST_ACC == 1);
+#else
+    constexpr bool enforce_fp32_accumulation = false;
+#endif
+
     // Initialization
     if constexpr (init) {
         reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, ocb);
-        cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
     }
+    cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
 
     constexpr uint32_t onetile = 1;
 
@@ -181,10 +213,16 @@ ALWI void reduce(
         // =================================================================
         const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
         const uint32_t tiles_per_batch = Ht * stride;
+        const uint32_t total_tiles = tiles_per_batch * num_batches;
 
         // PRELOADED: bulk reserve output upfront
         if constexpr (input_mode == ReduceInputMode::PRELOADED) {
             cb_reserve_back(ocb, num_batches);
+        }
+
+        // PERSISTENT: wait for all tiles upfront
+        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+            cb_wait_front(icb, total_tiles);
         }
 
         uint32_t batch_offset = 0;
@@ -196,14 +234,15 @@ ALWI void reduce(
                         cb_wait_front(icb, onetile);
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, 0, 0, 0);
                         cb_pop_front(icb, onetile);
-                    } else {
+                    } else {  // PRELOADED or PERSISTENT: indexed access
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, tile_idx, 0, 0);
                     }
                 }
             }
-            if constexpr (input_mode == ReduceInputMode::STREAMING) {
+            // STREAMING/PERSISTENT: reserve per-batch
+            if constexpr (input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::PERSISTENT) {
                 cb_reserve_back(ocb, onetile);
             }
             tile_regs_commit();
@@ -212,7 +251,10 @@ ALWI void reduce(
             tile_regs_release();
             if constexpr (input_mode == ReduceInputMode::STREAMING) {
                 cb_push_back(ocb, onetile);
-            } else {
+            } else {  // PRELOADED or PERSISTENT
+                if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+                    cb_push_back(ocb, onetile);
+                }
                 batch_offset += tiles_per_batch;
             }
         }
@@ -227,10 +269,16 @@ ALWI void reduce(
         // =================================================================
         const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
         const uint32_t total_outputs = Ht * num_batches;
+        const uint32_t total_tiles = Ht * stride * num_batches;
 
         // PRELOADED: bulk reserve output upfront
         if constexpr (input_mode == ReduceInputMode::PRELOADED) {
             cb_reserve_back(ocb, total_outputs);
+        }
+
+        // PERSISTENT: wait for all tiles upfront
+        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+            cb_wait_front(icb, total_tiles);
         }
 
         uint32_t index_offset = 0;
@@ -242,12 +290,18 @@ ALWI void reduce(
                         cb_wait_front(icb, onetile);
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, 0, 0, 0);
                         cb_pop_front(icb, onetile);
-                    } else {
+                    } else {  // PRELOADED or PERSISTENT: indexed access
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, wt + index_offset, 0, 0);
                     }
                 }
-                if constexpr (input_mode == ReduceInputMode::STREAMING) {
+
+                // Call post-reduce operation (e.g., recip_tile for softmax)
+                // User's lambda can include reduce_uninit() if needed before custom ops
+                post_reduce_op();
+
+                // STREAMING/PERSISTENT: reserve per-row to avoid deadlock
+                if constexpr (input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::PERSISTENT) {
                     cb_reserve_back(ocb, onetile);
                 }
                 tile_regs_commit();
@@ -256,7 +310,10 @@ ALWI void reduce(
                 tile_regs_release();
                 if constexpr (input_mode == ReduceInputMode::STREAMING) {
                     cb_push_back(ocb, onetile);
-                } else {
+                } else {  // PRELOADED or PERSISTENT
+                    if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+                        cb_push_back(ocb, onetile);
+                    }
                     index_offset += stride;
                 }
             }
@@ -279,10 +336,16 @@ ALWI void reduce(
         const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
         const uint32_t tiles_per_batch = Ht * stride;
         const uint32_t total_outputs = Wt * num_batches;
+        const uint32_t total_tiles = tiles_per_batch * num_batches;
 
         // PRELOADED: bulk reserve output upfront
         if constexpr (input_mode == ReduceInputMode::PRELOADED) {
             cb_reserve_back(ocb, total_outputs);
+        }
+
+        // PERSISTENT: wait for all tiles upfront
+        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+            cb_wait_front(icb, total_tiles);
         }
 
         uint32_t batch_offset = 0;
@@ -300,7 +363,7 @@ ALWI void reduce(
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                                 icb, icb_scaler, 0, 0, dst_idx);
                             cb_pop_front(icb, onetile);
-                        } else {
+                        } else {  // PRELOADED or PERSISTENT: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                                 icb, icb_scaler, tile_idx, 0, dst_idx);
@@ -311,17 +374,21 @@ ALWI void reduce(
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < current_chunk; ++i) {
-                    if constexpr (input_mode == ReduceInputMode::STREAMING) {
+                    // STREAMING/PERSISTENT: reserve/push per output tile
+                    if constexpr (
+                        input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::PERSISTENT) {
                         cb_reserve_back(ocb, onetile);
                     }
                     pack_tile(i, ocb);
-                    if constexpr (input_mode == ReduceInputMode::STREAMING) {
+                    if constexpr (
+                        input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::PERSISTENT) {
                         cb_push_back(ocb, onetile);
                     }
                 }
                 tile_regs_release();
             }
-            if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+            // Update batch_offset for indexed modes (PRELOADED and PERSISTENT)
+            if constexpr (input_mode != ReduceInputMode::STREAMING) {
                 batch_offset += tiles_per_batch;
             }
         }

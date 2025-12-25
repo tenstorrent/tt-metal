@@ -123,3 +123,138 @@ def test_tilize_untilize_cliff_cores(device, batch_size, channels, height, width
 
     # Identity operation: output should match input exactly
     assert_with_pcc(torch_input, torch_output, pcc=0.9999)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_avg(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_AVG operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 1] - width reduced to 1
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_AVG)
+
+    # Verify output shape: width reduced to 1
+    expected_shape = (batch_size, channels, height, 1)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: mean along width dimension
+    torch_expected = torch.mean(torch_input, dim=-1, keepdim=True)
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output, pcc=0.999)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_sum(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_SUM operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 1] - width reduced to 1
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_SUM)
+
+    # Verify output shape: width reduced to 1
+    expected_shape = (batch_size, channels, height, 1)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: sum along width dimension
+    torch_expected = torch.sum(torch_input, dim=-1, keepdim=True)
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output, pcc=0.999)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_max(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_MAX operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 1] - width reduced to 1
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_MAX)
+
+    # Verify output shape: width reduced to 1
+    expected_shape = (batch_size, channels, height, 1)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: max along width dimension
+    torch_expected = torch.max(torch_input, dim=-1, keepdim=True).values
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output, pcc=0.999)
