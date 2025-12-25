@@ -10,7 +10,7 @@ class AttentionConfig:
     """Base configuration class for attention modules"""
 
     embed_dims: int = 256
-    num_heads: int = 8
+    num_heads: int = 4
     num_levels: int = 4
     num_points: int = 4
     dropout: float = 0.0
@@ -21,6 +21,16 @@ class AttentionConfig:
 @dataclass
 class DeformableAttentionConfig(AttentionConfig):
     """Configuration for MultiScale Deformable Attention"""
+
+    query_embed_dims: int = None
+
+    def __post_init__(self):
+        # Set query_embed_dims to embed_dims if not specified
+        if self.query_embed_dims is None:
+            self.query_embed_dims = self.embed_dims
+
+        if self.embed_dims % self.num_heads != 0:
+            raise ValueError(f"embed_dims ({self.embed_dims}) must be divisible by num_heads ({self.num_heads})")
 
 
 @dataclass
