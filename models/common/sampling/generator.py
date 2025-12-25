@@ -61,6 +61,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self._log_probs_active = False
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -221,11 +222,15 @@ class SamplingGenerator:
         *,
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        force_argmax: bool = False,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
         """
+        if force_argmax:
+            tt_out = self.tt_sampling(logits, tt_out_tok=tt_out_tok, force_argmax=True)
+            return tt_out, None
 
         penalties_on = self._penalties_active
         log_probs_on = self._log_probs_active

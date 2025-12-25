@@ -157,7 +157,16 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(
+        self,
+        tensor,
+        dim,
+        cluster_axis=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_links=1,
+        buffer_key=None,
+        dtype=None,
+    ):
         """Flexible all-gather that works with both CCL implementations."""
         if self.cluster_shape[0] * self.cluster_shape[1] == 32:
             # Use line_all_gather with persistent buffer support
@@ -210,11 +219,7 @@ class TTSampling(LightweightModule):
 
         self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        tt_out_tok: ttnn.Tensor = None,
-    ):
+    def forward(self, x: ttnn.Tensor, tt_out_tok: ttnn.Tensor = None, force_argmax=False):
         """
         Perform on-device sampling on logits tensor.
         The logits are sharded over the devices in the cluster.
@@ -229,6 +234,19 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
+        if force_argmax:
+            x = self._perform_all_gather(
+                x,
+                dim=-1,
+            )  # memory_config=ttnn.DRAM_MEMORY_CONFIG, num_links=self.num_gather_links, buffer_key="SAMPLING_VALUES", )
+            x_untilized = ttnn.untilize(x, use_multicore=True)
+            return ttnn.argmax(
+                x_untilized,
+                dim=-1,
+                output_tensor=tt_out_tok,
+                keepdim=False,
+                use_multicore=True,
+            )
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
