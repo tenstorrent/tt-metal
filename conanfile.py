@@ -121,7 +121,13 @@ class TTNNConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure(variables={"VERSION_NUMERIC": self.version, "VERSION_HASH": self.conan_data["scm"]["commit"]})
+        # Get version hash from conan_data if available, otherwise get it from git directly
+        if self.conan_data and "scm" in self.conan_data and "commit" in self.conan_data["scm"]:
+            version_hash = self.conan_data["scm"]["commit"]
+        else:
+            # Fallback: get git commit directly
+            version_hash = subprocess.check_output("git rev-parse --short=10 HEAD", shell=True).decode().strip()
+        cmake.configure(variables={"VERSION_NUMERIC": self.version, "VERSION_HASH": version_hash})
         cmake.build()
 
     def package(self):
