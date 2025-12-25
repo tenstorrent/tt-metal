@@ -24,9 +24,10 @@
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
+    DeviceZoneScopedN("max_block_inplace");
     // inputs come in full, outputs go out full
-    copy_tile_to_dst_init_short(in0);
-    copy_tile_to_dst_init_short(in1);
+    copy_tile_to_dst_init_short_num_faces(in0);
+    copy_tile_to_dst_init_short_num_faces(in1);
     max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
@@ -36,7 +37,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::R));
+        max_tile_iterations(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::RC_custom), 4 /*iterations*/);
         pack_tile(dst_reg_0, in0);
         release_dst();
     }

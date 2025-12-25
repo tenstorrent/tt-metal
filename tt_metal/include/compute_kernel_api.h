@@ -376,6 +376,11 @@ ALWI void max_tile(uint32_t idst0, uint32_t idst1, int vector_mode = (int)Vector
     MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0, vector_mode)));
 }
 
+ALWI void max_tile_iterations(
+    uint32_t idst0, uint32_t idst1, int vector_mode = (int)VectorMode::RC_custom, int iterations = 1) {
+    MATH((llk_math_eltwise_unary_sfpu_max_iterations<APPROX, 32>(idst0, vector_mode, iterations)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */

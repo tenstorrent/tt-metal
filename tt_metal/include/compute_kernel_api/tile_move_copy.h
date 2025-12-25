@@ -33,6 +33,22 @@ ALWI void copy_tile_to_dst_init_short(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
+
+/* TODO: CLEAN THIS UP  WITH ACUTUAL ARGUMENTS*/
+ALWI void copy_tile_to_dst_init_short_num_faces(
+    uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
+    UNPACK((_llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        0, 0, FACE_R_DIM, 2, 5, 5)
+
+                ));
+
+    MATH((
+
+        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, false>(2, 5)
+
+            ));
+}
+
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
