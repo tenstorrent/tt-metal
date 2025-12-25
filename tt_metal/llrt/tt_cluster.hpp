@@ -4,7 +4,7 @@
 
 #pragma once
 
-#define ZERO 0
+#define ZEROZED 0
 
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
