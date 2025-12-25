@@ -16,10 +16,12 @@ ttnn::Tensor ExecuteTilizeUntilize::invoke(
     const ttnn::Tensor& input,
     std::optional<MemoryConfig> output_memory_config,
     std::optional<DataType> output_dtype,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::operations::reduction::OpType op_type,
+    float scaler) {
     // Call the primitive device operation
     // The registered operation handles execution automatically
-    return ttnn::prim::tilize_untilize(input, output_memory_config, output_dtype, memory_config);
+    return ttnn::prim::tilize_untilize(input, output_memory_config, output_dtype, memory_config, op_type, scaler);
 }
 
 }  // namespace ttnn::operations::reduction::tilize_untilize
