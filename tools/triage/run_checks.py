@@ -22,7 +22,7 @@ Description:
     block locations and RISC cores without needing to depend on multiple separate scripts.
 
 Owner:
-    adjorjevic-TT
+    adjordjevic-TT
 """
 
 from collections.abc import Callable
