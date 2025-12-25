@@ -403,10 +403,12 @@ jobs:
     if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     uses: ./.github/workflows/wheels.yaml
-    needs: build-docker-image
+    # Wait for C++ build to complete so ccache is populated
+    needs: [build-docker-image, build-artifact]
     secrets: inherit
     with:
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      build-type: ${{ inputs.build-type }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
