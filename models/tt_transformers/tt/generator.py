@@ -42,11 +42,48 @@ class SamplingParams:
     presence_penalty: float | list[float] = 0.0
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
-    seed: int | list[int] = 0
+    seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
+
+
+def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingParams, idx: int) -> SamplingParams:
+    """
+    Create a new SamplingParams where each list field is broadcast to a full (length-32) list,
+    taking the value from `idx`. Does not mutate the input.
+    """
+    slot_len = 32  # sampling only supports batch_size=32
+    kwargs = {}
+    for f in fields(SamplingParams):
+        value = getattr(formatted_sampling_params, f.name)
+        # `format_sampling_params` may convert scalar fields to 1-element lists.
+        # Treat short lists as broadcast scalars rather than per-request arrays.
+        if isinstance(value, List):
+            chosen = value[idx] if idx < len(value) else value[0]
+        else:
+            chosen = value
+        if chosen is None:
+            kwargs[f.name] = None
+        else:
+            kwargs[f.name] = [chosen] * slot_len
+    return SamplingParams(**kwargs)
+
+
+def _apply_prefill_sampling_state(
+    model_instance,
+    *,
+    sampling_params: SamplingParams,
+    prompt_tokens: torch.Tensor | None,
+):
+    sampling_module = getattr(model_instance, "sampling_prefill", None)
+    assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+    sampling_module.reset_sampling_params(sampling_params)
+    sampling_module.reset_seed(sampling_params.seed)
+    if prompt_tokens is not None:
+        sampling_module.reset_prompt_tokens(prompt_tokens)
+    sampling_module.reset_output_state()
 
 
 # Split lists into chunks
@@ -111,7 +148,7 @@ class Generator:
         self,
         kv_cache,
         enable_trace,
-        sampling_params=None,
+        sampling_params=[None],
     ):
         if self.already_warmed_up_prefill:
             return
@@ -120,6 +157,7 @@ class Generator:
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
         for model_id in range(self.data_parallel):
+            # each model sees each sampling_params at least once
             for supported_length in sequence_lengths_to_warmup:
                 # When model_id = 0, we compile all operators for the first time
                 # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
@@ -149,17 +187,17 @@ class Generator:
                         "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
                     )
                     break
-
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    page_table_warmup,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    warmup_empty_slots,
-                    enable_trace,
-                    model_id,
-                    sampling_params,
-                )
+                for param in sampling_params:
+                    self.prefill_forward_text(
+                        warmup_tokens,
+                        page_table_warmup,
+                        kv_cache,
+                        warmup_prompt_lens,
+                        warmup_empty_slots,
+                        enable_trace,
+                        model_id,
+                        param,
+                    )
 
     def _capture_trace_prefill(
         self,
@@ -212,7 +250,6 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
-        # We are not appending host/device here because we never do device sampling in prefill with TTT
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -278,12 +315,9 @@ class Generator:
             enable_trace = False
 
         sampling_on_device_requested = sampling_params is not None
-        formatted_sampling_params = (
-            format_sampling_params(sampling_params, 32) if sampling_on_device_requested else None
-        )
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        self.warmup_model_prefill(kv_cache, enable_trace, [sampling_params])
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -298,7 +332,9 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
-        out_list = []
+        sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
+        prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
+        prefill_results: list[dict] = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
@@ -346,16 +382,17 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            # Sampling during prefill is not currently supported with tracing; fall back to no-trace.
             if sampling_enabled:
-                enable_trace_current_prompt = False
-                sampling_module = getattr(self.model[model_id], "sampling_prefill", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                sampling_module.reset_sampling_params(formatted_sampling_params)
-                sampling_module.reset_seed(formatted_sampling_params.seed)
-                sampling_module.reset_prompt_tokens(prefill_ids[:, :seq_len].repeat(32, 1))
-                sampling_module.reset_output_state()
                 sampling_executed = True
+                per_request_params = format_sampling_params(
+                    _broadcast_formatted_sampling_params(sampling_params, idx), 32
+                )
+                assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
+                _apply_prefill_sampling_state(
+                    self.model[model_id],
+                    sampling_params=per_request_params,
+                    prompt_tokens=prefill_ids[:, :seq_len].repeat(32, 1),
+                )
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
@@ -368,6 +405,11 @@ class Generator:
                     prefill_seq_len=prefill_seq_len,
                     **local_kwargs,
                 )
+                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+                # We need to do this here, because we can't do this part in forward() if we have trace enabled
+                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+
             else:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
@@ -378,56 +420,62 @@ class Generator:
                     model_id=model_id,
                     **local_kwargs,
                 )
-            if enable_trace_current_prompt:
-                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-                # We need to do this here, because we can't do this part in forward() if we have trace enabled
-                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
-
-            # We have to dispatch copy to host to avoid corruption by the next user's prefill
+            # Defer blocking work to a second phase so other sub-meshes can keep running
             if sampling_enabled:
-                x_l1 = logits
-                logits = ttnn.to_memory_config(x_l1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                x_l1.deallocate(True)
-                out_list.append(ttnn.clone(logits))
-            else:
-                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                out_list.append(logits.cpu(blocking=False))
-
-        # Process the logits after all the prefill are done in data parallel mode
-        for idx, out in enumerate(out_list):
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-
-            # Ensure all copying is done
-            ttnn.synchronize_device(self.model[model_id].mesh_device)
-
-            if sampling_executed:
                 tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
-                    out,
+                    logits,
                     enable_trace=False,
                 )
-                tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
-                tokens_host = tokens_host[(last_token_idx % 32)]
-                log_probs_host = (
-                    self.model[model_id].process_output_decode(
-                        tt_log_probs, B=32, S=1, is_tokens=True, is_log_probs=True
-                    )[(last_token_idx % 32)]
-                    if tt_log_probs is not None
-                    else None
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "model_id": model_id,
+                        "last_token_idx": last_token_idx,
+                        "logits": [
+                            tt_tokens.cpu(blocking=False),
+                            tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
+                        ],
+                        "sampling": sampling_enabled,
+                    }
                 )
-                output_tokens[idx] = tokens_host
-                if log_probs_host is not None:
-                    output_log_probs[idx] = log_probs_host
-
             else:
-                # Since we give unpadded_seq_len, only the tile containing the last token is returned
-                output_logits[idx] = self.model[model_id].process_output_prefill(
-                    out, last_token_idx=(last_token_idx % 32)
+                logits = ttnn.untilize(logits, use_multicore=True)
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "model_id": model_id,
+                        "last_token_idx": last_token_idx,
+                        "logits": logits.cpu(blocking=False),
+                        "sampling": sampling_enabled,
+                    }
                 )
 
+        # Second phase: synchronize once per model and process outputs (sampling or host readback)
+        if len(prefill_results) > 0:
+            for res in prefill_results:
+                idx = res["idx"]
+                last_token_idx = res["last_token_idx"]
+                model_id = res["model_id"]
+                ttnn.synchronize_device(self.model[model_id].mesh_device)
+
+                if res["sampling"]:
+                    tt_tokens = res["logits"][0]
+                    tt_log_probs = res["logits"][1]
+                    tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[
+                        (last_token_idx % 32)
+                    ]
+                    log_probs_host = (
+                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[(last_token_idx % 32)]
+                        if tt_log_probs is not None
+                        else None
+                    )
+                    output_tokens[idx] = tokens_host
+                    if log_probs_host is not None:
+                        output_log_probs[idx] = log_probs_host
+                else:
+                    output_logits[idx] = self.model[model_id].process_output_prefill(
+                        res["logits"], last_token_idx=(int(prompt_lens[idx]) % 32)
+                    )
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
             return output_tokens, output_log_probs

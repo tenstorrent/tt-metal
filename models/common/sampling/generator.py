@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import random
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
@@ -116,7 +117,7 @@ class SamplingGenerator:
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
         )
-        #
+
         self._penalties_active = not (
             self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
             and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
@@ -257,8 +258,8 @@ class SamplingGenerator:
     def reset_seed(self, seed):
         for i, s in enumerate(seed):
             if s is None:
-                # set to default seed value which is 0
-                seed[i] = 0
+                # set to random seed to have variability while using tensor manual_seed
+                seed[i] = random.randint(0, 1000000)
         seed = torch.tensor(seed)
         user_ids = torch.arange(seed.shape[0])
 
@@ -298,7 +299,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": 0,
+        "seed": None,
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
