@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from conftest import skip_for_blackhole
 from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackRowsGolden, get_golden_generator
@@ -23,7 +22,6 @@ dimension_combinations = [
 ]
 
 
-@skip_for_blackhole
 @parametrize(
     test_name="pack_rows_test",
     formats=input_output_formats(
