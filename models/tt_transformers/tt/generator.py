@@ -42,7 +42,7 @@ class SamplingParams:
     presence_penalty: float | list[float] = 0.0
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
-    seed: int | list[int] = 0
+    seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
 
 
@@ -334,6 +334,7 @@ class Generator:
 
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
+        prefill_results: list[dict] = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
@@ -415,44 +416,60 @@ class Generator:
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
                 logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
 
-            # We have to dispatch copy to host to avoid corruption by the next user's prefill
-            if sampling_enabled:
-                # Ensure prefill/logits ops are complete before running sampling + host reads.
-                ttnn.synchronize_device(self.model[model_id].mesh_device)
-                logits_dram = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Defer blocking work to a second phase so other sub-meshes can keep running
+            prefill_results.append(
+                {
+                    "idx": idx,
+                    "model_id": model_id,
+                    "last_token_idx": last_token_idx,
+                    "logits": logits.cpu(blocking=False),
+                    "sampling": sampling_enabled,
+                }
+            )
 
-                per_request_params = sampling_params_per_out[idx]
-                assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
-                _apply_prefill_sampling_state(
-                    self.model[model_id],
-                    sampling_params=per_request_params,
-                    prompt_tokens=prompt_tokens_per_out[idx],
-                )
-                tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
-                    logits_dram,
-                    enable_trace=False,
-                )
-
-                tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
-                tokens_host = tokens_host[(last_token_idx % 32)]
-                log_probs_host = (
-                    self.model[model_id].process_output_decode(
-                        tt_log_probs, B=32, S=1, is_tokens=True, is_log_probs=True
-                    )[(last_token_idx % 32)]
-                    if tt_log_probs is not None
-                    else None
-                )
-                output_tokens[idx] = tokens_host
-                if log_probs_host is not None:
-                    output_log_probs[idx] = log_probs_host
-                logits_dram.deallocate(True)
-            else:
-                # Ensure prefill ops complete before host readback.
+        # Second phase: synchronize once per model and process outputs (sampling or host readback)
+        if len(prefill_results) > 0:
+            for res in prefill_results:
+                idx = res["idx"]
+                last_token_idx = res["last_token_idx"]
+                model_id = res["model_id"]
                 ttnn.synchronize_device(self.model[model_id].mesh_device)
-                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                output_logits[idx] = self.model[model_id].process_output_prefill(
-                    logits.cpu(blocking=True), last_token_idx=(int(prompt_lens[idx]) % 32)
-                )
+
+                if res["sampling"]:
+                    per_request_params = sampling_params_per_out[idx]
+                    assert (
+                        per_request_params is not None
+                    ), "Sampling was executed but missing per-request sampling params"
+                    _apply_prefill_sampling_state(
+                        self.model[model_id],
+                        sampling_params=per_request_params,
+                        prompt_tokens=prompt_tokens_per_out[idx],
+                    )
+                    res["logits"] = ttnn.to_device(
+                        res["logits"], self.model[model_id].mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                    tt_tokens, tt_log_probs = self.model[model_id].sampling_prefill.sample(
+                        res["logits"],
+                        enable_trace=False,
+                    )
+
+                    tokens_host = self.model[model_id].process_output_decode(tt_tokens, B=32, S=1, is_tokens=True)
+                    tokens_host = tokens_host[(last_token_idx % 32)]
+                    log_probs_host = (
+                        self.model[model_id].process_output_decode(
+                            tt_log_probs, B=32, S=1, is_tokens=True, is_log_probs=True
+                        )[(last_token_idx % 32)]
+                        if tt_log_probs is not None
+                        else None
+                    )
+                    output_tokens[idx] = tokens_host
+                    if log_probs_host is not None:
+                        output_log_probs[idx] = log_probs_host
+                    res["logits"].deallocate(True)
+                else:
+                    output_logits[idx] = self.model[model_id].process_output_prefill(
+                        res["logits"], last_token_idx=(int(prompt_lens[idx]) % 32)
+                    )
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
             return output_tokens, output_log_probs

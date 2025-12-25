@@ -299,7 +299,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": 0,
+        "seed": None,
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
