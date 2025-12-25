@@ -293,6 +293,154 @@ jobs:
           TT_METAL_L2_NIGHTLY_RUN_ID: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
           PERF_DEVICE_MODELS_RUN_ID: ${{ steps.trigger-workflows.outputs.perf-device-models-run-id }}
         run: |
+          # Helper function to check if failures exist in main branch
+          check_failure_exists_in_main() {
+            local run_id=$1
+            local workflow=$2
+
+            echo "🔍 Checking if failures exist in main branch for workflow: $workflow"
+
+            # Get detailed failure info from branch run: job name + failed step names
+            local branch_failure_details=$(gh run view "$run_id" --json jobs --jq '
+              [.jobs[] | select(.conclusion == "failure") | {
+                job: .name,
+                failed_steps: [.steps[] | select(.conclusion == "failure") | .name] | sort
+              }] | sort_by(.job)
+            ' --repo "${{ env.METAL_REPO }}" 2>/dev/null)
+
+            if [ -z "$branch_failure_details" ] || [ "$branch_failure_details" = "[]" ]; then
+              echo "No failed jobs found in current run"
+              return 1
+            fi
+
+            echo "Branch failure details: $branch_failure_details"
+
+            # Get annotations (test failures) from branch run - extract test identifiers only (path + title), NOT error messages
+            # This avoids false negatives from floating-point drift in error outputs
+            local branch_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/check-runs?check_suite_id=$(gh run view "$run_id" --json checkSuiteId --jq '.checkSuiteId' --repo "${{ env.METAL_REPO }}")" \
+              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+
+            echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length')"
+
+            # Find the latest completed run of the same workflow on main
+            local main_run_id=$(gh run list \
+              --workflow "$workflow" \
+              --branch "main" \
+              --limit 5 \
+              --json databaseId,status,conclusion \
+              --jq '[.[] | select(.status == "completed")] | .[0].databaseId // empty' \
+              --repo "${{ env.METAL_REPO }}" 2>/dev/null)
+
+            if [ -z "$main_run_id" ]; then
+              echo "No completed runs found on main for $workflow"
+              return 1
+            fi
+
+            echo "Found main run ID: $main_run_id"
+
+            # Get detailed failure info from main run
+            local main_failure_details=$(gh run view "$main_run_id" --json jobs --jq '
+              [.jobs[] | select(.conclusion == "failure") | {
+                job: .name,
+                failed_steps: [.steps[] | select(.conclusion == "failure") | .name] | sort
+              }] | sort_by(.job)
+            ' --repo "${{ env.METAL_REPO }}" 2>/dev/null)
+
+            if [ -z "$main_failure_details" ] || [ "$main_failure_details" = "[]" ]; then
+              echo "No failed jobs found in main run - main is passing"
+              return 1
+            fi
+
+            echo "Main failure details: $main_failure_details"
+
+            # Get annotations from main run - extract test identifiers only (path + title), NOT error messages
+            local main_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/check-runs?check_suite_id=$(gh run view "$main_run_id" --json checkSuiteId --jq '.checkSuiteId' --repo "${{ env.METAL_REPO }}")" \
+              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+
+            echo "Main failed tests count: $(echo "$main_annotations" | jq 'length')"
+
+            # Compare job+step failures
+            local all_failures_in_main=true
+
+            # Iterate through each branch failure
+            local branch_jobs=$(echo "$branch_failure_details" | jq -r '.[].job')
+
+            while IFS= read -r job_name; do
+              [ -z "$job_name" ] && continue
+
+              # Get failed steps for this job in branch
+              local branch_steps=$(echo "$branch_failure_details" | jq -r --arg job "$job_name" '.[] | select(.job == $job) | .failed_steps | .[]' 2>/dev/null)
+
+              # Check if this job exists in main failures
+              local main_job_exists=$(echo "$main_failure_details" | jq -e --arg job "$job_name" '.[] | select(.job == $job)' > /dev/null 2>&1 && echo "true" || echo "false")
+
+              if [ "$main_job_exists" = "false" ]; then
+                echo "✗ Job '$job_name' does NOT fail in main - this is a new failure"
+                all_failures_in_main=false
+                break
+              fi
+
+              # Get failed steps for this job in main
+              local main_steps=$(echo "$main_failure_details" | jq -r --arg job "$job_name" '.[] | select(.job == $job) | .failed_steps | .[]' 2>/dev/null)
+
+              # Check if all branch steps exist in main steps
+              while IFS= read -r step_name; do
+                [ -z "$step_name" ] && continue
+
+                if echo "$main_steps" | grep -qxF "$step_name"; then
+                  echo "✓ Job '$job_name' / Step '$step_name' also fails in main"
+                else
+                  echo "✗ Job '$job_name' / Step '$step_name' does NOT fail in main - this is a new failure"
+                  all_failures_in_main=false
+                  break 2
+                fi
+              done <<< "$branch_steps"
+
+            done <<< "$branch_jobs"
+
+            # If job+step comparison passed, also check annotations (test-level failures)
+            if [ "$all_failures_in_main" = "true" ]; then
+              local branch_anno_count=$(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo "0")
+              local main_anno_count=$(echo "$main_annotations" | jq 'length' 2>/dev/null || echo "0")
+
+              # Handle cases where annotations might not exist
+              if [ "$branch_anno_count" -eq 0 ] && [ "$main_anno_count" -eq 0 ]; then
+                echo "ℹ️ No test annotations found in either run - job+step match is sufficient"
+              elif [ "$branch_anno_count" -eq 0 ]; then
+                echo "ℹ️ No test annotations in branch run - job+step match is sufficient"
+              elif [ "$branch_anno_count" -gt 0 ]; then
+                echo "Comparing $branch_anno_count branch annotations against $main_anno_count main annotations..."
+
+                if [ "$main_anno_count" -eq 0 ]; then
+                  echo "⚠️ Branch has $branch_anno_count test annotations but main has none - cannot compare tests"
+                  echo "ℹ️ Falling back to job+step match (sufficient for pre-existing failure detection)"
+                else
+                  # Check if all branch annotations exist in main
+                  local new_annotations=$(echo "$branch_annotations" | jq --argjson main "$main_annotations" '[.[] | select(. as $a | $main | index($a) | not)]')
+                  local new_anno_count=$(echo "$new_annotations" | jq 'length')
+
+                  if [ "$new_anno_count" -gt 0 ]; then
+                    echo "✗ Found $new_anno_count new test failures not in main:"
+                    echo "$new_annotations" | jq -r '.[:5][]' | while read -r anno; do
+                      echo "  - ${anno:0:100}..."
+                    done
+                    all_failures_in_main=false
+                  else
+                    echo "✓ All test failure annotations also exist in main"
+                  fi
+                fi
+              fi
+            fi
+
+            if [ "$all_failures_in_main" = "true" ]; then
+              echo "✅ All failures (jobs, steps, and tests) exist in main branch - treating as pre-existing issues"
+              return 0
+            else
+              echo "❌ New failures detected that don't exist in main"
+              return 1
+            fi
+          }
+
           # Helper function for workflow monitoring
           monitor_workflow() {
             local run_id="$1"
@@ -321,6 +469,14 @@ jobs:
                     echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
                     return 0
                   else
+                    # Check if failures also exist in main branch
+                    if check_failure_exists_in_main "$run_id" "$workflow_name"; then
+                      local main_run_url=$(gh run list --workflow "$workflow_name" --branch "main" --limit 1 --json url --jq '.[0].url // empty' --repo "${{ env.METAL_REPO }}")
+                      echo "⚠️ $workflow_name failed, but same failures exist in main - treating as pre-existing issue: [View run]($run_url) | [Main run]($main_run_url)"
+                      echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
+                      return 0
+                    fi
+
                     echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url/attempts/$(($retries + 1))"
                     if [ $retries -ge $((MAX_RETRIES - 1)) ]; then
                       echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
