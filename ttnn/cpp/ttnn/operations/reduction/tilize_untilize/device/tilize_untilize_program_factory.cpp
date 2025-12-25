@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "kernels/op_types.hpp"
 
 namespace ttnn::operations::reduction::program {
 
@@ -111,8 +112,13 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     // KERNEL CREATION
     // ============================================================
 
+    // Operation type - currently only IDENTITY, future: REDUCE_W_SUM, etc.
+    constexpr uint32_t op_type = static_cast<uint32_t>(OpType::IDENTITY);
+    constexpr uint32_t packed_scaler = 0;  // Unused for IDENTITY, placeholder for future ops
+
     // Compile-time args for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {stick_size};
+    // Layout: [stick_size, op_type, packed_scaler, TensorAccessorArgs...]
+    std::vector<uint32_t> reader_compile_time_args = {stick_size, op_type, packed_scaler};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     // Compile-time args for writer kernel
@@ -120,9 +126,9 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Compile-time args for compute kernel
-    // num_tiles_per_row is compile-time (constant across all cores)
+    // Layout: [num_tiles_per_row, op_type]
     // num_blocks is runtime (varies per core to handle cliff)
-    std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_row};
+    std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_row, op_type};
 
     // Create reader kernel (RISCV_0 / BRISC / NOC0)
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
