@@ -35,6 +35,7 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@v4
         with:
+          path: .
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             tests/
@@ -56,9 +57,7 @@ jobs:
 
       - name: Run pytest with ASan
         timeout-minutes: 10
-        working-directory: /work/repo
         env:
-          PYTHONPATH: /work/repo
           LD_PRELOAD: /usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so
           ASAN_OPTIONS: "color=always:detect_leaks=1:detect_stack_use_after_return=1"
           LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
