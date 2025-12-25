@@ -54,12 +54,12 @@ void run_kernel()
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
 
-    _llk_unpack_matmul_init_<BUF_DESC_ID_SRC_A, BUF_DESC_ID_SRC_B, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM>(); // transpose in src_A not supported for
-                                                                                                                      // quasar
+    _llk_unpack_matmul_init_<BUF_DESC_ID_SRC_A, BUF_DESC_ID_SRC_B, UNPACK_TRANSPOSE_FACES>(CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
+                                                                                                                    // quasar
 
     for (uint32_t j = 0; j < KT_DIM; j++)
     {
-        _llk_unpack_matmul_<BUF_DESC_ID_SRC_A, BUF_DESC_ID_SRC_B, CT_DIM, RT_DIM, KT_DIM>(j, j * CT_DIM);
+        _llk_unpack_matmul_<BUF_DESC_ID_SRC_A, BUF_DESC_ID_SRC_B>(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
     }
 }
 
@@ -81,12 +81,12 @@ void run_kernel()
         false,
         static_cast<DataFormat>(formats.math),
         static_cast<DataFormat>(formats.math)>();
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, CT_DIM, RT_DIM, false, false>(); // disable flags for matmul with indexing and mxfp_2x not part
-                                                                                                  // of P0 test suite
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, false>(CT_DIM, RT_DIM); // disable flags for matmul with indexing and mxfp_2x not part
+                                                                                                // of P0 test suite
 
     for (uint32_t i = 0; i < KT_DIM; i++)
     {
-        _llk_math_matmul_block_<CT_DIM, RT_DIM>();
+        _llk_math_matmul_block_(CT_DIM, RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU>();
 }
@@ -114,7 +114,7 @@ void run_kernel()
     tdma_desc_dst.reg_data_format         = static_cast<uint8_t>(formats.pack_src);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
-    _llk_pack_matmul_init_<p_pacr::PACK0, BUF_DESC_ID_DST, RT_DIM, CT_DIM, 1>(); // Use destination buffer descriptor for packing output
+    _llk_pack_matmul_init_<p_pacr::PACK0, BUF_DESC_ID_DST>(RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
 
     _llk_pack_matmul_<p_pacr::PACK0>(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
