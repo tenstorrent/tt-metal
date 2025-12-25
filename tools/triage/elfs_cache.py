@@ -10,6 +10,9 @@ Usage:
 Description:
     Thread-safe data provider for caching ParsedElfFile objects.
     Provides an API for grabbing or caching ParsedElfFile objects by given elf path.
+
+Owner:
+    adjorjevic-TT
 """
 
 import os

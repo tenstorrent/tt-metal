@@ -31,6 +31,9 @@ Description:
         ./build_metal.sh --build-programming-examples
         build/programming_examples/matmul_multi_core
         triage
+
+Owner:
+    tt-vjovanovic
 """
 
 # Check if tt-exalens is installed
@@ -42,6 +45,7 @@ import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
+import re
 
 
 def find_install_debugger_script() -> str:
@@ -243,6 +247,15 @@ class TriageScript:
                 # This script does not have a configuration, which means it is not tt-triage script, skipping...
                 raise ValueError(f"Script {script_path} does not have script_config.")
 
+            # Check if script has a docstring and an owner
+            if not script_module.__doc__:
+                raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
+
+            if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
+                raise ValueError(
+                    f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
+                )
+
             # Check if script has a run method with two arguments (args and context)
             run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
             if run_method is not None:
@@ -378,6 +391,18 @@ def process_arguments(args: ScriptArguments) -> None:
     utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
 
+def process_triage_arguments() -> None:
+    """Parse early triage-only arguments to set verbosity and init console before script loading."""
+    from docopt import docopt
+
+    # Parse only triage's __doc__, ignoring script args
+    assert __doc__ is not None, "Script docstring must be provided."
+
+    args = docopt(__doc__, argv=sys.argv[1:], help=False, options_first=True)
+    triage_args = ScriptArguments(args)
+    process_arguments(triage_args)
+
+
 def parse_arguments(
     scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
 ) -> ScriptArguments:
@@ -507,8 +532,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"    {failure}")
             if script.failed:
                 utils.ERROR(f"    {script.failure_message}")
-        else:
-            utils.INFO("  pass")
+
+                import textwrap
+
+                docstring_indented = textwrap.indent(script.module.__doc__.strip(), "    ")
+                utils.ERROR(f"  Script help:\n{docstring_indented}")
+            else:
+                utils.INFO("  pass")
         return
 
     for failure in failures:
@@ -701,6 +731,8 @@ class TTTriageError(Exception):
 
 def main():
     triage_start = time()
+
+    process_triage_arguments()
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
