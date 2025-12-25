@@ -815,6 +815,7 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command
     return cq_to_event_by_device;
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point

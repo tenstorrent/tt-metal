@@ -126,6 +126,7 @@ run_t3000_tt_metal_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2.yaml
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/t3k_2x2_ttswitch_rank_bindings.yaml ./build/test/tt_metal/multi_host_ttswitch_tests --gtest_filter="MeshDeviceTTSwitchFixture.*"
 
   # Big-Mesh 2x4 Regression tests
   # Tests are disabled for now due to ND hangs
@@ -529,11 +530,7 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-layout0-ag_input_dtype0-mesh_device0]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
   # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
@@ -569,30 +566,14 @@ run_t3000_ccl_tests() {
 
   # all to all dispatch: 1 test for 2d and 1 for 1d linear should be enough
   # fabric 1d linear test on cluster axis 0 as other CCL tests aren't testing on this axis
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-dtype0-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-dram-dram-s128-7168-8-8-8-cluster_axis_0-2x4_grid-True-fabric_1d_linear]
   # fabric 2d test on cluster axis 1
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-dtype0-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-DataType.BFLOAT16-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
-  # if [[ -n "${NANOBIND}" ]]; then
-  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
-  # else
-  #   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
-  # fi
+  # pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
   # Record the end time
   end_time=$(date +%s)
