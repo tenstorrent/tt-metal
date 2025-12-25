@@ -60,6 +60,8 @@ jobs:
                 - 'tt_llk_quasar/**'
               tests:
                 - 'tests/**'
+                - '!tests/sources/quasar/**'
+                - '!tests/python_tests/quasar/**'
               github:
                 - '.github/**'
               documentation:
