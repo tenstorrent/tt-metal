@@ -20,6 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -208,45 +209,17 @@ void MAIN {
                 index_h_offset += per_core_N;
             }
             cb_push_back(cb_x, block_hw);
-            reconfig_data_format_srcb(cb_input_mask, cb_ones);
+            reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
             // Partial-E[x]
-            index_h_offset = 0;
-            mul_tiles_init(cb_x, cb_ones);
-            cb_reserve_back(cb_ex2pe, 1);
-            tile_regs_acquire();
             cb_wait_front(cb_x, block_hw);
-            cb_wait_front(cb_ones, 1);
-
-            index_h_offset = 0;
-            // Accomulate into dest directly by using mul_tiles (tile * 1 is accomulated into dest at the moment)
-            // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
-            for (uint32_t h = 0; h < block_h; ++h) {
-                for (uint32_t w = 0; w < block_w; ++w) {
-                    uint32_t index = index_h_offset + w;
-                    mul_tiles(cb_x, cb_ones, index, 0, dst0);
-                }
-                index_h_offset += block_w;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
-            tile_regs_release();
-            cb_push_back(cb_ex2pe, 1);
-            tile_regs_acquire();
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
-            cb_reserve_back(cb_ex_partial, 1);
-            cb_wait_front(cb_scaler, 1);
-            cb_wait_front(cb_ex2pe, 1);
-            // reduce only one final tile
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
-            cb_pop_front(cb_ex2pe, 1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
-            tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
-            reduce_uninit<FP32_DEST_ACC>();
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                compute_kernel_lib::ReduceInputMode::PRELOADED,
+                true,
+                true,
+                FP32_DEST_ACC>(cb_x, cb_scaler, cb_ex_partial, block_h, block_w, 1);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
