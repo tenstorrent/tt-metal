@@ -67,7 +67,8 @@ jobs:
             "efficientnetb0": false,
             "oft": false,
             "panoptic-deeplab": false,
-            "non-civ2": false
+            "non-civ2": false,
+            "ops-perf-tests": false
           }'
 
           if [[ "$requested_models" == "all" ]]; then
@@ -136,8 +137,8 @@ jobs:
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
             "N300 WH B0 Set 1": ["stable-diffusion-xl", "stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit"],
-            "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0"],
-            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "oft", "panoptic-deeplab"]
+            "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0", "ops-perf-tests"],
+            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "oft", "panoptic-deeplab", "ops-perf-tests"]
           }'
 
           # Original matrix definition
@@ -439,6 +440,15 @@ jobs:
           commands: |
             pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_130_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
+
+      - name: ops perf tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "ops-perf-tests"
+          commands: |
+            pytest tests/ttnn/unit_tests/operations/conv -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
         id: generate-device-perf-report
