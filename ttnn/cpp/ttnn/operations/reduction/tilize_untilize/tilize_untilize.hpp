@@ -8,6 +8,7 @@
 #include <tuple>
 #include "ttnn/decorators.hpp"
 #include "device/tilize_untilize_device_operation.hpp"
+#include "device/kernels/op_types.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -19,7 +20,9 @@ struct ExecuteTilizeUntilize {
         const ttnn::Tensor& input,
         std::optional<MemoryConfig> output_memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        ttnn::operations::reduction::OpType op_type = ttnn::operations::reduction::OpType::IDENTITY,
+        float scaler = 1.0f);
 };
 
 }  // namespace tilize_untilize
