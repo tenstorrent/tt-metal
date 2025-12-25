@@ -1,12 +1,12 @@
 """
 Comprehensive test utilities for comparing ttnn and PyTorch tensor outputs.
-Provides detailed statistical analysis and comparison functions.
+Provides detailed statistical analysis and comparison functions with sparsity awareness.
 """
 
 import torch
 import ttnn
 import numpy as np
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,423 @@ def convert_ttnn_to_torch(ttnn_tensor) -> torch.Tensor:
     if isinstance(ttnn_tensor, torch.Tensor):
         return ttnn_tensor
     return ttnn.to_torch(ttnn_tensor)
+
+
+def analyze_sparsity(
+    tensor: torch.Tensor, zero_threshold: float = 1e-8, block_size: Optional[int] = None, tensor_name: str = "tensor"
+) -> Dict[str, Any]:
+    """
+    Comprehensive sparsity analysis of a tensor.
+
+    Args:
+        tensor: Input tensor to analyze
+        zero_threshold: Values below this threshold are considered zero
+        block_size: Size for block sparsity analysis (e.g., 4 for 4x4 blocks)
+        tensor_name: Name for logging
+
+    Returns:
+        Dictionary containing sparsity statistics
+    """
+    if tensor.numel() == 0:
+        return {"error": "Empty tensor"}
+
+    tensor_flat = tensor.float().flatten()
+    total_elements = tensor_flat.numel()
+
+    # Basic sparsity
+    near_zero_mask = torch.abs(tensor_flat) <= zero_threshold
+    num_zeros = near_zero_mask.sum().item()
+    num_nonzeros = total_elements - num_zeros
+    sparsity_ratio = num_zeros / total_elements
+
+    # Value distribution analysis
+    nonzero_values = tensor_flat[~near_zero_mask]
+
+    stats = {
+        "tensor_name": tensor_name,
+        "shape": tuple(tensor.shape),
+        "total_elements": total_elements,
+        "zero_threshold": zero_threshold,
+        # Basic sparsity metrics
+        "num_zeros": num_zeros,
+        "num_nonzeros": num_nonzeros,
+        "sparsity_ratio": sparsity_ratio,
+        "density_ratio": 1.0 - sparsity_ratio,
+        # Nonzero value statistics
+        "nonzero_min": nonzero_values.min().item() if num_nonzeros > 0 else 0.0,
+        "nonzero_max": nonzero_values.max().item() if num_nonzeros > 0 else 0.0,
+        "nonzero_mean": nonzero_values.mean().item() if num_nonzeros > 0 else 0.0,
+        "nonzero_std": nonzero_values.std().item() if num_nonzeros > 0 else 0.0,
+        "nonzero_median": nonzero_values.median().item() if num_nonzeros > 0 else 0.0,
+    }
+
+    # Effective rank analysis (for 2D tensors)
+    if tensor.dim() == 2 and num_nonzeros > 0:
+        try:
+            # Compute SVD to get effective rank
+            U, S, V = torch.svd(tensor)
+            # Effective rank: number of singular values above threshold
+            significant_sv = (S > zero_threshold).sum().item()
+            total_sv = S.numel()
+
+            # Spectral metrics
+            spectral_norm = S.max().item()
+            frobenius_norm = torch.norm(tensor, "fro").item()
+            nuclear_norm = S.sum().item()
+
+            # Rank-based sparsity
+            rank_sparsity = 1.0 - (significant_sv / total_sv)
+
+            stats.update(
+                {
+                    "effective_rank": significant_sv,
+                    "max_rank": total_sv,
+                    "rank_sparsity": rank_sparsity,
+                    "spectral_norm": spectral_norm,
+                    "frobenius_norm": frobenius_norm,
+                    "nuclear_norm": nuclear_norm,
+                    "condition_number": (S.max() / S[S > zero_threshold].min()).item() if significant_sv > 1 else 1.0,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"SVD analysis failed for {tensor_name}: {e}")
+            stats.update({"effective_rank": None, "svd_error": str(e)})
+
+    # Block sparsity analysis
+    if block_size is not None and tensor.dim() >= 2:
+        try:
+            h, w = tensor.shape[-2], tensor.shape[-1]
+            if h >= int(block_size) and w >= int(block_size):
+                # Reshape into blocks
+                blocks_h = h // int(block_size)
+                blocks_w = w // int(block_size)
+
+                # Extract blocks
+                tensor_2d = tensor.view(-1, h, w)  # Flatten batch dimensions
+                blocks = tensor_2d[:, : blocks_h * int(block_size), : blocks_w * int(block_size)]
+                blocks = blocks.view(tensor_2d.shape[0], blocks_h, int(block_size), blocks_w, int(block_size))
+                blocks = blocks.permute(0, 1, 3, 2, 4).contiguous()
+                blocks = blocks.view(-1, int(block_size), int(block_size))
+
+                # Analyze block sparsity
+                block_norms = torch.norm(blocks.view(blocks.shape[0], -1), dim=1)
+                zero_blocks = (block_norms <= zero_threshold).sum().item()
+                total_blocks = blocks.shape[0]
+                block_sparsity = zero_blocks / total_blocks
+
+                stats.update(
+                    {
+                        "block_size": block_size,
+                        "total_blocks": total_blocks,
+                        "zero_blocks": zero_blocks,
+                        "block_sparsity": block_sparsity,
+                        "structured_sparsity_ratio": block_sparsity,
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Block sparsity analysis failed for {tensor_name}: {e}")
+            stats.update({"block_sparsity_error": str(e)})
+
+    # Pattern analysis for attention-like tensors
+    if tensor.dim() >= 3:  # Likely attention tensor [batch, heads, seq, seq] or similar
+        try:
+            # Analyze sparsity across different dimensions
+            batch_sparsity = []
+            head_sparsity = []
+
+            if tensor.dim() == 4:  # [batch, heads, seq, seq]
+                for b in range(tensor.shape[0]):
+                    batch_mask = torch.abs(tensor[b]) <= zero_threshold
+                    batch_sparsity.append(batch_mask.float().mean().item())
+
+                for h in range(tensor.shape[1]):
+                    head_mask = torch.abs(tensor[:, h]) <= zero_threshold
+                    head_sparsity.append(head_mask.float().mean().item())
+
+                stats.update(
+                    {
+                        "batch_sparsity_mean": np.mean(batch_sparsity),
+                        "batch_sparsity_std": np.std(batch_sparsity),
+                        "head_sparsity_mean": np.mean(head_sparsity),
+                        "head_sparsity_std": np.std(head_sparsity),
+                        "attention_pattern_analysis": True,
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Attention pattern analysis failed for {tensor_name}: {e}")
+
+    return stats
+
+
+def analyze_attention_sparsity(
+    attention_weights: torch.Tensor, zero_threshold: float = 1e-8, tensor_name: str = "attention_weights"
+) -> Dict[str, Any]:
+    """
+    Specialized sparsity analysis for attention weight tensors.
+
+    Args:
+        attention_weights: Attention weight tensor [batch, heads, seq_len, seq_len]
+        zero_threshold: Threshold for considering values as zero
+        tensor_name: Name for logging
+
+    Returns:
+        Dictionary with attention-specific sparsity metrics
+    """
+    base_stats = analyze_sparsity(attention_weights, zero_threshold, tensor_name=tensor_name)
+
+    if attention_weights.dim() < 3:
+        return base_stats
+
+    # Attention-specific analysis
+    attention_stats = {}
+
+    try:
+        # Assume last two dimensions are [seq_len, seq_len]
+        seq_len = attention_weights.shape[-1]
+
+        # Diagonal attention analysis
+        if attention_weights.shape[-2] == attention_weights.shape[-1]:
+            # Extract diagonal elements
+            diag_elements = torch.diagonal(attention_weights, dim1=-2, dim2=-1)
+            diag_mask = torch.abs(diag_elements) <= zero_threshold
+            diagonal_sparsity = diag_mask.float().mean().item()
+
+            # Extract off-diagonal elements
+            mask = ~torch.eye(seq_len, dtype=torch.bool, device=attention_weights.device)
+            off_diag_elements = attention_weights[..., mask].view(*attention_weights.shape[:-2], -1)
+            off_diag_mask = torch.abs(off_diag_elements) <= zero_threshold
+            off_diagonal_sparsity = off_diag_mask.float().mean().item()
+
+            attention_stats.update(
+                {
+                    "diagonal_sparsity": diagonal_sparsity,
+                    "off_diagonal_sparsity": off_diagonal_sparsity,
+                    "diagonal_dominance": diagonal_sparsity < off_diagonal_sparsity,
+                }
+            )
+
+        # Local vs global attention analysis
+        if seq_len > 8:  # Only for reasonably sized sequences
+            # Local attention (within distance 2)
+            local_mask = torch.zeros_like(attention_weights, dtype=torch.bool)
+            for i in range(seq_len):
+                start = max(0, i - 2)
+                end = min(seq_len, i + 3)
+                local_mask[..., i, start:end] = True
+
+            local_elements = attention_weights[local_mask]
+            local_sparsity_mask = torch.abs(local_elements) <= zero_threshold
+            local_sparsity = local_sparsity_mask.float().mean().item()
+
+            # Global attention (rest)
+            global_elements = attention_weights[~local_mask]
+            global_sparsity_mask = torch.abs(global_elements) <= zero_threshold
+            global_sparsity = global_sparsity_mask.float().mean().item()
+
+            attention_stats.update(
+                {
+                    "local_attention_sparsity": local_sparsity,
+                    "global_attention_sparsity": global_sparsity,
+                    "locality_preference": local_sparsity < global_sparsity,
+                }
+            )
+
+        # Entropy-based attention pattern analysis
+        if attention_weights.min() >= 0:  # Valid probability distribution
+            # Compute entropy for each attention head
+            eps = 1e-12
+            log_weights = torch.log(attention_weights + eps)
+            entropy = -(attention_weights * log_weights).sum(dim=-1)  # Entropy per query
+
+            attention_stats.update(
+                {
+                    "attention_entropy_mean": entropy.mean().item(),
+                    "attention_entropy_std": entropy.std().item(),
+                    "attention_entropy_min": entropy.min().item(),
+                    "attention_entropy_max": entropy.max().item(),
+                }
+            )
+
+    except Exception as e:
+        logger.warning(f"Attention-specific analysis failed: {e}")
+        attention_stats["attention_analysis_error"] = str(e)
+
+    # Merge with base stats
+    base_stats.update(attention_stats)
+    return base_stats
+
+
+def compare_sparsity_patterns(
+    tensor1: torch.Tensor,
+    tensor2: torch.Tensor,
+    zero_threshold: float = 1e-8,
+    tensor_names: Tuple[str, str] = ("tensor1", "tensor2"),
+) -> Dict[str, Any]:
+    """
+    Compare sparsity patterns between two tensors.
+
+    Args:
+        tensor1: First tensor (reference)
+        tensor2: Second tensor (comparison)
+        zero_threshold: Threshold for zero detection
+        tensor_names: Names for the tensors
+
+    Returns:
+        Dictionary with sparsity comparison metrics
+    """
+    if tensor1.shape != tensor2.shape:
+        return {"error": f"Shape mismatch: {tensor1.shape} vs {tensor2.shape}"}
+
+    # Individual sparsity analysis
+    stats1 = analyze_sparsity(tensor1, zero_threshold, tensor_name=tensor_names[0])
+    stats2 = analyze_sparsity(tensor2, zero_threshold, tensor_name=tensor_names[1])
+
+    # Pattern comparison
+    flat1 = tensor1.float().flatten()
+    flat2 = tensor2.float().flatten()
+
+    mask1 = torch.abs(flat1) <= zero_threshold
+    mask2 = torch.abs(flat2) <= zero_threshold
+
+    # Sparsity pattern overlap
+    both_zero = (mask1 & mask2).sum().item()
+    either_zero = (mask1 | mask2).sum().item()
+    only_tensor1_zero = (mask1 & ~mask2).sum().item()
+    only_tensor2_zero = (~mask1 & mask2).sum().item()
+
+    pattern_overlap = both_zero / either_zero if either_zero > 0 else 1.0
+
+    # Jaccard similarity of sparsity patterns (intersection over union)
+    jaccard_similarity = both_zero / either_zero if either_zero > 0 else 1.0
+
+    # Alternative similarity: intersection over smaller set
+    smaller_zero_count = min(mask1.sum().item(), mask2.sum().item())
+    intersection_similarity = both_zero / smaller_zero_count if smaller_zero_count > 0 else 1.0
+
+    # Sparsity difference
+    sparsity_diff = abs(stats1["sparsity_ratio"] - stats2["sparsity_ratio"])
+
+    comparison_stats = {
+        "tensor_names": tensor_names,
+        "individual_stats": {tensor_names[0]: stats1, tensor_names[1]: stats2},
+        # Pattern comparison
+        "pattern_overlap": pattern_overlap,
+        "jaccard_similarity": jaccard_similarity,
+        "intersection_similarity": intersection_similarity,
+        "sparsity_difference": sparsity_diff,
+        "both_zero_elements": both_zero,
+        "either_zero_elements": either_zero,
+        "only_tensor1_zero": only_tensor1_zero,
+        "only_tensor2_zero": only_tensor2_zero,
+        "total_elements": flat1.numel(),
+        # Relative sparsity metrics
+        "sparsity_ratio_1": stats1["sparsity_ratio"],
+        "sparsity_ratio_2": stats2["sparsity_ratio"],
+        "sparsity_correlation": "higher" if stats1["sparsity_ratio"] < stats2["sparsity_ratio"] else "lower",
+    }
+
+    return comparison_stats
+
+
+def print_sparsity_analysis(
+    tensor: torch.Tensor,
+    zero_threshold: float = 1e-8,
+    block_size: Optional[int] = None,
+    tensor_name: str = "tensor",
+    show_detailed: bool = True,
+) -> None:
+    """
+    Print comprehensive sparsity analysis.
+
+    Args:
+        tensor: Tensor to analyze
+        zero_threshold: Zero threshold
+        block_size: Block size for structured sparsity analysis
+        tensor_name: Name for display
+        show_detailed: Whether to show detailed statistics
+    """
+    print(f"\n🕳️  SPARSITY ANALYSIS: {tensor_name}")
+    print("=" * 60)
+
+    stats = analyze_sparsity(tensor, zero_threshold, block_size, tensor_name)
+
+    if "error" in stats:
+        print(f"❌ Error: {stats['error']}")
+        return
+
+    # Basic sparsity info
+    print(f"📊 BASIC SPARSITY:")
+    print(f"  Shape: {stats['shape']}")
+    print(f"  Total elements: {stats['total_elements']:,}")
+    print(f"  Zero threshold: {stats['zero_threshold']:.2e}")
+    print(f"  Zero elements: {stats['num_zeros']:,} ({stats['sparsity_ratio']:.1%})")
+    print(f"  Non-zero elements: {stats['num_nonzeros']:,} ({stats['density_ratio']:.1%})")
+
+    # Sparsity categorization
+    sparsity_level = stats["sparsity_ratio"]
+    if sparsity_level < 0.1:
+        sparsity_category = "Dense"
+        icon = "🟦"
+    elif sparsity_level < 0.5:
+        sparsity_category = "Moderately Sparse"
+        icon = "🟨"
+    elif sparsity_level < 0.9:
+        sparsity_category = "Sparse"
+        icon = "🟧"
+    else:
+        sparsity_category = "Extremely Sparse"
+        icon = "🟥"
+
+    print(f"  Category: {icon} {sparsity_category}")
+
+    # Non-zero value statistics
+    if stats["num_nonzeros"] > 0:
+        print(f"\n📈 NON-ZERO VALUE STATISTICS:")
+        print(f"  Range: [{stats['nonzero_min']:.6f}, {stats['nonzero_max']:.6f}]")
+        print(f"  Mean: {stats['nonzero_mean']:.6f}")
+        print(f"  Median: {stats['nonzero_median']:.6f}")
+        print(f"  Std: {stats['nonzero_std']:.6f}")
+
+    # Rank analysis for 2D tensors
+    if "effective_rank" in stats and stats["effective_rank"] is not None:
+        print(f"\n🔢 RANK ANALYSIS (2D tensors):")
+        print(f"  Effective rank: {stats['effective_rank']}/{stats['max_rank']}")
+        print(f"  Rank utilization: {(stats['effective_rank']/stats['max_rank']):.1%}")
+        print(f"  Condition number: {stats['condition_number']:.2f}")
+        if show_detailed:
+            print(f"  Spectral norm: {stats['spectral_norm']:.6f}")
+            print(f"  Frobenius norm: {stats['frobenius_norm']:.6f}")
+            print(f"  Nuclear norm: {stats['nuclear_norm']:.6f}")
+
+    # Block sparsity
+    if "block_sparsity" in stats:
+        print(f"\n🧱 BLOCK SPARSITY ({stats['block_size']}x{stats['block_size']} blocks):")
+        print(f"  Total blocks: {stats['total_blocks']:,}")
+        print(f"  Zero blocks: {stats['zero_blocks']:,} ({stats['block_sparsity']:.1%})")
+        print(f"  Structured sparsity: {stats['structured_sparsity_ratio']:.1%}")
+
+    # Attention pattern analysis
+    if "attention_pattern_analysis" in stats:
+        print(f"\n🎯 ATTENTION PATTERN ANALYSIS:")
+        print(f"  Batch sparsity: {stats['batch_sparsity_mean']:.1%} ± {stats['batch_sparsity_std']:.1%}")
+        print(f"  Head sparsity: {stats['head_sparsity_mean']:.1%} ± {stats['head_sparsity_std']:.1%}")
+
+    # Attention-specific metrics
+    if "diagonal_sparsity" in stats:
+        print(f"\n🔍 ATTENTION-SPECIFIC METRICS:")
+        print(f"  Diagonal sparsity: {stats['diagonal_sparsity']:.1%}")
+        print(f"  Off-diagonal sparsity: {stats['off_diagonal_sparsity']:.1%}")
+        print(f"  Diagonal dominance: {'✅' if stats['diagonal_dominance'] else '❌'}")
+
+        if "local_attention_sparsity" in stats:
+            print(f"  Local attention sparsity: {stats['local_attention_sparsity']:.1%}")
+            print(f"  Global attention sparsity: {stats['global_attention_sparsity']:.1%}")
+            print(f"  Locality preference: {'✅' if stats['locality_preference'] else '❌'}")
+
+        if "attention_entropy_mean" in stats:
+            print(f"  Attention entropy: {stats['attention_entropy_mean']:.3f} ± {stats['attention_entropy_std']:.3f}")
+
+    print("=" * 60)
 
 
 def compare_tensor_shapes(torch_tensor: torch.Tensor, ttnn_tensor, tensor_name: str = "tensor") -> bool:
@@ -120,11 +537,46 @@ def compute_error_statistics(torch_tensor: torch.Tensor, ttnn_tensor, tensor_nam
         "rel_error_p99": torch.quantile(rel_error, 0.99).item(),
     }
 
+    # Add sparsity analysis
+    try:
+        torch_sparsity = analyze_sparsity(torch_tensor, tensor_name=f"{tensor_name}_torch")
+        ttnn_sparsity = analyze_sparsity(ttnn_as_torch, tensor_name=f"{tensor_name}_ttnn")
+        sparsity_comparison = compare_sparsity_patterns(
+            torch_tensor, ttnn_as_torch, tensor_names=(f"{tensor_name}_torch", f"{tensor_name}_ttnn")
+        )
+
+        # Add key sparsity metrics to main stats
+        stats.update(
+            {
+                "torch_sparsity_ratio": torch_sparsity["sparsity_ratio"],
+                "ttnn_sparsity_ratio": ttnn_sparsity["sparsity_ratio"],
+                "sparsity_difference": sparsity_comparison["sparsity_difference"],
+                "sparsity_pattern_similarity": sparsity_comparison["jaccard_similarity"],
+                "torch_density_ratio": torch_sparsity["density_ratio"],
+                "ttnn_density_ratio": ttnn_sparsity["density_ratio"],
+            }
+        )
+
+        # Store detailed sparsity stats separately
+        stats["detailed_sparsity"] = {
+            "torch_sparsity": torch_sparsity,
+            "ttnn_sparsity": ttnn_sparsity,
+            "comparison": sparsity_comparison,
+        }
+
+    except Exception as e:
+        logger.warning(f"Sparsity analysis failed for {tensor_name}: {e}")
+        stats["sparsity_analysis_error"] = str(e)
+
     return stats
 
 
 def print_detailed_comparison(
-    torch_tensor: torch.Tensor, ttnn_tensor, tensor_name: str = "tensor", show_histograms: bool = False
+    torch_tensor: torch.Tensor,
+    ttnn_tensor,
+    tensor_name: str = "tensor",
+    show_histograms: bool = False,
+    show_sparsity: bool = True,
 ) -> None:
     """
     Print detailed comparison statistics between torch and ttnn tensors.
@@ -134,6 +586,7 @@ def print_detailed_comparison(
         ttnn_tensor: ttnn tensor to compare
         tensor_name: Name for logging
         show_histograms: Whether to show error distribution histograms
+        show_sparsity: Whether to show sparsity analysis
     """
     print(f"\n{'='*60}")
     print(f"DETAILED COMPARISON: {tensor_name}")
@@ -162,6 +615,26 @@ def print_detailed_comparison(
             f"  ttnn:    [{stats['ttnn_min']:.6f}, {stats['ttnn_max']:.6f}] (mean: {stats['ttnn_mean']:.6f}, std: {stats['ttnn_std']:.6f})"
         )
 
+        # Sparsity summary
+        if show_sparsity and "torch_sparsity_ratio" in stats:
+            print(f"\n🕳️  SPARSITY SUMMARY:")
+            print(f"  PyTorch sparsity: {stats['torch_sparsity_ratio']:.1%}")
+            print(f"  ttnn sparsity:    {stats['ttnn_sparsity_ratio']:.1%}")
+            print(f"  Sparsity difference: {stats['sparsity_difference']:.1%}")
+            print(f"  Pattern similarity: {stats['sparsity_pattern_similarity']:.3f}")
+
+            # Categorize sparsity level
+            avg_sparsity = (stats["torch_sparsity_ratio"] + stats["ttnn_sparsity_ratio"]) / 2
+            if avg_sparsity < 0.1:
+                sparsity_category = "🟦 Dense"
+            elif avg_sparsity < 0.5:
+                sparsity_category = "🟨 Moderately Sparse"
+            elif avg_sparsity < 0.9:
+                sparsity_category = "🟧 Sparse"
+            else:
+                sparsity_category = "🟥 Extremely Sparse"
+            print(f"  Overall category: {sparsity_category}")
+
         print(f"\n🎯 CORRELATION:")
         print(f"  Pearson CC: {stats['pcc']:.8f}")
 
@@ -185,6 +658,42 @@ def print_detailed_comparison(
 
         if show_histograms:
             print_error_histograms(torch_tensor, ttnn_tensor, tensor_name)
+
+        # Detailed sparsity analysis if available and requested
+        if show_sparsity and "detailed_sparsity" in stats:
+            detailed_sparsity = stats["detailed_sparsity"]
+
+            # Quick sparsity comparison insights
+            print(f"\n🔍 SPARSITY INSIGHTS:")
+
+            # Check if sparsity patterns are preserved
+            similarity = detailed_sparsity["comparison"]["jaccard_similarity"]
+            if similarity > 0.95:
+                pattern_status = "✅ Excellent pattern preservation"
+            elif similarity > 0.8:
+                pattern_status = "✅ Good pattern preservation"
+            elif similarity > 0.5:
+                pattern_status = "⚠️ Moderate pattern preservation"
+            else:
+                pattern_status = "❌ Poor pattern preservation"
+            print(f"  {pattern_status} ({similarity:.3f})")
+
+            # Check for rank preservation in 2D tensors
+            torch_sparsity = detailed_sparsity["torch_sparsity"]
+            ttnn_sparsity = detailed_sparsity["ttnn_sparsity"]
+
+            if "effective_rank" in torch_sparsity and torch_sparsity["effective_rank"] is not None:
+                torch_rank = torch_sparsity["effective_rank"]
+                if "effective_rank" in ttnn_sparsity and ttnn_sparsity["effective_rank"] is not None:
+                    ttnn_rank = ttnn_sparsity["effective_rank"]
+                    rank_diff = abs(torch_rank - ttnn_rank)
+                    if rank_diff <= 1:
+                        rank_status = "✅ Rank preserved"
+                    elif rank_diff <= 3:
+                        rank_status = "⚠️ Rank slightly changed"
+                    else:
+                        rank_status = "❌ Rank significantly changed"
+                    print(f"  {rank_status} (torch: {torch_rank}, ttnn: {ttnn_rank})")
 
     except Exception as e:
         print(f"❌ Error computing statistics: {e}")
@@ -403,17 +912,165 @@ def check_with_pcc(torch_tensor: torch.Tensor, ttnn_tensor, pcc: float = 0.99) -
         return False, f"Error computing PCC: {e}"
 
 
+def print_sparsity_summary(tensor: torch.Tensor, tensor_name: str = "tensor", zero_threshold: float = 1e-8) -> None:
+    """
+    Print a concise sparsity summary for a single tensor.
+
+    Args:
+        tensor: Tensor to analyze
+        tensor_name: Name for display
+        zero_threshold: Threshold for zero detection
+    """
+    stats = analyze_sparsity(tensor, zero_threshold, tensor_name=tensor_name)
+
+    if "error" in stats:
+        print(f"❌ Sparsity analysis error for {tensor_name}: {stats['error']}")
+        return
+
+    # Categorize sparsity
+    sparsity_ratio = stats["sparsity_ratio"]
+    if sparsity_ratio < 0.1:
+        category = "🟦 Dense"
+    elif sparsity_ratio < 0.5:
+        category = "🟨 Moderately Sparse"
+    elif sparsity_ratio < 0.9:
+        category = "🟧 Sparse"
+    else:
+        category = "🟥 Extremely Sparse"
+
+    print(
+        f"🕳️  {tensor_name}: {category} ({sparsity_ratio:.1%} sparse, {stats['num_zeros']:,}/{stats['total_elements']:,} zeros)"
+    )
+
+    # Add rank info if available
+    if "effective_rank" in stats and stats["effective_rank"] is not None:
+        print(
+            f"   Rank: {stats['effective_rank']}/{stats['max_rank']} (utilization: {(stats['effective_rank']/stats['max_rank']):.1%})"
+        )
+
+    # Add attention-specific info if available
+    if "diagonal_sparsity" in stats:
+        print(
+            f"   Attention patterns: diag {stats['diagonal_sparsity']:.1%}, off-diag {stats['off_diagonal_sparsity']:.1%}"
+        )
+
+
+def analyze_model_sparsity(model_outputs: Dict[str, torch.Tensor], zero_threshold: float = 1e-8) -> Dict[str, Any]:
+    """
+    Analyze sparsity patterns across multiple model outputs (e.g., attention weights, features).
+
+    Args:
+        model_outputs: Dictionary of tensor_name -> tensor
+        zero_threshold: Threshold for zero detection
+
+    Returns:
+        Dictionary with aggregated sparsity statistics
+    """
+    results = {
+        "zero_threshold": zero_threshold,
+        "tensor_count": len(model_outputs),
+        "individual_stats": {},
+        "aggregate_stats": {},
+    }
+
+    sparsity_ratios = []
+    total_elements = 0
+    total_zeros = 0
+
+    print(f"\n🔍 MODEL SPARSITY ANALYSIS")
+    print("=" * 50)
+
+    for tensor_name, tensor in model_outputs.items():
+        stats = analyze_sparsity(tensor, zero_threshold, tensor_name)
+        results["individual_stats"][tensor_name] = stats
+
+        if "error" not in stats:
+            sparsity_ratios.append(stats["sparsity_ratio"])
+            total_elements += stats["total_elements"]
+            total_zeros += stats["num_zeros"]
+
+            # Print concise summary
+            print_sparsity_summary(tensor, tensor_name, zero_threshold)
+
+    # Aggregate statistics
+    if sparsity_ratios:
+        results["aggregate_stats"] = {
+            "mean_sparsity": np.mean(sparsity_ratios),
+            "std_sparsity": np.std(sparsity_ratios),
+            "min_sparsity": np.min(sparsity_ratios),
+            "max_sparsity": np.max(sparsity_ratios),
+            "median_sparsity": np.median(sparsity_ratios),
+            "overall_sparsity": total_zeros / total_elements,
+            "total_elements": total_elements,
+            "total_zeros": total_zeros,
+        }
+
+        print(f"\n📊 AGGREGATE STATISTICS:")
+        print(f"  Overall sparsity: {results['aggregate_stats']['overall_sparsity']:.1%}")
+        print(
+            f"  Mean tensor sparsity: {results['aggregate_stats']['mean_sparsity']:.1%} ± {results['aggregate_stats']['std_sparsity']:.1%}"
+        )
+        print(
+            f"  Range: [{results['aggregate_stats']['min_sparsity']:.1%}, {results['aggregate_stats']['max_sparsity']:.1%}]"
+        )
+        print(f"  Total elements analyzed: {total_elements:,}")
+
+    print("=" * 50)
+    return results
+
+
 # Example usage function
 def example_usage():
-    """Example of how to use the comparison utilities."""
-    # Create example tensors
-    torch_ref = torch.randn(2, 256, 64)
+    """Example of how to use the comparison utilities with sparsity analysis."""
+    print("🚀 EXAMPLE USAGE OF ENHANCED COMPARISON UTILITIES")
+    print("=" * 60)
+
+    # Create example tensors with different sparsity patterns
+    torch.manual_seed(42)  # For reproducible results
+
+    # Dense tensor
+    torch_ref = torch.randn(2, 64, 64)
     torch_test = torch_ref + 0.01 * torch.randn_like(torch_ref)  # Add small noise
 
-    print("Example usage of comparison utilities:")
+    # Sparse attention-like tensor
+    attention_weights = torch.rand(1, 8, 32, 32)
+    attention_weights = torch.softmax(attention_weights, dim=-1)
 
-    # Basic detailed comparison
-    print_detailed_comparison(torch_ref, torch_test, "example_tensor")
+    # Make it sparser by zeroing out small values
+    attention_mask = attention_weights > 0.1
+    attention_sparse = attention_weights * attention_mask.float()
+
+    # Create TTNN version with slight differences
+    attention_ttnn = attention_sparse + 0.005 * torch.randn_like(attention_sparse)
+    attention_ttnn = torch.clamp(attention_ttnn, min=0.0)  # Keep non-negative
+
+    print("\n🧪 BASIC COMPARISON WITH SPARSITY:")
+
+    # Basic detailed comparison with sparsity
+    print_detailed_comparison(torch_ref, torch_test, "dense_example", show_sparsity=True)
+
+    print("\n🎯 ATTENTION TENSOR SPARSITY ANALYSIS:")
+
+    # Detailed sparsity analysis for attention weights
+    print_sparsity_analysis(attention_sparse, tensor_name="attention_weights", show_detailed=True)
+
+    print("\n📊 ATTENTION TENSOR COMPARISON:")
+
+    # Compare attention tensors
+    print_detailed_comparison(attention_sparse, attention_ttnn, "attention_comparison", show_sparsity=True)
+
+    print("\n🏗️  MODEL SPARSITY OVERVIEW:")
+
+    # Model-wide sparsity analysis
+    model_outputs = {
+        "dense_features": torch_ref,
+        "attention_weights": attention_sparse,
+        "output_projection": torch.randn(64, 128) * (torch.rand(64, 128) > 0.3),  # 70% sparse
+    }
+
+    model_analysis = analyze_model_sparsity(model_outputs)
+
+    print("\n🔧 TOLERANCE CHECKING WITH SPARSITY:")
 
     # Tolerance checking
     passed, results = check_with_tolerances(
@@ -425,9 +1082,26 @@ def example_usage():
         tensor_name="example_tensor",
     )
 
+    print("\n📋 SPARSITY COMPARISON BETWEEN TENSORS:")
+
+    # Direct sparsity comparison
+    sparsity_comp = compare_sparsity_patterns(
+        attention_sparse, attention_ttnn, tensor_names=("sparse_attention", "ttnn_attention")
+    )
+
+    print(f"  Pattern similarity: {sparsity_comp['jaccard_similarity']:.3f}")
+    print(f"  Sparsity difference: {sparsity_comp['sparsity_difference']:.1%}")
+
     # Legacy PCC check
     pcc_passed, pcc_msg = check_with_pcc(torch_ref, torch_test, pcc=0.95)
-    print(f"\nLegacy PCC check: {pcc_passed}, {pcc_msg}")
+    print(f"\n📈 Legacy PCC check: {pcc_passed}, {pcc_msg}")
+
+    print(f"\n✅ Example completed! Use these functions to analyze your BEVFormer attention patterns.")
+    print("   Key functions:")
+    print("   - print_sparsity_analysis(): Detailed sparsity analysis of single tensor")
+    print("   - analyze_model_sparsity(): Overview of sparsity across multiple tensors")
+    print("   - print_detailed_comparison(): Enhanced comparison with sparsity metrics")
+    print("   - compare_sparsity_patterns(): Direct sparsity pattern comparison")
 
 
 if __name__ == "__main__":
