@@ -246,7 +246,7 @@ TEST_F(SplitGalaxyMeshDeviceFixture, SocketSubContextValidation) {
     // config.
     using namespace tt_metal::distributed::multihost;
     std::vector<int> handshake_ranks = {0, 2};
-    auto parent_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& parent_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto socket_connection = tt_metal::distributed::SocketConnection(
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
