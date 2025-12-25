@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "fixed_point_arithmetic.hpp"
+#include "ttnn/cpp/ttnn/operations/pool/fixed_point_arithmetic.hpp"
 
 // Fill given four values into the memory starting at the given address.
 // Used to fill the bilinear weights for reduction into L1 memory.
