@@ -4,12 +4,19 @@ export temporigbranch=brosko/test_glx_umd
 # export tempcommit=("1ce581b")
 # export tempcommit=("5f72bff" "8a63e7f" "f21759e" "2646d30" "6862db7")
 export allcommits=("72cd7112" "af52aa16" "bc14a3b5" "f865ace3" "82e7f387" "45742f8d" "c582ec5b" "fb6ce5c9" "78677932" "14ac4416" "0a30b1e2" "c9fc7294" "03055725" "67a67152" "d86b83ac" "30cc18fd" "8b24e259" "2568ba11" "0e071c64" "cba7b617" "646dbd58" "ba4ab7b5" "7aa315ea" "d0936031" "a780c582" "5a6d9f71" "77cfe2d8" "9e68b60e" "2a923097" "6711cedc" "8e2877c6" "9cb38471" "4aeef666" "9e6bfc61" "70db3062" "ae043aaa" "159e3004" "cb9b4f55" "10059405" "bdcda51e" "dab66912" "d2d07866" "58e5f0ea" "ad06de83" "2e824226" "ea62cf52" "b61cf119" )
-# Now take every 7th commit
-export tempcommit=("${allcommits[@]:0:7}")
+# Now take every 7th commit (indices 0, 7, 14, 21, 28, 35, 42, ...)
+tempcommit=()
+for ((i=14; i<${#allcommits[@]}; i+=7)); do
+  tempcommit+=("${allcommits[$i]}")
+done
+export tempcommit
 export tempbranch=brosko/test_glx_umd_
 
 # Declare associative array to store commit hash -> run URL mapping
 declare -A run_links
+
+echo "Running for commits: ${tempcommit[@]}"
+# exit 1
 
 # Loop over the array
 for i in "${!tempcommit[@]}"; do
