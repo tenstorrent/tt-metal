@@ -13,7 +13,7 @@ Description:
     signals related to that core (e.g., for brisc, prints all signals matching brisc*).
 
 Owner:
-    adjorjevic-TT
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass
