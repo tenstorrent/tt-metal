@@ -408,7 +408,7 @@ class MasterConfigLoader:
         # Only count consecutive tensors from the start
         # Stop when we hit the first non-tensor (this prevents counting output tensors)
         for arg in first_config_args:
-            tensor_config = self.extract_tensor_config(arg)
+            tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
             if tensor_config:
                 tensor_count += 1
             else:
@@ -608,7 +608,7 @@ class MasterConfigLoader:
                 for arg in config:
                     # arg is a dict, could be {"UnparsedElement": ...} or {"arg0": {...}} etc.
                     # Pass the entire arg dict to extract_tensor_config
-                    tensor_config = self.extract_tensor_config(arg)
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                     if tensor_config:
                         break  # Found tensor, proceed to parse it
 
@@ -1223,7 +1223,7 @@ class MasterConfigLoader:
                 tensor_configs = []
                 scalar_value = None
                 for arg in config:
-                    tensor_config = self.extract_tensor_config(arg)
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                     if tensor_config:
                         tensor_configs.append(tensor_config)
                         if len(tensor_configs) >= 2:
@@ -1493,7 +1493,7 @@ class MasterConfigLoader:
                 # Extract ALL tensors from each config
                 tensor_configs = []
                 for arg in config:
-                    tensor_config = self.extract_tensor_config(arg)
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                     if tensor_config:
                         tensor_configs.append(tensor_config)
                         # Continue collecting up to tensor_count (don't break early)
@@ -1705,102 +1705,6 @@ class MasterConfigLoader:
 
         return None
 
-    def _extract_permute_dims(self, config: List) -> Optional[List[int]]:
-        """Extract dims parameter from permute operation config"""
-        try:
-            # Look for arg1 which should contain the dims parameter
-            for arg in config:
-                if isinstance(arg, dict) and "arg1" in arg:
-                    dims_str = arg["arg1"]
-                    # The dims are in format '[0, 2, 3, 1]' or similar
-                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
-                        # Parse the list string
-                        dims_str = dims_str.strip("[]")
-                        if dims_str:
-                            dims = [int(x.strip()) for x in dims_str.split(",")]
-                            return dims
-            return None
-        except Exception as e:
-            return None
-
-    def _parse_list_from_string(self, value) -> Optional[List]:
-        """Parse a list from string representation or return if already a list"""
-        try:
-            # If already a list, return it
-            if isinstance(value, list):
-                return value
-            # If string, try to parse it
-            if isinstance(value, str):
-                value = value.strip()
-                if value.startswith("[") and value.endswith("]"):
-                    # Use json.loads for safer parsing
-                    return json.loads(value.replace("'", '"'))
-            return None
-        except Exception as e:
-            return None
-
-    def _parse_numeric_value(self, value):
-        """Parse numeric value from string or return if already numeric"""
-        try:
-            # If already a number, return it
-            if isinstance(value, (int, float)):
-                return value
-            # If list, check if it's a numeric list or parse each element
-            if isinstance(value, list):
-                # Could be a list of numbers for value parameter
-                return value
-            # If string, try to parse it
-            if isinstance(value, str):
-                value = value.strip()
-                # Try as list first
-                if value.startswith("["):
-                    parsed = self._parse_list_from_string(value)
-                    if parsed is not None:
-                        return parsed
-                # Try as float
-                if "." in value:
-                    return float(value)
-                # Try as int
-                return int(value)
-            return None
-        except Exception as e:
-            return None
-
-    def _extract_shape_parameter(self, config: List, arg_name: str = "arg1") -> Optional[List[int]]:
-        """Extract Shape parameter from config (e.g., for untilize_with_unpadding end_shape, reshape target_shape)"""
-        try:
-            for arg in config:
-                if isinstance(arg, dict) and arg_name in arg:
-                    shape_data = arg[arg_name]
-                    # Handle dict with 'Shape' key
-                    if isinstance(shape_data, dict) and "Shape" in shape_data:
-                        shape = shape_data["Shape"]
-                        if isinstance(shape, list):
-                            return shape
-                    # Handle string representation of list
-                    elif isinstance(shape_data, str):
-                        parsed = self._parse_list_from_string(shape_data)
-                        if parsed is not None and isinstance(parsed, list):
-                            return parsed
-                    # Handle direct list
-                    elif isinstance(shape_data, list):
-                        return shape_data
-            return None
-        except Exception as e:
-            return None
-
-    def _extract_int_parameter(self, config: List, arg_name: str) -> Optional[int]:
-        """Extract integer parameter from config (e.g., for transpose dim0, dim1)"""
-        try:
-            for arg in config:
-                if isinstance(arg, dict) and arg_name in arg:
-                    value = arg[arg_name]
-                    if isinstance(value, (int, str)):
-                        return int(value)
-            return None
-        except Exception as e:
-            return None
-
     def _get_conv2d_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -1814,7 +1718,8 @@ class MasterConfigLoader:
             traced_machine_info_list = []
 
             for config, source, machine_info in configs:
-                params = self._extract_conv2d_parameters(config)
+                # Use extractor from OperationParameterExtractors
+                params = OperationParameterExtractors._extract_conv2d_parameters(config)
                 if params:
                     # Build input_specs list:
                     # [batch_size, output_channels, input_channels, input_height, input_width,
@@ -1889,7 +1794,7 @@ class MasterConfigLoader:
                 # Extract base tensor config for input tensor
                 tensor_config = None
                 for arg in config:
-                    tc = self.extract_tensor_config(arg)
+                    tc = OperationParameterExtractors.extract_tensor_config(arg)
                     if tc:
                         tensor_config = tc
                         break
@@ -1898,7 +1803,7 @@ class MasterConfigLoader:
                     continue
 
                 # Extract linear-specific parameters
-                linear_params = self._extract_linear_parameters(config)
+                linear_params = OperationParameterExtractors._extract_linear_parameters(config)
                 if not linear_params:
                     continue
 
@@ -2458,7 +2363,7 @@ class MasterConfigLoader:
                     for arg in config:
                         if isinstance(arg, dict):
                             if "arg0" in arg:
-                                tensor_config = self.extract_tensor_config(arg["arg0"])
+                                tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
                             if "arg2" in arg:
                                 # arg2 is num_q_heads
                                 num_q_heads_val = arg["arg2"]
@@ -2572,7 +2477,7 @@ class MasterConfigLoader:
                     for arg in config:
                         if isinstance(arg, dict):
                             if "arg0" in arg:
-                                tensor_config = self.extract_tensor_config(arg["arg0"])
+                                tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
                             if "arg1" in arg:
                                 # arg1 is num_q_heads (called num_heads in function)
                                 num_heads_val = arg["arg1"]
@@ -2668,218 +2573,6 @@ class MasterConfigLoader:
             traceback.print_exc()
             return {}
 
-    def _extract_conv2d_parameters(self, config: List) -> Optional[Dict]:
-        """Extract all parameters for conv2d operation"""
-        try:
-            # Conv2d parameter mapping:
-            # arg3: input_channels, arg4: output_channels, arg5: batch_size
-            # arg6: input_height, arg7: input_width
-            # arg8: [kernel_h, kernel_w], arg9: [stride_h, stride_w]
-            # arg10: [pad_h1, pad_h2, pad_w1, pad_w2], arg11: [dilation_h, dilation_w]
-            # arg12: groups, arg13: dtype, arg14: bias tensor (optional)
-            # arg15: conv_config (unsupported type), arg16: compute_config
-
-            params = {}
-            for arg in config:
-                if not isinstance(arg, dict):
-                    continue
-                if "arg3" in arg:
-                    params["input_channels"] = int(arg["arg3"]) if isinstance(arg["arg3"], (int, str)) else None
-                if "arg4" in arg:
-                    params["output_channels"] = int(arg["arg4"]) if isinstance(arg["arg4"], (int, str)) else None
-                if "arg5" in arg:
-                    params["batch_size"] = int(arg["arg5"]) if isinstance(arg["arg5"], (int, str)) else None
-                if "arg6" in arg:
-                    params["input_height"] = int(arg["arg6"]) if isinstance(arg["arg6"], (int, str)) else None
-                if "arg7" in arg:
-                    params["input_width"] = int(arg["arg7"]) if isinstance(arg["arg7"], (int, str)) else None
-                if "arg8" in arg:
-                    kernel = self._parse_list_from_string(arg["arg8"]) if isinstance(arg["arg8"], str) else arg["arg8"]
-                    if kernel and len(kernel) >= 2:
-                        params["kernel_height"] = kernel[0]
-                        params["kernel_width"] = kernel[1]
-                if "arg9" in arg:
-                    stride = self._parse_list_from_string(arg["arg9"]) if isinstance(arg["arg9"], str) else arg["arg9"]
-                    if stride and len(stride) >= 2:
-                        params["stride_h"] = stride[0]
-                        params["stride_w"] = stride[1]
-                if "arg10" in arg:
-                    padding = (
-                        self._parse_list_from_string(arg["arg10"]) if isinstance(arg["arg10"], str) else arg["arg10"]
-                    )
-                    if padding:
-                        if len(padding) >= 4:
-                            # Format: [pad_h1, pad_h2, pad_w1, pad_w2]
-                            params["pad_h"] = padding[0]  # Use first pad value
-                            params["pad_w"] = padding[2]  # Use third pad value
-                        elif len(padding) >= 2:
-                            # Format: [pad_h, pad_w]
-                            params["pad_h"] = padding[0]
-                            params["pad_w"] = padding[1]
-                if "arg11" in arg:
-                    dilation = (
-                        self._parse_list_from_string(arg["arg11"]) if isinstance(arg["arg11"], str) else arg["arg11"]
-                    )
-                    if dilation and len(dilation) >= 2:
-                        params["dilation_h"] = dilation[0]
-                        params["dilation_w"] = dilation[1]
-                if "arg12" in arg:
-                    params["groups"] = int(arg["arg12"]) if isinstance(arg["arg12"], (int, str)) else None
-                if "arg13" in arg:
-                    # Extract dtype (e.g., "DataType::BFLOAT8_B" -> "bfloat8_b")
-                    dtype_str = str(arg["arg13"])
-                    if "BFLOAT8_B" in dtype_str or "bfloat8_b" in dtype_str:
-                        params["dtype"] = "bfloat8_b"
-                    elif "BFLOAT16" in dtype_str or "bfloat16" in dtype_str:
-                        params["dtype"] = "bfloat16"
-                    elif "FLOAT32" in dtype_str or "float32" in dtype_str:
-                        params["dtype"] = "float32"
-                if "arg14" in arg and isinstance(arg["arg14"], dict):
-                    # Bias tensor exists
-                    params["has_bias"] = True
-                if "arg16" in arg and isinstance(arg["arg16"], dict):
-                    # Extract compute_config (WormholeComputeKernelConfig)
-                    compute_config_dict = arg["arg16"]
-                    if "WormholeComputeKernelConfig" in compute_config_dict:
-                        wormhole_config = compute_config_dict["WormholeComputeKernelConfig"]
-                        params["compute_config"] = {
-                            "math_fidelity": wormhole_config.get("math_fidelity", "LoFi"),
-                            "math_approx_mode": wormhole_config.get("math_approx_mode", 0),
-                            "fp32_dest_acc_en": wormhole_config.get("fp32_dest_acc_en", 1),
-                            "packer_l1_acc": wormhole_config.get("packer_l1_acc", 1),
-                            "dst_full_sync_en": wormhole_config.get("dst_full_sync_en", 0),
-                            "throttle_level": wormhole_config.get("throttle_level", "ThrottleLevel::NO_THROTTLE"),
-                        }
-
-            # Set has_bias to False if not found
-            if "has_bias" not in params:
-                params["has_bias"] = False
-
-            # Set default dtype if not found
-            if "dtype" not in params:
-                params["dtype"] = "bfloat16"
-
-            # Check if we have all required params
-            required = [
-                "batch_size",
-                "output_channels",
-                "input_channels",
-                "input_height",
-                "input_width",
-                "kernel_height",
-                "kernel_width",
-                "stride_h",
-                "stride_w",
-                "pad_h",
-                "pad_w",
-                "groups",
-                "dilation_h",
-                "dilation_w",
-            ]
-            if all(k in params for k in required):
-                return params
-            return None
-        except Exception as e:
-            return None
-
-    def _extract_linear_parameters(self, config: List) -> Optional[Dict]:
-        """Extract all parameters for linear operation"""
-        try:
-            # Linear parameter mapping:
-            # arg0: input tensor, arg1: weight tensor, arg2: bias tensor (optional)
-            # arg3: transpose_a, arg4: transpose_b
-
-            params = {}
-
-            # Extract transpose flags
-            for arg in config:
-                if not isinstance(arg, dict):
-                    continue
-                if "arg3" in arg:
-                    params["transpose_a"] = bool(int(arg["arg3"])) if isinstance(arg["arg3"], (int, str)) else False
-                if "arg4" in arg:
-                    params["transpose_b"] = bool(int(arg["arg4"])) if isinstance(arg["arg4"], (int, str)) else False
-
-            # Extract tensor shapes
-            tensor_shapes = []
-            for arg in config:
-                if isinstance(arg, dict):
-                    # Check for direct tensor
-                    if "arg1" in arg or "arg2" in arg:
-                        for key in ["arg1", "arg2"]:
-                            if key in arg and isinstance(arg[key], dict) and "Tensor" in arg[key]:
-                                tensor_spec = arg[key]["Tensor"]["tensor_spec"]
-                                shape = tensor_spec["logical_shape"]
-                                tensor_shapes.append(shape)
-                    # Check for UnparsedElement (input tensor)
-                    if "UnparsedElement" in arg:
-                        tc = self.extract_tensor_config(arg)
-                        if tc and hasattr(tc, "shape"):
-                            tensor_shapes.insert(0, tc.shape)
-
-            if len(tensor_shapes) >= 2:
-                params["input_shape"] = tensor_shapes[0]
-                params["weight_shape"] = tensor_shapes[1]
-                params["bias_shape"] = tensor_shapes[2] if len(tensor_shapes) >= 3 else None
-                params["has_bias"] = len(tensor_shapes) >= 3
-                return params
-
-            return None
-        except Exception as e:
-            return None
-
-    def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
-        """Extract tensor configuration from argument data
-
-        Note: UnparsedElements are now fixed by the tracer's post-processing,
-        so this method only handles already-clean data structures.
-        """
-        if not isinstance(arg_data, dict):
-            return None
-
-        # Handle nested structure like {arg0: {Tensor: ...}} or {arg1: {Tensor: ...}}
-        # Check if any of the keys are argument names (arg0, arg1, etc.)
-        if "Tensor" not in arg_data:
-            # Look for nested tensor in argument keys
-            for key, value in arg_data.items():
-                if key.startswith("arg") and isinstance(value, dict) and "Tensor" in value:
-                    arg_data = value
-                    break
-
-        if "Tensor" not in arg_data:
-            return None
-
-        tensor_data = arg_data["Tensor"]
-        tensor_spec = tensor_data.get("tensor_spec", {})
-        tensor_layout = tensor_spec.get("tensor_layout", {})
-
-        # Extract shape
-        shape = tensor_spec.get("logical_shape", [])
-        if not shape:
-            return None
-
-        # Extract other properties
-        dtype_str = tensor_layout.get("dtype", "DataType::BFLOAT16")
-        memory_config = tensor_layout.get("memory_config", {})
-
-        # Extract layout from tensor_data (top level, added by graph tracer)
-        layout_str = tensor_data.get("layout", "")
-        if layout_str:
-            # Clean up layout string: "Layout::ROW_MAJOR" -> "ROW_MAJOR"
-            layout = layout_str.replace("Layout::", "")
-        else:
-            # Fallback: Determine layout (simplified - would need more logic for accurate detection)
-            layout = "TILE"  # Default assumption for most ops
-
-        # Extract storage_type from tensor_data (top level, added by graph tracer)
-        storage_type = tensor_data.get("storage_type", "StorageType::DEVICE")
-        if not storage_type:
-            storage_type = "StorageType::DEVICE"  # Default to DEVICE
-
-        return TensorConfig(
-            shape=shape, dtype=dtype_str, layout=layout, memory_config=memory_config, storage_type=storage_type
-        )
-
     def convert_to_sweep_parameters(self, operation_name: str, max_configs: int = 50) -> Dict[str, Dict]:
         """Convert master JSON configs to sweep test parameters"""
         configs = self.get_operation_configs(operation_name)
@@ -2905,7 +2598,7 @@ class MasterConfigLoader:
                 for arg in config:
                     for arg_name, arg_data in arg.items():
                         if arg_name.startswith("arg") and isinstance(arg_data, dict):
-                            tensor_config = self.extract_tensor_config(arg_data)
+                            tensor_config = OperationParameterExtractors.extract_tensor_config(arg_data)
                             if tensor_config:
                                 # Add to our lists if not already present
                                 if tensor_config.shape not in input_shapes:
