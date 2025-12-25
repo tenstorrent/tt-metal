@@ -46,7 +46,11 @@ void run_kernel()
     const bool is_int_fpu_en = false;
 
     _llk_math_hw_configure_(formats.math, formats.math);
+#ifdef ARCH_BLACKHOLE
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4 /*num_faces*/, formats.math);
+#else
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4 /*num_faces*/, formats.math);
+#endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (int i = 0; i < TILE_CNT; ++i)
@@ -71,7 +75,11 @@ void run_kernel()
     const bool UNTILIZE = false;
 
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#else
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
+#endif
     _llk_pack_rows_init_(NUM_ROWS_TO_PACK);
     _llk_packer_wait_for_math_done_();
 
