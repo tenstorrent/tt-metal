@@ -782,7 +782,7 @@ def test_demo_for_conditional_generation(
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
-            2: {"prefill_time_to_token": 0.11, "decode_t/s/u": 150.0},
+            2: {"prefill_time_to_token": 0.113, "decode_t/s/u": 145.0},
             8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
             32: {"prefill_time_to_token": 0.20, "decode_t/s/u": 80.0},
         }
