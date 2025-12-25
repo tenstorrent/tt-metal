@@ -441,6 +441,7 @@ from ttnn.operations.losses import (
 
 from ttnn.operations.reduction import (
     ReduceType,
+    TilizeUntilizeOpType,
 )
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
