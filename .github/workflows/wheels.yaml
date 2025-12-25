@@ -90,7 +90,8 @@ jobs:
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
-          CIBW_TEST_COMMAND: ${{ contains(inputs.build-type, 'ASan') && '' || 'python -c "import ttnn"' }}
+          CIBW_TEST_COMMAND: python -c "import ttnn"
+          CIBW_TEST_SKIP: ${{ contains(inputs.build-type, 'ASan') && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
