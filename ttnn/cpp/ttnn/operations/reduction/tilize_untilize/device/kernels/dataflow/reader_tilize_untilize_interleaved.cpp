@@ -9,38 +9,66 @@
  * Reader kernel for tilize_untilize operation.
  * Reads row-major sticks (32 rows at a time) from DRAM into CB_in (c_0).
  *
- * CB_in receives row-major data for one tile block (32 rows x width).
- * The compute kernel will tilize this into num_tiles_per_row tiled format tiles.
+ * Operation selection via compile-time OpType argument and if constexpr:
+ * - OpType::IDENTITY: No auxiliary CB setup needed
+ * - Future: REDUCE_W_* operations will generate scaler tile in CB_scaler (c_2)
  *
- * Based on: reader_unary_stick_layout_split_rows_interleaved.cpp pattern
+ * Compile-time args:
+ *   [0] stick_size - Size of each row in bytes
+ *   [1] op_type - Operation type enum value
+ *   [2] packed_scaler - Packed scaler value (used by reduction operations)
+ *   [3+] TensorAccessorArgs for source tensor
+ *
+ * Runtime args:
+ *   [0] src_addr - Source buffer address
+ *   [1] num_sticks - Number of rows to read
+ *   [2] start_stick_id - Starting row index
  */
+
+// Operation type enum - must match host-side and compute kernel definition
+enum class OpType : uint32_t {
+    IDENTITY = 0,
+    // Future:
+    // REDUCE_W_SUM = 1,
+    // REDUCE_W_MAX = 2,
+    // REDUCE_W_AVG = 3,
+    // RELU = 4,
+};
 
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
+    constexpr OpType op_type = static_cast<OpType>(get_compile_time_arg_val(1));
+    constexpr uint32_t packed_scaler = get_compile_time_arg_val(2);  // Used by reduction operations
+    constexpr auto src_tensor_args = TensorAccessorArgs<3>();        // Starts after op_type and packed_scaler
 
     // Runtime args
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
 
-    // CB setup
+    // CB indices
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;  // For reduction operations
     constexpr uint32_t tile_height = 32;
 
     // Calculate num_tiles_per_row from stick_size
-    // Each tile has TILE_WIDTH=32 elements, and we have BFLOAT16=2 bytes per element
-    // stick_size = width * element_size = num_tiles_per_row * TILE_WIDTH * element_size
-    // For tilize, CB_in holds row-major data for num_tiles_per_row tiles worth of input
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t element_size = 2;  // BF16
     constexpr uint32_t num_tiles_per_row = stick_size / (tile_width * element_size);
 
-    // Setup tensor accessor
+    // ========== Auxiliary CB Setup (operation-specific) ==========
+    if constexpr (op_type == OpType::IDENTITY) {
+        // No auxiliary CB setup needed for identity operation
+    }
+    // Future: reduction operations would generate scaler here
+    // else if constexpr (op_type == OpType::REDUCE_W_SUM || ...) {
+    //     generate_reduce_scaler(cb_scaler, packed_scaler);
+    // }
+
+    // ========== Core Data Reading (shared by all operations) ==========
     const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
 
-    // Process all tile blocks (each block = 32 rows)
     uint32_t stick_id = start_stick_id;
     uint32_t num_blocks = num_sticks / tile_height;
 
@@ -60,7 +88,7 @@ void kernel_main() {
         // Wait for all reads to complete
         noc_async_read_barrier();
 
-        // Push num_tiles_per_row tiles to compute (tilize produces num_tiles_per_row tiles)
+        // Push num_tiles_per_row tiles to compute
         cb_push_back(cb_id_in0, num_tiles_per_row);
 
         // Advance to next block of 32 sticks
