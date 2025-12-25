@@ -129,8 +129,15 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
     }
 }
 
+// Validate the remote descriptor received from the peer against the local descriptor.
+// This is done when:
+// 1. Consolidating descriptors across hosts in a Big Mesh (validate validate_buffer_addresses = true in this case),
+//    due the lock-step allocation of buffers across a mesh.
+// 2. Exchanging descriptors between the controller host and all peers.
 void validate_remote_desc(
-    const SocketPeerDescriptor& local_desc, const SocketPeerDescriptor& remote_desc, bool validate_address = true) {
+    const SocketPeerDescriptor& local_desc,
+    const SocketPeerDescriptor& remote_desc,
+    bool validate_buffer_addresses = true) {
     // Verify that socket connection config matches
     TT_FATAL(
         local_desc.config.socket_connection_config.size() == remote_desc.config.socket_connection_config.size(),
@@ -158,7 +165,7 @@ void validate_remote_desc(
         local_desc.config.socket_mem_config.receiver_sub_device ==
             remote_desc.config.socket_mem_config.receiver_sub_device,
         "Mismatch in receiver sub-device during handshake.");
-    if (validate_address) {
+    if (validate_buffer_addresses) {
         TT_FATAL(
             local_desc.config_buffer_address == remote_desc.config_buffer_address,
             "Mismatch in config buffer address during handshake.");
@@ -585,6 +592,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
                 connection.sender_core.device_coord,
                 sender_device->get_fabric_node_id(connection.sender_core.device_coord));
         } else {
+            TT_FATAL(config.sender_mesh_id.has_value(), "Sender mesh id is not set.");
             fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
                 connection.sender_core.device_coord,
                 tt::tt_fabric::FabricNodeId(
@@ -596,6 +604,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
                 connection.receiver_core.device_coord,
                 receiver_device->get_fabric_node_id(connection.receiver_core.device_coord));
         } else {
+            TT_FATAL(config.receiver_mesh_id.has_value(), "Receiver mesh id is not set.");
             fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
                 connection.receiver_core.device_coord,
                 tt::tt_fabric::FabricNodeId(
