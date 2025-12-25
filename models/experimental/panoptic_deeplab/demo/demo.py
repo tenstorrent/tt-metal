@@ -474,7 +474,7 @@ def run_panoptic_deeplab_demo(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": PDL_L1_SMALL_SIZE, "trace_region_size": 2000000}],
+    [{"l1_small_size": PDL_L1_SMALL_SIZE, "trace_region_size": 4000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
