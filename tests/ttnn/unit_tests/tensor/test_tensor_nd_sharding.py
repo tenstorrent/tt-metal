@@ -3,6 +3,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.use_module_device
+
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc, update_for_unsigned_widening

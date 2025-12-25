@@ -13,6 +13,8 @@ import numpy as np
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, update_for_unsigned_widening
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "layout",
