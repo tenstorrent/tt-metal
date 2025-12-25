@@ -110,9 +110,9 @@ def convert_enum_values_to_strings(data):
 def serialize(object, warnings=[]):
     if "to_json" in dir(object):
         return {"type": str(type(object)).split("'")[1], "data": object.to_json()}
-    elif "pybind" in str(type(type(object))) and type(object) and type(object) not in warnings:
+    elif "nanobind" in str(type(type(object))) and type(object) and type(object) not in warnings:
         logger.warning(
-            f"pybinded ttnn class detected without a to_json method. Your type may need to pybind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
+            f"nanobinded ttnn class detected without a to_json method. Your type may need to nanobind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
         )
         warnings.append(type(object))
         return str(object)
@@ -216,9 +216,9 @@ def serialize_structured(object, warnings=[]):
             return {"type": str(type(object)).split("'")[1], "data": parsed_data}
         except (json.JSONDecodeError, TypeError):
             return {"type": str(type(object)).split("'")[1], "data": json_str}
-    elif "pybind" in str(type(type(object))) and type(object) and type(object) not in warnings:
+    elif "nanobind" in str(type(type(object))) and type(object) and type(object) not in warnings:
         logger.warning(
-            f"pybinded ttnn class detected without a to_json method. Your type may need to pybind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
+            f"nanobinded ttnn class detected without a to_json method. Your type may need to nanobind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
         )
         warnings.append(type(object))
         return str(object)

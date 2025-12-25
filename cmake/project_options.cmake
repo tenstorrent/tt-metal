@@ -3,7 +3,6 @@
 #   The following options and their defaults impact what artifacts get built
 ###########################################################################################
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
-option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" ON)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
@@ -26,11 +25,7 @@ option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile fir
 ###########################################################################################
 
 if(WITH_PYTHON_BINDINGS)
-    if(EXPERIMENTAL_NANOBIND_BINDINGS)
-        set(PY_BINDING "nanobind")
-    else()
-        set(PY_BINDING "pybind")
-    endif()
+    set(PY_BINDING "nanobind")
     message(STATUS "Python Binding Backend: ${PY_BINDING}")
 endif()
 
