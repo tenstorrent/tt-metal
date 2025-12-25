@@ -137,8 +137,8 @@ def test_ms_deformable_attention_forward(
         tt_model_output,
         pcc_threshold=0.999,
         abs_error_threshold=0.02,
-        rel_error_threshold=0.7,
-        max_error_ratio=0.3,
+        rel_error_threshold=0.2,
+        max_error_ratio=0.15,
         tensor_name="ms_deformable_attention_output",
     )
 
