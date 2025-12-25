@@ -88,6 +88,7 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
+            ${{ contains(inputs.build-type, 'ASan') && 'LD_PRELOAD=/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so' || '' }}
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
