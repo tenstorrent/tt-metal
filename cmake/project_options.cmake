@@ -25,8 +25,7 @@ option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile fir
 ###########################################################################################
 
 if(WITH_PYTHON_BINDINGS)
-    set(PY_BINDING "nanobind")
-    message(STATUS "Python Binding Backend: ${PY_BINDING}")
+    message(STATUS "Building with Python Bindings: nanobind")
 endif()
 
 if(CMAKE_CXX_CLANG_TIDY AND TT_UNITY_BUILDS)
