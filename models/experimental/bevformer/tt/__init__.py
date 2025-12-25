@@ -6,15 +6,15 @@ ttnn implementations of BEVFormer attention modules.
 """
 
 from .tt_ms_deformable_attention import TTMSDeformableAttention
+from .tt_spatial_cross_attention import TTSpatialCrossAttention
+from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .model_preprocessing import (
     create_ms_deformable_attention_parameters,
-    create_ms_deformable_attention_model_parameters,
-    convert_torch_deformable_attention_to_ttnn_parameters,
 )
 
 __all__ = [
     "TTMSDeformableAttention",
+    "TTSpatialCrossAttention",
+    "TTTemporalSelfAttention",
     "create_ms_deformable_attention_parameters",
-    "create_ms_deformable_attention_model_parameters",
-    "convert_torch_deformable_attention_to_ttnn_parameters",
 ]
