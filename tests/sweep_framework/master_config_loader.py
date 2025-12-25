@@ -483,24 +483,26 @@ class MasterConfigLoader:
                 }
 
             # Special handling for operations with complex parameter structures
+            # All these operations now use the generic _get_operation_suite_parameters
+            # which delegates to OperationParameterExtractors
             if operation_name in ["conv2d", "ttnn::conv2d"]:
-                print(f"🔧 Detected conv2d operation with special parameter structure")
-                return self._get_conv2d_suite_parameters(
+                print(f"🔧 Detected conv2d operation - using registered extractor")
+                return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in ["linear", "ttnn::linear"]:
-                print(f"🔧 Detected linear operation with special parameter structure")
+                print(f"🔧 Detected linear operation - using registered extractor")
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in ["embedding", "ttnn::embedding"]:
-                print(f"🔧 Detected embedding operation with special parameter structure")
+                print(f"🔧 Detected embedding operation - using registered extractor")
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in ["concat", "ttnn::concat"]:
-                print(f"🔧 Detected concat operation with vector of tensors input")
-                return self._get_concat_suite_parameters(
+                print(f"🔧 Detected concat operation - using registered extractor")
+                return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in [
@@ -508,8 +510,8 @@ class MasterConfigLoader:
                 "experimental::nlp_create_qkv_heads",
                 "ttnn::experimental::nlp_create_qkv_heads",
             ]:
-                print(f"🔧 Detected nlp_create_qkv_heads operation - extracting num_q_heads and num_kv_heads")
-                return self._get_nlp_create_qkv_heads_suite_parameters(
+                print(f"🔧 Detected nlp_create_qkv_heads operation - using registered extractor")
+                return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in [
@@ -517,8 +519,8 @@ class MasterConfigLoader:
                 "experimental::nlp_create_qkv_heads_decode",
                 "ttnn::experimental::nlp_create_qkv_heads_decode",
             ]:
-                print(f"🔧 Detected nlp_create_qkv_heads_decode operation - extracting num_heads and num_kv_heads")
-                return self._get_nlp_create_qkv_heads_decode_suite_parameters(
+                print(f"🔧 Detected nlp_create_qkv_heads_decode operation - using registered extractor")
+                return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif operation_name in [
@@ -1705,174 +1707,6 @@ class MasterConfigLoader:
 
         return None
 
-    def _get_conv2d_suite_parameters(
-        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
-    ) -> Dict:
-        """Get parameters for conv2d operation which uses input_specs format"""
-        try:
-            input_specs_list = []
-            compute_configs_list = []
-            dtypes_list = []
-            config_tensors_in_dram_list = []
-            traced_source_list = []
-            traced_machine_info_list = []
-
-            for config, source, machine_info in configs:
-                # Use extractor from OperationParameterExtractors
-                params = OperationParameterExtractors._extract_conv2d_parameters(config)
-                if params:
-                    # Build input_specs list:
-                    # [batch_size, output_channels, input_channels, input_height, input_width,
-                    #  kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-                    # Use tuple so it serializes as a string for proper deserialization
-                    input_spec = (
-                        params["batch_size"],
-                        params["output_channels"],
-                        params["input_channels"],
-                        params["input_height"],
-                        params["input_width"],
-                        params["kernel_height"],
-                        params["kernel_width"],
-                        params["stride_h"],
-                        params["stride_w"],
-                        params["pad_h"],
-                        params["pad_w"],
-                        params["groups"],
-                        params["dilation_h"],
-                        params["dilation_w"],
-                        params["has_bias"],
-                    )
-                    input_specs_list.append(input_spec)
-                    # Extract compute_config if available
-                    compute_configs_list.append(params.get("compute_config"))
-                    # Extract dtype if available
-                    dtypes_list.append(params.get("dtype", "bfloat16"))
-                    # Extract config_tensors_in_dram if available (default True for model_traced to help with OOM)
-                    config_tensors_in_dram_list.append(params.get("config_tensors_in_dram", True))
-                    # Track source for traceability
-                    traced_source_list.append(source)
-                    # Track machine_info for traceability
-                    traced_machine_info_list.append(machine_info)
-
-            if input_specs_list:
-                print(
-                    f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
-                )
-                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, and traced_machine_info to prevent Cartesian product
-                # Use comma-separated parameter name to pass tuples together
-                paired_configs = list(
-                    zip(
-                        input_specs_list,
-                        [False] * len(input_specs_list),
-                        compute_configs_list,
-                        dtypes_list,
-                        config_tensors_in_dram_list,
-                        traced_source_list,
-                        traced_machine_info_list,
-                    )
-                )
-                return {
-                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info": paired_configs,
-                }
-
-            return {"input_specs": [], "is_conv1d": []}
-        except Exception as e:
-            print(f"❌ Error extracting conv2d parameters: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {"input_specs": [], "is_conv1d": []}
-
-    def _get_linear_suite_parameters(
-        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
-    ) -> Dict:
-        """Get parameters for linear operation"""
-        try:
-            paired_configs = []
-
-            for config, source, machine_info in configs:
-                # Extract base tensor config for input tensor
-                tensor_config = None
-                for arg in config:
-                    tc = OperationParameterExtractors.extract_tensor_config(arg)
-                    if tc:
-                        tensor_config = tc
-                        break
-
-                if not tensor_config:
-                    continue
-
-                # Extract linear-specific parameters
-                linear_params = OperationParameterExtractors._extract_linear_parameters(config)
-                if not linear_params:
-                    continue
-
-                # Parse tensor config
-                parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                parsed_layout = self.parse_layout(tensor_config.layout)
-                parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                if parsed_dtype and parsed_layout and parsed_mem_config:
-                    config_dict = {
-                        "input_shape": linear_params["input_shape"],
-                        "weight_shape": linear_params["weight_shape"],
-                        "bias_shape": linear_params["bias_shape"],
-                        "input_a_dtype": parsed_dtype,
-                        "input_b_dtype": parsed_dtype,  # Assume same dtype for weight
-                        "input_a_layout": parsed_layout,
-                        "input_b_layout": parsed_layout,  # Assume same layout for weight
-                        "input_a_memory_config": parsed_mem_config,
-                        "input_b_memory_config": parsed_mem_config,  # Assume same memory config
-                        "output_memory_config": parsed_mem_config,
-                        "transpose_a": linear_params["transpose_a"],
-                        "transpose_b": linear_params["transpose_b"],
-                        "has_bias": linear_params["has_bias"],
-                        "traced_source": source,
-                        "traced_machine_info": machine_info,
-                    }
-                    paired_configs.append(config_dict)
-
-            if paired_configs:
-                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-
-                # Build parameter dict
-                param_names = [
-                    "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
-                ]
-                param_lists = [
-                    [
-                        (
-                            cfg["input_shape"],
-                            cfg["weight_shape"],
-                            cfg["bias_shape"],
-                            cfg["input_a_dtype"],
-                            cfg["input_b_dtype"],
-                            cfg["input_a_layout"],
-                            cfg["input_b_layout"],
-                            cfg["input_a_memory_config"],
-                            cfg["input_b_memory_config"],
-                            cfg["output_memory_config"],
-                            cfg["transpose_a"],
-                            cfg["transpose_b"],
-                            cfg["has_bias"],
-                            cfg["traced_source"],
-                            cfg["traced_machine_info"],
-                        )
-                        for cfg in paired_configs
-                    ]
-                ]
-
-                return {param_names[0]: param_lists[0]}
-
-            return {}
-        except Exception as e:
-            print(f"❌ Error extracting linear parameters: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {}
-
     def _get_operation_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -2166,6 +2000,119 @@ class MasterConfigLoader:
                         ]
                         return {param_names[0]: param_lists[0]}
 
+                    # For conv2d operation (special input_specs format)
+                    elif clean_op_name == "conv2d":
+                        # Build input_specs list from extracted parameters
+                        input_specs_list = []
+                        compute_configs_list = []
+                        dtypes_list = []
+                        config_tensors_in_dram_list = []
+
+                        for idx, params in enumerate(extracted_params):
+                            input_spec = (
+                                params.get("batch_size"),
+                                params.get("output_channels"),
+                                params.get("input_channels"),
+                                params.get("input_height"),
+                                params.get("input_width"),
+                                params.get("kernel_height"),
+                                params.get("kernel_width"),
+                                params.get("stride_h"),
+                                params.get("stride_w"),
+                                params.get("pad_h"),
+                                params.get("pad_w"),
+                                params.get("groups"),
+                                params.get("dilation_h"),
+                                params.get("dilation_w"),
+                                params.get("has_bias"),
+                            )
+                            input_specs_list.append(input_spec)
+                            compute_configs_list.append(params.get("compute_config"))
+                            dtypes_list.append(params.get("dtype", "bfloat16"))
+                            config_tensors_in_dram_list.append(params.get("config_tensors_in_dram", True))
+
+                        paired_configs = list(
+                            zip(
+                                input_specs_list,
+                                [False] * len(input_specs_list),
+                                compute_configs_list,
+                                dtypes_list,
+                                config_tensors_in_dram_list,
+                                extracted_sources,
+                                extracted_machine_infos,
+                            )
+                        )
+                        return {
+                            "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info": paired_configs,
+                        }
+
+                    # For concat operation (vector of tensors input)
+                    elif clean_op_name == "concat":
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("input_shape"),
+                                    params.get("dim"),
+                                    params.get("input_a_dtype"),
+                                    params.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    params.get("input_a_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("input_b_dtype"),
+                                    params.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    params.get("input_b_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                            )
+                        param_name = "input_shape,dim,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
+
+                    # For nlp_create_qkv_heads operation
+                    elif (
+                        clean_op_name == "experimental::nlp_create_qkv_heads" or clean_op_name == "nlp_create_qkv_heads"
+                    ):
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("shape"),
+                                    params.get("dtype"),
+                                    params.get("layout", ttnn.TILE_LAYOUT),
+                                    params.get("memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("num_q_heads"),
+                                    params.get("num_kv_heads"),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                            )
+                        param_name = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_q_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
+
+                    # For nlp_create_qkv_heads_decode operation
+                    elif (
+                        clean_op_name == "experimental::nlp_create_qkv_heads_decode"
+                        or clean_op_name == "nlp_create_qkv_heads_decode"
+                    ):
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("shape"),
+                                    params.get("dtype"),
+                                    params.get("layout", ttnn.TILE_LAYOUT),
+                                    params.get("memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("num_heads"),
+                                    params.get("num_kv_heads"),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                            )
+                        param_name = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
+
                     # For other operations, return the transformed configs directly
                     # This would need to be customized per operation
                     return {}
@@ -2173,401 +2120,6 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting {operation_name} parameters: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {}
-
-    def _get_concat_suite_parameters(
-        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
-    ) -> Dict:
-        """Get parameters for concat operation which takes a vector of tensors"""
-        try:
-            paired_configs = []
-            failed_configs = 0
-
-            for config_idx, (config, source, machine_info) in enumerate(configs):
-                try:
-                    # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
-                    # Extract vector of tensors from arg0 (may be UnparsedElement)
-                    tensor_configs = []
-                    dim = None
-                    memory_config = None
-
-                    # Extract dim from arg1
-                    for arg in config:
-                        if isinstance(arg, dict):
-                            if "arg1" in arg:
-                                dim_val = arg["arg1"]
-                                if isinstance(dim_val, (int, str)) and dim_val != "nullopt":
-                                    try:
-                                        dim = int(dim_val)
-                                    except:
-                                        pass
-                            if "arg2" in arg:
-                                mem_config_data = arg["arg2"]
-                                if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
-                                    memory_config = self.parse_memory_config(mem_config_data["MemoryConfig"], None)
-
-                            # Extract vector of tensors from arg0
-                            if "arg0" in arg:
-                                arg0_data = arg["arg0"]
-                                # Check if it's a string (simplified representation)
-                                if (
-                                    isinstance(arg0_data, str)
-                                    and arg0_data.startswith("[{")
-                                    and "tensor_spec" in arg0_data
-                                ):
-                                    # Try to parse the JSON array string
-                                    try:
-                                        tensor_array = json.loads(arg0_data)
-                                        tensor_configs = tensor_array
-                                    except:
-                                        pass
-
-                            # Check for UnparsedElement in arg0
-                            if "UnparsedElement" in arg:
-                                from tests.sweep_framework.operation_parameter_extractors import (
-                                    OperationParameterExtractors,
-                                )
-
-                                unparsed_data = arg["UnparsedElement"]
-                                tensor_vector = OperationParameterExtractors.extract_tensor_vector_from_unparsed(
-                                    unparsed_data
-                                )
-                                if tensor_vector:
-                                    tensor_configs = tensor_vector
-
-                    # Extract shapes, dtypes, layouts, and memory_configs from tensor vector
-                    if tensor_configs and len(tensor_configs) >= 2 and dim is not None:
-                        # Build input_shape dict with all tensor shapes
-                        input_shape_dict = {}
-                        input_dtypes = []
-                        input_layouts = []
-                        input_memory_configs = []
-
-                        for i, tensor_obj in enumerate(tensor_configs):
-                            if "tensor_spec" in tensor_obj:
-                                tensor_spec = tensor_obj["tensor_spec"]
-                                tensor_layout = tensor_spec.get("tensor_layout", {})
-
-                                shape = tensor_spec.get("logical_shape", [])
-                                dtype_str = tensor_layout.get("dtype", "")
-                                layout_str = tensor_layout.get("layout", "")
-                                mem_config_dict = tensor_layout.get("memory_config", {})
-
-                                # Store shape with key like input_a, input_b, etc.
-                                suffix = chr(97 + i)  # a, b, c, ...
-                                input_shape_dict[f"input_{suffix}"] = shape
-
-                                # Parse and store dtype, layout, memory_config
-                                if dtype_str:
-                                    dtype_str_clean = dtype_str.replace("DataType::", "")
-                                    input_dtypes.append(self.parse_dtype(f"DataType::{dtype_str_clean}"))
-                                else:
-                                    input_dtypes.append(None)
-
-                                if layout_str:
-                                    layout_str_clean = layout_str.replace("Layout::", "")
-                                    input_layouts.append(self.parse_layout(layout_str_clean))
-                                else:
-                                    input_layouts.append(ttnn.TILE_LAYOUT)
-
-                                if mem_config_dict:
-                                    input_memory_configs.append(self.parse_memory_config(mem_config_dict, shape))
-                                else:
-                                    input_memory_configs.append(None)
-
-                        # Create config dict with all extracted information
-                        config_dict = {
-                            "input_shape": input_shape_dict,
-                            "dim": dim,
-                            "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
-                            "traced_source": source,
-                            "traced_machine_info": machine_info,
-                        }
-
-                        # Add dtype, layout, memory_config for each input (at least 2)
-                        if len(input_dtypes) >= 2:
-                            config_dict["input_a_dtype"] = input_dtypes[0]
-                            config_dict["input_b_dtype"] = input_dtypes[1]
-                            config_dict["input_a_layout"] = input_layouts[0]
-                            config_dict["input_b_layout"] = input_layouts[1]
-                            config_dict["input_a_memory_config"] = input_memory_configs[0] or ttnn.DRAM_MEMORY_CONFIG
-                            config_dict["input_b_memory_config"] = input_memory_configs[1] or ttnn.DRAM_MEMORY_CONFIG
-
-                        paired_configs.append(config_dict)
-
-                except Exception as e:
-                    failed_configs += 1
-                    continue
-
-            if paired_configs:
-                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-
-                # Build parameter dict - include input_shape and all tensor parameters
-                param_names = [
-                    "input_shape",
-                    "dim",
-                    "input_a_dtype",
-                    "input_a_layout",
-                    "input_a_memory_config",
-                    "input_b_dtype",
-                    "input_b_layout",
-                    "input_b_memory_config",
-                    "output_memory_config",
-                    "traced_source",
-                ]
-                param_lists = [
-                    [cfg.get("input_shape") for cfg in paired_configs],
-                    [cfg.get("dim") for cfg in paired_configs],
-                    [cfg.get("input_a_dtype") for cfg in paired_configs],
-                    [cfg.get("input_a_layout") for cfg in paired_configs],
-                    [cfg.get("input_a_memory_config") for cfg in paired_configs],
-                    [cfg.get("input_b_dtype") for cfg in paired_configs],
-                    [cfg.get("input_b_layout") for cfg in paired_configs],
-                    [cfg.get("input_b_memory_config") for cfg in paired_configs],
-                    [cfg.get("output_memory_config") for cfg in paired_configs],
-                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
-                ]
-
-                # Create tuples of exact configurations
-                exact_configs = list(zip(*param_lists))
-                param_key = ",".join(param_names)
-
-                return {param_key: exact_configs}
-
-            return {}
-        except Exception as e:
-            print(f"❌ Error extracting concat parameters: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {}
-
-    def _get_nlp_create_qkv_heads_suite_parameters(
-        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
-    ) -> Dict:
-        """Get parameters for nlp_create_qkv_heads operation which requires num_q_heads and num_kv_heads parameters"""
-        try:
-            paired_configs = []
-            failed_configs = 0
-
-            for config_idx, (config, source, machine_info) in enumerate(configs):
-                try:
-                    # Extract input tensor (arg0)
-                    tensor_config = None
-                    num_q_heads = None
-                    num_kv_heads = None
-
-                    for arg in config:
-                        if isinstance(arg, dict):
-                            if "arg0" in arg:
-                                tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
-                            if "arg2" in arg:
-                                # arg2 is num_q_heads
-                                num_q_heads_val = arg["arg2"]
-                                if isinstance(num_q_heads_val, (int, str)) and num_q_heads_val != "nullopt":
-                                    try:
-                                        num_q_heads = int(num_q_heads_val)
-                                    except:
-                                        pass
-                            if "arg3" in arg:
-                                # arg3 is num_kv_heads
-                                num_kv_heads_val = arg["arg3"]
-                                if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
-                                    try:
-                                        num_kv_heads = int(num_kv_heads_val)
-                                    except:
-                                        pass
-
-                    if not tensor_config:
-                        failed_configs += 1
-                        continue
-                    # Allow None values for num_q_heads and num_kv_heads - test files will infer them
-
-                    # Parse tensor config
-                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                    parsed_layout = self.parse_layout(tensor_config.layout)
-                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                    # Extract output memory config from arg5 if present
-                    output_mem_config = parsed_mem_config
-                    for arg in config:
-                        if isinstance(arg, dict) and "arg5" in arg:
-                            mem_config_data = arg["arg5"]
-                            if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
-                                output_mem_config = self.parse_memory_config(
-                                    mem_config_data["MemoryConfig"], tensor_config.shape
-                                )
-                                break
-
-                    if parsed_dtype and parsed_layout and parsed_mem_config:
-                        config_dict = {
-                            "shape": tensor_config.shape,
-                            "dtype": parsed_dtype,
-                            "layout": parsed_layout,
-                            "memory_config": parsed_mem_config,
-                            "output_memory_config": output_mem_config,
-                            "num_q_heads": num_q_heads,
-                            "num_kv_heads": num_kv_heads,
-                            "traced_source": source,
-                            "traced_machine_info": machine_info,
-                        }
-                        paired_configs.append(config_dict)
-
-                except Exception as e:
-                    failed_configs += 1
-                    continue
-
-            if paired_configs:
-                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-
-                # Build parameter dict
-                param_names = [
-                    "input_shape",
-                    "input_a_dtype",
-                    "input_a_layout",
-                    "input_a_memory_config",
-                    "num_q_heads",
-                    "num_kv_heads",
-                    "output_memory_config",
-                    "traced_source",
-                ]
-                param_lists = [
-                    [cfg["shape"] for cfg in paired_configs],
-                    [cfg["dtype"] for cfg in paired_configs],
-                    [cfg["layout"] for cfg in paired_configs],
-                    [cfg["memory_config"] for cfg in paired_configs],
-                    [cfg["num_q_heads"] for cfg in paired_configs],
-                    [cfg["num_kv_heads"] for cfg in paired_configs],
-                    [cfg["output_memory_config"] for cfg in paired_configs],
-                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
-                ]
-
-                # Create tuples of exact configurations
-                exact_configs = list(zip(*param_lists))
-                param_key = ",".join(param_names)
-
-                return {param_key: exact_configs}
-
-            return {}
-        except Exception as e:
-            print(f"❌ Error extracting nlp_create_qkv_heads parameters: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {}
-
-    def _get_nlp_create_qkv_heads_decode_suite_parameters(
-        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
-    ) -> Dict:
-        """Get parameters for nlp_create_qkv_heads_decode operation which requires num_heads and num_kv_heads parameters"""
-        try:
-            paired_configs = []
-            failed_configs = 0
-
-            for config_idx, (config, source, machine_info) in enumerate(configs):
-                try:
-                    # Extract input tensor (arg0)
-                    tensor_config = None
-                    num_heads = None
-                    num_kv_heads = None
-
-                    for arg in config:
-                        if isinstance(arg, dict):
-                            if "arg0" in arg:
-                                tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
-                            if "arg1" in arg:
-                                # arg1 is num_q_heads (called num_heads in function)
-                                num_heads_val = arg["arg1"]
-                                if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
-                                    try:
-                                        num_heads = int(num_heads_val)
-                                    except:
-                                        pass
-                            if "arg2" in arg:
-                                # arg2 is num_kv_heads
-                                num_kv_heads_val = arg["arg2"]
-                                if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
-                                    try:
-                                        num_kv_heads = int(num_kv_heads_val)
-                                    except:
-                                        pass
-
-                    if not tensor_config:
-                        failed_configs += 1
-                        continue
-                    # Allow None values for num_heads and num_kv_heads - test files will infer them
-
-                    # Parse tensor config
-                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                    parsed_layout = self.parse_layout(tensor_config.layout)
-                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                    # Extract output memory config from arg6 if present
-                    output_mem_config = parsed_mem_config
-                    for arg in config:
-                        if isinstance(arg, dict) and "arg6" in arg:
-                            mem_config_data = arg["arg6"]
-                            if isinstance(mem_config_data, dict) and "MemoryConfig" in mem_config_data:
-                                output_mem_config = self.parse_memory_config(
-                                    mem_config_data["MemoryConfig"], tensor_config.shape
-                                )
-                                break
-
-                    if parsed_dtype and parsed_layout and parsed_mem_config:
-                        config_dict = {
-                            "shape": tensor_config.shape,
-                            "dtype": parsed_dtype,
-                            "layout": parsed_layout,
-                            "memory_config": parsed_mem_config,
-                            "output_memory_config": output_mem_config,
-                            "num_heads": num_heads,
-                            "num_kv_heads": num_kv_heads,
-                            "traced_source": source,
-                            "traced_machine_info": machine_info,
-                        }
-                        paired_configs.append(config_dict)
-
-                except Exception as e:
-                    failed_configs += 1
-                    continue
-
-            if paired_configs:
-                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-
-                # Build parameter dict
-                param_names = [
-                    "input_shape",
-                    "input_a_dtype",
-                    "input_a_layout",
-                    "input_a_memory_config",
-                    "num_heads",
-                    "num_kv_heads",
-                    "output_memory_config",
-                    "traced_source",
-                ]
-                param_lists = [
-                    [cfg["shape"] for cfg in paired_configs],
-                    [cfg["dtype"] for cfg in paired_configs],
-                    [cfg["layout"] for cfg in paired_configs],
-                    [cfg["memory_config"] for cfg in paired_configs],
-                    [cfg["num_heads"] for cfg in paired_configs],
-                    [cfg["num_kv_heads"] for cfg in paired_configs],
-                    [cfg["output_memory_config"] for cfg in paired_configs],
-                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
-                ]
-
-                # Create tuples of exact configurations
-                exact_configs = list(zip(*param_lists))
-                param_key = ",".join(param_names)
-
-                return {param_key: exact_configs}
-
-            return {}
-        except Exception as e:
-            print(f"❌ Error extracting nlp_create_qkv_heads_decode parameters: {e}")
             import traceback
 
             traceback.print_exc()
