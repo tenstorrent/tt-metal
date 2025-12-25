@@ -21,7 +21,7 @@ class PatchTSMixerGatedAttention(nn.Module):
         return x * w
 
 
-class PatchBatchNorm(nn.Module):
+class PatchTSMixerBatchNorm(nn.Module):
     """
     Module that applies batch normalization over the sequence length (time) dimension
     Args:
@@ -82,7 +82,7 @@ class PatchTSMixerNormLayer(nn.Module):
         if "batch" in self.norm_type:
             B, C, N_p, D = x.shape
             x_reshaped = x.view(B * C, N_p, D)
-            x_reshaped = self.norm(x_reshaped.transpose(1, 2).transpose(1, 2))
+            x_reshaped = self.norm(x_reshaped.transpose(1, 2)).transpose(1, 2)
             return x_reshaped.view(B, C, N_p, D)
         else:
             # LayerNorm over last dim
