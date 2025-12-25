@@ -5,7 +5,6 @@
 import torch
 import ttnn
 
-from loguru import logger
 
 from collections import namedtuple
 
@@ -79,57 +78,49 @@ class TTObjectEncoder:
         positions = self._decode_positions(device, pos_offsets, grid)
         dimensions = self._decode_dimensions(device, dim_offsets)
         angles = self._decode_angles(device, ang_offsets)
-        peaks_torch, max_inds, scores, smoothed, mp = self._decode_heatmaps(device, heatmaps)
+        topk_scores, topk_inds, smoothed, mp = self._decode_heatmaps(device, heatmaps)
         # fallback to torch
-        classids = torch.nonzero(peaks_torch)[:, 0]
 
-        scores_torch = ttnn.to_torch(scores, dtype=torch.float32)
+        scores_torch = ttnn.to_torch(topk_scores, dtype=torch.float32).flatten()
+        inds_torch = ttnn.to_torch(topk_inds, dtype=torch.int32).flatten()
         positions_torch = ttnn.to_torch(positions, dtype=torch.float32)
         dimensions_torch = ttnn.to_torch(dimensions, dtype=torch.float32)
         angles_torch = ttnn.to_torch(angles, dtype=torch.float32)
+        classids = torch.zeros(
+            50, dtype=torch.int32
+        )  # TODO add support for multiple classes by making classids an output of nms
 
-        scores_torch = scores_torch[peaks_torch]
-        positions_torch = positions_torch[peaks_torch]
-        dimensions_torch = dimensions_torch[peaks_torch]
-        angles_torch = angles_torch[peaks_torch]
+        positions_torch = positions_torch[0, inds_torch // 159, inds_torch % 159, :]
+        dimensions_torch = dimensions_torch[0, inds_torch // 159, inds_torch % 159, :]
+        angles_torch = angles_torch[0, inds_torch // 159, inds_torch % 159]
+
+        smoothed_torch = ttnn.to_torch(smoothed, dtype=torch.float32)
+        mp_torch = ttnn.to_torch(mp, dtype=torch.float32)
+        score_map = scores_torch > 0
 
         return (
-            [scores_torch, classids, positions_torch, dimensions_torch, angles_torch],
-            [peaks_torch, max_inds, smoothed, mp],
-            ("scores", "classids", "positions", "dimensions", "angles"),
-            ("peaks", "max_inds", "smoothed", "mp"),
+            [
+                scores_torch[score_map],
+                classids[score_map],
+                positions_torch[score_map],
+                dimensions_torch[score_map],
+                angles_torch[score_map],
+            ],
+            [smoothed_torch, mp_torch],
+            ("objects", "scores", "classids", "positions", "dimensions", "angles"),
+            ("smoothed", "maxpool"),
         )
-        # THIS SHOULD BE ADDED BACK
-
-        objects = list()
-        for score, cid, pos, dim, ang in zip(scores_torch, classids, positions_torch, dimensions_torch, angles_torch):
-            objects.append(ObjectData(self.classnames[cid], pos, dim, ang, score))
-
-        return [
-            objects,
-            peaks_torch,
-            peaks_torch,
-            max_inds,
-            scores_torch,
-            classids,
-            positions_torch,
-            dimensions_torch,
-            angles_torch,
-            smoothed,
-            mp,
-        ], ("objects", "peaks", "max_inds", "scores", "classids", "positions", "dimensions", "angles", "smoothed", "mp")
 
     def _decode_heatmaps(self, device, heatmaps):
-        peaks, max_inds, smoothed, mp = self._non_maximum_suppression(device, heatmaps)
-        scores = heatmaps
+        topk_scores, topk_inds, smoothed, mp = self._non_maximum_suppression(device, heatmaps)
         # classids = torch.nonzero(peaks)[:, 0] #moved to level above
-        return peaks[0], max_inds, scores, smoothed, mp
+        return topk_scores, topk_inds, smoothed, mp
 
     def _decode_positions(self, device, pos_offsets, grid):
         # Compute the center of each grid cell
         # perhaps could be moved to init block
         centers = grid[1:, 1:] + grid[:-1, :-1]
-        centers = ttnn.divide(centers, 2.0, fast_and_approximate_mode=True)
+        centers = ttnn.div(centers, 2.0)
         # Un-normalize grid offsets
         pos_offsets = ttnn.permute(pos_offsets, (0, 2, 3, 1))
         positions = pos_offsets * self.pos_std_ttnn + centers
@@ -155,7 +146,7 @@ class TTObjectEncoder:
         smoothed, out_h, out_w = self.nms_conv(device, heatmaps_4d)
         torch_smoothed = ttnn.to_torch(smoothed, dtype=torch.float32)
 
-        mp, indices = ttnn.max_pool2d(
+        mp = ttnn.max_pool2d(
             input_tensor=smoothed,
             batch_size=n,
             input_h=h,
@@ -166,36 +157,23 @@ class TTObjectEncoder:
             padding=[1, 1],
             dilation=[1, 1],
             applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not smoothed.is_sharded() else None,
+            output_layout=ttnn.TILE_LAYOUT,
             ceil_mode=False,
             deallocate_input=False,
             reallocate_halo_output=True,
-            return_indices=True,
+            return_indices=False,
         )
-        torch_mp = ttnn.to_torch(mp, dtype=torch.float32).permute(0, 3, 1, 2)
+        heatmaps_flat = ttnn.reshape(heatmaps, (1, 1, -1, 1))
+        heatmaps_flat = heatmaps_flat * ttnn.eq(smoothed, mp)
+        topk_scores, topk_inds = ttnn.topk(heatmaps_flat, 50, dim=2, sorted=False)
+        topk_scores = ttnn.threshold(topk_scores, self.nms_thresh, -1.0)
 
-        # TODO(mbezulj): figure out ttnn way to handle this
-
-        # fallback to torch to calculate max_peaks
-        max_inds = ttnn.to_torch(indices, dtype=torch.int64).permute(0, 3, 1, 2).view(n, c, h, w)
-        heatmaps_torch = ttnn.to_torch(heatmaps, dtype=torch.float32)
-        # indices = indices.squeeze(0)
-        # Find the pixels which correspond to the maximum indices
-        _, height, width = heatmaps_torch.size()
-        flat_inds = torch.arange(height * width).type_as(max_inds).view(height, width)
-        peaks = (flat_inds == max_inds) & (heatmaps_torch > self.nms_thresh)
-
-        # Keep only the top N peaks
-        if peaks.long().sum() > self.max_peaks:
-            scores = heatmaps_torch[peaks]
-            scores, _ = torch.sort(scores, descending=True)
-            peaks = peaks & (heatmaps_torch > scores[self.max_peaks - 1])
-
-        logger.debug(f"tt_peaks {peaks.long().sum()}")
-        return peaks, max_inds, torch_smoothed, torch_mp
+        return topk_scores, topk_inds, smoothed, mp
 
     def create_objects(self, scores, classids, positions, dimensions, angles):
         """Separate method to create ObjectData list from tensors"""
         objects = []
         for score, cid, pos, dim, ang in zip(scores, classids, positions, dimensions, angles):
             objects.append(ObjectData(self.classnames[cid], pos, dim, ang, score))
+
         return objects
