@@ -523,6 +523,10 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
+    import os
+
+    os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] = "7,7"
+
     request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:

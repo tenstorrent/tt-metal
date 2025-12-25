@@ -13,7 +13,7 @@ class ModelOptimisations:
         conv_w_dtype=ttnn.bfloat16,
         attention_weights_dtype=ttnn.bfloat8_b,
         ff_weights_dtype=ttnn.bfloat8_b,
-        force_full_grid=False,
+        force_full_grid=True,
     ):
         self.conv_configs = {}
         self.conv_output_dtype = conv_act_dtype
