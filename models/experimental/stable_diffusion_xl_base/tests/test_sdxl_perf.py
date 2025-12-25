@@ -113,7 +113,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'",
-            691_874_774,
+            691_445_943,
             "sdxl_vae",
             "sdxl_vae_decode",
             VAE_DEVICE_TEST_TOTAL_ITERATIONS,
