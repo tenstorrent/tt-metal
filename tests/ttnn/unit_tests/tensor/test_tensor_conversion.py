@@ -72,6 +72,8 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
+
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 

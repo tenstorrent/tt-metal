@@ -448,11 +448,6 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
-        # `to_torch` conversion can widen data types to avoid data loss -- to allow `allclose`
-        # to complete correctly, do the type conversion here.
-        if tt_metadata_list[tensor_index].dtype in [ttnn.uint32, ttnn.uint16]:
-            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[tensor_index].dtype)
-
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
         selected_experts_k = tt_metadata_tensor.shape[3]
