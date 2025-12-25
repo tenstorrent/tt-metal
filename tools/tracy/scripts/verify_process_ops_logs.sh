@@ -18,7 +18,7 @@ fi
 
 # Base tracy command parts
 TRACY_BASE="$PYTHON_CMD -m tracy -v -r -p"
-PYTEST_CMD="-m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]"
+PYTEST_CMD="-m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-device_params0]"
 BASE_DIR="test_runtime_analysis_outputs"
 
 echo "=== Comparing Current Commit Runtime Analysis vs Previous Commit Python Processing ==="
