@@ -24,7 +24,6 @@ using namespace tt::tt_metal;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
-// Maximum number of sticks to process per batch for optimal NOC utilization
 constexpr uint32_t MAX_BATCH_SIZE = 5;
 
 // Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
@@ -41,29 +40,22 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     auto& output_tensor = output;
 
     tt::tt_metal::Program program{};
+    const bool is_sharded = input_tensor.is_sharded();
 
-    // Data formats
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::tt_metal::IDevice* const device = output_tensor.device();
 
-    // Shape and dimensions (NHWC format)
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_batch = input_shape[0];
     const uint32_t input_height = input_shape[1];
     const uint32_t input_width = input_shape[2];
     const uint32_t input_channels = input_shape[3];
 
-    // Calculate rotation parameters
     const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);
     const float sin_angle = std::sin(angle_rad);
 
-    // Center point
-    // PyTorch uses pixel centers at 0.5, 1.5, ... while we use 0, 1, ...
-    // So we subtract 0.5 from PyTorch-style coordinates to match our convention
-    // Center point
-    // PyTorch uses pixel centers at 0.5, 1.5, ... while we use 0, 1, ...
-    // So we subtract 0.5 from PyTorch-style coordinates to match our convention
     float center_x, center_y;
     if (operation_attributes.center.has_value()) {
         center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
@@ -73,90 +65,125 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
     }
 
-    // Fill value as bfloat16
     const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
-
-    // Work distribution - Total work units = N * H * W (one output pixel per work unit)
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
 
-    // Calculate cores needed
-    const auto compute_grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
-
-    const uint32_t num_cores_y = compute_grid_size.y;
-
-    // Get logical cores for setting runtime args
-    std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, num_cores, true);
-
-    // Calculate stick sizes (aligned based on buffer type for efficient reads)
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
-    const uint32_t aligned_input_stick_nbytes = pool::get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t aligned_output_stick_nbytes = pool::get_aligned_stick_size(input_shape, output_tensor);
 
-    // Calculate max CB pages based on available L1 memory
-    // Due to nothing else taking L1 in this data movement op, let's assume
-    // that it is okay to use 16KB of L1 for this CB allocation and calculate accordingly
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1, core_group_2;
+    uint32_t num_cores = 0;
+    uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
+    std::vector<CoreCoord> logical_cores;
+    uint32_t input_nsticks_per_core = 0;
+    uint32_t output_nsticks_per_core = 0;
+    bool is_block_sharded = false;
+    bool is_width_sharded = false;
+    uint32_t num_cores_x = 0;
+    uint32_t shard_width = 0;
+
+    if (is_sharded) {
+        const auto input_shard_spec = input_tensor.shard_spec().value();
+        all_cores = input_shard_spec.grid;
+        num_cores = input_shard_spec.num_cores();
+        input_nsticks_per_core = input_shard_spec.shape[0];
+        output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
+        logical_cores = corerange_to_cores(
+            all_cores, num_cores, input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        is_block_sharded =
+            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
+        is_width_sharded =
+            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
+        num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
+        shard_width = input_shard_spec.shape[1];
+    } else {
+        const auto compute_grid_size = device->compute_with_storage_grid_size();
+        auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
+            tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
+        std::tie(num_cores, all_cores, core_group_1, core_group_2) =
+            std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
+        num_sticks_per_core_group_1 = num_sticks_1;
+        num_sticks_per_core_group_2 = num_sticks_2;
+        logical_cores = corerange_to_cores(all_cores, num_cores, true);
+    }
+
+    const uint32_t num_cores_y = device->compute_with_storage_grid_size().y;
+
+    const uint32_t effective_channels = is_sharded ? shard_width : input_channels;
+    const uint32_t aligned_input_stick_nbytes = is_sharded ? effective_channels * input_tensor.element_size()
+                                                           : pool::get_aligned_stick_size(input_shape, input_tensor);
+    const uint32_t aligned_output_stick_nbytes = is_sharded ? effective_channels * output_tensor.element_size()
+                                                            : pool::get_aligned_stick_size(input_shape, output_tensor);
+
     const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
     const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;
     const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_stick_nbytes;
 
-    // Determine actual number of CB pages: min of (max work per core, L1 capacity)
-    const uint32_t max_sticks_per_core = std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+    const uint32_t max_sticks_per_core =
+        is_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
 
-    // Fill CB - single page to hold pre-filled stick
     auto [fill_cb_index, fill_cb_handle] =
         tt::tt_metal::create_cb(next_cb_index++, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
 
-    // Output CB for communication between reader and writer
+    tt::tt_metal::CBHandle input_cb_handle = 0;
+    uint32_t input_cb_index = 0;
+    if (is_sharded) {
+        std::tie(input_cb_index, input_cb_handle) = tt::tt_metal::create_cb(
+            next_cb_index++,
+            program,
+            all_cores,
+            aligned_input_stick_nbytes,
+            input_nsticks_per_core,
+            input_cb_data_format,
+            input_tensor.buffer());
+    }
+
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++,
         program,
         all_cores,
         output_cb_page_size,
-        num_cb_pages * NEAREST_BUFFERING_FACTOR,
-        output_cb_data_format);
+        is_sharded ? output_nsticks_per_core : num_cb_pages * NEAREST_BUFFERING_FACTOR,
+        output_cb_data_format,
+        is_sharded ? output_tensor.buffer() : nullptr);
 
-    // Check if fill value is zero
     const bool fill_is_zero = (fill_value_bf16 == 0);
-    // Batch size is limited by available CB pages or MAX_BATCH_SIZE, whichever is smaller
     const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
-    // Reader compile-time arguments
+    const uint32_t kernel_channels =
+        is_sharded && (is_block_sharded || is_width_sharded) ? shard_width : input_channels;
+    const uint32_t kernel_stick_nbytes =
+        is_sharded && (is_block_sharded || is_width_sharded) ? (shard_width * element_size) : input_stick_nbytes;
     std::vector<uint32_t> reader_compile_time_args = {
-        output_cb_index,                      // ct_arg[0]: output_cb_index
-        aligned_input_stick_nbytes,           // ct_arg[1]: aligned_input_stick_nbytes (for DRAM reads)
-        input_batch,                          // ct_arg[2]: input_batch
-        input_height,                         // ct_arg[3]: input_height
-        input_width,                          // ct_arg[4]: input_width
-        input_channels,                       // ct_arg[5]: input_channels
-        num_cb_pages,                         // ct_arg[6]: num_cb_pages
-        fill_cb_index,                        // ct_arg[7]: fill_cb_index (0 if fill_is_zero)
-        input_stick_nbytes,                   // ct_arg[8]: input_stick_nbytes (unaligned, for fill)
-        static_cast<uint32_t>(fill_is_zero),  // ct_arg[9]: fill_is_zero
-        batch_size                            // ct_arg[10]: batch_size
+        output_cb_index,
+        aligned_input_stick_nbytes,
+        input_batch,
+        input_height,
+        input_width,
+        kernel_channels,
+        num_cb_pages,
+        fill_cb_index,
+        kernel_stick_nbytes,
+        static_cast<uint32_t>(fill_is_zero),
+        batch_size,
     };
 
-    // Append tensor accessor args for input tensor (starts at ct_arg[11])
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    // Writer compile-time arguments (RISCV_1)
     std::vector<uint32_t> writer_compile_time_args = {
-        output_cb_index,              // ct_arg[0]: output_cb_index
-        aligned_output_stick_nbytes,  // ct_arg[1]: aligned_output_stick_nbytes
-        num_cb_pages,                 // ct_arg[2]: num_cb_pages
-        batch_size,                   // ct_arg[3]: batch_size
+        output_cb_index,
+        aligned_output_stick_nbytes,
+        num_cb_pages,
+        batch_size,
     };
 
-    // Append tensor accessor args for output tensor (starts at ct_arg[4])
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
@@ -164,7 +191,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
@@ -172,36 +198,69 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    // Set runtime arguments for each core
-    uint32_t sticks_processed = 0;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        const CoreCoord& core = logical_cores[i];
-        const uint32_t num_sticks =
-            core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
+    if (is_sharded) {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
 
-        // Reader runtime args
-        std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(),                  // rt_arg[0]: input_buffer_address
-            num_sticks,                                        // rt_arg[1]: num_sticks
-            sticks_processed,                                  // rt_arg[2]: start_stick_id
-            static_cast<uint32_t>(float_to_fixed(cos_angle)),  // rt_arg[3]: cos_angle (Q16.16)
-            static_cast<uint32_t>(float_to_fixed(sin_angle)),  // rt_arg[4]: sin_angle (Q16.16)
-            static_cast<uint32_t>(float_to_fixed(center_x)),   // rt_arg[5]: center_x (Q16.16)
-            static_cast<uint32_t>(float_to_fixed(center_y)),   // rt_arg[6]: center_y (Q16.16)
-            static_cast<uint32_t>(fill_value_bf16)             // rt_arg[7]: fill_value (bfloat16)
-        };
+            uint32_t start_stick_id;
+            if (is_width_sharded) {
+                start_stick_id = 0;
+            } else if (is_block_sharded) {
+                uint32_t core_y = i / num_cores_x;
+                start_stick_id = core_y * input_nsticks_per_core;
+            } else {
+                start_stick_id = i * input_nsticks_per_core;
+            }
 
-        // Writer runtime args
-        std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-            num_sticks,                         // rt_arg[1]: num_sticks
-            sticks_processed,                   // rt_arg[2]: start_stick_id
-        };
+            std::vector<uint32_t> reader_runtime_args = {
+                input_tensor.buffer()->address(),
+                input_nsticks_per_core,
+                start_stick_id,
+                static_cast<uint32_t>(float_to_fixed(cos_angle)),
+                static_cast<uint32_t>(float_to_fixed(sin_angle)),
+                static_cast<uint32_t>(float_to_fixed(center_x)),
+                static_cast<uint32_t>(float_to_fixed(center_y)),
+                static_cast<uint32_t>(fill_value_bf16),
+            };
 
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            std::vector<uint32_t> writer_runtime_args = {
+                output_tensor.buffer()->address(),
+                input_nsticks_per_core,
+                start_stick_id,
+            };
 
-        sticks_processed += num_sticks;
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        }
+    } else {
+        uint32_t sticks_processed = 0;
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+            const uint32_t num_sticks =
+                core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
+
+            std::vector<uint32_t> reader_runtime_args = {
+                input_tensor.buffer()->address(),
+                num_sticks,
+                sticks_processed,
+                static_cast<uint32_t>(float_to_fixed(cos_angle)),
+                static_cast<uint32_t>(float_to_fixed(sin_angle)),
+                static_cast<uint32_t>(float_to_fixed(center_x)),
+                static_cast<uint32_t>(float_to_fixed(center_y)),
+                static_cast<uint32_t>(fill_value_bf16),
+            };
+
+            std::vector<uint32_t> writer_runtime_args = {
+                output_tensor.buffer()->address(),
+                num_sticks,
+                sticks_processed,
+            };
+
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+
+            sticks_processed += num_sticks;
+        }
     }
 
     return {
@@ -210,7 +269,10 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
          .writer_kernel_id = writer_kernel_id,
          .num_cores = num_cores,
          .num_cores_y = num_cores_y,
-         .enable_split_reader = false}};
+         .is_sharded = is_sharded,
+         .logical_cores = logical_cores,
+         .input_cb_handle = input_cb_handle,
+         .output_cb_handle = output_cb_handle}};
 }
 
 void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
@@ -223,11 +285,14 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& is_sharded = cached_program.shared_variables.is_sharded;
+    auto& logical_cores = cached_program.shared_variables.logical_cores;
+    auto& input_cb_handle = cached_program.shared_variables.input_cb_handle;
+    auto& output_cb_handle = cached_program.shared_variables.output_cb_handle;
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
 
-    // Recalculate rotation parameters
     const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);
     const float sin_angle = std::sin(angle_rad);
@@ -236,9 +301,6 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
     const uint32_t input_width = input_shape[2];
     const uint32_t input_height = input_shape[1];
 
-    // Center point
-    // PyTorch uses pixel centers at 0.5, 1.5, ... while we use 0, 1, ...
-    // So we subtract 0.5 from PyTorch-style coordinates to match our convention
     float center_x, center_y;
     if (operation_attributes.center.has_value()) {
         center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
@@ -250,24 +312,38 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
 
     const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    if (is_sharded) {
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, input_cb_handle, *src_buffer);
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, output_cb_handle, *dst_buffer);
 
-        // Update reader kernel runtime arguments
-        {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();                           // input_buffer_address
-            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));  // cos_angle (Q16.16)
-            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));  // sin_angle (Q16.16)
-            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));   // center_x (Q16.16)
-            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));   // center_y (Q16.16)
-            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);          // fill_value
-        }
+            runtime_args[0] = src_buffer->address();
+            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));
+            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));
+            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));
+            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));
+            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
 
-        // Update writer kernel runtime arguments
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();  // output_buffer_address
+            auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            writer_args[0] = dst_buffer->address();
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+            runtime_args[3] = static_cast<uint32_t>(float_to_fixed(cos_angle));
+            runtime_args[4] = static_cast<uint32_t>(float_to_fixed(sin_angle));
+            runtime_args[5] = static_cast<uint32_t>(float_to_fixed(center_x));
+            runtime_args[6] = static_cast<uint32_t>(float_to_fixed(center_y));
+            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
+
+            auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            writer_args[0] = dst_buffer->address();
         }
     }
 }
