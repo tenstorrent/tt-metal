@@ -234,10 +234,10 @@ def test_resnet_layer_pcc(
         ),
         (
             {
-                "res2": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res3": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.6},
-                "res4": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res5": {"pcc": 0.992, "abs_err": 0.5, "rel_err": 0.7},
+                "res2": {"pcc": 0.999, "abs_err": 0.1, "rel_err": 0.3},
+                "res3": {"pcc": 0.999, "abs_err": 0.04, "rel_err": 0.6},
+                "res4": {"pcc": 0.999, "abs_err": 0.02, "rel_err": 0.3},
+                "res5": {"pcc": 0.993, "abs_err": 0.02, "rel_err": 0.7},
             },
             skip_if_not_blackhole_110_cores,
         ),
