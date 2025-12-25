@@ -613,6 +613,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
+            batch_size=batch_size,
         )
         ttnn.deallocate(xqkv)
 

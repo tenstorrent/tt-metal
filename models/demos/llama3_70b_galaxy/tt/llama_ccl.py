@@ -684,6 +684,7 @@ class TT_CCL:
         buffer_key=None,
         use_noc1_only=False,
         use_optimal_ccl_for_llama=False,
+        batch_size=1,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -736,6 +737,7 @@ class TT_CCL:
                 num_links=num_links,
                 math_op=ttnn.ReduceType.Sum,
                 buffer_key=buffer_key,
+                batch_size=batch_size,
             )
             # ttnn.synchronize_device(self.mesh_device)
             # Gather the scattered tensor
@@ -940,9 +942,10 @@ class TT_CCL:
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
         use_noc1_only=False,
+        batch_size=1,
     ):
         if self.mode == "prefill":
-            if self.use_ring_rs_prefill:
+            if self.use_ring_rs_prefill and batch_size == 1:
                 return self.ring_reduce_scatter(
                     input_tensor_mesh,
                     memory_config,
