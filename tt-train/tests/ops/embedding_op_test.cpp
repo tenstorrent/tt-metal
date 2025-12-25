@@ -38,7 +38,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     autograd::TensorPtr embeddings = ops::embedding_op(input, weight);
@@ -50,7 +50,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
         }
     }
     auto target_tensor = autograd::create_tensor(
-        ttml::core::from_vector(target_vector, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}), device));
+        ttml::core::from_vector(target_vector, ttnn::Shape({batch_size, sentence_size, embedding_dim}), device));
     auto result = ttml::ops::mse_loss(embeddings, target_tensor);
     result->backward();
 
@@ -81,7 +81,7 @@ TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
@@ -102,10 +102,38 @@ TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
     auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, ttnn::Shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+        input_data, ttnn::Shape({batch_size, sentence_size}), device, Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
+}
+
+TEST_F(EmbeddingOpTest, EmbeddingRejectsRank4Input) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+
+    // Valid embedding weights
+    uint32_t num_embeddings = 32;
+    uint32_t embedding_dim = 32;
+    auto weight_tensor = core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
+    autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
+
+    // Rank-4 input tensor (INVALID)
+    uint32_t batch_size = 1;
+    uint32_t sentence_size = 32;
+    std::vector<uint32_t> input_data(batch_size * sentence_size);
+    std::iota(input_data.begin(), input_data.end(), 0U);
+
+    auto bad_input_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data,
+        ttnn::Shape({batch_size, 1, 1, sentence_size}),  // rank = 4
+        device,
+        ttnn::Layout::ROW_MAJOR);
+    autograd::TensorPtr bad_input = autograd::create_tensor(bad_input_tensor);
+
+    // Embedding must reject rank > 2
+    EXPECT_ANY_THROW(ops::embedding_op(bad_input, weight));
 }
 
 // This test was previously throwing an exception, but now it just freezes
