@@ -164,9 +164,8 @@ class TtBEVFormerEncoder:
         ones = ttnn.ones_like(reference_points[..., :1])
         reference_points = ttnn.concat((reference_points, ones), dim=-1)
 
-        reference_points = ttnn.permute(reference_points, (1, 0, 2, 3))  # [D, B, Q, 4]
-        D = reference_points.shape[0]
-        B = reference_points.shape[1]
+        B = reference_points.shape[0]
+        D = reference_points.shape[1]
         num_query = reference_points.shape[2]
         num_cam = lidar2img.shape[1]
 
@@ -176,16 +175,15 @@ class TtBEVFormerEncoder:
         reference_points_cam_list = []
 
         for cam_idx in range(num_cam):
-            cam_lidar2img = lidar2img[0, cam_idx]  # [4, 4] for current camera
-            ref_points_flat = ttnn.reshape(reference_points, (B * num_query * D, 4))  # [B*Q*D, 4]
+            cam_lidar2img = lidar2img[:, cam_idx, :, :]  # [4, 4] for current camera
+            ref_points_flat = ttnn.reshape(reference_points, (B, D * num_query, 4))  # [B, D*Q, 4]
 
-            # [B*Q*D, 4] @ [4, 4]
+            # [B, D*Q, 4] @ [B, 4, 4]
             cam_lidar2img_T = ttnn.transpose(cam_lidar2img, -2, -1)  # Last two dims transpose
-            points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B*Q*D, 4]
+            points_cam_flat = ttnn.matmul(ref_points_flat, cam_lidar2img_T)  # [B, D*Q, 4]
 
-            points_cam = ttnn.reshape(points_cam_flat, (B, num_query, D, 4))  # [B, Q, D, 4]
-
-            points_cam = ttnn.reshape(points_cam, (D, B, 1, num_query, 4))
+            points_cam = ttnn.reshape(points_cam_flat, (B, D, 1, num_query, 4))  # [B, D, 1, Q, 4]
+            points_cam = ttnn.permute(points_cam, (1, 0, 2, 3, 4))  # [D, B, 1, Q, 4]
             reference_points_cam_list.append(points_cam)
 
         reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 4]
