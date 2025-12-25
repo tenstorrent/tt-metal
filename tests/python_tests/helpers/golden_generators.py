@@ -1863,3 +1863,39 @@ class TilizeGolden:
             ]
 
         return result.flatten().to(torch_format)
+
+
+@register_golden
+class PackRowsGolden:
+    def __call__(
+        self,
+        operand,
+        data_format,
+        dimensions=[32, 32],
+        num_rows_to_pack=1,
+        tile_count=1,
+    ):
+        row_num_datums = 16
+
+        if not isinstance(operand, torch.Tensor):
+            operand = torch.tensor(operand, dtype=format_dict[data_format])
+
+        operand_flat = operand.flatten()
+
+        # Extract first num_rows_to_pack * row_num_datums elements from each tile
+        num_elements_per_tile = num_rows_to_pack * row_num_datums
+
+        # Calculate total number of elements we need
+        total_elements = tile_count * ELEMENTS_PER_TILE
+
+        operand_flat = operand_flat[:total_elements]
+
+        # Reshape the data: (total_elements,) -> (tile_count, ELEMENTS_PER_TILE)
+        tiles_reshaped = operand_flat.view(tile_count, ELEMENTS_PER_TILE)
+
+        # Extract first num_elements_per_tile elements from each tile
+        extracted_elements = tiles_reshaped[:, :num_elements_per_tile]
+
+        result = extracted_elements.flatten()
+
+        return result.to(format_dict[data_format])
