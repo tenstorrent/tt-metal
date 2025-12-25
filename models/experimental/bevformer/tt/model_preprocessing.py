@@ -34,15 +34,29 @@ def convert_parameterdict_to_object(param_dict):
 
     for layer_name, layer_params in param_dict.items():
         layer_obj = type("Layer", (), {})()
-        for param_name, param_tensor in layer_params.items():
-            setattr(layer_obj, param_name, param_tensor)
+
+        # Handle case where layer_params might already be an object (not a dict)
+        if hasattr(layer_params, "items"):
+            # layer_params is a dictionary
+            for param_name, param_tensor in layer_params.items():
+                setattr(layer_obj, param_name, param_tensor)
+        else:
+            # layer_params is already an object, copy its attributes
+            if hasattr(layer_params, "__dict__"):
+                for param_name, param_tensor in layer_params.__dict__.items():
+                    setattr(layer_obj, param_name, param_tensor)
+            else:
+                # layer_params is a single tensor/value, store it directly
+                setattr(params_obj, layer_name, layer_params)
+                continue
+
         setattr(params_obj, layer_name, layer_obj)
 
     return params_obj
 
 
 # Helper functions for common preprocessing operations
-def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None):
+def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     """Build kwargs dict for ttnn.from_torch based on available parameters"""
     kwargs = {}
     if dtype is not None:
@@ -51,6 +65,8 @@ def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None):
         kwargs["layout"] = layout
     if weights_mesh_mapper is not None:
         kwargs["mesh_mapper"] = weights_mesh_mapper
+    if device is not None:
+        kwargs["device"] = device
     return kwargs
 
 
@@ -62,24 +78,38 @@ def _process_linear_layer(layer, device, dtype=None, layout=None, weights_mesh_m
         layout = DEFAULT_LAYOUT
 
     layer_params = {}
-    layer_params["weight"] = ttnn.to_device(
-        preprocess_linear_weight(
+
+    # Process weights and biases - preprocess functions already handle ttnn.from_torch
+    if device is not None:
+        processed_weight = preprocess_linear_weight(
             layer.weight,
             dtype=dtype,
             layout=layout,
             weights_mesh_mapper=weights_mesh_mapper,
-        ),
-        device,
-    )
-    layer_params["bias"] = ttnn.to_device(
-        preprocess_linear_bias(
-            layer.bias,
-            dtype=dtype,
-            layout=layout,
-            weights_mesh_mapper=weights_mesh_mapper,
-        ),
-        device,
-    )
+            device=device,
+        )
+        # processed_weight is already a ttnn tensor with device placement from preprocess function
+        layer_params["weight"] = processed_weight
+
+        if layer.bias is not None:
+            processed_bias = preprocess_linear_bias(
+                layer.bias,
+                dtype=dtype,
+                layout=layout,
+                weights_mesh_mapper=weights_mesh_mapper,
+                device=device,
+            )
+            # processed_bias is already a ttnn tensor with device placement from preprocess function
+            layer_params["bias"] = processed_bias
+        else:
+            layer_params["bias"] = None
+    else:
+        # For None device (testing), just store the original torch tensors
+        layer_params["weight"] = layer.weight.clone().detach()
+        if layer.bias is not None:
+            layer_params["bias"] = layer.bias.clone().detach()
+        else:
+            layer_params["bias"] = None
     return layer_params
 
 
@@ -113,26 +143,26 @@ def _manage_cache_save(parameters, cache_file_name, device, cache_type=""):
 
 
 # Local preprocessing functions to avoid import issues
-def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_mapper=None):
+def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     if dtype is None:
         dtype = DEFAULT_DTYPE
     if layout is None:
         layout = DEFAULT_LAYOUT
     weight = weight.T.contiguous()
 
-    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper)
+    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
     weight = ttnn.from_torch(weight, **kwargs)
     return weight
 
 
-def preprocess_linear_bias(bias, *, dtype=None, layout=None, weights_mesh_mapper=None):
+def preprocess_linear_bias(bias, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     if dtype is None:
         dtype = DEFAULT_DTYPE
     if layout is None:
         layout = DEFAULT_LAYOUT
     bias = bias.reshape((1, -1))
 
-    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper)
+    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
     bias = ttnn.from_torch(bias, **kwargs)
     return bias
 
@@ -164,7 +194,8 @@ def preprocess_ms_deformable_attention_parameters(
     # Try to load from cache first
     cached_params = _manage_cache_load(cache_file_name, device)
     if cached_params is not None:
-        return cached_params
+        # Convert cached params to object format for dot notation access
+        return convert_parameterdict_to_object(cached_params)
 
     print("Preprocessing multi-scale deformable attention parameters...")
     parameters = {}
@@ -178,10 +209,13 @@ def preprocess_ms_deformable_attention_parameters(
                 layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
             )
 
+    # Convert flat dictionary to object structure for dot notation access
+    params_obj = convert_parameterdict_to_object(parameters)
+
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "MS deformable attention ")
     print("Parameter preprocessing completed.")
-    return parameters
+    return params_obj
 
 
 def create_ms_deformable_attention_parameters(
@@ -265,7 +299,8 @@ def preprocess_spatial_cross_attention_parameters(
     # Try to load from cache first
     cached_params = _manage_cache_load(cache_file_name, device)
     if cached_params is not None:
-        return cached_params
+        # Convert cached params to object format for dot notation access
+        return convert_parameterdict_to_object(cached_params)
 
     print("Preprocessing spatial cross attention parameters...")
     parameters = {}
@@ -295,10 +330,13 @@ def preprocess_spatial_cross_attention_parameters(
                 deform_attn.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
             )
 
+    # Convert flat dictionary to object structure for dot notation access
+    params_obj = convert_parameterdict_to_object(parameters)
+
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "SCA ")
     print("SCA parameter preprocessing completed.")
-    return parameters
+    return params_obj
 
 
 def preprocess_temporal_self_attention_parameters(
@@ -328,7 +366,8 @@ def preprocess_temporal_self_attention_parameters(
     # Try to load from cache first
     cached_params = _manage_cache_load(cache_file_name, device)
     if cached_params is not None:
-        return cached_params
+        # Convert cached params to object format for dot notation access
+        return convert_parameterdict_to_object(cached_params)
 
     print("Preprocessing temporal self attention parameters...")
     parameters = {}
@@ -358,10 +397,13 @@ def preprocess_temporal_self_attention_parameters(
                 deform_attn.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
             )
 
+    # Convert flat dictionary to object structure for dot notation access
+    params_obj = convert_parameterdict_to_object(parameters)
+
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "TSA ")
     print("TSA parameter preprocessing completed.")
-    return parameters
+    return params_obj
 
 
 def create_spatial_cross_attention_parameters(
