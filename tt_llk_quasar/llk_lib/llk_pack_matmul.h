@@ -16,22 +16,24 @@ using namespace ckernel;
  * values = p_pacr::PACK0
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 16-31
- * @param num_tiles: number of tiles to pack at a time
+ * @param subblock_r_dim: number of tiles in the row dimension of a matrix block
+ * @param subblock_c_dim: number of tiles in the column dimension of a matrix block
+ * @param num_subblocks_c_dim: number of subblocks in the column dimension of a matrix block
  */
-template <uint8_t PACK_SEL, uint8_t BUF_DESC_ID, uint32_t SUBBLOCK_R_DIM, uint32_t SUBBLOCK_C_DIM, uint32_t NUM_SUBBLOCKS_C_DIM>
-inline void _llk_pack_matmul_mop_config_()
+template <uint8_t PACK_SEL, uint8_t BUF_DESC_ID>
+inline void _llk_pack_matmul_mop_config_(const uint32_t subblock_r_dim, const uint32_t subblock_c_dim, const uint32_t num_subblocks_c_dim)
 {
     static_assert((PACK_SEL == p_pacr::PACK0), "PACK_SEL can only be set to p_pacr::PACK0");
 
     static_assert((BUF_DESC_ID < 32 && BUF_DESC_ID >= 16), "BUF_DESC_ID should be between 16-32 for packers");
 
-    const uint32_t MOP_OUTER_LOOP = SUBBLOCK_R_DIM;
-    const uint32_t MOP_INNER_LOOP = SUBBLOCK_C_DIM;
+    const uint32_t MOP_OUTER_LOOP = subblock_r_dim;
+    const uint32_t MOP_INNER_LOOP = subblock_c_dim;
 
     // RT: Use defines to remove these constexpr, and replace with a single TT_OP_PACR_FACE_INC
     constexpr static uint pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dst (l1) tile idx*/, 1 /*Src tile Idx*/, BUF_DESC_ID, 0);
-    constexpr static uint incr_l1_ptr = TT_OP_INC_DST_TILE_FACE_ROW_IDX(
-        p_set_inc_sel::TILE_SEL, p_pacr::PACK0, SUBBLOCK_C_DIM * NUM_SUBBLOCKS_C_DIM - SUBBLOCK_C_DIM); // cycle pipelined by PACR0_TILE_INC taking >=8 cycles
+    uint incr_l1_ptr                  = TT_OP_INC_DST_TILE_FACE_ROW_IDX(
+        p_set_inc_sel::TILE_SEL, p_pacr::PACK0, subblock_c_dim * num_subblocks_c_dim - subblock_c_dim); // cycle pipelined by PACR0_TILE_INC taking >=8 cycles
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn);
     temp.set_end_op(incr_l1_ptr);
 
@@ -45,12 +47,14 @@ inline void _llk_pack_matmul_mop_config_()
  * values = p_pacr::PACK0/PACK1
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 16-31
- * @param num_tiles: number of tiles to pack at a time
+ * @param subblock_r_dim: number of tiles in the row dimension of a matrix block
+ * @param subblock_c_dim: number of tiles in the column dimension of a matrix block
+ * @param num_subblocks_c_dim: number of subblocks in the column dimension of a matrix block
  */
-template <uint8_t PACK_SEL, uint8_t BUF_DESC_ID, uint32_t SUBBLOCK_R_DIM, uint32_t SUBBLOCK_C_DIM, uint32_t NUM_SUBBLOCKS_C_DIM>
-inline void _llk_pack_matmul_init_()
+template <uint8_t PACK_SEL, uint8_t BUF_DESC_ID>
+inline void _llk_pack_matmul_init_(const uint32_t subblock_r_dim, const uint32_t subblock_c_dim, const uint32_t num_subblocks_c_dim)
 {
-    _llk_pack_matmul_mop_config_<PACK_SEL, BUF_DESC_ID, SUBBLOCK_R_DIM, SUBBLOCK_C_DIM, NUM_SUBBLOCKS_C_DIM>();
+    _llk_pack_matmul_mop_config_<PACK_SEL, BUF_DESC_ID>(subblock_r_dim, subblock_c_dim, num_subblocks_c_dim);
 }
 
 /**
