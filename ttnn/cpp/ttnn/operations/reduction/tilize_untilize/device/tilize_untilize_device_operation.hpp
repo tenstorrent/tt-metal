@@ -35,7 +35,9 @@ struct TilizeUntilizeDeviceOperation {
         const Tensor& input,
         std::optional<MemoryConfig> output_memory_config,
         std::optional<DataType> output_dtype,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+        OpType op_type = OpType::IDENTITY,
+        float scaler = 1.0f);
 };
 
 }  // namespace ttnn::operations::reduction

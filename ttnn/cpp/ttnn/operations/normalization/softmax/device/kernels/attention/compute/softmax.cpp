@@ -12,6 +12,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -22,23 +23,16 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row
-    tile_regs_acquire();
+    // calculate max val per row using PERSISTENT mode
+    // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
     reconfig_data_format(cb_in, cb_bcast_scaler);
-    cb_reserve_back(cb_max, 1);
-    cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt++) {
-        cb_wait_front(cb_in, wt + 1);
-        constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
-    }
-    reduce_uninit();
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_max);
-    tile_regs_release();
-    cb_push_back(cb_max, 1);
+    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+        cb_in,
+        cb_bcast_scaler,
+        cb_max,
+        1,   // Ht (1 row)
+        Wt,  // Wt tiles per row
+        1);  // num_batches
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -269,28 +263,14 @@ void kernel_main() {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
-        tile_regs_acquire();
-        cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
-
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
-                /*iCB=*/cb_exps,
-                /*icb_scaler=*/cb_bcast_scaler,
-                /*itile=*/wt,
-                /*itile_scaler=*/bcast_scaler0,
-                /*idst0=*/dst0);
-        }
-        reduce_uninit();
-        recip_tile_init();
-        recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_recipsumexps);
-        tile_regs_release();
-        cb_push_back(cb_recipsumexps, 1);
+        // SUM reduce with reciprocal operation using PERSISTENT mode
+        // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, 0, 0, []() {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 

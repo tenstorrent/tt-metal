@@ -12,26 +12,22 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row
-    tile_regs_acquire();
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
-    cb_reserve_back(cb_max, 1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
-    cb_wait_front(cb_bcast_scaler, 1);
-    for (uint32_t w = 0; w < block_w; w++) {
-        constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
-    }
-    reduce_uninit();
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_max);
-    tile_regs_release();
-    cb_push_back(cb_max, 1);
+
+    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
+    // Note: The library handles waiting for scaler tile internally
+    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+        cb_in,
+        cb_bcast_scaler,
+        cb_max,
+        1,        // Ht (1 row)
+        block_w,  // Wt tiles per row
+        1);       // num_batches
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -213,24 +209,16 @@ void kernel_main() {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif  // FUSED_SCALE_MASK
 
-        // sum(exp(x))
-        tile_regs_acquire();
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        // SUM reduce with reciprocal operation using PRELOADED mode
+        // PRELOADED is correct for sharded - all tiles loaded at once
+        // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         cb_wait_front(cb_exps, block_w);
-        cb_wait_front(cb_bcast_scaler, 1);
-        cb_reserve_back(cb_recipsumexps, 1);
-        for (uint32_t w = 0; w < block_w; w++) {
-            constexpr uint32_t bcast_scaler0 = 0;
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
-        }
-        reduce_uninit();
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_recipsumexps);
-        tile_regs_release();
-        cb_push_back(cb_recipsumexps, 1);
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, block_w, 1, 0, 0, []() {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(cb_exps, cb_recipsumexps);
