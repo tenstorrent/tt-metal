@@ -325,10 +325,15 @@ jobs:
 
             # Get annotations (test failures) from branch run - extract test identifiers only (path + title), NOT error messages
             # This avoids false negatives from floating-point drift in error outputs
-            local branch_annotations=$(gh api "/repos/${{ github.repository }}/check-runs?check_suite_id=$(gh run view "$run_id" --json checkSuiteId --jq '.checkSuiteId')" \
-              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            # Use headSha to query check runs for the commit
+            local branch_head_sha=$(gh run view "$run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
+            local branch_annotations="[]"
+            if [ -n "$branch_head_sha" ]; then
+              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            fi
 
-            echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length')"
+            echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo 0)"
 
             # Find the latest completed run of the same workflow on main
             local main_run_id=$(gh run list \
@@ -362,10 +367,14 @@ jobs:
             echo "Main failure details: $main_failure_details"
 
             # Get annotations from main run - extract test identifiers only (path + title), NOT error messages
-            local main_annotations=$(gh api "/repos/${{ github.repository }}/check-runs?check_suite_id=$(gh run view "$main_run_id" --json checkSuiteId --jq '.checkSuiteId')" \
-              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            local main_head_sha=$(gh run view "$main_run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
+            local main_annotations="[]"
+            if [ -n "$main_head_sha" ]; then
+              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            fi
 
-            echo "Main failed tests count: $(echo "$main_annotations" | jq 'length')"
+            echo "Main failed tests count: $(echo "$main_annotations" | jq 'length' 2>/dev/null || echo 0)"
 
             # Compare job+step failures
             local all_failures_in_main=true
@@ -640,10 +649,15 @@ jobs:
 
             # Get annotations (test failures) from branch run - extract test identifiers only (path + title), NOT error messages
             # This avoids false negatives from floating-point drift in error outputs
-            local branch_annotations=$(gh api "/repos/${{ github.repository }}/check-runs?check_suite_id=$(gh run view "$run_id" --json checkSuiteId --jq '.checkSuiteId')" \
-              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            # Use headSha to query check runs for the commit
+            local branch_head_sha=$(gh run view "$run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
+            local branch_annotations="[]"
+            if [ -n "$branch_head_sha" ]; then
+              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            fi
 
-            echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length')" >&2
+            echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo 0)" >&2
 
             # Find the latest completed run of the same workflow on main
             local main_run_id=$(gh run list \
@@ -677,10 +691,14 @@ jobs:
             echo "Main failure details: $main_failure_details" >&2
 
             # Get annotations from main run - extract test identifiers only (path + title), NOT error messages
-            local main_annotations=$(gh api "/repos/${{ github.repository }}/check-runs?check_suite_id=$(gh run view "$main_run_id" --json checkSuiteId --jq '.checkSuiteId')" \
-              --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            local main_head_sha=$(gh run view "$main_run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
+            local main_annotations="[]"
+            if [ -n "$main_head_sha" ]; then
+              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+            fi
 
-            echo "Main failed tests count: $(echo "$main_annotations" | jq 'length')" >&2
+            echo "Main failed tests count: $(echo "$main_annotations" | jq 'length' 2>/dev/null || echo 0)" >&2
 
             # Compare job+step failures
             local all_failures_in_main=true
