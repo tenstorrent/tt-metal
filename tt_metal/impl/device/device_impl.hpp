@@ -199,7 +199,9 @@ private:
 
     void configure_command_queue_programs();
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_safe();
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const;

@@ -12,6 +12,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
+#include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -77,7 +78,35 @@ public:
 };
 
 // NOLINTBEGIN(bugprone-unused-raii)
+// NOLINTBEGIN(misc-redundant-expression)
 void py_module_types(nb::module_& mod) {
+    using namespace tt::tt_metal::distributed::multihost;
+
+    // Bind strong types for Rank and Size
+    nb::class_<Rank>(mod, "Rank", "Rank of a process in the distributed context")
+        .def(nb::init<int>())
+        .def("__int__", [](const Rank& r) { return *r; })
+        .def("__repr__", [](const Rank& r) { return nb::str("Rank({})").format(*r); })
+        .def("__str__", [](const Rank& r) { return nb::str("{}").format(*r); })
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self)
+        .def(nb::self < nb::self)
+        .def(nb::self <= nb::self)
+        .def(nb::self > nb::self)
+        .def(nb::self >= nb::self);
+
+    nb::class_<Size>(mod, "Size", "Size (number of processes) in the distributed context")
+        .def(nb::init<int>())
+        .def("__int__", [](const Size& s) { return *s; })
+        .def("__repr__", [](const Size& s) { return nb::str("Size({})").format(*s); })
+        .def("__str__", [](const Size& s) { return nb::str("{}").format(*s); })
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self)
+        .def(nb::self < nb::self)
+        .def(nb::self <= nb::self)
+        .def(nb::self > nb::self)
+        .def(nb::self >= nb::self);
+
     nb::class_<MeshToTensor>(mod, "CppMeshToTensor");
     nb::class_<TensorToMesh>(mod, "CppTensorToMesh");
 
@@ -96,6 +125,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<DistributedHostBuffer>(mod, "DistributedHostBuffer");
     nb::class_<TensorTopology>(mod, "TensorTopology");
 }
+// NOLINTEND(misc-redundant-expression)
 // NOLINTEND(bugprone-unused-raii)
 
 void py_module(nb::module_& mod) {
@@ -841,6 +871,125 @@ void py_module(nb::module_& mod) {
                 Tensor: The combined tensor.
             )doc");
     mod.def("using_distributed_env", &tt::tt_metal::distributed::UsingDistributedEnvironment);
+
+    // Distributed context bindings (moved from distributed_context.cpp)
+    using namespace tt::tt_metal::distributed::multihost;
+
+    // Initialize the distributed context
+    mod.def(
+        "init_distributed_context",
+        []() {
+            // In Python context, we typically don't have argc/argv in the same way
+            // This is a simplified initialization that works with default MPI settings
+            static char prog_name[] = "python";
+            static char* argv[] = {prog_name, nullptr};
+            DistributedContext::create(1, argv);
+        },
+        R"doc(
+            Initialize the distributed context with default settings.
+
+            This is a convenience function for Python that initializes the distributed
+            context without requiring command-line arguments.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.init_distributed_context()
+                >>> rank = ttnn.distributed_context_get_rank()
+                >>> size = ttnn.distributed_context_get_size()
+                >>> print(f"Rank {int(rank)} of {int(size)}")
+        )doc");
+
+    // Check if distributed context is initialized
+    mod.def(
+        "is_initialized",
+        &DistributedContext::is_initialized,
+        R"doc(
+            Check if the distributed context has been initialized.
+
+            Returns:
+                bool: True if initialized, False otherwise.
+
+            Example:
+                >>> import ttnn
+                >>> if ttnn.distributed_context_is_initialized():
+                >>>     rank = ttnn.distributed_context_get_rank()
+        )doc");
+
+    // Get the rank of the current process
+    mod.def(
+        "get_rank",
+        []() -> Rank {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_current_world()->rank();
+        },
+        R"doc(
+            Get the rank of the current process.
+
+            Returns:
+                Rank: The rank of the current process (0-indexed).
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+
+            Example:
+                >>> import ttnn
+                >>> rank = ttnn.distributed_context_get_rank()
+                >>> print(f"This is rank {rank}")
+                >>> # Convert to int if needed
+                >>> rank_int = int(rank)
+        )doc");
+
+    // Get the total number of processes
+    mod.def(
+        "get_size",
+        []() -> Size {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_current_world()->size();
+        },
+        R"doc(
+            Get the total number of processes.
+
+            Returns:
+                Size: The total number of processes.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+
+            Example:
+                >>> import ttnn
+                >>> size = ttnn.distributed_context_get_size()
+                >>> print(f"Total processes: {size}")
+                >>> # Convert to int if needed
+                >>> size_int = int(size)
+        )doc");
+
+    // Synchronize all processes
+    mod.def(
+        "barrier",
+        []() {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            DistributedContext::get_current_world()->barrier();
+        },
+        R"doc(
+            Synchronize all processes.
+
+            This function blocks until all processes have reached this point.
+
+            Raises:
+                RuntimeError: If the distributed context has not been initialized.
+
+            Example:
+                >>> import ttnn
+                >>> # Do some work...
+                >>> ttnn.distributed_context_barrier()
+                >>> # All processes continue from here
+        )doc");
 }
 
 }  // namespace ttnn::distributed
