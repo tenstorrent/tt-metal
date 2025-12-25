@@ -89,35 +89,49 @@ class TtCLIPAttention:
     def __init__(self, config, parameters, device):
         self.config = config
         self.device = device
-
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.embed_dim // self.num_heads
+        self.scale = 1.0 / (self.head_dim**0.5)
 
-        self.q_proj_weight = ttnn.to_device(ttnn.from_torch(parameters.q_proj.weight, dtype=ttnn.bfloat16), device)
+        self.q_proj_weight = ttnn.from_torch(
+            parameters.q_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.q_proj_bias = ttnn.from_torch(
+            parameters.q_proj.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        self.q_proj_bias = ttnn.to_device(ttnn.from_torch(parameters.q_proj.bias, dtype=ttnn.bfloat16), device)
+        self.k_proj_weight = ttnn.from_torch(
+            parameters.k_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.k_proj_bias = ttnn.from_torch(
+            parameters.k_proj.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        self.k_proj_weight = ttnn.to_device(ttnn.from_torch(parameters.k_proj.weight, dtype=ttnn.bfloat16), device)
+        self.v_proj_weight = ttnn.from_torch(
+            parameters.v_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.v_proj_bias = ttnn.from_torch(
+            parameters.v_proj.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        self.k_proj_bias = ttnn.to_device(ttnn.from_torch(parameters.k_proj.bias, dtype=ttnn.bfloat16), device)
-
-        self.v_proj_weight = ttnn.to_device(ttnn.from_torch(parameters.v_proj.weight, dtype=ttnn.bfloat16), device)
-
-        self.v_proj_bias = ttnn.to_device(ttnn.from_torch(parameters.v_proj.bias, dtype=ttnn.bfloat16), device)
-
-        self.out_proj_weight = ttnn.to_device(ttnn.from_torch(parameters.out_proj.weight, dtype=ttnn.bfloat16), device)
-
-        self.out_proj_bias = ttnn.to_device(ttnn.from_torch(parameters.out_proj.bias, dtype=ttnn.bfloat16), device)
+        self.out_proj_weight = ttnn.from_torch(
+            parameters.out_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.out_proj_bias = ttnn.from_torch(
+            parameters.out_proj.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
     def __call__(self, hidden_states: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """
         Args:
-            hidden_states (batch_size, seq_len, hidden_size)
-            attention_mask (batch_size, seq_len)
+            hidden_states: shape (batch_size, seq_len, hidden_size)
+            attention_mask: shape (batch_size, seq_len) or None
         Returns:
-            output (batch_size, seq_len, hidden_size)
+            output: shape (batch_size, seq_len, hidden_size)
         """
+        batch_size = hidden_states.shape[0]
+        seq_len = hidden_states.shape[1]
 
         query = ttnn.linear(hidden_states, self.q_proj_weight, bias=self.q_proj_bias)
         key = ttnn.linear(hidden_states, self.k_proj_weight, bias=self.k_proj_bias)
@@ -132,8 +146,10 @@ class TtCLIPAttention:
         value = ttnn.reshape(value, (batch_size, seq_len, self.num_heads, self.head_dim))
         value = ttnn.permute(value, (0, 2, 1, 3))
 
+        is_causal = seq_len > 1
+
         attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query, key, value, attention_mask=attention_mask, is_causal=True
+            query, key, value, attn_mask=attention_mask, is_causal=is_causal, scale=self.scale
         )
 
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
