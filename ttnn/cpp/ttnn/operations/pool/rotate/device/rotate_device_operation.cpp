@@ -66,9 +66,16 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    // Output shape is the same as input shape for rotate (expand=False)
     ttnn::Shape output_shape = input.logical_shape();
     ttnn::Shape output_padded = input.padded_shape();
+
+    if (operation_attributes.memory_config.is_sharded()) {
+        auto shard_spec = operation_attributes.memory_config.shard_spec().value();
+        MemoryConfig mem_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
+        return TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mem_config));
+    }
 
     return TensorSpec(
         output_shape,
@@ -87,10 +94,6 @@ RotateDeviceOperation::tensor_return_value_t RotateDeviceOperation::create_outpu
 
 tt::stl::hash::hash_t RotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Cache based on tensor shape, memory config, and interpolation mode
-    // angle, center, and fill are runtime args and don't affect program structure
-    // expand is validated to be false, so doesn't need to be in hash
-    // interpolation_mode affects program structure (different kernels/CBs)
     return tt::stl::hash::hash_objects_with_default_seed(
         operation_attributes.memory_config,
         operation_attributes.interpolation_mode,

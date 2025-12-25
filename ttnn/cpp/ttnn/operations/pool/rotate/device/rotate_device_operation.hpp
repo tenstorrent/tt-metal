@@ -29,10 +29,13 @@ struct RotateDeviceOperation {
     struct NearestProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};  // No compute kernel needed for nearest
+            tt::tt_metal::KernelHandle writer_kernel_id{};
             std::size_t num_cores{};
             std::size_t num_cores_y{};
-            bool enable_split_reader{};
+            bool is_sharded{};
+            std::vector<CoreCoord> logical_cores{};
+            tt::tt_metal::CBHandle input_cb_handle{};
+            tt::tt_metal::CBHandle output_cb_handle{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
