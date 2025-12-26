@@ -395,6 +395,54 @@ def test_vadv2_transformer(
         can_bus=can_bus,
     )
 
+    # Print PCC comparison results
+    print("\n" + "=" * 80)
+    print("VADv2 Transformer PCC Comparison Results")
+    print("=" * 80)
+
+    from models.common.utility_functions import comp_pcc
+
+    pcc_results = {}
+    tensor_comparisons = [
+        ("output[0] - bev_embed", 0, 0.99),
+        ("output[1] - hs (object features)", 1, 0.99),
+        ("output[2] - init_reference", 2, 0.99),
+        ("output[3] - inter_references", 3, 0.98),
+        ("output[4] - map_hs", 4, 0.98),
+        ("output[5] - map_init_reference", 5, 0.98),
+        ("output[6] - map_inter_references", 6, 0.98),
+    ]
+
+    all_passed = True
+    for name, idx, threshold in tensor_comparisons:
+        torch_tensor = model_outputs[idx]
+        ttnn_tensor = ttnn.to_torch(ttnn_outputs[idx]).float()
+
+        # Compute PCC
+        passed, pcc_value = comp_pcc(torch_tensor, ttnn_tensor, pcc=threshold)
+        pcc_results[name] = pcc_value
+
+        # Print result
+        status = "✓ PASS" if passed else "✗ FAIL"
+        print(f"  {name:<35} PCC: {pcc_value:.6f}  (threshold: {threshold:.2f})  {status}")
+
+        if not passed:
+            all_passed = False
+
+    # Print summary
+    print("=" * 80)
+    avg_pcc = sum(pcc_results.values()) / len(pcc_results)
+    min_pcc = min(pcc_results.values())
+    max_pcc = max(pcc_results.values())
+
+    print(f"Summary:")
+    print(f"  Average PCC: {avg_pcc:.6f}")
+    print(f"  Min PCC:     {min_pcc:.6f} ({min(pcc_results, key=pcc_results.get)})")
+    print(f"  Max PCC:     {max_pcc:.6f} ({max(pcc_results, key=pcc_results.get)})")
+    print(f"  Overall:     {'✓ ALL PASSED' if all_passed else '✗ SOME FAILED'}")
+    print("=" * 80 + "\n")
+
+    # Now run the assertions (will fail if any PCC is below threshold)
     result1 = assert_with_pcc(model_outputs[0], ttnn.to_torch(ttnn_outputs[0]).float(), 0.99)
     result2 = assert_with_pcc(model_outputs[1], ttnn.to_torch(ttnn_outputs[1]).float(), 0.99)
     result3 = assert_with_pcc(model_outputs[2], ttnn.to_torch(ttnn_outputs[2]).float(), 0.99)
