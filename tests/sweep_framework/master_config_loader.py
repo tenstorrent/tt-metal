@@ -528,49 +528,29 @@ class MasterConfigLoader:
                 return self._get_concat_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in [
-                "nlp_create_qkv_heads",
-                "experimental::nlp_create_qkv_heads",
-                "ttnn::experimental::nlp_create_qkv_heads",
-            ]:
+            elif self._matches_operation(operation_name, "nlp_create_qkv_heads"):
                 print(f"🔧 Detected nlp_create_qkv_heads operation - extracting num_q_heads and num_kv_heads")
                 return self._get_nlp_create_qkv_heads_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in [
-                "nlp_create_qkv_heads_decode",
-                "experimental::nlp_create_qkv_heads_decode",
-                "ttnn::experimental::nlp_create_qkv_heads_decode",
-            ]:
+            elif self._matches_operation(operation_name, "nlp_create_qkv_heads_decode"):
                 print(f"🔧 Detected nlp_create_qkv_heads_decode operation - extracting num_heads and num_kv_heads")
                 return self._get_nlp_create_qkv_heads_decode_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in [
-                "paged_scaled_dot_product_attention_decode",
-                "transformer::paged_scaled_dot_product_attention_decode",
-                "ttnn::transformer::paged_scaled_dot_product_attention_decode",
-            ]:
+            elif self._matches_operation(operation_name, "paged_scaled_dot_product_attention_decode"):
                 print(
                     f"🔧 Detected paged_scaled_dot_product_attention_decode operation - using operation-specific extractor"
                 )
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in [
-                "scaled_dot_product_attention_decode",
-                "transformer::scaled_dot_product_attention_decode",
-                "ttnn::transformer::scaled_dot_product_attention_decode",
-            ]:
+            elif self._matches_operation(operation_name, "scaled_dot_product_attention_decode"):
                 print(f"🔧 Detected scaled_dot_product_attention_decode operation - using operation-specific extractor")
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in [
-                "experimental::paged_update_cache",
-                "ttnn::experimental::paged_update_cache",
-                "paged_update_cache",
-            ]:
+            elif self._matches_operation(operation_name, "paged_update_cache"):
                 print(
                     f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
                 )
