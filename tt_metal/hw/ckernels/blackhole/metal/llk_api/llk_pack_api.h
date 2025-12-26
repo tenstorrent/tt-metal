@@ -236,15 +236,15 @@ inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_in
 /**
  * @brief Pack rows from a destination register to L1 memory.
  *
- * @param output The output circular buffer identifier
  * @param dst_index Index in the destination register to read from
+ * @param output The output circular buffer identifier
  * @param output_index The index in the output CB to write to
  *
  * This function packs the specified number of rows (configured via llk_pack_rows_init)
  * from the destination register to the output circular buffer.
  */
 inline void llk_pack_rows(
-    const std::uint32_t output, const std::uint32_t dst_index, const std::uint32_t output_index = 0) {
+    const std::uint32_t dst_index, const std::uint32_t output, const std::uint32_t output_index = 0) {
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
     _llk_pack_rows_(dst_index, pack_addr);

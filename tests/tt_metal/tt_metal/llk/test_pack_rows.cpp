@@ -87,10 +87,10 @@ void run_single_core_pack_rows_program(
             .set_page_size(src0_cb_index, input_single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(output_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, output_size);
+        tt_metal::CircularBufferConfig(output_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(output_cb_index, output_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -124,7 +124,7 @@ void run_single_core_pack_rows_program(
     std::vector<uint32_t> src0_vec;
     for (uint32_t i = 0; i < input_single_tile_size / sizeof(uint32_t); i++) {
         bfloat16 val1(static_cast<float>(i * 2));
-        bfloat16 val2(static_cast<float>(i * 2 + 1));
+        bfloat16 val2(static_cast<float>((i * 2) + 1));
         src0_vec.push_back(pack_two_bfloat16_into_uint32({val1, val2}));
     }
     tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);

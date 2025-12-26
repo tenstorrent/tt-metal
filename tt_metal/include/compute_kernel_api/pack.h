@@ -216,7 +216,7 @@ ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows)
  */
 // clang-format on
 ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
-    PACK((llk_pack_rows(ocb, idst, output_index)));
+    PACK((llk_pack_rows(idst, ocb, output_index)));
 }
 
 // clang-format off
