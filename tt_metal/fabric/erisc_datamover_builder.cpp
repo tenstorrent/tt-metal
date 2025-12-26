@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -234,7 +233,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // Allocate code profiling buffer (conditionally enabled)
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+    if (rtoptions.fabric_code_profiling_enabled()) {
         // Buffer size: max timer types * 16 bytes per result
         constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
         this->code_profiling_buffer_address = next_l1_addr;
@@ -818,9 +817,11 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
 
     // Add code profiling arguments (conditionally enabled)
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+    if (rtoptions.fabric_code_profiling_enabled()) {
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
-        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        CodeProfilingTimerType code_profiling_timer_type =
+            convert_to_code_profiling_timer_type(rtoptions.get_fabric_code_profiling_timer_str());
+        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(code_profiling_timer_type);
         ct_args.push_back(code_profiling_enabled_timers);
 
         // Add code profiling buffer address (16B aligned)

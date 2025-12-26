@@ -119,6 +119,14 @@ void TestContext::read_code_profiling_results() { get_code_profiler().read_code_
 
 void TestContext::report_code_profiling_results() { get_code_profiler().report_code_profiling_results(); }
 
+void TestContext::initialize_code_profiling_results_csv_file() {
+    get_code_profiler().initialize_code_profiling_results_csv_file();
+}
+
+void TestContext::dump_code_profiling_results_to_csv(const TestConfig& config) {
+    get_code_profiler().dump_code_profiling_results_to_csv(config);
+}
+
 void TestContext::process_telemetry_for_golden() {
     auto& telemetry_manager = get_telemetry_manager();
     telemetry_manager.process_telemetry_for_golden();

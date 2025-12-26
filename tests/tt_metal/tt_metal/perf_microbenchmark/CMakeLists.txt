@@ -73,6 +73,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/tt_fabric_test_device_setup.cpp
                 routing/tt_fabric_test_progress_monitor.cpp
                 routing/tt_fabric_test_eth_readback.cpp
+                ${PROJECT_SOURCE_DIR}/tt_metal/fabric/fabric_edm_profiler_helper.cpp
                 routing/tt_fabric_test_code_profiler.cpp
                 routing/tt_fabric_telemetry_manager.cpp
         )

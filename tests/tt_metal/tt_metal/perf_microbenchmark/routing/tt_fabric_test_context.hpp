@@ -35,7 +35,6 @@
 #include "tt_fabric_test_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 
 using tt::tt_fabric::fabric_tests::CI_ARTIFACTS_DIR;
 using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
@@ -59,7 +58,6 @@ using ProgressMonitorConfig = tt::tt_fabric::fabric_tests::ProgressMonitorConfig
 using TestProgressMonitor = tt::tt_fabric::fabric_tests::TestProgressMonitor;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
-using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -91,13 +89,6 @@ using BandwidthStatistics = tt::tt_fabric::fabric_tests::BandwidthStatistics;
 using BandwidthProfiler = ::BandwidthProfiler;
 using BandwidthResultsManager = tt::tt_fabric::fabric_tests::BandwidthResultsManager;
 using LatencyTestManager = ::LatencyTestManager;
-
-// Helper functions for parsing traffic pattern parameters
-using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
-using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
-using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
-using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
-using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
@@ -210,6 +201,10 @@ public:
 
     // Configures latency test mode by extracting and storing parameters from the test config
     void setup_latency_test_mode(const TestConfig& config);
+
+    void initialize_code_profiling_results_csv_file();
+
+    void dump_code_profiling_results_to_csv(const TestConfig& config);
 
 private:
     void reset_local_variables();
