@@ -5,8 +5,8 @@
 #include <stdint.h>
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
-#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
-#include <ttnn/cpp/ttnn/operations/pool/fixed_point_arithmetic.hpp>
+#include <ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
+#include <ttnn/operations/pool/fixed_point_arithmetic.hpp>
 
 void kernel_main() {
     // Runtime arguments
