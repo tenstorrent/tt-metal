@@ -16,7 +16,7 @@ Description:
     mismatch between Metal device IDs and Exalens device IDs.
 
 Owner:
-    adjorjevic-TT
+    adjordjevic-TT
 """
 
 from inspector_data import run as get_inspector_data, InspectorData

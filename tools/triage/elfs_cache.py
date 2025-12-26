@@ -12,7 +12,7 @@ Description:
     Provides an API for grabbing or caching ParsedElfFile objects by given elf path.
 
 Owner:
-    adjorjevic-TT
+    adjordjevic-TT
 """
 
 import os

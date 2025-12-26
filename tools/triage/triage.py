@@ -207,6 +207,7 @@ class TriageScript:
     config: ScriptConfig
     module: ModuleType
     run_method: Callable[..., Any]
+    documentation: str
     depends: list["TriageScript"] = field(default_factory=list)
     failed: bool = False
     failure_message: str | None = None
@@ -277,6 +278,7 @@ class TriageScript:
                 config=deepcopy(script_config),
                 module=script_module,
                 run_method=run_method,
+                documentation=script_module.__doc__,
             )
 
             if triage_script.config.depends is None:
@@ -346,18 +348,33 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-console: Console
+# Purposely uninitialized global console object to ensure proper initialization only once later
+console: Console = None  # type: ignore[assignment]
 
 
-def init_console(args: ScriptArguments) -> None:
+def init_console_and_verbosity(args: ScriptArguments) -> None:
     global console
+
+    if console is not None:
+        return
 
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
-
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"] or 0
+    set_verbose_level(verbose_level)
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
 
 def create_progress() -> Progress:
@@ -375,23 +392,10 @@ def create_progress() -> Progress:
 
 
 def process_arguments(args: ScriptArguments) -> None:
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
-    # Initialize console
-    init_console(args)
-
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+    init_console_and_verbosity(args)
 
 
-def process_triage_arguments() -> None:
+def parse_triage_arguments() -> None:
     """Parse early triage-only arguments to set verbosity and init console before script loading."""
     from docopt import docopt
 
@@ -425,8 +429,7 @@ def parse_arguments(
     my_name = os.path.splitext(os.path.basename(__file__))[0]
     docs[my_name] = __doc__
     for script in scripts.values():
-        if hasattr(script.module, "__doc__") and script.module.__doc__:
-            docs[script.name] = script.module.__doc__
+        docs[script.name] = script.documentation
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
@@ -456,9 +459,7 @@ def parse_arguments(
         return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
-    doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
-    if doc is None:
-        doc = __doc__
+    doc = __doc__ if script_path is None else scripts[script_path].documentation
     if detailed_help:
         help_message = doc
         if script_path is None:
@@ -466,19 +467,19 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    help_message += f"\n{script.module.__doc__}\n"
+                    help_message += f"\n{script.documentation}\n"
         print(help_message)
         sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    usage = printable_usage(script.module.__doc__)
+                    usage = printable_usage(script.documentation)
                     help_message += " " + " ".join(usage.split()[2:])
 
     DocoptExit.usage = help_message
@@ -535,7 +536,7 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
 
                 import textwrap
 
-                docstring_indented = textwrap.indent(script.module.__doc__.strip(), "    ")
+                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
             else:
                 utils.INFO("  pass")
@@ -732,7 +733,7 @@ class TTTriageError(Exception):
 def main():
     triage_start = time()
 
-    process_triage_arguments()
+    parse_triage_arguments()
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
