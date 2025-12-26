@@ -1601,122 +1601,6 @@ class OperationParameterExtractors:
 
         return transformed_configs
 
-    @staticmethod
-    def _transform_nlp_create_qkv_heads_parameters(
-        configs: List[Dict],
-        parse_dtype=None,
-        parse_layout=None,
-        parse_memory_config=None,
-    ) -> List[Dict]:
-        """Transform extracted nlp_create_qkv_heads parameters to TTNN types"""
-        transformed_configs = []
-
-        for config in configs:
-            try:
-                transformed_config = {}
-
-                # Parse shape (list)
-                if "shape" in config:
-                    transformed_config["shape"] = config["shape"]
-
-                # Parse dtype
-                if "dtype" in config and parse_dtype:
-                    transformed_config["dtype"] = parse_dtype(config["dtype"])
-                elif "dtype" in config:
-                    transformed_config["dtype"] = config["dtype"]
-
-                # Parse layout
-                if "layout" in config and parse_layout:
-                    transformed_config["layout"] = parse_layout(config["layout"])
-                elif "layout" in config:
-                    transformed_config["layout"] = config["layout"]
-
-                # Parse memory configs
-                if "memory_config" in config and parse_memory_config:
-                    shape = config.get("shape", [])
-                    transformed_config["memory_config"] = parse_memory_config(config["memory_config"], shape)
-                elif "memory_config" in config:
-                    transformed_config["memory_config"] = config["memory_config"]
-
-                if "output_memory_config" in config and parse_memory_config:
-                    shape = config.get("shape", [])
-                    transformed_config["output_memory_config"] = parse_memory_config(
-                        config["output_memory_config"], shape
-                    )
-                elif "output_memory_config" in config:
-                    transformed_config["output_memory_config"] = config["output_memory_config"]
-
-                # Copy scalar parameters
-                if "num_q_heads" in config:
-                    transformed_config["num_q_heads"] = config["num_q_heads"]
-                if "num_kv_heads" in config:
-                    transformed_config["num_kv_heads"] = config["num_kv_heads"]
-
-                transformed_configs.append(transformed_config)
-            except Exception as e:
-                print(f"Error transforming nlp_create_qkv_heads config: {e}")
-                continue
-
-        return transformed_configs
-
-    @staticmethod
-    def _transform_nlp_create_qkv_heads_decode_parameters(
-        configs: List[Dict],
-        parse_dtype=None,
-        parse_layout=None,
-        parse_memory_config=None,
-    ) -> List[Dict]:
-        """Transform extracted nlp_create_qkv_heads_decode parameters to TTNN types"""
-        transformed_configs = []
-
-        for config in configs:
-            try:
-                transformed_config = {}
-
-                # Parse shape (list)
-                if "shape" in config:
-                    transformed_config["shape"] = config["shape"]
-
-                # Parse dtype
-                if "dtype" in config and parse_dtype:
-                    transformed_config["dtype"] = parse_dtype(config["dtype"])
-                elif "dtype" in config:
-                    transformed_config["dtype"] = config["dtype"]
-
-                # Parse layout
-                if "layout" in config and parse_layout:
-                    transformed_config["layout"] = parse_layout(config["layout"])
-                elif "layout" in config:
-                    transformed_config["layout"] = config["layout"]
-
-                # Parse memory configs
-                if "memory_config" in config and parse_memory_config:
-                    shape = config.get("shape", [])
-                    transformed_config["memory_config"] = parse_memory_config(config["memory_config"], shape)
-                elif "memory_config" in config:
-                    transformed_config["memory_config"] = config["memory_config"]
-
-                if "output_memory_config" in config and parse_memory_config:
-                    shape = config.get("shape", [])
-                    transformed_config["output_memory_config"] = parse_memory_config(
-                        config["output_memory_config"], shape
-                    )
-                elif "output_memory_config" in config:
-                    transformed_config["output_memory_config"] = config["output_memory_config"]
-
-                # Copy scalar parameters
-                if "num_heads" in config:
-                    transformed_config["num_heads"] = config["num_heads"]
-                if "num_kv_heads" in config:
-                    transformed_config["num_kv_heads"] = config["num_kv_heads"]
-
-                transformed_configs.append(transformed_config)
-            except Exception as e:
-                print(f"Error transforming nlp_create_qkv_heads_decode config: {e}")
-                continue
-
-        return transformed_configs
-
 
 # Register the built-in extractors
 OperationParameterExtractors.register_extractor(
@@ -1787,17 +1671,14 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "all_gather_async",
     extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
-    transform_func=OperationParameterExtractors._transform_all_gather_async_parameters,
 )
 OperationParameterExtractors.register_extractor(
     "experimental::all_gather_async",
     extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
-    transform_func=OperationParameterExtractors._transform_all_gather_async_parameters,
 )
 OperationParameterExtractors.register_extractor(
     "ttnn::experimental::all_gather_async",
     extract_func=OperationParameterExtractors._extract_all_gather_async_parameters,
-    transform_func=OperationParameterExtractors._transform_all_gather_async_parameters,
 )
 
 # Register paged_scaled_dot_product_attention_decode extractor
@@ -2308,34 +2189,34 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "nlp_create_qkv_heads",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_parameters,
+    transform_func=None,
 )
 OperationParameterExtractors.register_extractor(
     "experimental::nlp_create_qkv_heads",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_parameters,
+    transform_func=None,
 )
 OperationParameterExtractors.register_extractor(
     "ttnn::experimental::nlp_create_qkv_heads",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_parameters,
+    transform_func=None,
 )
 
 # Register nlp_create_qkv_heads_decode extractors
 OperationParameterExtractors.register_extractor(
     "nlp_create_qkv_heads_decode",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_decode_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_decode_parameters,
+    transform_func=None,
 )
 OperationParameterExtractors.register_extractor(
     "experimental::nlp_create_qkv_heads_decode",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_decode_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_decode_parameters,
+    transform_func=None,
 )
 OperationParameterExtractors.register_extractor(
     "ttnn::experimental::nlp_create_qkv_heads_decode",
     extract_func=OperationParameterExtractors._extract_nlp_create_qkv_heads_decode_parameters,
-    transform_func=OperationParameterExtractors._transform_nlp_create_qkv_heads_decode_parameters,
+    transform_func=None,
 )
 
 

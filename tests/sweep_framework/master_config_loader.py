@@ -1966,8 +1966,6 @@ class MasterConfigLoader:
                         param_spec = "input_shape,input_dtype,input_layout,input_memory_config,output_memory_config,traced_source,traced_machine_info"
                         # Note: input_dtype maps to input_a_dtype in param spec but is input_dtype in cfg
                         # We need to remap the keys
-                        # Use extracted_params since all_gather_async doesn't have a transformer
-                        source_configs = transformed_configs if transformed_configs else extracted_params
                         remapped_configs = [
                             {
                                 "input_shape": cfg.get("input_shape"),
@@ -1976,7 +1974,7 @@ class MasterConfigLoader:
                                 "input_memory_config": cfg.get("input_memory_config"),
                                 "output_memory_config": cfg.get("output_memory_config"),
                             }
-                            for cfg in source_configs
+                            for cfg in transformed_configs
                         ]
                         return self._format_multi_tensor_params(
                             remapped_configs,
@@ -2100,11 +2098,9 @@ class MasterConfigLoader:
                     elif (
                         clean_op_name == "experimental::nlp_create_qkv_heads" or clean_op_name == "nlp_create_qkv_heads"
                     ):
-                        # Transformer returns: shape, dtype, layout, memory_config, num_q_heads, num_kv_heads, output_memory_config (parsed)
+                        # Extractor returns: shape, dtype, layout, memory_config, num_q_heads, num_kv_heads, output_memory_config
                         # But test expects: input_shape, input_a_dtype, input_a_layout, input_a_memory_config, num_q_heads, num_kv_heads, output_memory_config
                         # So we need to remap the keys
-                        # Use transformed_configs since we now have a transformer for nlp_create_qkv_heads
-                        source_params = transformed_configs if transformed_configs else extracted_params
                         remapped_params = [
                             {
                                 "input_shape": p.get("shape"),
@@ -2115,7 +2111,7 @@ class MasterConfigLoader:
                                 "num_kv_heads": p.get("num_kv_heads"),
                                 "output_memory_config": p.get("output_memory_config"),
                             }
-                            for p in source_params
+                            for p in extracted_params
                         ]
                         param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_q_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
                         defaults = {
@@ -2136,10 +2132,8 @@ class MasterConfigLoader:
                         clean_op_name == "experimental::nlp_create_qkv_heads_decode"
                         or clean_op_name == "nlp_create_qkv_heads_decode"
                     ):
-                        # Transformer returns: shape, dtype, layout, memory_config, num_heads, num_kv_heads, output_memory_config (parsed)
+                        # Extractor returns: shape, dtype, layout, memory_config, num_heads, num_kv_heads, output_memory_config
                         # Test expects: input_shape, input_a_dtype, input_a_layout, input_a_memory_config, num_heads, num_kv_heads, output_memory_config
-                        # Use transformed_configs since we now have a transformer for nlp_create_qkv_heads_decode
-                        source_params = transformed_configs if transformed_configs else extracted_params
                         remapped_params = [
                             {
                                 "input_shape": p.get("shape"),
@@ -2150,7 +2144,7 @@ class MasterConfigLoader:
                                 "num_kv_heads": p.get("num_kv_heads"),
                                 "output_memory_config": p.get("output_memory_config"),
                             }
-                            for p in source_params
+                            for p in extracted_params
                         ]
                         param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
                         defaults = {
