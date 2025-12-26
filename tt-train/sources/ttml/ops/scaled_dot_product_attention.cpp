@@ -140,7 +140,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask) {
+    const autograd::TensorPtr& mask) {
     validate_qkv_shapes(query, key, value);
 
     auto [batch_num, heads, seq_len, embedding_dim] = query->get_value().logical_shape().to_array_4D();
@@ -155,14 +155,17 @@ autograd::TensorPtr scaled_dot_product_attention(
     // σQ @ K
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
-    if (mask.has_value()) {
-        auto mask_tensor = mask.value()->get_value();
-        // ttnn::where when mask is not of the same shape as qk_scaled
+    if (mask) {
+        auto mask_tensor = mask->get_value();
+        // Apply attention mask: where mask=0 (padding), set to -1e9 to suppress attention
+        // Formula: qk_masked = mask * qk_scaled + (mask - 1) * (1e9)
+        //   - Where mask=1 (real tokens): 1 * qk + 0 * (1e9) = qk
+        //   - Where mask=0 (padding):     0 * qk + (-1) * (1e9) = -1e9
         qk_scaled = ttnn::add(
             ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             ttnn::multiply(
                 ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-                1e9F,
+                1e9F,  // Note: (mask-1) is negative where mask=0, so this produces -1e9
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
@@ -244,15 +247,15 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask) {
+    const autograd::TensorPtr& mask) {
     const float scale = 1.0F / std::sqrt(static_cast<float>(query->get_value().logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
     auto qk_t =
         ttnn_fixed::matmul(query->get_value(), key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
     // (B, H, S, S) * scale
     auto qk_scaled = ttnn::multiply(qk_t, scale);
-    if (mask.has_value()) {
-        qk_scaled = ttnn::where(mask.value()->get_value(), qk_scaled, /* other */ -1e9F);
+    if (mask) {
+        qk_scaled = ttnn::where(mask->get_value(), qk_scaled, /* other */ -1e9F);
     }
     // (B, H, S, S)
     // auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
@@ -278,8 +281,8 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
                     ttnn::subtract(qk_scaled, std::log(static_cast<float>(query->get_value().logical_shape()[-2]))))
                     .front();
 
-            if (mask.has_value()) {
-                grad_scaled_dot = ttnn::where(mask.value()->get_value(), grad_scaled_dot, /* other */ 0.0F);
+            if (mask) {
+                grad_scaled_dot = ttnn::where(mask->get_value(), grad_scaled_dot, /* other */ 0.0F);
             }
 
             auto grad_q = ttnn_fixed::matmul(
