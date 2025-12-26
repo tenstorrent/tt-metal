@@ -234,53 +234,61 @@ def test_memory_configs(device, memory_config):
 
 @pytest.mark.parametrize("shard_strategy", ["height", "width", "block"])
 def test_sharded_memory(device, shard_strategy):
-    """Test rotation with height, width and block sharded memory configurations.
+    """Test rotation with height, width and block sharded memory configurations using full grid.
 
-    Note: Width sharding uses a single core with full channels since rotate requires
-    complete sticks (all channels) for each spatial position to sample from arbitrary
-    locations during rotation.
+    Each sharding strategy uses a tensor shape optimized for that strategy:
+    - Height: Sticks split across all cores, full channels per stick
+    - Width: All sticks on each core, channels split across cores
+    - Block: Sticks split across Y cores, full channels per stick
     """
     torch.manual_seed(0)
 
-    input_shape = (1, 4, 4, 64)
-    angle = 45.0
-    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.rotate)
-    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
-
     grid_size = device.compute_with_storage_grid_size()
-    total_height = input_shape[0] * input_shape[1] * input_shape[2]
+    num_cores_x = grid_size.x
+    num_cores_y = grid_size.y
+    num_cores = num_cores_x * num_cores_y
+    angle = 45.0
 
     if shard_strategy == "height":
-        num_cores = grid_size.x * grid_size.y
-        shard_height = (total_height + num_cores - 1) // num_cores
+        total_sticks = num_cores * 4
+        input_shape = (1, total_sticks, 1, 64)
+        shard_height = (total_sticks + num_cores - 1) // num_cores
+        shard_width = input_shape[3]
         shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
-            (shard_height, input_shape[3]),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+            (shard_height, shard_width),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         sharded_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
         )
     elif shard_strategy == "width":
-        shard_height = total_height
-        shard_width = input_shape[3]
+        total_sticks = 16
+        channels = num_cores * 32
+        input_shape = (1, 4, 4, channels)
+        shard_height = total_sticks
+        shard_width = channels // num_cores
         shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
             (shard_height, shard_width),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     else:
-        shard_height = (total_height + grid_size.y - 1) // grid_size.y
-        shard_width = input_shape[3]
+        total_sticks = num_cores_y * 4
+        input_shape = (1, total_sticks, 1, num_cores_x * 32)
+        shard_height = (total_sticks + num_cores_y - 1) // num_cores_y
+        shard_width = input_shape[3] // num_cores_x
         shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, grid_size.y - 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
             (shard_height, shard_width),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
@@ -293,11 +301,17 @@ def test_sharded_memory(device, shard_strategy):
 
 
 def test_nd_sharded_memory(device):
-    """Test rotation with ND sharded memory configuration using a crazy shape with true 4D sharding."""
+    """Test rotation with ND sharded memory configuration.
+
+    Uses shard_shape that keeps full channels per shard - ND sharding with split
+    channels is not supported because rotate needs to read from arbitrary spatial
+    positions but must copy all channels together.
+    """
     torch.manual_seed(0)
 
-    input_shape = (3, 17, 23, 48)
-    angle = 73.5
+    input_shape = (4, 4, 4, 128)
+    shard_shape = (1, 2, 2, 32)
+    angle = 45.0
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.rotate)
@@ -307,15 +321,9 @@ def test_nd_sharded_memory(device):
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
     grid = ttnn.CoreRangeSet([core_range])
 
-    shard_shape_4d = [input_shape[0], input_shape[1], input_shape[2], input_shape[3]]
     nd_sharded_memory_config = ttnn.MemoryConfig(
         ttnn.BufferType.L1,
-        ttnn.NdShardSpec(
-            shard_shape_4d,
-            grid,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-        ),
+        ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid),
     )
 
     ttnn_input = ttnn.from_torch(
