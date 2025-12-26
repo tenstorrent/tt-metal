@@ -516,7 +516,7 @@ def _normalize_original_vector_data(original):
         elif isinstance(obj, (list, str, int, float, bool)) or obj is None:
             normalized[k] = obj
         else:
-            # For complex pybind/ttnn objects, fall back to structured serialization
+            # For complex nanobind/ttnn objects, fall back to structured serialization
             try:
                 normalized[k] = serialize_structured(obj)
             except Exception:

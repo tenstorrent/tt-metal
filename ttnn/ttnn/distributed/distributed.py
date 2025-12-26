@@ -558,7 +558,7 @@ def create_system_mesh_table():
     try:
         system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
 
-        # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
+        # TODO: Remove shape indexing workaround after exposing subscripts in nanobind
         global_shape = tuple(system_mesh_desc.shape())
         local_shape = tuple(system_mesh_desc.local_shape())
         rows, cols = global_shape[0], global_shape[1]

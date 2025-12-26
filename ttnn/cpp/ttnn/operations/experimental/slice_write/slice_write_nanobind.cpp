@@ -46,8 +46,8 @@ void bind_slice_write(nb::module_& mod) {
                 >>> ttnn.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
                 )doc";
 
-    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
-    // a vector with a fixed size default value
+    // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
+    // than a vector with a fixed size default value
     using OperationType = decltype(ttnn::experimental::slice_write);
     ttnn::bind_registered_operation(
         mod,
