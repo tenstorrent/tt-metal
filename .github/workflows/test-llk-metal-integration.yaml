@@ -322,8 +322,9 @@ jobs:
             local branch_annotations="[]"
             if [ -n "$branch_head_sha" ]; then
               # Include both "error" and "failure" annotation levels (pytest uses "error")
-              branch_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/commits/$branch_head_sha/check-runs" --paginate \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Use paginate with slurp to combine all pages, then process
+              branch_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/commits/$branch_head_sha/check-runs" --paginate 2>/dev/null | \
+                jq -s '[.[].check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo 0)"
@@ -364,8 +365,9 @@ jobs:
             local main_annotations="[]"
             if [ -n "$main_head_sha" ]; then
               # Include both "error" and "failure" annotation levels (pytest uses "error")
-              main_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/commits/$main_head_sha/check-runs" --paginate \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Use paginate with slurp to combine all pages, then process
+              main_annotations=$(gh api "/repos/${{ env.METAL_REPO }}/commits/$main_head_sha/check-runs" --paginate 2>/dev/null | \
+                jq -s '[.[].check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Main failed tests count: $(echo "$main_annotations" | jq 'length' 2>/dev/null || echo 0)"
