@@ -63,6 +63,13 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     // Stick (row) dimensions
     uint32_t stick_size = tensor_width * input.element_size();
 
+    // For reduction operations, output has width of TILE_WIDTH (32)
+    uint32_t output_stick_size = stick_size;  // Same as input for IDENTITY
+    if (operation_attributes.op_type != OpType::IDENTITY) {
+        // Reductions produce 1 tile per row (width = 32)
+        output_stick_size = TILE_WIDTH * input.element_size();
+    }
+
     // Device and core setup - multi-core work distribution
     IDevice* device = input.device();
     auto grid_size = device->compute_with_storage_grid_size();
@@ -112,9 +119,51 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     // KERNEL CREATION
     // ============================================================
 
-    // Operation type - currently only IDENTITY, future: REDUCE_W_SUM, etc.
-    constexpr uint32_t op_type = static_cast<uint32_t>(OpType::IDENTITY);
-    constexpr uint32_t packed_scaler = 0;  // Unused for IDENTITY, placeholder for future ops
+    // Operation type from attributes - no recompilation needed to change
+    uint32_t op_type = static_cast<uint32_t>(operation_attributes.op_type);
+
+    // Compute scaler: use provided scaler, with special handling for AVG
+    float scaler_value = operation_attributes.scaler;
+    if (operation_attributes.op_type == OpType::REDUCE_W_AVG) {
+        // For AVG, scaler should be 1/W. If user provided 1.0f (default),
+        // compute it automatically. Otherwise, use user-provided value.
+        if (scaler_value == 1.0f) {
+            scaler_value = 1.0f / static_cast<float>(tensor_width);
+        }
+    }
+    bfloat16 bf_scaler = bfloat16::truncate(scaler_value);
+    uint32_t packed_scaler = pack_two_bfloat16_into_uint32({bf_scaler, bf_scaler});
+
+    // Create CB_scaler (c_2) and CB_reduced (c_3) for reduction operations
+    if (op_type != static_cast<uint32_t>(OpType::IDENTITY)) {
+        // CB_scaler (c_2): Scaler tile for reduction operations
+        // Only 1 tile needed - generated once by reader, never popped (persistent read)
+        tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
+        uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
+        tt::tt_metal::CircularBufferConfig cb_scaler_config =
+            tt::tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{tt::CBIndex::c_2, scaler_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_2, scaler_single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+
+        // CB_reduced (c_3): Holds the reduced tile between reduce and untilize
+        // Data flow: CB_1 (num_tiles) -> reduce -> CB_3 (1 tile) -> untilize -> CB_16
+        // Single-buffered: same kernel writes (reduce) and reads (untilize), no overlap possible
+        tt::tt_metal::CircularBufferConfig cb_reduced_config =
+            tt::tt_metal::CircularBufferConfig(input_tile_size, {{tt::CBIndex::c_3, input_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_3, input_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduced_config);
+    }
+
+    // Generate kernel defines for reduction operations
+    std::map<std::string, std::string> kernel_defines;
+    if (op_type == static_cast<uint32_t>(OpType::REDUCE_W_SUM) ||
+        op_type == static_cast<uint32_t>(OpType::REDUCE_W_AVG)) {
+        kernel_defines["REDUCE_OP"] = "PoolType::SUM";
+        kernel_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    } else if (op_type == static_cast<uint32_t>(OpType::REDUCE_W_MAX)) {
+        kernel_defines["REDUCE_OP"] = "PoolType::MAX";
+        kernel_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    }
 
     // Compile-time args for reader kernel
     // Layout: [stick_size, op_type, packed_scaler, TensorAccessorArgs...]
@@ -122,7 +171,8 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     // Compile-time args for writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {cb_out_id, stick_size, TILE_HEIGHT};
+    // Use output_stick_size (different from input for reductions)
+    std::vector<uint32_t> writer_compile_time_args = {cb_out_id, output_stick_size, TILE_HEIGHT};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Compile-time args for compute kernel
@@ -136,7 +186,7 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
         "ttnn/cpp/ttnn/operations/reduction/tilize_untilize/device/kernels/dataflow/"
         "reader_tilize_untilize_interleaved.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     // Create writer kernel (RISCV_1 / NCRISC / NOC1)
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -152,7 +202,10 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
         program,
         "ttnn/cpp/ttnn/operations/reduction/tilize_untilize/device/kernels/compute/tilize_untilize_compute.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_compile_time_args,
+            .defines = kernel_defines});
 
     // ============================================================
     // SET PER-CORE RUNTIME ARGUMENTS
