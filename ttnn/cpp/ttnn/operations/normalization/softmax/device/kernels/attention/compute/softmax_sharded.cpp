@@ -214,28 +214,27 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif  // FUSED_SCALE_MASK
 
-        // SUM reduce with reciprocal operation
-        // NOTE: This reduce cannot use reduce_helpers library because it requires calling
-        // recip_tile() after reduce_uninit() but before tile_regs_commit/pack.
-        // The library manages tile_regs internally and doesn't support injecting custom
-        // operations between reduce and pack. This would require library enhancements.
-        tile_regs_acquire();
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        // SUM reduce with reciprocal operation using reduce_helpers library with post-reduce lambda
         cb_wait_front(cb_exps, block_w);
-        cb_wait_front(cb_bcast_scaler, 1);
-        cb_reserve_back(cb_recipsumexps, 1);
-        for (uint32_t w = 0; w < block_w; w++) {
-            constexpr uint32_t bcast_scaler0 = 0;
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
-        }
-        reduce_uninit();
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_recipsumexps);
-        tile_regs_release();
-        cb_push_back(cb_recipsumexps, 1);
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputMode::PRELOADED,
+            true,  // init
+            true,  // uninit (called at end of helper)
+            ENABLE_FP32_DEST_ACC>(
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            1,        // Ht
+            block_w,  // Wt
+            1,        // num_batches
+            0,        // row_chunk (unused for REDUCE_ROW)
+            0,        // input_stride (use default)
+            []() {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(cb_exps, cb_recipsumexps);
