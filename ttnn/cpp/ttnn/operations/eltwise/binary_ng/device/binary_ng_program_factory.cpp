@@ -549,9 +549,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto a_dtype = a.dtype();
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    /* For BFLOAT8_B inputs with scalar operations, the scalar is always packed as BFLOAT16
+       for better precision, so b_dtype should be BFLOAT16 to match the actual data format */
     const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
-                         : is_sfpu_op  ? a_dtype
+                         : is_sfpu_op  ? (is_block_float(a_dtype) ? DataType::BFLOAT16 : a_dtype)
                                        : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
