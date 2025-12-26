@@ -80,7 +80,6 @@ void ProfilerStateManager::cleanup_device_profilers() {
     for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
         threads[i] = std::thread([it]() {
             DeviceProfiler& profiler = it->second;
-            log_info(tt::LogMetal, "Dumping device profiler results during cleanup dumpDeviceResults");
             profiler.dumpDeviceResults();
             profiler.destroyTracyContexts();
         });

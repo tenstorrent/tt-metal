@@ -320,7 +320,8 @@ __attribute__((noinline)) void finish_profiler() {
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
-    bool is_dram_set = 0;
+    bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
+    int dramProfilerAddressIndex = DRAM_PROFILER_ADDRESS;
 
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
@@ -328,14 +329,11 @@ __attribute__((noinline)) void finish_profiler() {
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         bool do_noc = true;
-        int dramProfilerAddressIndex = 0;
 
         if constexpr (NON_DROPPING) {
             dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0 + riscID;
-        } else {
-            dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT;
+            is_dram_set = profiler_control_buffer[dramProfilerAddressIndex] != 0;
         }
-        is_dram_set = profiler_control_buffer[dramProfilerAddressIndex] != 0;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
@@ -463,6 +461,16 @@ __attribute__((noinline)) void quick_push() {
 
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
+    }
+
+    currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
+    if constexpr (NON_DROPPING) {
+        if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+            signal_host_buffer_full();
+            // Host index is reset because we got a new DRAM buffer
+            profiler_control_buffer[HOST_BUFFER_END_INDEX] = 0;
+            currEndIndex = wIndex;
+        }
     }
 
     // If sending all optional markers still leaves room for the two guaranteed end markers, send everything

@@ -999,8 +999,6 @@ void dumpDeviceResultsToCSV(
         return;
     }
 
-    int num_elements_written = 0;
-
     for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
@@ -1033,15 +1031,11 @@ void dumpDeviceResultsToCSV(
                     marker.line,
                     marker.file,
                     meta_data_str);
-
-                num_elements_written++;
             }
         }
     }
 
     log_file_ofs.close();
-
-    log_info(tt::LogMetal, "Wrote {} elements to CSV file", num_elements_written);
 }
 
 bool isGalaxyMMIODevice(IDevice* device) {
@@ -1555,17 +1549,6 @@ void DeviceProfiler::readRiscProfilerResults(
                 }
             }
         }
-        // Count total markers inserted for this core
-        int total_markers_for_core = 0;
-        for (const auto& [risc, markers] : device_markers_for_core) {
-            total_markers_for_core += markers.size();
-        }
-        log_info(
-            tt::LogMetal,
-            "Read {} elements from device profiler, Inserted {} markers ({} RISC types)",
-            deviceTraceCounterRead,
-            total_markers_for_core,
-            device_markers_for_core.size());
     }
 
     if (!skipReadingDeviceTraceCounter()) {
@@ -2617,29 +2600,7 @@ void DeviceProfiler::pollDebugDumpResults(
         inactive_buffer_end_indices.clear();
     }
 
-    // Log marker count before dump
-    {
-        int totalMarkers = 0;
-        for (const auto& [core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
-            for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
-                totalMarkers += device_markers.size();
-            }
-        }
-        log_info(tt::LogMetal, "pollDebugDumpResults: Total markers before dump: {}", totalMarkers);
-    }
-
     dumpDeviceResults(/*is_mid_run_dump=*/true);
-
-    // Log marker count after dump
-    {
-        int totalMarkers = 0;
-        for (const auto& [core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
-            for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
-                totalMarkers += device_markers.size();
-            }
-        }
-        log_info(tt::LogMetal, "pollDebugDumpResults: Total markers after dump: {}", totalMarkers);
-    }
 
     // Commit the updated control buffers to our host state
     for (const auto& [virtual_core, risc_types] : stalled_risc_types) {
