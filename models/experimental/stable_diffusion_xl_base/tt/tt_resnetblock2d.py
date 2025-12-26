@@ -6,12 +6,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_gn_mask,
-    prepare_gn_mask_negative_mask,
-    prepare_gn_beta_gamma,
     prepare_conv_params,
-    prepare_split_conv_params,
-    split_conv2d,
     prepare_linear_params,
 )
 
@@ -24,19 +19,12 @@ class TtResnetBlock2D(LightweightModule):
         module_path,
         model_config,
         conv_shortcut=False,
-        split_in=1,
-        split_out=1,
         debug_mode=False,
-        use_negative_mask=False,
-        dram_groupnorm=False,
     ):
         super().__init__()
 
         self.device = device
         self.module_path = module_path
-        self.split_conv = split_in > 1 or split_out > 1
-        self.split_in = split_in
-        self.split_out = split_out
         self.debug_mode = debug_mode
 
         # fixed for ResnetBlock
@@ -45,7 +33,6 @@ class TtResnetBlock2D(LightweightModule):
         self.dilation = (1, 1)
         self.groups = 1
 
-        self.norm_core_grid_2 = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-5
         self.is_first_resnet_block = "resnets.0" in module_path and "up_blocks" not in module_path
@@ -70,68 +57,48 @@ class TtResnetBlock2D(LightweightModule):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"].squeeze()
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
-        self.dram_groupnorm = dram_groupnorm
-        if dram_groupnorm:
-            self.norm_blocks_1 = 2
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=4)
-            [self.gamma_t_1, self.beta_t_1], self.input_mask_1 = ttnn.dram_group_norm_params_from_torch(
-                [norm_weights_1, norm_bias_1],
-                norm_weights_1.shape[0],
-                self.norm_groups,
-                device,
-                core_grid=self.norm_core_grid_1,
-                return_mask=True,
-            )
-        else:
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=8)
-            self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-                device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
-            )
-            self.input_mask_1 = prepare_gn_mask(
-                self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
-            )
-            if use_negative_mask:
-                # For these groupnomrms, for them to be able to fit into L1 memory, we need to use negative mask
-                # This is the same mask as the regular groupnorm mask, except that ones and zeros are inverted.
-                # This allows us to get rid of one CB in the groupnorm, so it can fit into L1 memory.
-                self.input_negative_mask_1 = prepare_gn_mask_negative_mask(
-                    self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
-                )
-            else:
-                self.input_negative_mask_1 = None
-
-        self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-            device, norm_weights_2, norm_bias_2, self.norm_core_grid_2.y
+        (
+            self.groupnorm_config_1,
+            self.groupnorm_memory_config_1,
+            self.input_mask_1,
+            self.input_negative_mask_1,
+            self.gamma_t_1,
+            self.beta_t_1,
+        ) = model_config.get_groupnorm_params(
+            f"{module_path}.norm1", norm_weights_1, norm_bias_1, self.norm_groups, device
         )
-        self.input_mask_2 = prepare_gn_mask(
-            self.device, norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
+        assert (
+            self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config_1 == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
+        (
+            self.groupnorm_config_2,
+            self.groupnorm_memory_config_2,
+            self.input_mask_2,
+            self.input_negative_mask_2,
+            self.gamma_t_2,
+            self.beta_t_2,
+        ) = model_config.get_groupnorm_params(
+            f"{module_path}.norm2", norm_weights_2, norm_bias_2, self.norm_groups, device
         )
+        assert (
+            self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config_2 == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
-        if self.split_conv:
-            (
-                self.tt_conv1_weights,
-                self.tt_conv1_bias,
-                self.conv1_params,
-            ) = prepare_split_conv_params(
-                conv_weights_1,
-                conv_bias_1,
-                self.conv1_config.weights_dtype,
-                split_in,
-                split_out,
-            )
-        else:
-            (
-                self.tt_conv1_weights,
-                self.tt_conv1_bias,
-                self.conv1_params,
-            ) = prepare_conv_params(
-                conv_weights_1,
-                conv_bias_1,
-                self.conv1_config.weights_dtype,
-            )
+
+        (
+            self.tt_conv1_weights,
+            self.tt_conv1_bias,
+            self.conv1_params,
+        ) = prepare_conv_params(
+            conv_weights_1,
+            conv_bias_1,
+            self.conv1_config.weights_dtype,
+        )
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
 
@@ -164,98 +131,60 @@ class TtResnetBlock2D(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        if self.dram_groupnorm:
-            hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            hidden_states = ttnn.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                input_mask=self.input_mask_1,
-                weight=self.gamma_t_1,
-                bias=self.beta_t_1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.norm_core_grid_1,
-                epsilon=self.norm_eps,
-                inplace=False,
-                num_out_blocks=self.norm_blocks_1,
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config_1["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
-        else:
-            grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
-            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-            shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-            sharded_mem_config = ttnn.MemoryConfig(
-                ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-            )
-            if not hidden_states.is_sharded():
-                if C == 320 or C == 960:
-                    hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-                hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
-            hidden_states = ttnn.group_norm(
-                hidden_states,
-                num_groups=self.norm_groups,
-                input_mask=self.input_mask_1,
-                weight=self.gamma_t_1,
-                bias=self.beta_t_1,
-                memory_config=sharded_mem_config,
-                core_grid=self.norm_core_grid_1,
-                epsilon=self.norm_eps,
-                negative_mask=self.input_negative_mask_1,
-            )
+            # This is an optimization to avoid unaligned DRAM/L1 sharded transfer
+            if C == 320 or C == 960:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        hidden_states = ttnn.group_norm(
+            hidden_states,
+            num_groups=self.norm_groups,
+            input_mask=self.input_mask_1,
+            negative_mask=self.input_negative_mask_1,
+            weight=self.gamma_t_1,
+            bias=self.beta_t_1,
+            epsilon=self.norm_eps,
+            memory_config=hidden_states.memory_config(),
+            **self.groupnorm_config_1,
+        )
 
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
-        if self.split_conv:
-            if self.input_negative_mask_1 is not None:
-                # In this case, hidden states are already in RM format, but they need to be in DRAM in order for split conv to work
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-            else:
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states, [C, H, W], [tt_conv1_weights, tt_conv1_bias] = split_conv2d(
-                device=self.device,
-                hidden_states=hidden_states,
-                input_shape=[B, C, H, W],
-                conv_weights=self.tt_conv1_weights,
-                conv_bias=self.tt_conv1_bias,
-                split_in=self.split_in,
-                split_out=self.split_out,
-                compute_config=self.compute1_config,
-                conv_config=self.conv1_config,
-                conv_params=self.conv1_params,
-                conv_dtype=self.conv_output_dtype,
-                stride=self.stride,
-                padding=self.padding,
-                dilation=self.dilation,
-                groups=self.groups,
-            )
-        else:
-            if self.dram_groupnorm:
-                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
-                input_tensor=hidden_states,
-                weight_tensor=self.tt_conv1_weights,
-                in_channels=self.conv1_params["input_channels"],
-                out_channels=self.conv1_params["output_channels"],
-                device=self.device,
-                bias_tensor=self.tt_conv1_bias,
-                kernel_size=self.conv1_params["kernel_size"],
-                stride=self.stride,
-                padding=self.padding,
-                dilation=self.dilation,
-                batch_size=B,
-                input_height=H,
-                input_width=W,
-                conv_config=self.conv1_config,
-                compute_config=self.compute1_config,
-                slice_config=ttnn.Conv2dL1FullSliceConfig,
-                groups=self.groups,
-                memory_config=None,
-                return_output_dim=True,
-                return_weights_and_bias=True,
-                dtype=self.conv_output_dtype,
-            )
-            C = self.conv1_params["output_channels"]
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            weight_tensor=self.tt_conv1_weights,
+            in_channels=self.conv1_params["input_channels"],
+            out_channels=self.conv1_params["output_channels"],
+            device=self.device,
+            bias_tensor=self.tt_conv1_bias,
+            kernel_size=self.conv1_params["kernel_size"],
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            batch_size=B,
+            input_height=H,
+            input_width=W,
+            conv_config=self.conv1_config,
+            compute_config=self.compute1_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            groups=self.groups,
+            memory_config=None,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
+        )
+        C = self.conv1_params["output_channels"]
         if not self.debug_mode:
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
@@ -272,28 +201,29 @@ class TtResnetBlock2D(LightweightModule):
         # Note: moving this add to NG has perf impact, to be investigated
         hidden_states = ttnn.add_(hidden_states, temb, use_legacy=True)
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
+        if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config_2["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
-        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
 
-        if "up_blocks.2" in self.module_path and not self.split_conv:
+        if "up_blocks.2" in self.module_path:
             hidden_states = ttnn.move(hidden_states)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask_2,
+            negative_mask=self.input_negative_mask_2,
             weight=self.gamma_t_2,
             bias=self.beta_t_2,
-            memory_config=sharded_mem_config,
-            core_grid=self.norm_core_grid_2,
             epsilon=self.norm_eps,
+            memory_config=hidden_states.memory_config(),
+            **self.groupnorm_config_2,
         )
 
         ttnn.silu(hidden_states, output_tensor=hidden_states)

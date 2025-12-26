@@ -35,12 +35,6 @@ class TtGEGLU(LightweightModule):
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
 
     def forward(self, input_tensor):
-        if self.program_config is not None:
-            if input_tensor.shape[2] == 4096:
-                # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
-                # hence using L1 memory config instead
-                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-
         # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
         hidden_states = ttnn.linear(
             input_tensor,
@@ -50,6 +44,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
+
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,

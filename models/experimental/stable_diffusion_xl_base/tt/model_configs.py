@@ -5,6 +5,12 @@
 import ttnn
 import re
 
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
+    prepare_gn_mask,
+    prepare_gn_mask_negative_mask,
+    prepare_gn_beta_gamma,
+)
+
 
 class ModelOptimisations:
     def __init__(
@@ -25,7 +31,8 @@ class ModelOptimisations:
         self.attention_weights_dtype = attention_weights_dtype
         self.ff_weights_dtype = ff_weights_dtype
 
-        # HEIGHT SHARDED
+        # region CONV2D CONFIGS
+        # region HEIGHT SHARDED
         self.conv_configs["ABH_1024_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -108,8 +115,9 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=32,
         )
+        # endregion
 
-        # BLOCK SHARDED
+        # region BLOCK SHARDED
         override_output_sharding_config = not force_full_grid
         override_output_core_grid = (
             ttnn.CoreRangeSet(
@@ -290,8 +298,9 @@ class ModelOptimisations:
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
+        # endregion
 
-        # DEFAULT CONF
+        # region DEFAULT CONF
         self.conv_configs["DEFAULT"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=None,
@@ -313,8 +322,10 @@ class ModelOptimisations:
             act_block_h_override=0,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        # endregion
+        # endregion
 
-        # MATMUL CONFIGS
+        # region MATMUL CONFIGS
         self.matmul_versions = {
             "40_cores": {
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -827,7 +838,69 @@ class ModelOptimisations:
         self.matmul_configs = (
             self.matmul_versions["40_cores"] if not force_full_grid else self.matmul_versions["full_grid"]
         )
+        # endregion
+
+        # region LAYERNORM CONFIGS
         self.core_grid_x = 5 if not force_full_grid else 8
+        # endregion
+
+        # region GROUPNORM CONFIGS
+        self.groupnorm_configs = {}
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": True,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=4),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE_NEGATIVE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": True,
+        }
+        self.groupnorm_configs["DRAM_GROUPNORM_4X8"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=4),
+                "num_out_blocks": 2,
+                "inplace": False,
+            },
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        # endregion
 
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -1161,3 +1234,45 @@ class ModelOptimisations:
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
+
+    def generate_groupnorm_params(self, config, weights, bias, groups, device):
+        if config["memory_config"] != ttnn.DRAM_MEMORY_CONFIG:
+            gamma, beta = prepare_gn_beta_gamma(device, weights, bias, config["op_config"]["core_grid"].x)
+            mask = prepare_gn_mask(device, weights.shape[0], groups, config["op_config"]["core_grid"].x)
+            negative_mask = (
+                prepare_gn_mask_negative_mask(device, weights.shape[0], groups, config["op_config"]["core_grid"].x)
+                if config["negative_mask"]
+                else None
+            )
+        else:
+            [gamma, beta], mask = ttnn.dram_group_norm_params_from_torch(
+                [weights, bias],
+                weights.shape[0],
+                groups,
+                device,
+                core_grid=config["op_config"]["core_grid"],
+                return_mask=True,
+            )
+            negative_mask = None
+
+        return mask, negative_mask, gamma, beta
+
+    def get_groupnorm_config(self, module_path):
+        if "decoder" not in module_path and "encoder" not in module_path:
+            if "up_blocks.2" in module_path and "norm1" in module_path:
+                return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
+            if "resnets" in module_path:
+                return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+            if "attentions" in module_path:
+                if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"]
+                else:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+        return None
+
+    def get_groupnorm_params(self, module_path, weights, bias, groups, device):
+        config = self.get_groupnorm_config(module_path)
+
+        mask, negative_mask, gamma, beta = self.generate_groupnorm_params(config, weights, bias, groups, device)
+        return config["op_config"], config["memory_config"], mask, negative_mask, gamma, beta

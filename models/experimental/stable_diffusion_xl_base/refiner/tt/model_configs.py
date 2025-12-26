@@ -176,10 +176,10 @@ class RefinerModelOptimisations(ModelOptimisations):
             if "mid_block" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"]
-            elif "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+            elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"]
-            elif "down_blocks.2" in matmul_path or "up_blocks.2" in matmul_path:
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"]
         return None
@@ -261,3 +261,14 @@ class RefinerModelOptimisations(ModelOptimisations):
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
+
+    def get_groupnorm_config(self, module_path):
+        if "up_blocks.3" in module_path and "resnets.0" in module_path and "norm1" in module_path:
+            return self.groupnorm_configs["DRAM_GROUPNORM_4X8"]
+        if "up_blocks.3" in module_path and "resnets.0" not in module_path and "norm1" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
+        if "resnets" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+        if "attentions" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+        return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
