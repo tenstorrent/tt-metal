@@ -188,14 +188,24 @@ jobs:
 
           declare -A run_ids
 
+          # Build architecture parameter based on which post-commit tests are enabled
+          if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0", "blackhole"]'
+          elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
+            ARCH_PARAM='["wormhole_b0"]'
+          else
+            ARCH_PARAM='["blackhole"]'
+          fi
+
           # Function to trigger workflow and get run ID and URL
           trigger_and_get_id() {
             local workflow_file="$1"
             local display_name="$2"
 
-            # Special handling for tt-metal-l2-nightly.yaml to pass C++ and other test configuration flags
             if [ "$workflow_file" = "tt-metal-l2-nightly.yaml" ]; then
-              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_cpp_tests=true \
+              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+              -f architecture="$ARCH_PARAM" \
+              -f run_cpp_tests=true \
               -f run_metal_iommu_tests=true \
               -f run_sd_unit_tests=true \
               -f run_fd_unit_tests=true \
@@ -203,6 +213,9 @@ jobs:
               -f run_tt_train_cpp_unit_tests=true \
               -f run_models_unit_tests=true \
               -f run_tt_cnn_unit_tests=true
+            elif [ "$workflow_file" = "perf-device-models.yaml" ]; then
+              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+              -f architecture="$ARCH_PARAM"
             else
               gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
             fi
