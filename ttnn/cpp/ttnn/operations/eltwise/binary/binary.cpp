@@ -953,6 +953,8 @@ template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 // Explicit template instantiations for BinaryOperationWithFastApprox
 template struct BinaryOperationWithFastApprox<BinaryOpType::DIV>;
 template struct InplaceBinaryOperationWithFastApprox<BinaryOpType::DIV>;
+template struct BinaryOperationWithFastApprox<BinaryOpType::MUL>;
+template struct InplaceBinaryOperationWithFastApprox<BinaryOpType::MUL>;
 
 template struct WhereOperationWithScalar<BinaryOpType::WHERE_TST>;
 template struct WhereOperationWithScalar<BinaryOpType::WHERE_TTS>;

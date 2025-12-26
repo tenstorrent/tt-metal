@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -43,7 +43,7 @@ def test_mul_4D(device, h, w):
     output = ttnn.mul(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, 1)
 
 
 # fmt: off
@@ -57,7 +57,7 @@ def test_multiply_with_scalar(device, scalar):
     output = scalar * input_tensor_a
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, 1)
 
 
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -81,7 +81,7 @@ def test_multiply_with_scalar_sharded(device, scalar, input_shard_orientation, o
     output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, 1)
 
 
 @pytest.mark.skip(reason="Unable to multiply scalar to tensor with int")
@@ -116,4 +116,34 @@ def test_multiply_float32_with_scalar_sharded(device, scalar, batch_size, output
     output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_with_ulp(torch_output_tensor, output, 0)
+
+
+def test_binary_mul_div_bf16(device):
+    torch_dtype = torch.bfloat16
+    ttnn_dtype = ttnn.bfloat16
+
+    x_torch = torch.tensor([[508]], dtype=torch_dtype)
+    y_torch = torch.tensor([[748]], dtype=torch_dtype)
+
+    z_torch_mul = torch.mul(x_torch, y_torch)
+    z_torch_div = torch.div(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=False)
+    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)
+
+    tt_out_mul = ttnn.to_torch(z_tt_mul)
+    tt_out_div = ttnn.to_torch(z_tt_div)
+
+    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=15, sci_mode = False, edgeitems=17)
+    # print("z_tt_mul", z_tt_mul)
+    # print("z_tt_div", z_tt_div)
+    # print("tt_out_mul", tt_out_mul)
+    # print("tt_out_div", tt_out_div)
+    # print("z_torch_mul", z_torch_mul)
+    # print("z_torch_div", z_torch_div)
+
+    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
+    assert_with_ulp(z_torch_div, tt_out_div, 0)
