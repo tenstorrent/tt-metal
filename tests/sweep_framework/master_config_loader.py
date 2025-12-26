@@ -63,6 +63,31 @@ class TensorConfig:
 class MasterConfigLoader:
     """Loads and converts master JSON configurations to sweep test parameters"""
 
+    def _matches_operation(self, operation_name: str, base_name: str) -> bool:
+        """Check if operation_name matches any variant of base_name.
+
+        Handles common patterns like:
+        - "add" matches ["add", "ttnn::add"]
+        - "linear" matches ["linear", "ttnn::linear"]
+        - "nlp_create_qkv_heads" matches ["nlp_create_qkv_heads", "experimental::nlp_create_qkv_heads", "ttnn::experimental::nlp_create_qkv_heads"]
+
+        Args:
+            operation_name: The operation name to check
+            base_name: The base operation name
+
+        Returns:
+            True if operation_name is any variant of base_name
+        """
+        variants = [
+            base_name,
+            f"ttnn::{base_name}",
+            f"experimental::{base_name}",
+            f"ttnn::experimental::{base_name}",
+            f"transformer::{base_name}",
+            f"ttnn::transformer::{base_name}",
+        ]
+        return operation_name in variants
+
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
             master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
