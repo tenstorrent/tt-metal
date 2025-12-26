@@ -2125,7 +2125,7 @@ class MasterConfigLoader:
                         }
                         param_tuples = [
                             self._build_param_tuple_from_config(
-                                params, param_spec.split(","), extracted_sources, extracted_machine_infos, idx, defaults
+                                params, param_spec.split(","), idx, extracted_sources, extracted_machine_infos, defaults
                             )
                             for idx, params in enumerate(remapped_params)
                         ]
@@ -2160,7 +2160,7 @@ class MasterConfigLoader:
                         }
                         param_tuples = [
                             self._build_param_tuple_from_config(
-                                params, param_spec.split(","), extracted_sources, extracted_machine_infos, idx, defaults
+                                params, param_spec.split(","), idx, extracted_sources, extracted_machine_infos, defaults
                             )
                             for idx, params in enumerate(remapped_params)
                         ]
