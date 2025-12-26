@@ -847,108 +847,6 @@ class MasterConfigLoader:
         else:
             return parsed_mem_config
 
-    def _format_unary_all_cases(self, operation_name: str, paired_configs: List[Dict]) -> Dict:
-        """
-        Format unary configs for all_cases mode (Cartesian product).
-
-        Returns:
-            Dictionary with unique values for each parameter type.
-        """
-        unique_shapes = []
-        seen_shapes = set()
-        dtypes = set()
-        layouts = set()
-        unique_memory_configs = []
-        seen_mem_configs = set()
-        unique_output_memory_configs = []
-        seen_output_mem_configs = set()
-
-        for cfg in paired_configs:
-            # Track unique shapes
-            shape_tuple = tuple(cfg["shape"])
-            if shape_tuple not in seen_shapes:
-                unique_shapes.append(shape_tuple)
-                seen_shapes.add(shape_tuple)
-
-            dtypes.add(cfg["dtype"])
-            layouts.add(cfg["layout"])
-
-            # Track unique memory configs
-            mem_config_str = str(cfg["memory_config"])
-            if mem_config_str not in seen_mem_configs:
-                unique_memory_configs.append(cfg["memory_config"])
-                seen_mem_configs.add(mem_config_str)
-
-            output_mem_config_str = str(cfg["output_memory_config"])
-            if output_mem_config_str not in seen_output_mem_configs:
-                unique_output_memory_configs.append(cfg["output_memory_config"])
-                seen_output_mem_configs.add(output_mem_config_str)
-
-        return {
-            "input_shape": unique_shapes,
-            "input_a_dtype": list(dtypes),
-            "input_a_layout": list(layouts),
-            "input_a_memory_config": unique_memory_configs,
-            "output_memory_config": unique_output_memory_configs,
-        }
-
-    def _initialize_unary_param_lists(self, operation_name: str) -> Dict[str, List]:
-        """
-        Initialize empty lists for operation-specific parameters.
-
-        Returns:
-            Dictionary mapping parameter names to empty lists (or None if not applicable).
-        """
-        return {
-            # Common parameters
-            "input_shapes": [],
-            "input_a_dtypes": [],
-            "input_a_layouts": [],
-            "input_a_memory_configs": [],
-            "output_memory_configs": [],
-            "storage_types": [],
-            "traced_source_list": [],
-            "traced_machine_info_list": [],
-            "traced_config_names": [],
-            # Operation-specific parameters
-            "dims_list": [] if operation_name in ["permute", "ttnn::permute"] else None,
-            "end_shape_list": [] if operation_name == "untilize_with_unpadding" else None,
-            "dim0_list": [] if operation_name == "transpose" else None,
-            "dim1_list": [] if operation_name == "transpose" else None,
-            "target_shape_list": [] if operation_name == "reshape" else None,
-            "padding_list": [] if operation_name in ["pad", "ttnn::pad"] else None,
-            "output_padded_shape_list": [] if operation_name in ["pad", "ttnn::pad"] else None,
-            "input_tensor_start_list": [] if operation_name in ["pad", "ttnn::pad"] else None,
-            "value_list": [] if operation_name in ["pad", "ttnn::pad"] else None,
-            "padded_shape_list": [] if operation_name == "tilize_with_val_padding" else None,
-            "pad_value_list": [] if operation_name == "tilize_with_val_padding" else None,
-            "num_heads_list": (
-                []
-                if operation_name
-                in [
-                    "nlp_concat_heads_decode",
-                    "experimental::nlp_concat_heads_decode",
-                    "ttnn::experimental::nlp_concat_heads_decode",
-                ]
-                else None
-            ),
-            "batch_size_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "input_h_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "input_w_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "channels_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "kernel_size_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "stride_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "padding_list_maxpool": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "dilation_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "applied_shard_scheme_list": [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None,
-            "scale_factor_list": [] if operation_name in ["upsample", "ttnn::upsample"] else None,
-            "mode_list": [] if operation_name in ["upsample", "ttnn::upsample"] else None,
-            "output_dtype_list": [] if operation_name in ["typecast", "ttnn::typecast"] else None,
-            "scalar_list": [] if operation_name in ["gt", "ttnn::gt"] else None,
-            "scalar_if_true_list": [] if operation_name in ["where", "ttnn::where"] else None,
-            "scalar_if_false_list": [] if operation_name in ["where", "ttnn::where"] else None,
-        }
-
     def _get_unary_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -1010,15 +908,52 @@ class MasterConfigLoader:
 
             if all_cases:
                 # Return separate lists for Cartesian product
-                result = self._format_unary_all_cases(operation_name, paired_configs)
+                # Extract UNIQUE values for each parameter type
+                unique_shapes = []
+                seen_shapes = set()
+                dtypes = set()
+                layouts = set()
+                unique_memory_configs = []
+                seen_mem_configs = set()
+                unique_output_memory_configs = []
+                seen_output_mem_configs = set()
 
-                # Calculate and print statistics
+                for cfg in paired_configs:
+                    # Track unique shapes
+                    shape_tuple = tuple(cfg["shape"])
+                    if shape_tuple not in seen_shapes:
+                        # Convert to tuple so it serializes as a string for proper deserialization
+                        unique_shapes.append(shape_tuple)
+                        seen_shapes.add(shape_tuple)
+
+                    dtypes.add(cfg["dtype"])
+                    layouts.add(cfg["layout"])
+
+                    # Track unique memory configs (using str representation as key)
+                    mem_config_str = str(cfg["memory_config"])
+                    if mem_config_str not in seen_mem_configs:
+                        unique_memory_configs.append(cfg["memory_config"])
+                        seen_mem_configs.add(mem_config_str)
+
+                    output_mem_config_str = str(cfg["output_memory_config"])
+                    if output_mem_config_str not in seen_output_mem_configs:
+                        unique_output_memory_configs.append(cfg["output_memory_config"])
+                        seen_output_mem_configs.add(output_mem_config_str)
+
+                result = {
+                    "input_shape": unique_shapes,
+                    "input_a_dtype": list(dtypes),
+                    "input_a_layout": list(layouts),
+                    "input_a_memory_config": unique_memory_configs,
+                    "output_memory_config": unique_output_memory_configs,
+                }
+
                 total_tests = (
-                    len(result["input_shape"])
-                    * len(result["input_a_dtype"])
-                    * len(result["input_a_layout"])
-                    * len(result["input_a_memory_config"])
-                    * len(result["output_memory_config"])
+                    len(unique_shapes)
+                    * len(dtypes)
+                    * len(layouts)
+                    * len(unique_memory_configs)
+                    * len(unique_output_memory_configs)
                 )
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
@@ -1026,48 +961,58 @@ class MasterConfigLoader:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
                 # Return individual parameter lists to match sweep file expectations
-                # Initialize all parameter lists
-                params = self._initialize_unary_param_lists(operation_name)
-
-                # Unpack for easier access
-                input_shapes = params["input_shapes"]
-                input_a_dtypes = params["input_a_dtypes"]
-                input_a_layouts = params["input_a_layouts"]
-                input_a_memory_configs = params["input_a_memory_configs"]
-                output_memory_configs = params["output_memory_configs"]
-                storage_types = params["storage_types"]
-                traced_source_list = params["traced_source_list"]
-                traced_machine_info_list = params["traced_machine_info_list"]
-                traced_config_names = params["traced_config_names"]
-
-                # Operation-specific params
-                dims_list = params["dims_list"]
-                end_shape_list = params["end_shape_list"]
-                dim0_list = params["dim0_list"]
-                dim1_list = params["dim1_list"]
-                target_shape_list = params["target_shape_list"]
-                padding_list = params["padding_list"]
-                output_padded_shape_list = params["output_padded_shape_list"]
-                input_tensor_start_list = params["input_tensor_start_list"]
-                value_list = params["value_list"]
-                padded_shape_list = params["padded_shape_list"]
-                pad_value_list = params["pad_value_list"]
-                num_heads_list = params["num_heads_list"]
-                batch_size_list = params["batch_size_list"]
-                input_h_list = params["input_h_list"]
-                input_w_list = params["input_w_list"]
-                channels_list = params["channels_list"]
-                kernel_size_list = params["kernel_size_list"]
-                stride_list = params["stride_list"]
-                padding_list_maxpool = params["padding_list_maxpool"]
-                dilation_list = params["dilation_list"]
-                applied_shard_scheme_list = params["applied_shard_scheme_list"]
-                scale_factor_list = params["scale_factor_list"]
-                mode_list = params["mode_list"]
-                output_dtype_list = params["output_dtype_list"]
-                scalar_list = params["scalar_list"]
-                scalar_if_true_list = params["scalar_if_true_list"]
-                scalar_if_false_list = params["scalar_if_false_list"]
+                # Extract each parameter type into separate lists
+                input_shapes = []
+                input_a_dtypes = []
+                input_a_layouts = []
+                input_a_memory_configs = []
+                output_memory_configs = []
+                storage_types = []
+                traced_source_list = []
+                traced_machine_info_list = []
+                traced_config_names = []
+                dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
+                end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
+                dim0_list = [] if operation_name == "transpose" else None
+                dim1_list = [] if operation_name == "transpose" else None
+                target_shape_list = [] if operation_name == "reshape" else None
+                # pad specific parameters (support both padding and output_padded_shape formats)
+                padding_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                output_padded_shape_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                input_tensor_start_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                value_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                padded_shape_list = [] if operation_name == "tilize_with_val_padding" else None
+                pad_value_list = [] if operation_name == "tilize_with_val_padding" else None
+                num_heads_list = (
+                    []
+                    if operation_name
+                    in [
+                        "nlp_concat_heads_decode",
+                        "experimental::nlp_concat_heads_decode",
+                        "ttnn::experimental::nlp_concat_heads_decode",
+                    ]
+                    else None
+                )
+                # max_pool2d specific parameters
+                batch_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                input_h_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                input_w_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                channels_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                kernel_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                stride_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                padding_list_maxpool = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                dilation_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                applied_shard_scheme_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                # upsample specific parameters
+                scale_factor_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
+                mode_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
+                # typecast specific parameters
+                output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
+                # gt specific parameters
+                scalar_list = [] if operation_name in ["gt", "ttnn::gt"] else None
+                # where specific parameters
+                scalar_if_true_list = [] if operation_name in ["where", "ttnn::where"] else None
+                scalar_if_false_list = [] if operation_name in ["where", "ttnn::where"] else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
