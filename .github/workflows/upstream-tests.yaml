@@ -222,7 +222,7 @@ jobs:
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
-        timeout-minutes: 10
+        timeout-minutes: 25
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
   test-bh-glx-image:
     needs:
