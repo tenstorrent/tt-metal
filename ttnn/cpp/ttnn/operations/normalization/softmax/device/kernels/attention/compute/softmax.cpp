@@ -12,6 +12,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -22,23 +23,21 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row
-    tile_regs_acquire();
+    // calculate max val per row using reduce_helpers library
     reconfig_data_format(cb_in, cb_bcast_scaler);
-    cb_reserve_back(cb_max, 1);
-    cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt++) {
-        cb_wait_front(cb_in, wt + 1);
-        constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
-    }
-    reduce_uninit();
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_max);
-    tile_regs_release();
-    cb_push_back(cb_max, 1);
+
+    // Wait for all Wt tiles to be available for PRELOADED mode
+    cb_wait_front(cb_in, Wt);
+
+    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
+    // Note: The library handles waiting for scaler tile internally
+    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+        cb_in,
+        cb_bcast_scaler,
+        cb_max,
+        1,   // Ht (1 row)
+        Wt,  // Wt tiles per row
+        1);  // num_batches
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -270,6 +269,11 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
+        // SUM reduce with reciprocal operation
+        // NOTE: This reduce cannot use reduce_helpers library because it requires calling
+        // recip_tile() after reduce_uninit() but before tile_regs_commit/pack.
+        // The library manages tile_regs internally and doesn't support injecting custom
+        // operations between reduce and pack. This would require library enhancements.
         tile_regs_acquire();
         cb_reserve_back(cb_recipsumexps, onetile);
         reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
