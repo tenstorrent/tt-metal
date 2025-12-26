@@ -11,7 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype, update_for_unsigned_widening
 
 pytestmark = pytest.mark.use_module_device
 
@@ -71,6 +71,8 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
         py_tensor_after_round_trip = tt_tensor.to_torch()
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
+
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape
@@ -155,6 +157,8 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
         py_tensor_after_round_trip = tt_tensor.to_torch()
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
+
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     if python_dtype_str in ("int64", "float16"):
         pytest.xfail(
