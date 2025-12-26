@@ -20,7 +20,7 @@ std::vector<ttnn::Tensor> SDPABackwardOperation::invoke(
     const float dropout_probability,
     const bool fp32_dest_acc_en) {
     // Call KV kernel to compute grad_K and grad_V
-    // Returns [grad_Q_placeholder, grad_K, grad_V]
+    // Returns grad_K and grad_V as a vector of tensors
     auto kv_result = ttnn::prim::ttml_sdpa_kv_bw(
         grad_output, attn_output, query, key, value, attn_mask, intermediates, dropout_probability, fp32_dest_acc_en);
 

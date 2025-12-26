@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <chrono>
 #include <cmath>
 #include <core/ttnn_all_includes.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -29,49 +31,32 @@ protected:
 };
 
 xt::xarray<float> generate_attn_mask(const xt::xarray<float>& query) {
-    auto shape = query.shape();
-    size_t S = shape[2];
-    // Create mask with shape (1, 1, S, S) - same mask for all batches/heads
-    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
-
-    for (size_t s = 0; s < S; ++s) {
-        for (size_t w = 0; w <= s; ++w) {
-            mask(0, 0, s, w) = 1.0F;  // causal mask - lower triangular part
-        }
-    }
-    return mask;
+    const auto shape = query.shape();
+    const size_t S = shape[2];
+    // Create causal mask (lower triangular) with shape (1, 1, S, S)
+    xt::xarray<float> mask = xt::tril(xt::ones<float>({S, S}));
+    return mask.reshape({1UL, 1UL, S, S});
 }
 
 // Error analysis utility function
 void print_error_analysis(
     const xt::xarray<float>& result,
     const xt::xarray<float>& groundtruth,
-    std::pair<float, float> threshold,  // {atol, rtol}
-    size_t num_elements_to_print,
+    const std::pair<float, float> threshold,  // {atol, rtol}
+    const size_t num_elements_to_print,
     const std::string& name) {
     assert(result.shape() == groundtruth.shape() && "Tensors must have the same shape");
 
-    // float atol = threshold.first;
-    // float rtol = threshold.second;
-    // auto& [atol, rtol] = threshold;
-    double atol = static_cast<double>(threshold.first);
-    double rtol = static_cast<double>(threshold.second);
-    size_t total_elements = result.size();
-    auto shape = result.shape();
+    const double atol = static_cast<double>(threshold.first);
+    const double rtol = static_cast<double>(threshold.second);
+    const size_t total_elements = result.size();
+    const auto shape = result.shape();
 
-    // Compute statistics
-    float mean_error = 0.0f;
-    float mse = 0.0f;
-    float max_diff = 0.0f;
-
-    for (size_t i = 0; i < total_elements; ++i) {
-        float diff = std::abs(result.flat(i) - groundtruth.flat(i));
-        mean_error += diff;
-        mse += diff * diff;
-        max_diff = std::max(max_diff, diff);
-    }
-    mean_error /= total_elements;
-    mse /= total_elements;
+    // Compute statistics using vectorized operations
+    const xt::xarray<float> abs_diff = xt::abs(result - groundtruth);
+    const float mean_error = xt::mean(abs_diff)();
+    const float mse = xt::mean(xt::square(abs_diff))();
+    const float max_diff = xt::amax(abs_diff)();
 
     // Print statistics
     fmt::print("=== Error Analysis: {} ===\n", name);
@@ -92,11 +77,12 @@ void print_error_analysis(
         for (size_t h = 0; h < shape[1]; ++h) {
             for (size_t s = 0; s < shape[2]; ++s) {
                 for (size_t d = 0; d < shape[3]; ++d) {
-                    double result_val = static_cast<double>(result(b, h, s, d));
-                    double gt_val = static_cast<double>(groundtruth(b, h, s, d));
-                    double diff = std::abs(result_val - gt_val);
-                    double tolerance = std::max(atol, rtol * std::abs(gt_val));
-                    bool is_close = (diff <= atol || diff <= rtol * std::max(std::abs(result_val), std::abs(gt_val)));
+                    const double result_val = static_cast<double>(result(b, h, s, d));
+                    const double gt_val = static_cast<double>(groundtruth(b, h, s, d));
+                    const double diff = std::abs(result_val - gt_val);
+                    const double tolerance = std::max(atol, rtol * std::abs(gt_val));
+                    const bool is_close =
+                        (diff <= atol || diff <= rtol * std::max(std::abs(result_val), std::abs(gt_val)));
                     if (!is_close) {
                         if (error_count <= num_elements_to_print) {
                             fmt::print(
@@ -123,32 +109,58 @@ void print_error_analysis(
 
 xt::xarray<float> dot_product(const xt::xarray<float>& input_0, const xt::xarray<float>& input_1) {
     assert(input_0.shape() == input_1.shape());
-    auto shape = input_0.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
-    shape[3] = 1U;  // output shape is (B,H,S,1)
-    xt::xarray<float> result = xt::zeros<float>(shape);
-
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t s = 0; s < S; ++s) {
-                float sum = 0.0F;
-                for (size_t d = 0; d < D; ++d) {
-                    sum += input_0(b, h, s, d) * input_1(b, h, s, d);
-                }
-                result(b, h, s, 0) = sum;
-            }
-        }
-    }
-    return result;
+    // Vectorized: element-wise multiply then sum over last axis (D dimension)
+    return xt::sum(input_0 * input_1, {3}, xt::keep_dims);
 }
 
 // Helper function to scale a tensor by a scalar factor
 // Used to pre-scale Query or Key tensors to match kernel's mathematical flow
-xt::xarray<float> scale_tensor(const xt::xarray<float>& tensor, float scale_factor) {
+xt::xarray<float> scale_tensor(const xt::xarray<float>& tensor, const float scale_factor) {
     return tensor * scale_factor;
 }
 
+// Helper: Expand K/V from (B, G, S, D) to (B, H, S, D) for grouped query attention
+xt::xarray<float> expand_kv_heads(const xt::xarray<float>& kv, size_t H) {
+    const auto shape = kv.shape();
+    const size_t B = shape[0], G = shape[1], S = shape[2], D = shape[3];
+    if (H == G) {
+        return kv;  // No expansion needed
+    }
+    const size_t heads_per_group = H / G;
+    xt::xarray<float> expanded = xt::zeros<float>({B, H, S, D});
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t g = 0; g < G; ++g) {
+            for (size_t hg = 0; hg < heads_per_group; ++hg) {
+                xt::view(expanded, b, g * heads_per_group + hg, xt::all(), xt::all()) =
+                    xt::view(kv, b, g, xt::all(), xt::all());
+            }
+        }
+    }
+    return expanded;
+}
+
+// Helper: Reduce gradients from (B, H, S, D) to (B, G, S, D) by summing over head groups
+xt::xarray<float> reduce_grad_to_groups(const xt::xarray<float>& grad, size_t G) {
+    const auto shape = grad.shape();
+    const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    if (H == G) {
+        return grad;  // No reduction needed
+    }
+    const size_t heads_per_group = H / G;
+    xt::xarray<float> reduced = xt::zeros<float>({B, G, S, D});
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t g = 0; g < G; ++g) {
+            for (size_t hg = 0; hg < heads_per_group; ++hg) {
+                xt::view(reduced, b, g, xt::all(), xt::all()) +=
+                    xt::view(grad, b, g * heads_per_group + hg, xt::all(), xt::all());
+            }
+        }
+    }
+    return reduced;
+}
+
 // Pure float implementation of SDPA backward pass using xtensor
+// HYBRID VERSION: Uses xt::linalg::dot for matmuls, loop-based softmax backward
 // This serves as the reference ground truth for testing
 // Returns: {dQ, dK, dV, intermediates}
 std::vector<xt::xarray<float>> float_sdpa_backward(
@@ -157,58 +169,37 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const xt::xarray<float>& V,
     const xt::xarray<float>& grad_output,
     const std::optional<xt::xarray<float>>& attn_mask = std::nullopt) {
-    auto shape = Q.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3], intermediate_size = 64;
+    const auto shape = Q.shape();
+    const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3], intermediate_size = 64;
 
-    auto kv_shape = K.shape();
-    size_t G = kv_shape[1];  // number of KV heads (groups)
+    const auto kv_shape = K.shape();
+    const size_t G = kv_shape[1];  // number of KV heads (groups)
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(D));
 
     // ========== Forward Pass (need intermediate values) ==========
 
     // Step 1: Scale query
-    xt::xarray<float> Q_scaled = Q * scale;
+    const xt::xarray<float> Q_scaled = Q * scale;
 
-    // Step 2: Compute attention scores: S = Q_scaled @ K^T
-    // Handle grouped attention: each KV head serves multiple Q heads
+    // Step 2: Compute attention scores: S = Q_scaled @ K^T using xt::linalg::dot
+    const xt::xarray<float> K_expanded = expand_kv_heads(K, H);
     xt::xarray<float> scores = xt::zeros<float>({B, H, S, S});
-
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            size_t kv_head = h / (H / G);  // which KV head this Q head uses
-            for (size_t i = 0; i < S; ++i) {
-                for (size_t j = 0; j < S; ++j) {
-                    float sum = 0.0F;
-                    for (size_t d = 0; d < D; ++d) {
-                        sum += Q_scaled(b, h, i, d) * K(b, kv_head, j, d);
-                    }
-                    scores(b, h, i, j) = sum;
-                }
-            }
+            auto q_slice = xt::view(Q_scaled, b, h, xt::all(), xt::all());    // (S, D)
+            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            xt::view(scores, b, h, xt::all(), xt::all()) = xt::linalg::dot(q_slice, xt::transpose(k_slice));
         }
     }
 
-    // Step 3: Apply attention mask if provided
-    // Mask is (1, 1, S, S) - same mask for all batches/heads
+    // Step 3: Apply attention mask if provided (vectorized)
     if (attn_mask.has_value()) {
         const auto& mask = attn_mask.value();
-        for (size_t b = 0; b < B; ++b) {
-            for (size_t h = 0; h < H; ++h) {
-                for (size_t i = 0; i < S; ++i) {
-                    for (size_t j = 0; j < S; ++j) {
-                        // mask: 1.0 = keep, 0.0 = mask out
-                        if (mask(0, 0, i, j) < 0.5F) {
-                            scores(b, h, i, j) = -1e9F;
-                        }
-                    }
-                }
-            }
-        }
+        scores = xt::where(mask < 0.5F, -1e9F, scores);
     }
 
-    // Step 4: Softmax over last dimension and store intermediates
-    // Intermediates shape: (B, H, S, 64) where position 0 = max_val, position 32 = recip_sum_exp
+    // Step 4: Softmax over last dimension and store intermediates (loop-based for correctness)
     xt::xarray<float> intermediates = xt::zeros<float>({B, H, S, intermediate_size});
     xt::xarray<float> attention_weights = xt::zeros<float>({B, H, S, S});
     for (size_t b = 0; b < B; ++b) {
@@ -219,8 +210,6 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                 for (size_t j = 1; j < S; ++j) {
                     max_val = std::max(max_val, scores(b, h, i, j));
                 }
-
-                // Store max_val at position 0
                 intermediates(b, h, i, 0) = max_val;
 
                 // Compute exp and sum
@@ -230,8 +219,6 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                     attention_weights(b, h, i, j) = exp_val;
                     sum_exp += exp_val;
                 }
-
-                // Store recip_sum_exp at position 32
                 intermediates(b, h, i, 32) = 1.0F / sum_exp;
 
                 // Normalize
@@ -242,56 +229,33 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         }
     }
 
-    // Step 5: attention_weights @ V (forward output, not returned but needed for backward)
-    // We don't actually need to compute this for backward pass
-
     // ========== Backward Pass ==========
+    const auto& dO = grad_output;
 
-    const auto& dO = grad_output;  // gradient w.r.t. output [B, H, S, D]
-
-    // Step 1: Compute dL/dV = attention_weights^T @ dO
-    // For grouped attention, sum over Q heads that share the same KV head
-    xt::xarray<float> dV = xt::zeros<float>({B, G, S, D});
-
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t g = 0; g < G; ++g) {
-            // Sum contributions from all Q heads in this group
-            for (size_t h_in_group = 0; h_in_group < (H / G); ++h_in_group) {
-                size_t h = g * (H / G) + h_in_group;
-                for (size_t j = 0; j < S; ++j) {  // V's sequence dimension
-                    for (size_t d = 0; d < D; ++d) {
-                        float sum = 0.0F;
-                        for (size_t i = 0; i < S; ++i) {
-                            sum += attention_weights(b, h, i, j) * dO(b, h, i, d);
-                        }
-                        dV(b, g, j, d) += sum;
-                    }
-                }
-            }
-        }
-    }
-
-    // Step 2: Compute dL/dP (gradient w.r.t. attention weights) = dO @ V^T
-    xt::xarray<float> dP = xt::zeros<float>({B, H, S, S});
-
+    // Step 4: dV = P^T @ dO using xt::linalg::dot, then reduce to groups
+    xt::xarray<float> dV_expanded = xt::zeros<float>({B, H, S, D});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            size_t kv_head = h / (H / G);
-            for (size_t i = 0; i < S; ++i) {
-                for (size_t j = 0; j < S; ++j) {
-                    float sum = 0.0F;
-                    for (size_t d = 0; d < D; ++d) {
-                        sum += dO(b, h, i, d) * V(b, kv_head, j, d);
-                    }
-                    dP(b, h, i, j) = sum;
-                }
-            }
+            auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, S)
+            auto do_slice = xt::view(dO, b, h, xt::all(), xt::all());                // (S, D)
+            xt::view(dV_expanded, b, h, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(p_slice), do_slice);
+        }
+    }
+    const xt::xarray<float> dV = reduce_grad_to_groups(dV_expanded, G);
+
+    // Step 5: dP = dO @ V^T using xt::linalg::dot
+    const xt::xarray<float> V_expanded = expand_kv_heads(V, H);
+    xt::xarray<float> dP = xt::zeros<float>({B, H, S, S});
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            auto do_slice = xt::view(dO, b, h, xt::all(), xt::all());         // (S, D)
+            auto v_slice = xt::view(V_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            xt::view(dP, b, h, xt::all(), xt::all()) = xt::linalg::dot(do_slice, xt::transpose(v_slice));
         }
     }
 
-    // Step 3: Softmax backward: dL/dS = P * (dP - sum(P * dP))
+    // Step 6: Softmax backward (LOOP-BASED for correctness): dS = P * (dP - sum(P * dP))
     xt::xarray<float> dS = xt::zeros<float>({B, H, S, S});
-
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             for (size_t i = 0; i < S; ++i) {
@@ -300,7 +264,6 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                 for (size_t j = 0; j < S; ++j) {
                     sum_p_dp += attention_weights(b, h, i, j) * dP(b, h, i, j);
                 }
-
                 // Compute dS = P * (dP - sum_p_dp)
                 for (size_t j = 0; j < S; ++j) {
                     dS(b, h, i, j) = attention_weights(b, h, i, j) * (dP(b, h, i, j) - sum_p_dp);
@@ -309,51 +272,29 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         }
     }
 
-    // Step 4: Apply scale to dS (IMPORTANT: scale before matmul for numerical stability!)
+    // Apply scale to dS
     dS = dS * scale;
 
-    // Step 5: Compute dL/dQ = dS @ K
+    // Step 7: dQ = dS @ K using xt::linalg::dot
     xt::xarray<float> dQ = xt::zeros<float>({B, H, S, D});
-
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            size_t kv_head = h / (H / G);
-            for (size_t i = 0; i < S; ++i) {
-                for (size_t d = 0; d < D; ++d) {
-                    float sum = 0.0F;
-                    for (size_t j = 0; j < S; ++j) {
-                        sum += dS(b, h, i, j) * K(b, kv_head, j, d);
-                    }
-                    dQ(b, h, i, d) = sum;
-                }
-            }
+            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());         // (S, S)
+            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            xt::view(dQ, b, h, xt::all(), xt::all()) = xt::linalg::dot(ds_slice, k_slice);
         }
     }
 
-    // Step 6: Compute dL/dK = dS^T @ Q
-    // dS already has scale applied (line 317), so we use UNSCALED Q to match composite
-    // Composite does: dL_dK = (dL_dscaled_dot * scale)^T @ query (line 513, 520-522)
-    // This is mathematically: dK = (grad_softmax * scale)^T @ Q
-    // For grouped attention, sum over Q heads that share the same KV head
-    xt::xarray<float> dK = xt::zeros<float>({B, G, S, D});
-
+    // Step 8: dK = dS^T @ Q using xt::linalg::dot, then reduce to groups
+    xt::xarray<float> dK_expanded = xt::zeros<float>({B, H, S, D});
     for (size_t b = 0; b < B; ++b) {
-        for (size_t g = 0; g < G; ++g) {
-            // Sum contributions from all Q heads in this group
-            for (size_t h_in_group = 0; h_in_group < (H / G); ++h_in_group) {
-                size_t h = g * (H / G) + h_in_group;
-                for (size_t j = 0; j < S; ++j) {  // K's sequence dimension
-                    for (size_t d = 0; d < D; ++d) {
-                        float sum = 0.0F;
-                        for (size_t i = 0; i < S; ++i) {
-                            sum += dS(b, h, i, j) * Q(b, h, i, d);  // Use UNSCALED Q!
-                        }
-                        dK(b, g, j, d) += sum;
-                    }
-                }
-            }
+        for (size_t h = 0; h < H; ++h) {
+            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());  // (S, S)
+            auto q_slice = xt::view(Q, b, h, xt::all(), xt::all());    // (S, D) - UNSCALED!
+            xt::view(dK_expanded, b, h, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(ds_slice), q_slice);
         }
     }
+    const xt::xarray<float> dK = reduce_grad_to_groups(dK_expanded, G);
 
     return {dQ, dK, dV, intermediates};
 }
@@ -374,11 +315,11 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
 ttnn::Tensor groups_shared_matmul(
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& kv_tensor,
-    bool transpose_a = false,
-    bool transpose_b = false) {
+    const bool transpose_a = false,
+    const bool transpose_b = false) {
     using namespace ttml;
-    auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
-    auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
+    const auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
+    const auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
         throw std::invalid_argument(
             fmt::format(
@@ -392,8 +333,8 @@ ttnn::Tensor groups_shared_matmul(
     }
     // result will have shape (batch_num, heads, M, N)
     // we determine M,N based on the transpose options
-    auto M = transpose_a ? embedding_dim : seq_len;
-    auto N = transpose_b ? seq_len_v : embedding_dim_v;
+    const auto M = transpose_a ? embedding_dim : seq_len;
+    const auto N = transpose_b ? seq_len_v : embedding_dim_v;
 
     // - G != H:
     //   bcast kv_tensor to groups in query_tensor then reshape back to query_tensor_shape:
@@ -411,14 +352,14 @@ ttnn::Tensor groups_shared_matmul(
 
 // helper function to collect grads from the query groups associated
 // with each key/value
-ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t groups) {
+ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, const uint32_t groups) {
     using namespace ttml;
     if (ungrouped_grads.logical_shape().rank() != 4) {
         throw std::invalid_argument(
             fmt::format("ungrouped_grads must have rank 4, but got rank {}", ungrouped_grads.logical_shape().rank()));
     }
     // [B,H,S,E]
-    auto [batch_num, num_heads, seq_len, embedding_dim] = ungrouped_grads.logical_shape().to_array_4D();
+    const auto [batch_num, num_heads, seq_len, embedding_dim] = ungrouped_grads.logical_shape().to_array_4D();
     if (groups == num_heads) {
         // group size is 1, nothing to do
         return ungrouped_grads;
@@ -437,13 +378,13 @@ std::vector<ttnn::Tensor> composite_sdpa(
     const ttnn::Tensor& value,
     const ttnn::Tensor& grad_output,
     const std::optional<ttnn::Tensor>& attn_mask,
-    bool return_intermediate = false) {
+    const bool return_intermediate = false) {
     // Forward pass with intermediates returned
     // Backward pass return 3 gradients
     using namespace ttml;
 
-    auto [batch_num, heads, seq_len, embedding_dim] = query.logical_shape().to_array_4D();
-    auto groups = value.logical_shape().to_array_4D()[1];
+    const auto [batch_num, heads, seq_len, embedding_dim] = query.logical_shape().to_array_4D();
+    const auto groups = value.logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
@@ -612,45 +553,49 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
-    auto scaled_query = core::from_xtensor(scale_query_tensor, device);
+    const xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
+    const auto scaled_query = core::from_xtensor(scale_query_tensor, device);
 
-    auto query = core::from_xtensor(query_tensor, device);
-    auto key = core::from_xtensor(key_tensor, device);
-    auto value = core::from_xtensor(value_tensor, device);
-    auto attn_mask = core::from_xtensor(attn_mask_tensor, device);
-    auto grad_output = core::from_xtensor(grad_output_tensor, device);
+    const auto query = core::from_xtensor(query_tensor, device);
+    const auto key = core::from_xtensor(key_tensor, device);
+    const auto value = core::from_xtensor(value_tensor, device);
+    const auto attn_mask = core::from_xtensor(attn_mask_tensor, device);
+    const auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
     // ========== Pure Float Reference (Ground Truth) ==========
     fmt::print("Computing pure float reference (ground truth)...\n");
+    auto float_start = std::chrono::high_resolution_clock::now();
     auto float_gradients =
         float_sdpa_backward(query_tensor, key_tensor, value_tensor, grad_output_tensor, attn_mask_tensor);
-    auto float_dQ = float_gradients[0];
-    auto float_dK = float_gradients[1];
-    auto float_dV = float_gradients[2];
-    auto float_intermediates = float_gradients[3];
-    fmt::print("Float reference computed.\n\n");
+    auto float_end = std::chrono::high_resolution_clock::now();
+    const auto& float_dQ = float_gradients[0];
+    const auto& float_dK = float_gradients[1];
+    const auto& float_dV = float_gradients[2];
+    const auto& float_intermediates = float_gradients[3];
+    const auto float_duration_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(float_end - float_start).count();
+    fmt::print("Float reference computed in {} ms\n\n", float_duration_ms);
 
     // ========== Composite Implementation (uses ttnn ops) ==========
     fmt::print("Computing composite SDPA backward (ttnn ops)...\n");
     auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
-    auto composite_attn_output = /* attn_output */ composite_output[0];
+    const auto composite_attn_output = /* attn_output */ composite_output[0];
     auto max_value = /* max_value */ composite_output[1];
     auto recip_sum_exp = /* recip_sum_exp */ composite_output[2];
-    auto dL_dQ = /* dL_dQ */ composite_output[3];
-    auto dL_dK = /* dL_dK */ composite_output[4];
-    auto dL_dV = /* dL_dV */ composite_output[5];
-    [[maybe_unused]] auto attention_weights = /* attention_weights */ composite_output[6];
+    const auto dL_dQ = /* dL_dQ */ composite_output[3];
+    const auto dL_dK = /* dL_dK */ composite_output[4];
+    const auto dL_dV = /* dL_dV */ composite_output[5];
+    [[maybe_unused]] const auto attention_weights = /* attention_weights */ composite_output[6];
 
-    auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
+    const auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
     max_value = ttnn::add(padded_interm, max_value);
     recip_sum_exp = ttnn::add(padded_interm, recip_sum_exp);
 
-    auto composite_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
+    const auto composite_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
 
     // Diagnostic: Check intermediate values that might affect numerical stability
-    xt::xarray<float> max_val_cpu = core::to_xtensor(max_value);
-    xt::xarray<float> recip_cpu = core::to_xtensor(recip_sum_exp);
+    const xt::xarray<float> max_val_cpu = core::to_xtensor(max_value);
+    const xt::xarray<float> recip_cpu = core::to_xtensor(recip_sum_exp);
     fmt::print("\n=== Intermediates for Numerical Stability Check ===\n");
     fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
     if (S > 32) {
@@ -660,7 +605,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
     fmt::print("\nComputing SDPA forward kernel...\n");
-    auto sdpa_fw_result = ttml::metal::sdpa_fw(
+    const auto sdpa_fw_result = ttml::metal::sdpa_fw(
         query,
         key,
         value,
@@ -670,14 +615,14 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         fp32_dest_acc_en);
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
-    auto kernel_attn_output = sdpa_fw_result[0].value();
-    auto kernel_intermediates = sdpa_fw_result[1].value();
+    const auto kernel_attn_output = sdpa_fw_result[0].value();
+    const auto kernel_intermediates = sdpa_fw_result[1].value();
     fmt::print("SDPA forward kernel output shape: {}\n", kernel_attn_output.logical_shape());
     fmt::print("SDPA forward kernel intermediates shape: {}\n", kernel_intermediates.logical_shape());
 
     // ========== SDPA Backward Kernel (using forward kernel outputs) ==========
     fmt::print("\nComputing SDPA backward kernel (using sdpa_fw outputs)...\n");
-    auto op_result = ttml::metal::sdpa_bw(
+    const auto op_result = ttml::metal::sdpa_bw(
         grad_output,
         kernel_attn_output,
         query,
@@ -691,38 +636,19 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     fmt::print("\n=== Converting tensors to xtensor ===\n");
 
     // Convert forward kernel outputs for comparison
-    xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
-    xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
-    xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
-    xt::xarray<float> composite_intermediates_cpu = core::to_xtensor(composite_intermediates);
+    const xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
+    const xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
+    const xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
+    const xt::xarray<float> composite_intermediates_cpu = core::to_xtensor(composite_intermediates);
     fmt::print("Converted forward outputs\n");
 
-    xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(op_result[0]);  // dL_dQ
-    fmt::print("Converted kernel dQ\n");
-    xt::xarray<float> composite_dQ = core::to_xtensor(dL_dQ);
-    fmt::print("Converted composite dQ\n");
+    const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(op_result[0]);  // dL_dQ
+    const xt::xarray<float> sdpa_bw_dK = core::to_xtensor(op_result[1]);  // dL_dK
+    const xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
 
-    xt::xarray<float> sdpa_bw_dK = core::to_xtensor(op_result[1]);  // dL_dK
-    fmt::print("Converted kernel dK\n");
-    xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
-    fmt::print("Converted composite dK\n");
-
-    xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
-    fmt::print("Converted kernel dV\n");
-    xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
-    fmt::print("Converted composite dV\n");
-
-    // Print shapes before checking
-    fmt::print("\n=== Tensor Shapes ===\n");
-    fmt::print("float_dQ shape: {}\n", float_dQ.shape());
-    fmt::print("float_dK shape: {}\n", float_dK.shape());
-    fmt::print("float_dV shape: {}\n", float_dV.shape());
-    fmt::print("composite_dQ shape: {}\n", composite_dQ.shape());
-    fmt::print("composite_dK shape: {}\n", composite_dK.shape());
-    fmt::print("composite_dV shape: {}\n", composite_dV.shape());
-    fmt::print("kernel_dQ shape: {}\n", sdpa_bw_dQ.shape());
-    fmt::print("kernel_dK shape: {}\n", sdpa_bw_dK.shape());
-    fmt::print("kernel_dV shape: {}\n", sdpa_bw_dV.shape());
+    const xt::xarray<float> composite_dQ = core::to_xtensor(dL_dQ);
+    const xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
+    const xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
 
     // Verify shapes match
     ASSERT_EQ(sdpa_bw_dQ.shape(), composite_dQ.shape()) << "kernel_dQ shape != composite_dQ shape";
@@ -732,29 +658,16 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     ASSERT_EQ(sdpa_bw_dV.shape(), composite_dV.shape()) << "kernel_dV shape != composite_dV shape";
     ASSERT_EQ(sdpa_bw_dV.shape(), float_dV.shape()) << "kernel_dV shape != float_dV shape";
 
-    // Debug: Check for NaN/Inf values
-    fmt::print("\n=== DEBUG: Checking for invalid values ===\n");
-
-    auto has_nan_or_inf = [](const xt::xarray<float>& arr, const std::string& name) {
-        size_t nan_count = 0, inf_count = 0;
-        for (size_t i = 0; i < arr.size(); ++i) {
-            if (std::isnan(arr.flat(i)))
-                nan_count++;
-            if (std::isinf(arr.flat(i)))
-                inf_count++;
-        }
-        fmt::print("{}: shape={}, NaNs={}, Infs={}\n", name, arr.shape(), nan_count, inf_count);
-    };
-
-    has_nan_or_inf(float_dQ, "float_dQ");
-    has_nan_or_inf(composite_dQ, "composite_dQ");
-    has_nan_or_inf(sdpa_bw_dQ, "kernel_dQ");
-    has_nan_or_inf(float_dK, "float_dK");
-    has_nan_or_inf(composite_dK, "composite_dK");
-    has_nan_or_inf(sdpa_bw_dK, "kernel_dK");
-    has_nan_or_inf(float_dV, "float_dV");
-    has_nan_or_inf(composite_dV, "composite_dV");
-    has_nan_or_inf(sdpa_bw_dV, "kernel_dV");
+    // Check for NaN/Inf values
+    EXPECT_TRUE(xt::all(xt::isfinite(float_dQ))) << "float_dQ contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(float_dK))) << "float_dK contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(float_dV))) << "float_dV contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(composite_dQ))) << "composite_dQ contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(composite_dK))) << "composite_dK contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(composite_dV))) << "composite_dV contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dQ))) << "kernel_dQ contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dK))) << "kernel_dK contains NaN or Inf values";
+    EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dV))) << "kernel_dV contains NaN or Inf values";
 
     // ========== Comparisons ==========
     fmt::print("\n=== COMPARISON RESULTS ===\n\n");
@@ -786,42 +699,20 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     // Final assertions
     // Forward pass checks
-    bool fw_attn_output_matches = xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, rtol, atol);
+    const bool fw_attn_output_matches = xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, rtol, atol);
     // Compare kernel intermediates vs float (same sparse format: values at pos 0 and 32 only)
-    bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, rtol, atol);
+    const bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, float_intermediates, rtol, atol);
 
     // Backward pass checks
-    bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
-    bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
-    bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
-    bool kernel_dQ_matches_composite = xt::allclose(sdpa_bw_dQ, composite_dQ, rtol, atol);
-    bool kernel_dK_matches_composite = xt::allclose(sdpa_bw_dK, composite_dK, rtol, atol);
-    bool kernel_dV_matches_composite = xt::allclose(sdpa_bw_dV, composite_dV, rtol, atol);
-    bool composite_dQ_matches_float = xt::allclose(composite_dQ, float_dQ, rtol, atol);
-    bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
-    bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
-
-    fmt::print("\n=== FINAL RESULTS ({}) ===\n", config.test_name);
-
-    // Forward pass results
-    fmt::print("Forward Pass:\n");
-    fmt::print("  Attn Output (Kernel vs Composite): {}\n", fw_attn_output_matches ? "PASS" : "FAIL");
-    fmt::print("  Intermediates (Kernel vs Float): {}\n", fw_intermediates_matches ? "PASS" : "FAIL");
-
-    // Backward pass results
-    fmt::print("\nBackward Pass (sdpa_bw kernel using sdpa_fw outputs):\n");
-    fmt::print(
-        "dQ: Kernel vs Float: {}, Composite vs Float: {}\n",
-        kernel_dQ_matches_float ? "PASS" : "FAIL",
-        composite_dQ_matches_float ? "PASS" : "FAIL");
-    fmt::print(
-        "dK: Kernel vs Float: {}, Composite vs Float: {}\n",
-        kernel_dK_matches_float ? "PASS" : "FAIL",
-        composite_dK_matches_float ? "PASS" : "FAIL");
-    fmt::print(
-        "dV: Kernel vs Float: {}, Composite vs Float: {}\n",
-        kernel_dV_matches_float ? "PASS" : "FAIL",
-        composite_dV_matches_float ? "PASS" : "FAIL");
+    const bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
+    const bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
+    const bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
+    const bool kernel_dQ_matches_composite = xt::allclose(sdpa_bw_dQ, composite_dQ, rtol, atol);
+    const bool kernel_dK_matches_composite = xt::allclose(sdpa_bw_dK, composite_dK, rtol, atol);
+    const bool kernel_dV_matches_composite = xt::allclose(sdpa_bw_dV, composite_dV, rtol, atol);
+    const bool composite_dQ_matches_float = xt::allclose(composite_dQ, float_dQ, rtol, atol);
+    const bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
+    const bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
 
     // Assertions
     EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output mismatch in " << config.test_name;

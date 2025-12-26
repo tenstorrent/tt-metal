@@ -94,10 +94,10 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* intermediates_buffer,
     const tt::tt_metal::Buffer* grad_key_buffer,
     const tt::tt_metal::Buffer* grad_value_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
+    const uint32_t num_cores,
+    const uint32_t num_cores_y,
+    const uint32_t num_rows_per_core_group_1,
+    const uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
@@ -155,67 +155,46 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     tt::tt_metal::Program program{};
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // Get tensor dimensions and extract heads from shapes
-    auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
-    auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
-    auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
+    const auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
+    const auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
+    const auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
 
     // For backward pass we split work over rows of K and V
     // Each row corresponds to a group in K and V, and all associated heads in Q
     // TODO[improvement](vmelnykov): explore splitting work over cores using assumption that attn_mask is
     // causal(triangular).
-    uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    uint32_t NC = kB * kNH;
-    uint32_t total_rows_to_process = NC * St;   // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
-    uint32_t kv_heads = kNH;                    // number of heads in Key and Value
-    uint32_t heads_per_group = qNH / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
-    uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
+    const uint32_t NC = kB * kNH;
+    const uint32_t total_rows_to_process =
+        NC * St;                    // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+    const uint32_t kv_heads = kNH;  // number of heads in Key and Value
+    const uint32_t heads_per_group = qNH / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
+    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
+    const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
     // Scale factor for attention computation
     // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
-    float per_head_dim = static_cast<float>(qEmbd);
-    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
-    uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
-    uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
+    const float per_head_dim = static_cast<float>(qEmbd);
+    const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    uint32_t block_size = get_block_size(qWt, 4U);
+    const uint32_t block_size = get_block_size(qWt, 4U);
 
-    //[DEBUG]:
-    fmt::print(
-        "SDPA BW KV: NC={}, St={}, qWt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
-        "{}, total_rows_to_process = {}, num_cores={} ({}x{}), "
-        "group1 cores={} rows/core={}, group2 cores={} rows/core={}\n",
-        NC,
-        St,
-        qWt,
-        scaler,
-        block_size,
-        qNH,
-        kv_heads,
-        heads_per_group,
-        total_rows_to_process,
-        num_cores,
-        num_cores_x,
-        num_cores_y,
-        core_group_1.size(),
-        num_rows_per_core_group_1,
-        core_group_2.size(),
-        num_rows_per_core_group_2);
-
-    auto data_format = input_data_format;
-    auto precise_data_format = tt::DataFormat::Float32;
+    const auto data_format = input_data_format;
+    const auto precise_data_format = tt::DataFormat::Float32;
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -398,9 +377,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         minus_one,                  // 6: mask transform constant
         custom_inf                  // 7: mask transform constant
     };
-
-    // kernels.compute_group_1 = create_compute_kernel(
-    //     program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
 
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,

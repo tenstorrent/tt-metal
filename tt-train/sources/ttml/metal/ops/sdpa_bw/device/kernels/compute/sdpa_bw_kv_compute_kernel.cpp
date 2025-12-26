@@ -31,6 +31,11 @@
 
 namespace NAMESPACE {
 
+// SDPA Backward Compute Kernel for Key and Value gradients.
+// Computes dK and dV by iterating over query rows for each K/V row.
+// For grouped query attention, accumulates gradients from multiple query heads per KV head.
+// Processing order: for each K/V row → for each query head in group → for each query row
+
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (used in update_grad_value)
 constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim (qWt == kWt == vWt)
@@ -137,14 +142,14 @@ void MAIN {
 
                 cb_wait_front(alias_cb_cur_grad_value, tiles_per_row);
 
-                // TODO[optimization](vmelnykov): we can optimize perf by calculating u_scalar_row one per row of query
-                // and share it with kv kernel as additional intermdediate(or even leave this as sharded L1 tensor) Step
-                // 4: calculate u_scalar_row
+                // Step 4: calculate u_scalar_row = sum(dO * O) per row
+                // TODO[optimization](vmelnykov): Calculate u_scalar_row once per query row and share with KV kernel
+                // as additional intermediate (or keep as sharded L1 tensor)
                 compute_u_scalar_row(
                     cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
 
                 // Step 5: compute grad w.r.t attention weights
-                // dP = dO @ V^T (where dO is upsteam grad_output)
+                // dP = dO @ V^T (where dO is upstream grad_output)
                 compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
 
                 // Step 6: softmax backward block
@@ -168,7 +173,7 @@ void MAIN {
 
                 cb_wait_front(alias_cb_cur_grad_key, tiles_per_row);
 
-                // pop intermediates results using for update dK and dQ
+                // Pop intermediate results used for computing dK and dV
                 cb_pop_front(cb_u_scalar_row, onetile);
                 cb_pop_front(cb_grad_attn_weights, onetile);
                 cb_pop_front(cb_grad_scores, onetile);

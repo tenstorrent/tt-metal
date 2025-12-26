@@ -102,41 +102,45 @@ void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
     generate_tile_with_packed_bfloat16_value(cb_id, packed_value);
 }
 
-// Generates a tile intended for performing row reduction through matrix multiplication.
-// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
-// Template parameter T should be uint16_t for BF16 or uint32_t for FP32.
-template <typename T>
-void generate_matmul_row_reduce_tile_t(uint32_t cb_id) {
-    // For BF16: one = 0x3F80 (bf16 1.0), For FP32: one = 0x3F800000 (fp32 1.0)
-    constexpr T one = (sizeof(T) == 2) ? static_cast<T>(0x3F80) : static_cast<T>(0x3F800000);
-    constexpr T zero = static_cast<T>(0);
-
-    cb_reserve_back(cb_id, onetile);
+// Helper template for generating matmul row reduce tile with specific type and one value.
+// The tile pattern has 1.0 in the first column of even faces (left faces) and 0 elsewhere.
+template <typename T, T one_value>
+inline void fill_matmul_row_reduce_tile(uint32_t cb_id) {
     T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
-                if (!(face & 1U) && (w == 0)) {  // check whether face is even and width is zero
-                    *tile_ptr++ = one;
-                } else {
-                    *tile_ptr++ = zero;
-                }
+                // Set to 'one' only in first column (w==0) of even faces (left faces)
+                *tile_ptr++ = (!(face & 1U) && (w == 0)) ? one_value : static_cast<T>(0);
             }
         }
     }
-    cb_push_back(cb_id, onetile);
 }
 
-// Convenience wrapper for BF16 (backward compatibility)
+// Generates a tile intended for performing row reduction through matrix multiplication.
+// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
+// Automatically determines the data type from the circular buffer's data format.
+// Supports: Float32, Float16_b (BF16), Int32, UInt32, UInt16, UInt8 formats.
 inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
-    generate_matmul_row_reduce_tile_t<uint16_t>(cb_id);
-}
+    const DataFormat data_format = get_dataformat(cb_id);
 
-// Convenience wrapper for FP32
-inline void generate_matmul_row_reduce_tile_fp32(uint32_t cb_id) {
-    generate_matmul_row_reduce_tile_t<uint32_t>(cb_id);
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32:
+            fill_matmul_row_reduce_tile<uint32_t, 0x3F800000>(cb_id);  // fp32 1.0
+            break;
+        case DataFormat::Int32:
+        case DataFormat::UInt32: fill_matmul_row_reduce_tile<uint32_t, 1>(cb_id); break;
+        case DataFormat::UInt16: fill_matmul_row_reduce_tile<uint16_t, 1>(cb_id); break;
+        case DataFormat::UInt8: fill_matmul_row_reduce_tile<uint8_t, 1>(cb_id); break;
+        default:                                                   // Float16_b and other bf16 variants
+            fill_matmul_row_reduce_tile<uint16_t, 0x3F80>(cb_id);  // bf16 1.0
+            break;
+    }
+
+    cb_push_back(cb_id, onetile);
 }
 
 // ----- Type conversion helper functions -----

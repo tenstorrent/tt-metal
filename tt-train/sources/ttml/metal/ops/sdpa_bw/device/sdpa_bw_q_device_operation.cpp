@@ -30,11 +30,11 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     const auto& value = tensor_args.value;
     const auto& intermediates = tensor_args.intermediates;
 
-    // Validate shapes are compatible
-    auto grad_output_shape = grad_output.logical_shape();
-    auto query_shape = query.logical_shape();
-    auto key_shape = key.logical_shape();
-    auto value_shape = value.logical_shape();
+    // Validate that input and output tensor shapes are compatible
+    const auto grad_output_shape = grad_output.logical_shape();
+    const auto query_shape = query.logical_shape();
+    const auto key_shape = key.logical_shape();
+    const auto value_shape = value.logical_shape();
 
     TT_FATAL(
         grad_output_shape == query_shape,
@@ -61,9 +61,9 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         "All input tensors must be on the same device");
 
     // Extract and validate heads from tensor shapes
-    auto [qB, qH, qS, qE] = query_shape.to_array_4D();
-    auto [kB, kH, kS, kE] = key_shape.to_array_4D();
-    auto [vB, vH, vS, vE] = value_shape.to_array_4D();
+    const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
+    const auto [kB, kH, kS, kE] = key_shape.to_array_4D();
+    const auto [vB, vH, vS, vE] = value_shape.to_array_4D();
 
     TT_FATAL(
         qH > 0 && kH > 0 && vH > 0,

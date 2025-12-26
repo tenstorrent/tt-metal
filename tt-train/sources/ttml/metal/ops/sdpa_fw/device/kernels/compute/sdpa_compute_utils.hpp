@@ -365,21 +365,3 @@ void pack_intermediate_result(
 
     cb_push_back(cb_out_idx, tiles_count);
 }
-
-// OLD: Simple copy without masking (may have non-zero values in columns other than 0)
-// void pack_intermediate_result(uint32_t cb_in_idx, uint32_t cb_out_idx, uint32_t tiles_count = 1U) {
-//     cb_wait_front(cb_in_idx, tiles_count);
-//     cb_reserve_back(cb_out_idx, tiles_count);
-//     reconfig_data_format(cb_in_idx, cb_out_idx);
-//     for (uint32_t tile_idx = 0; tile_idx < tiles_count; ++tile_idx) {
-//         tile_regs_acquire();
-//         copy_tile_init(cb_in_idx);
-//         copy_tile(cb_in_idx, tile_idx, 0);
-//         tile_regs_commit();
-//         tile_regs_wait();
-//         pack_reconfig_data_format(cb_out_idx);
-//         pack_tile(0, cb_out_idx);
-//         tile_regs_release();
-//     }
-//     cb_push_back(cb_out_idx, tiles_count);
-// }

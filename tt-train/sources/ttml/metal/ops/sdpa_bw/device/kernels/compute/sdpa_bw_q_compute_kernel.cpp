@@ -31,6 +31,10 @@
 
 namespace NAMESPACE {
 
+// SDPA Backward Compute Kernel for Query gradient.
+// Computes dQ by iterating over K/V rows for each query row.
+// Processing order: for each query row → for each K/V row (accumulating dQ)
+
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t qWt = get_compile_time_arg_val(1);              // num tile in inner dim (qWt == kWt == vWt)
 constexpr uint32_t Ht = get_compile_time_arg_val(2);               // num_seq_len / TILE_H
@@ -115,7 +119,7 @@ void MAIN {
             apply_statistics_inplace(cb_attention_weights, cb_intermediates, num_of_interm_tiles);
 
             // Step 4: compute grad w.r.t attention weights
-            // dP = dO @ V^T (where dO is upsteam grad_output)
+            // dP = dO @ V^T (where dO is upstream grad_output)
             compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights, scaler_bits);
 
             // Step 5: softmax backward block
@@ -137,15 +141,15 @@ void MAIN {
                 /* do_accumulate */ (h > 0));
             cb_wait_front(alias_cb_cur_grad_query, tiles_per_row);
 
-            // Swap current and previous grad_query buffers
+            // Swap current and previous grad_query buffers for double-buffering
             std::swap(alias_cb_prev_grad_query, alias_cb_cur_grad_query);
 
-            // Pop CBs for next K/V block
+            // Pop CBs consumed in this K/V iteration
             cb_pop_front(cb_key, tiles_per_row);
             cb_pop_front(cb_value, tiles_per_row);
-
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_grad_attn_weights, onetile);
+            // Note: cb_grad_scores is popped inside update_grad_query
         }
 
         // Push final grad_query to output CB

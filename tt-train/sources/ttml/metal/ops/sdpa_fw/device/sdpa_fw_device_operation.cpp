@@ -140,10 +140,10 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             tt::tt_metal::DataType::BFLOAT16);
 
         auto output_shape = preallocated_output->padded_shape();
-        // NEW: Output shape (B, H, S, D) - heads NOT fused
+        // Output shape (B, H, S, D) - heads NOT fused
         TT_FATAL(
-            output_shape[0] == query_shape[0] &&   // B
-                output_shape[1] == qHt &&          // H (heads NOT fused)
+            output_shape[0] == query_shape[0] &&      // B
+                output_shape[1] == qHt &&             // H (heads NOT fused)
                 output_shape[2] == query_shape[2] &&  // S
                 output_shape[3] == query_shape[3],    // D
             "Invalid preallocated output shape. Expected (B, H, S, D) = ({}, {}, {}, {}), got {}. Query shape={}",
@@ -153,19 +153,6 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             query_shape[3],
             output_shape,
             query_shape);
-        // OLD: Output shape (B, 1, S, qHt*d) - heads fused in last dim
-        // TT_FATAL(
-        //     output_shape[0] == query_shape[0] &&          // B
-        //         output_shape[1] == 1U &&                  // fused heads
-        //         output_shape[2] == query_shape[2] &&      // S
-        //         output_shape[3] == query_shape[3] * qHt,  // qHt * d
-        //     "Invalid preallocated output shape. Expected (B, 1, S, qHt*d) = ({}, {}, {}, {}), got {}. Query shape={}",
-        //     query_shape[0],
-        //     1U,
-        //     query_shape[2],
-        //     query_shape[3] * qHt,
-        //     output_shape,
-        //     query_shape);
     }
 
     // TODO(vmelnykov): #28205 - Implement dropout support in SDPA forward operation
@@ -195,13 +182,6 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             "q_heads={}",
             interm_shape,
             qHt);
-        // OLD: intermediate shape: (B, q_heads, S, 1U) - one value per head
-        // TT_FATAL(
-        //     interm_shape[0] == qBt && interm_shape[1] == qHt && interm_shape[2] == qSt && interm_shape[3] == 1U,
-        //     "Preallocated intermediate shape must be (B, q_heads, S, 1U). Got preallocated intermediate shape={}, "
-        //     "q_heads={}",
-        //     interm_shape,
-        //     qHt);
     }
 }
 
@@ -230,14 +210,11 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
         } else {
             auto shape = tensor_args.query.logical_shape();
             // intermediate shape: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
-            constexpr uint32_t kIntermediateWidth = 64U;
-            shape[-1] = kIntermediateWidth;
+            shape[-1] = 64U;
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(
                     tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
-            // OLD: intermediate shape: (B, q_heads, S, 1U) - one value per head
-            // shape[-1] = 1U;  // intermediate is 1 element in inner dim
         }
     }
 

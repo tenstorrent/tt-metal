@@ -186,9 +186,8 @@ void MAIN {
         // Writer will write these to shape (B, H, S, 64)
         // cb_matmul_reduce is used as mask tile (1.0 in col 0, 0.0 elsewhere) to ensure zeros elsewhere
         pack_intermediate_result(alias_cb_prev_max, cb_intermediates, cb_matmul_reduce);      // tile 0: max_val at col 0
-        pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates, cb_matmul_reduce);  // tile 1: recip_sum_exp at col 32
-        // OLD: pack only recip_sum_exp
-        // pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
+        pack_intermediate_result(
+            alias_cb_prev_sum_exp, cb_intermediates, cb_matmul_reduce);  // tile 1: recip_sum_exp at col 32
 #endif
 
         cb_reserve_back(cb_output, qWt);

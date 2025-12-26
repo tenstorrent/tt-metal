@@ -41,26 +41,17 @@ void kernel_main() {
 
     const uint32_t tiles_per_head = qWt;
     constexpr uint32_t kIntermediateTilesPerRow = 2U;
-    // const uint32_t outWt = tiles_per_head * q_heads;  // fused width in tiles: (qNH * d) / TILE_W
 
-    uint32_t end_row = start_row + num_rows_to_process;
+    const uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
         // convert global row index to output tensor coordinates
-        uint32_t s_tile_idx = r % Ht;  // position in sequence (tile idx)
-        uint32_t q_head_idx = (r / Ht) % q_heads;
-        uint32_t batch_idx = r / (Ht * q_heads);
+        const uint32_t s_tile_idx = r % Ht;  // position in sequence (tile idx)
+        const uint32_t q_head_idx = (r / Ht) % q_heads;
+        const uint32_t batch_idx = r / (Ht * q_heads);
 
         // -------- Output: (B, H, S, D), heads NOT fused --------
         // Linear index for [B, H, S, D]: ((b * q_heads + h) * Ht + s_tile) * tiles_per_head + col
-        uint32_t out_start_idx = ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * tiles_per_head;
-
-        // -------- OLD: Output: (B, 1, S, qNH*qEmbd), heads fused in last dim --------
-        // Row base for (batch_idx, s_tile): ((b * 1 + 0) * Ht + s_tile_idx) * outWt
-        // uint32_t out_row_base_tiles = ((batch_idx * Ht) + s_tile_idx) * outWt;
-        // Slice for this head in fused width
-        // uint32_t head_offset_tiles = q_head_idx * tiles_per_head;
-        // First tile index where we place this head's row
-        // uint32_t out_start_idx = out_row_base_tiles + head_offset_tiles;
+        const uint32_t out_start_idx = ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * tiles_per_head;
 
         write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
 
@@ -69,7 +60,7 @@ void kernel_main() {
         // Tile 0: max_val at col 0, rest padded
         // Tile 1: recip_sum_exp at col 32 (col 0 of second tile), rest padded
         // Linear index for [B, qNH, S, 64]: ((b * q_heads + h) * Ht + s_tile) * 2 + tile_offset
-        uint32_t intermediate_base_idx =
+        const uint32_t intermediate_base_idx =
             ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
 
         cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
@@ -84,15 +75,6 @@ void kernel_main() {
 
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
-
-        // OLD: Single tile (recip_sum_exp only)
-        // uint32_t intermediate_idx = ((batch_idx * q_heads + q_head_idx) * Ht) + s_tile_idx;
-        // cb_wait_front(cb_intermediates, onetile);
-        // uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        // noc_async_write_tile(intermediate_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        // noc_async_write_barrier();
-        // cb_pop_front(cb_intermediates, onetile);
-
 #endif
     }
 }

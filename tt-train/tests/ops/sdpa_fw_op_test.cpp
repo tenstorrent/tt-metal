@@ -277,21 +277,15 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     const std::size_t kv_heads = K_split.shape()[1];
     const std::size_t S = Q_split.shape()[2];
     const std::size_t Dh = Q_split.shape()[3];
-    // const std::size_t qD = q_heads * Dh;  // Total query dimension (OLD: for fused output)
 
     // Output in SPLIT format (B, H, S, Dh) - heads NOT fused
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
-    // OLD: Output in FUSED format (B, 1, S, qD) - back to unsplit format
-    // xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
-
     // Intermediates: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
     constexpr std::size_t kIntermediateWidth = 64U;
     xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, kIntermediateWidth});
     std::fill(Intermediates.begin(), Intermediates.end(), 0.0F);
-    // OLD: Intermediates: (B, q_heads, S, 1) - reciprocal of sum of exponentials per head per sequence position
-    // xt::xarray<float> Intermediates = xt::xarray<float>::from_shape({B, q_heads, S, std::size_t(1)});
 
     auto group_of_head = [&](std::size_t h) -> std::size_t {
         // contiguous block mapping for grouped KV
@@ -304,7 +298,6 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     for (std::size_t b = 0; b < B; ++b) {
         for (std::size_t h = 0; h < q_heads; ++h) {
             const std::size_t g = group_of_head(h);
-            // const std::size_t q_off = h * Dh;  // OLD: Offset in fused output tensor
 
             for (std::size_t i = 0; i < S; ++i) {
                 // scores_row[j] = (q_i · k_j) * scale + mask(i,j)
@@ -328,7 +321,6 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 // Store intermediates: max_val at col 0, recip_sum_exp at col 32
                 Intermediates(b, h, i, 0) = rmax;           // max_val at position 0
                 Intermediates(b, h, i, 32) = 1.0F / denom;  // recip_sum_exp at position 32
-                // OLD: Intermediates(b, h, i, 0) = 1.0F / denom;
 
                 // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh)
                 for (std::size_t t = 0; t < Dh; ++t) {
@@ -338,7 +330,6 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                         acc += w * V_split(b, g, j, t);
                     }
                     Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh)
-                    // OLD: Out(b, 0, i, q_off + t) = acc;  // Store in fused format
                 }
             }
         }
@@ -536,9 +527,6 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
     xt::xarray<float> composite_result_xtensor = core::to_xtensor(composite_result_split[0]);  // Already (B, H, S, D)
     xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
-
-    // OLD: Fuse composite output to match kernel format (B, 1, S, qD*q_heads)
-    // xt::xarray<float> composite_result_xtensor = fuse_heads(composite_result_split_xtensor, config.num_query_heads);
 
     // Run float reference implementation with split tensors - now outputs (B, H, S, D) format
     auto [float_result, float_intermediates] =
@@ -772,9 +760,6 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         // Kernel returns split format (B, H, S, Dh) - heads NOT fused
         std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
         EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
-        // OLD: Kernel returns fused format (B, 1, S, d) where d is total embedding dimension
-        // std::vector<size_t> expected_shape = {B, 1U, S, d};
-        // EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in fused format (B, 1, S, d)";
     }
 
     // Test Case 2: return_intermediates = true
@@ -795,16 +780,11 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         // Kernel returns split format (B, H, S, Dh) - heads NOT fused
         std::vector<size_t> expected_shape = {B, num_heads, S, head_dim};
         EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in split format (B, H, S, Dh)";
-        // OLD: Kernel returns fused format (B, 1, S, d) where d is total embedding dimension
-        // std::vector<size_t> expected_shape = {B, 1U, S, d};
-        // EXPECT_EQ(result_xtensor.shape(), expected_shape) << "Result should be in fused format (B, 1, S, d)";
 
         // Check intermediate shape: (B, num_query_heads, S, 64)
         constexpr size_t kIntermediateWidth = 64U;
         std::vector<size_t> expected_interm_shape = {B, num_heads, S, kIntermediateWidth};
-        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape)
-            << "Intermediate shape should be (B, q_heads, S, 64)";
-        // OLD: std::vector<size_t> expected_interm_shape = {B, num_heads, S, 1U};
+        EXPECT_EQ(interm_xtensor.shape(), expected_interm_shape) << "Intermediate shape should be (B, q_heads, S, 64)";
 
         // Verify intermediate values at position 32 are reasonable (should be positive reciprocals)
         // Note: position 0 contains max_val (can be any value), position 32 contains recip_sum_exp

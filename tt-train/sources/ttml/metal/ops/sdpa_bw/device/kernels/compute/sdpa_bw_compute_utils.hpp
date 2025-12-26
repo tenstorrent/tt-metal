@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <api/debug/dprint.h>
 #include <compute_kernel_api/reg_api.h>
-#include <debug/dprint.h>
 
 #include <cstdint>
 
@@ -18,9 +18,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
-
-// test
-#include "compute_kernel_api/eltwise_unary/fill.h"
 
 constexpr uint32_t onetile = 1U;
 
@@ -40,11 +37,11 @@ constexpr uint32_t dst_reg_number = 8U;
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
 void apply_mask_on_reg(
-    uint32_t register_idx,
-    uint32_t cb_attn_mask,
-    uint32_t scaler_bits,
-    uint32_t minus_one_bits,
-    uint32_t custom_inf_bits) {
+    const uint32_t register_idx,
+    const uint32_t cb_attn_mask,
+    const uint32_t scaler_bits,
+    const uint32_t minus_one_bits,
+    const uint32_t custom_inf_bits) {
     /* The DST register buffer must be in acquired state via *acquire_dst* call.*/
 
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
@@ -74,7 +71,12 @@ void apply_mask_on_reg(
     cb_pop_front(cb_attn_mask, onetile);
 }
 
-void apply_statistics_inplace(uint32_t cb_attention_weights, uint32_t cb_intermediates, uint32_t num_of_interm_tiles) {
+// Recomputes attention weights from pre-softmax scores using stored statistics.
+// Given raw attention scores and intermediates (max_val at [0], recip_sum_exp at [1]),
+// computes: softmax(x) = exp(x - max) * recip_sum_exp
+// This is used in backward pass to reconstruct P from stored forward pass statistics.
+void apply_statistics_inplace(
+    const uint32_t cb_attention_weights, const uint32_t cb_intermediates, const uint32_t num_of_interm_tiles) {
     cb_wait_front(cb_attention_weights, onetile);
     cb_wait_front(cb_intermediates, num_of_interm_tiles);
 
@@ -111,7 +113,9 @@ void apply_statistics_inplace(uint32_t cb_attention_weights, uint32_t cb_interme
     cb_push_back(cb_attention_weights, onetile);
 }
 
-inline void transpose_tile(uint32_t cb_input, /*output cb*/ uint32_t cb_transpose_wh) {
+// Transposes a single tile by swapping width and height dimensions.
+// Used for computing A^T @ B matmuls in backward pass (e.g., dV = P^T @ dO).
+inline void transpose_tile(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
     cb_wait_front(cb_input, onetile);
     // transpose attention weights
     reconfig_data_format(cb_input, cb_input);
@@ -128,13 +132,17 @@ inline void transpose_tile(uint32_t cb_input, /*output cb*/ uint32_t cb_transpos
     cb_push_back(cb_transpose_wh, onetile);
 }
 
+// Computes the per-row scalar u = sum(dO * O) needed for softmax backward.
+// This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
+// Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
+// The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
 void compute_u_scalar_row(
-    uint32_t cb_grad_output,
-    uint32_t cb_attn_output,
-    /*output result*/ uint32_t cb_u_scalar_row,
-    /*mutmul reduction*/ uint32_t cb_mat_mul_reduction,
-    uint32_t tiles_per_row,
-    uint32_t scaler_bits) {
+    const uint32_t cb_grad_output,
+    const uint32_t cb_attn_output,
+    /*output result*/ const uint32_t cb_u_scalar_row,
+    /*mutmul reduction*/ const uint32_t cb_mat_mul_reduction,
+    const uint32_t tiles_per_row,
+    const uint32_t scaler_bits) {
     const uint32_t accum_register = 0;
     // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
     // accumulation to dest regs
@@ -181,13 +189,15 @@ void compute_u_scalar_row(
     cb_push_back(cb_u_scalar_row, onetile);
 }
 
-// Compute gradient w.r.t. attention weights
+// Computes gradient w.r.t. attention weights: dP = dO @ V^T
+// This is the first step in the backward chain from output gradient to score gradient.
+// Input: dO (grad_output) and V (value), Output: dP (grad_attn_weights)
 void compute_grad_attn_weights(
-    uint32_t cb_grad_output,
-    uint32_t cb_value,
-    uint32_t tiles_per_row,
-    uint32_t cb_grad_attn_weights,
-    uint32_t scaler_bits) {
+    const uint32_t cb_grad_output,
+    const uint32_t cb_value,
+    const uint32_t tiles_per_row,
+    const uint32_t cb_grad_attn_weights,
+    const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
     // This call is required to set up the matmul correctly
     mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
@@ -211,15 +221,18 @@ void compute_grad_attn_weights(
     cb_push_back(cb_grad_attn_weights, onetile);
 }
 
-// Compute gradient w.r.t. scores(before softmax) dL/dZ = dL/d(Q@K^T) = (dP - u_scalar_row) * P
-// TODO(vmelnykov): In general we need to use fp32 for cb_grad_scores but right now we can't do matmul beween fp16
-// and fp32 CBs(need to compute grad Q and grad K with better accuracy)
+// Computes gradient w.r.t. pre-softmax scores (softmax backward pass).
+// Formula: dS = P * (dP - u) * scale, where:
+//   - P = attention_weights (softmax output)
+//   - dP = grad_attn_weights (gradient from dO @ V^T)
+//   - u = u_scalar_row (per-row sum: sum(dO * O))
+//   - scale = 1/sqrt(d_k) applied here for numerical stability in subsequent matmuls
 void compute_grad_scores(
-    uint32_t cb_grad_attn_weights,
-    uint32_t cb_attention_weights,
-    uint32_t cb_u_scalar_row,
-    uint32_t scaler_bits,
-    /* output */ uint32_t cb_grad_scores) {
+    const uint32_t cb_grad_attn_weights,
+    const uint32_t cb_attention_weights,
+    const uint32_t cb_u_scalar_row,
+    const uint32_t scaler_bits,
+    /* output */ const uint32_t cb_grad_scores) {
     cb_wait_front(cb_grad_attn_weights, onetile);
     cb_wait_front(cb_u_scalar_row, onetile);
 
@@ -260,15 +273,19 @@ void compute_grad_scores(
     cb_push_back(cb_grad_scores, onetile);
 }
 
+// Computes gradient w.r.t. Value tensor: dV = P^T @ dO
+// For grouped query attention, gradients from multiple query heads are accumulated
+// into their shared KV head using do_accumulate flag.
+// Uses cb_transpose_wh as scratch space for transposed attention weights.
 void update_grad_value(
-    uint32_t cb_attention_weights,
-    uint32_t cb_transpose_wh,
-    uint32_t cb_grad_output,
-    uint32_t cb_prev_grad_value,
-    uint32_t cb_cur_grad_value,
-    uint32_t tiles_per_row,
-    uint32_t block_size,
-    bool do_accumulate = false) {
+    const uint32_t cb_attention_weights,
+    const uint32_t cb_transpose_wh,
+    const uint32_t cb_grad_output,
+    const uint32_t cb_prev_grad_value,
+    const uint32_t cb_cur_grad_value,
+    const uint32_t tiles_per_row,
+    const uint32_t block_size,
+    const bool do_accumulate = false) {
     transpose_tile(cb_attention_weights, cb_transpose_wh);
 
     // grad_V = Attention^T @ grad_output
@@ -310,15 +327,19 @@ void update_grad_value(
     }
 }
 
+// Computes gradient w.r.t. Key tensor: dK = dS^T @ Q
+// where dS = scaled gradient w.r.t. scores (already includes 1/sqrt(d_k) scaling).
+// For grouped query attention, gradients from multiple query heads are accumulated
+// into their shared KV head using do_accumulate flag.
 void update_grad_key(
-    uint32_t cb_grad_scores,
-    uint32_t cb_query,
-    uint32_t scaler_bits,
-    uint32_t cb_transpose_wh,
-    uint32_t cb_prev_grad_key,
-    uint32_t cb_cur_grad_key,
-    uint32_t tiles_per_row,
-    bool do_accumulate = false) {
+    const uint32_t cb_grad_scores,
+    const uint32_t cb_query,
+    const uint32_t scaler_bits,
+    const uint32_t cb_transpose_wh,
+    const uint32_t cb_prev_grad_key,
+    const uint32_t cb_cur_grad_key,
+    const uint32_t tiles_per_row,
+    const bool do_accumulate = false) {
     transpose_tile(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
@@ -356,23 +377,22 @@ void update_grad_key(
     }
 }
 
+// Computes gradient w.r.t. Query tensor: dQ = dS @ K
+// where dS = scaled gradient w.r.t. scores (already includes 1/sqrt(d_k) scaling).
+// Accumulates across sequence blocks when processing in tiles (do_accumulate=true).
 void update_grad_query(
-    uint32_t cb_grad_scores,
-    uint32_t cb_key,
-    uint32_t scaler_bits,
-    uint32_t cb_prev_grad_query,
-    uint32_t cb_cur_grad_query,
-    uint32_t tiles_per_row,
-    bool do_accumulate = false) {
+    const uint32_t cb_grad_scores,
+    const uint32_t cb_key,
+    const uint32_t scaler_bits,
+    const uint32_t cb_prev_grad_query,
+    const uint32_t cb_cur_grad_query,
+    const uint32_t tiles_per_row,
+    const bool do_accumulate = false) {
     cb_wait_front(cb_grad_scores, onetile);
     cb_reserve_back(cb_cur_grad_query, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_query);
-    // TODO(vmelnykov): In general we need to use fp32 for cb_grad_scores but right now we can't do matmul beween fp16
-    // and fp32 CBs(need to compute grad Q and grad K with better accuracy)
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         tile_regs_acquire();
-        // reconfig_data_format(cb_grad_scores, cb_key);
-        // mm_init_short(cb_grad_scores, cb_key, /* transpose */ 0);
         // This call is required to set up the matmul correctly
         mm_init_short_with_dt(cb_grad_scores, cb_key, cb_prev_grad_query, /*transpose*/ 0);
         matmul_tiles(
@@ -404,7 +424,9 @@ void update_grad_query(
     }
 }
 
-void pack_result(uint32_t cb_source, uint32_t cb_output, uint32_t num_tiles) {
+// Copies tiles from source circular buffer to output circular buffer.
+// Used for final packing of computed gradients to output buffers with potential format conversion.
+void pack_result(const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles) {
     cb_wait_front(cb_source, num_tiles);
     cb_reserve_back(cb_output, num_tiles);
 

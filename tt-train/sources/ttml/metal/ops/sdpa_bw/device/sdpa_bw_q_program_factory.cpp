@@ -89,10 +89,10 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* attn_mask_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
     const tt::tt_metal::Buffer* grad_query_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
+    const uint32_t num_cores,
+    const uint32_t num_cores_y,
+    const uint32_t num_rows_per_core_group_1,
+    const uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
@@ -155,65 +155,46 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto* device = grad_output.device();
     tt::tt_metal::Program program{};
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // Get tensor dimensions and extract heads from shapes
-    auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
-    auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
-    auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
+    const auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
+    const auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
+    const auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
 
     // For query backward pass we split work over rows of Q
-    uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    uint32_t NC = qB * qNH;
-    uint32_t total_rows_to_process = NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
-    uint32_t q_heads = qNH;                    // number of heads in Query
-    uint32_t kv_heads = kNH;
-    uint32_t heads_per_group = qNH / kv_heads;  // we read one group of K and V for every heads_per_group heads from Q
+    const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
+    const uint32_t NC = qB * qNH;
+    const uint32_t total_rows_to_process =
+        NC * St;                   // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+    const uint32_t q_heads = qNH;  // number of heads in Query
+    const uint32_t kv_heads = kNH;
+    const uint32_t heads_per_group =
+        qNH / kv_heads;  // we read one group of K and V for every heads_per_group heads from Q
 
-    uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
+    const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
     // Scale factor for attention computation
     // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
-    float per_head_dim = static_cast<float>(qEmbd);
-    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
-    uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
-    uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
+    const float per_head_dim = static_cast<float>(qEmbd);
+    const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    uint32_t block_size = get_block_size(qWt, 4U);
+    const uint32_t block_size = get_block_size(qWt, 4U);
 
-    fmt::print(
-        "SDPA BW Q: NC={}, St={}, qWt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
-        "{}, total_rows_to_process = {}, num_cores={} ({}x{}), "
-        "group1 cores={} rows/core={}, group2 cores={} rows/core={}\n",
-        NC,
-        St,
-        qWt,
-        scaler,
-        block_size,
-        qNH,
-        kv_heads,
-        heads_per_group,
-        total_rows_to_process,
-        num_cores,
-        num_cores_x,
-        num_cores_y,
-        core_group_1.size(),
-        num_rows_per_core_group_1,
-        core_group_2.size(),
-        num_rows_per_core_group_2);
-
-    auto data_format = input_data_format;
-    auto precise_data_format = tt::DataFormat::Float32;
+    const auto data_format = input_data_format;
+    const auto precise_data_format = tt::DataFormat::Float32;
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -456,7 +437,6 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     const q::operation_attributes_t& args,
     const q::tensor_args_t& tensor_args,
     q::tensor_return_value_t& tensor_return_value) {
-    // TODO: Implement runtime argument override for Q kernel
     // This updates buffer addresses and other runtime parameters
     auto& shared_vars = cached_program.shared_variables;
     auto& sdpa_bw_reader_kernel = shared_vars.sdpa_bw_q_reader_kernel;
