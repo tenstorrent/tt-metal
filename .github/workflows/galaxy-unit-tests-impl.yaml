@@ -105,7 +105,8 @@ jobs:
             # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
             # { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true },
-            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" }
+            { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" },
+            { "name": "Galaxy tttv2 module tests", "arch": "wormhole_b0", "model": "tttv2-modules", "timeout": 5, "owner_id": "U07RY6B5FLJ"} # Gongyu Wang
           ]')
 
           # Filter matrix based on model selection
@@ -233,6 +234,21 @@ jobs:
 
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
+
+      - name: Run tttv2 module tests
+        if: ${{ matrix.test-group.model == 'tttv2-modules' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          HF_HUB_OFFLINE: 1
+          HF_HOME: /mnt/MLPerf/huggingface/
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct/
+        run: |
+          pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+            --tb=short \
+            --m "not slow" \
+            --cov=models.common.modules.mlp.mlp_2d \
+            --cov-report=term-missing \
+            --cov-config=models/common/tests/setup.cfg
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

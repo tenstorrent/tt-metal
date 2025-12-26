@@ -11,6 +11,7 @@ This test suite verifies:
 """
 
 import math
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -545,7 +546,7 @@ def test_mlp_1d_vs_reference(
 
     # Create LazyWeights
     ttnn.SetDefaultDevice(ttnn_mesh_device)
-    cache_dir = Path("model_cache/mlp_1d")
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/mlp_1d"))
     lazy_w1 = LazyWeight(source=w1_torch, dtype=w1_dtype, cache_dir_weight_name=(cache_dir, "w1"))
     lazy_w2 = LazyWeight(source=w2_torch, dtype=w2_dtype, cache_dir_weight_name=(cache_dir, "w2"))
     lazy_w3 = LazyWeight(source=w3_torch, dtype=w3_dtype, cache_dir_weight_name=(cache_dir, "w3"))

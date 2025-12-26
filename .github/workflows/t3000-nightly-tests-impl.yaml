@@ -39,9 +39,16 @@ jobs:
           {
             name: "models_common_unit_tests",
             arch: wormhole_b0,
-            cmd: pytest --tb=short models/common/tests,
+            cmd: pytest --tb=short models/common/tests/test_*.py,
             timeout: 5,
-            owner_id: U07RY6B5FLJ,  #Gongyu Wang
+            owner_id: U07RY6B5FLJ  #Gongyu Wang
+          },
+          {
+            name: "models_tttv2_modules_unit_tests",
+            arch: wormhole_b0,
+            cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules,
+            timeout: 20,
+            owner_id: U07RY6B5FLJ  #Gongyu Wang
           },
         ]
 

@@ -185,6 +185,14 @@ jobs:
               "cmd": "run_t3000_tt_dit_tests",
               "timeout": 20,
               "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k/N300/N150 tttv2 module tests",
+              "model": "tttv2 modules",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_tttv2_modules_tests",
+              "timeout": 5,
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
             }
           ]')
 
