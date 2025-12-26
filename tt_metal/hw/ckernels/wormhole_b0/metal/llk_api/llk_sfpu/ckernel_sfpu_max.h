@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,22 +6,24 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
-
-using namespace sfpi;
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
+// max(a, b) where a = dst_reg[0], b = dst_reg[32]
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_max() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat a = dst_reg[0];
-        vFloat b = dst_reg[32];
-        v_if(a < b) { dst_reg[0] = b; }
-        v_endif;
+        sfpi::vFloat a = sfpi::dst_reg[0];
+        sfpi::vFloat b = sfpi::dst_reg[32];
 
-        dst_reg++;
+        // sfpi::vec_min_max puts min in first arg, max in second
+        sfpi::vec_min_max(a, b);  // After: a = min(a,b), b = max(a,b)
+        sfpi::dst_reg[0] = b;
+
+        sfpi::dst_reg++;
     }
 }
 
