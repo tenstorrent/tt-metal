@@ -430,6 +430,7 @@ add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
+add_library(tt-nn::tt-nn ALIAS ttnncpp) # Canonical alias — ensures consistency across find_package() usage
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
@@ -439,9 +440,9 @@ set_target_properties(
     ttnncpp
     PROPERTIES
         EXPORT_NAME
-            TTNN
-        PREFIX
-            "_"
+            tt-nn
+        OUTPUT_NAME
+            "tt-nn"
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
@@ -452,6 +453,10 @@ set_target_properties(
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
         INTERFACE_HEADER_SETS_TO_VERIFY
             api
+        VERSION
+            ${PROJECT_VERSION}
+        SOVERSION
+            ${PROJECT_VERSION_MAJOR}
 )
 
 file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
@@ -629,7 +634,19 @@ target_link_libraries(
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
+
+add_custom_command(
+    TARGET ttnncpp
+    POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE_NAME:ttnncpp>" "_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:ttnncpp>"
+    COMMENT "Creating symlink _ttnncpp.so -> $<TARGET_FILE_NAME:ttnncpp>"
+)
+
 if(TT_INSTALL)
+    install(FILES "$<TARGET_FILE_DIR:ttnncpp>/_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>" DESTINATION lib)
+
     install(
         TARGETS
             ttnncpp
@@ -640,7 +657,7 @@ if(TT_INSTALL)
     install(
         TARGETS
             ttnncpp
-        EXPORT TT-NN
+        EXPORT tt-nn
         FILE_SET
         api
             COMPONENT ttnn-dev
@@ -657,6 +674,7 @@ if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+    add_library(tt-nn::Python ALIAS ttnn) # Canonical alias — ensures consistency across find_package() usage
     target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
     TT_ENABLE_UNITY_BUILD(ttnn)
 
@@ -774,7 +792,7 @@ if(WITH_PYTHON_BINDINGS)
     nanobind_link_options(ttnn)
 
     if(TT_INSTALL)
-        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+        install(TARGETS ttnn EXPORT tt-nn LIBRARY COMPONENT ttnn-runtime)
     endif()
 
     # Install .so into src files for nanobind implementation
@@ -798,7 +816,7 @@ if(WITH_PYTHON_BINDINGS)
     )
 endif()
 if(TT_INSTALL)
-    install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
+    install(EXPORT tt-nn NAMESPACE tt-nn:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
 endif()
 
 if(TTNN_BUILD_TESTS)
