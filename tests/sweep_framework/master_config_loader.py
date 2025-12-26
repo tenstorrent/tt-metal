@@ -630,7 +630,9 @@ class MasterConfigLoader:
                     if parsed_dtype and parsed_layout and parsed_mem_config:
                         # Hardcode specific operation requirements
                         # tilize and tilize_with_val_padding: JSON doesn't have layout field, but these ops require ROW_MAJOR_LAYOUT
-                        if self._matches_operation(operation_name, "tilize") or self._matches_operation(operation_name, "tilize_with_val_padding"):
+                        if self._matches_operation(operation_name, "tilize") or self._matches_operation(
+                            operation_name, "tilize_with_val_padding"
+                        ):
                             parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
@@ -1705,11 +1707,6 @@ class MasterConfigLoader:
 
         return None
 
-
-
-
-
-
     def _get_conv2d_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -2603,18 +2600,28 @@ class MasterConfigLoader:
                 if "arg7" in arg:
                     params["input_width"] = int(arg["arg7"]) if isinstance(arg["arg7"], (int, str)) else None
                 if "arg8" in arg:
-                    kernel = OperationParameterExtractors._parse_list_from_string(arg["arg8"]) if isinstance(arg["arg8"], str) else arg["arg8"]
+                    kernel = (
+                        OperationParameterExtractors._parse_list_from_string(arg["arg8"])
+                        if isinstance(arg["arg8"], str)
+                        else arg["arg8"]
+                    )
                     if kernel and len(kernel) >= 2:
                         params["kernel_height"] = kernel[0]
                         params["kernel_width"] = kernel[1]
                 if "arg9" in arg:
-                    stride = OperationParameterExtractors._parse_list_from_string(arg["arg9"]) if isinstance(arg["arg9"], str) else arg["arg9"]
+                    stride = (
+                        OperationParameterExtractors._parse_list_from_string(arg["arg9"])
+                        if isinstance(arg["arg9"], str)
+                        else arg["arg9"]
+                    )
                     if stride and len(stride) >= 2:
                         params["stride_h"] = stride[0]
                         params["stride_w"] = stride[1]
                 if "arg10" in arg:
                     padding = (
-                        OperationParameterExtractors._parse_list_from_string(arg["arg10"]) if isinstance(arg["arg10"], str) else arg["arg10"]
+                        OperationParameterExtractors._parse_list_from_string(arg["arg10"])
+                        if isinstance(arg["arg10"], str)
+                        else arg["arg10"]
                     )
                     if padding:
                         if len(padding) >= 4:
@@ -2627,7 +2634,9 @@ class MasterConfigLoader:
                             params["pad_w"] = padding[1]
                 if "arg11" in arg:
                     dilation = (
-                        OperationParameterExtractors._parse_list_from_string(arg["arg11"]) if isinstance(arg["arg11"], str) else arg["arg11"]
+                        OperationParameterExtractors._parse_list_from_string(arg["arg11"])
+                        if isinstance(arg["arg11"], str)
+                        else arg["arg11"]
                     )
                     if dilation and len(dilation) >= 2:
                         params["dilation_h"] = dilation[0]
@@ -2690,7 +2699,6 @@ class MasterConfigLoader:
             return None
         except Exception as e:
             return None
-
 
     def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
         """Extract tensor configuration from argument data
