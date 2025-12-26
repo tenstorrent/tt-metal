@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Dumps information about lightweight asserts that have occurred on the device.
+
+Owner:
+    tt-vjovanovic
 """
 
 

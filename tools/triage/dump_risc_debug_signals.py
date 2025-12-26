@@ -11,6 +11,9 @@ Description:
     Goes through all tensix and idle_eth blocks and tries to halt every core inside them.
     If halt is successful, does nothing. If it throws an exception, prints all debug bus
     signals related to that core (e.g., for brisc, prints all signals matching brisc*).
+
+Owner:
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass

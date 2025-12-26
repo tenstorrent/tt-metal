@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Checking that ARC heartbeat is running. Estimating ARC uptime.
+
+Owner:
+    ihamer-tt
 """
 
 from dataclasses import dataclass
