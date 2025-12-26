@@ -119,13 +119,19 @@ def test_scatter_partial(
     torch_dtype = select_torch_dtype(input_dtype)
 
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    device.disable_program_cache()
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     torch_index = torch.randint(0, input_shape[dim], index_shape)
+    device.disable_program_cache()
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     torch_src = torch.randn(source_shape, dtype=torch_dtype)
+    device.disable_program_cache()
     ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
     ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
@@ -179,13 +185,20 @@ def test_scatter_normal_with_callback(
     torch_index_dtype = select_torch_dtype(index_dtype)
 
     torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    device.disable_program_cache()
     ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     torch_index = rand_permutations(index_and_source_shape, dim, torch_index_dtype)
+
+    device.disable_program_cache()
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     torch_src = torch.randn(index_and_source_shape, dtype=torch_dtype)
+    device.disable_program_cache()
     ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+    device.enable_program_cache()
 
     for _ in range(2):
         torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)

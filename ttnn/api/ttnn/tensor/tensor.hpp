@@ -36,7 +36,29 @@
 #include <tt_stl/optional_reference.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
-#include "types.hpp"
+
+namespace ttnn {
+namespace distributed {
+class TensorToMesh;
+
+}  // namespace distributed
+
+enum class PyDType {
+    FLOAT32,
+    FLOAT64,
+    FLOAT16,
+    BFLOAT16,
+    INT8,
+    INT16,
+    INT32,
+    INT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    BOOL
+};
+}  // namespace ttnn
 
 namespace tt::tt_metal {
 
@@ -334,12 +356,24 @@ void write_tensor(
 
 Tensor set_tensor_id(const Tensor& tensor);
 
+Tensor convert_python_tensor_to_tt_tensor(
+    const ttnn::Shape& tensor_shape,
+    DataType dst_dtype,
+    Layout layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
+    ttnn::PyDType src_data_type,
+    const std::function<HostBuffer(DataType)>& get_host_tensor,
+    std::optional<tt::tt_metal::distributed::MeshDevice*> device,
+    std::optional<ttnn::QueueId> cq_id,
+    const ttnn::distributed::TensorToMesh* mesh_mapper,
+    std::optional<float> pad_value = std::nullopt);
+
 namespace ops {
 Tensor view(
     const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
 Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
-
 }  // namespace ops
 
 }  // namespace tt::tt_metal
