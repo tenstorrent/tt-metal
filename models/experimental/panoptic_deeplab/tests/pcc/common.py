@@ -76,14 +76,14 @@ def skip_if_not_blackhole_20_cores(device):
         )
 
 
-def skip_if_not_blackhole_130_cores(device):
+def skip_if_not_blackhole_110_cores(device):
     """
     This function is meant to be run only inside pytest tests.
     """
     if not is_blackhole():
-        pytest.skip("This test is intended to run only on Blackhole P150 devices with 130 cores.")
+        pytest.skip("This test is intended to run only on Blackhole P150 devices with 110 cores.")
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 13 or compute_grid.y != 10:
+    if compute_grid.x != 11 or compute_grid.y != 10:
         pytest.skip(
-            f"This test is intended to run only on Blackhole P150 devices with 130 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [13, 10]."
+            f"This test is intended to run only on Blackhole P150 devices with 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [11, 10]."
         )
