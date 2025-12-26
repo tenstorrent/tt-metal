@@ -67,7 +67,6 @@ class TTSampling(LightweightModule):
         self.cluster_shape = args.cluster_shape
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
-        self.sub_core_grid_sampling = getattr(args, "sub_core_grid_sampling", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
 
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
@@ -343,7 +342,11 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=self.sub_core_grid_sampling,
+            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None,
             output_tensor=tt_out_tok,
         )
 

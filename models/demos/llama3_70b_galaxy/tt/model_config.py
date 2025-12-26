@@ -486,12 +486,6 @@ class TtModelArgs:
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
             ]
         )
-        self.sub_core_grid_sampling = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(2, 4), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
         self.start_core = ttnn.CoreCoord(1, 0)
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
