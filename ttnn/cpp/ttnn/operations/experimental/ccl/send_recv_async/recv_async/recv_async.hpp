@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "ttnn/decorators.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace ttnn {
 namespace operations::experimental::ccl {

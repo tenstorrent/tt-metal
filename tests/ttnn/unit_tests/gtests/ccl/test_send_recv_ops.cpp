@@ -16,7 +16,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {

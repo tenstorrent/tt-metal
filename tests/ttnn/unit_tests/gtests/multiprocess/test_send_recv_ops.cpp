@@ -12,7 +12,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 
