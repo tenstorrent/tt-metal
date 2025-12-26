@@ -26,16 +26,26 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto shard_spec = input.shard_spec().value();
-    const auto shard_shape = shard_spec.shape;
-    const auto shard_grid = shard_spec.grid;
-    const auto& input_shape = input.logical_shape();
+    const ShardSpec& shard_spec = input.shard_spec().value();
+    const std::array<uint32_t, 2> shard_shape = shard_spec.shape;
+    const Shape& input_shape = input.logical_shape();
     const DataType input_dtype = input.dtype();
     const Layout input_layout = input.layout();
     TT_FATAL(
         input_layout == output.layout() && input_dtype == output.dtype() &&
             shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
-        "Error");
+        "Error: input tensor layout, dtype, and shard shape must match output tensor layout, dtype, and shard shape.");
+
+    // Filter shard grid to only include cores within compute grid to avoid illegal kernel placement on dispatch cores
+    // Dispatch cores are outside the compute_with_storage_grid_size, so intersecting with compute grid filters them out
+    auto* device = input.device();
+    const CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    const CoreRangeSet compute_grid =
+        CoreRangeSet({CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})});
+    const CoreRangeSet shard_grid = shard_spec.grid.intersection(compute_grid);
+    TT_FATAL(
+        !shard_grid.empty(), "Shard grid cannot be empty after filtering to compute grid (dispatch cores excluded)");
+
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
