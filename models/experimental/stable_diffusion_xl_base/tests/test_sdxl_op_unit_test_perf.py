@@ -8,7 +8,7 @@ import ttnn
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
-USE_PERF_TEST_MODE = False
+USE_PERF_TEST_MODE = True
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
