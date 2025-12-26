@@ -4,12 +4,15 @@
 
 """Training loop and batch preparation for transformer models."""
 import numpy as np
+import ttnn
 import ttml
 from tqdm import tqdm
 from data import get_batch, build_causal_mask
 
 
-def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
+def get_batch_ttml(
+    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
+):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -28,18 +31,35 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
     if use_ddp:
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         tt_x = ttml.autograd.Tensor.from_numpy(
-            x_u32.reshape(batch_size, 1, 1, seq_len), ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+            x_u32.reshape(batch_size, 1, 1, seq_len),
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
+            mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
+        )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
-            x_u32.reshape(batch_size, 1, 1, seq_len), ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+            x_u32.reshape(batch_size, 1, 1, seq_len),
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        )
     return tt_x, tt_y
 
 
-def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
+def train(
+    cfg,
+    model,
+    optim,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    use_ddp: bool = False,
+    use_tp: bool = False,
+):
     """Execute training loop.
 
     Args:
@@ -59,7 +79,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )  # [1,1,T,T], float32
 
     # Create composer for distributed tensors if using DDP
@@ -126,7 +146,9 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
             last_val_loss = val_losses[-1]
             model.train()
             # Update bar with validation loss
-            postfix = {"train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"}
+            postfix = {
+                "train_loss": f"{train_losses[-1]:.4f}" if train_losses else "N/A"
+            }
             postfix["val_loss"] = f"{last_val_loss:.4f}"
             bar.set_postfix(postfix, refresh=False)
 
