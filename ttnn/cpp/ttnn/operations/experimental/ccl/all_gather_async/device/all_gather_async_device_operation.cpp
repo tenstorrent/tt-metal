@@ -278,7 +278,7 @@ AllGatherAsyncDeviceOperation::invoke(
     } else {
         TT_FATAL(input_tensor.device() != nullptr, "Mesh device is required");
 
-        num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
+        num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
         TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
 
