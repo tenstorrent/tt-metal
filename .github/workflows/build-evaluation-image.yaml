@@ -156,7 +156,6 @@ jobs:
       - name: Verify BuildKit connection
         if: ${{ inputs.buildkit }}
         run: |
-
           nc -zv ${{ env.BUILDKIT_HOST }} ${{ env.BUILDKIT_PORT }}
 
       - name: Set up Docker Buildx
@@ -188,6 +187,8 @@ jobs:
           tags: ${{ steps.docker-metadata.outputs.tags }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
           build-args: ${{ inputs.build-args }}
+          secrets: |
+            CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
           push: true
