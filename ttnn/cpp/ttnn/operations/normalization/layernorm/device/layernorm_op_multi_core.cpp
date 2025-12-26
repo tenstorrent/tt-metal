@@ -117,15 +117,14 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         },
         operation_attributes.program_config);
 
-    const auto& shape = a.padded_shape();
-    uint32_t W = shape[-1], H = shape[-2];
-    uint32_t HW = H * W;
-    uint32_t NC = a.physical_volume() / HW;
+    const auto& logical_shape = a.logical_shape();
+    const auto& padded_shape = a.padded_shape();
+    uint32_t W = logical_shape[-1];
+    uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
+    uint32_t HWp = Hp * Wp;
+    uint32_t NC = a.physical_volume() / HWp;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -140,7 +139,13 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+    // Data span in tiles, rounded up to tile boundaries
+    uint32_t Wt = Wp / TILE_WIDTH;
+    uint32_t Ht = Hp / TILE_HEIGHT;
+
+    // Block size that maximizes dest usage depending on
+    // whether fp32 accumulation is enabled
+    uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -182,17 +187,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
-
-    // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
-    }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
-    }
-
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -210,23 +204,21 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
-    // TODO(AP): can also add support for block_size=7 -> 63, 28
-    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
+    // Size the small-kernel CBs to be a multiple of the block size
+    uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
+    uint32_t in0_t =
+        Wt_next_block_up;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
     uint32_t out0_t = block_size * 2;
-    uint32_t im0_t = WtB;             // buffer for saving xmm
-    uint32_t im3_t = WtB;             // buffer for xmm^2
-    uint32_t in5_t = WtB;             // buffer for gamma
-    uint32_t in6_t = WtB;             // buffer for beta
+    uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
+    uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
+    uint32_t in5_t = Wt_next_block_up;  // buffer for gamma
+    uint32_t in6_t = Wt_next_block_up;  // buffer for beta
     uint32_t im6_t = block_size * 2;  // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
-        im6_t = WtB;
-        // cout << "im6_t=WtB=" << WtB << endl;
+        im6_t = Wt_next_block_up;
         in0_t = 2 * block_size;
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
@@ -237,8 +229,14 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t im2_t = 2;  //
 
     bool large_tensor_needed = false;
-    constexpr uint32_t no_weights_max_size = 120;
-    constexpr uint32_t with_weights_max_size = 60;
+    // The following constants were chosen empirically to
+    // maximize the buffer size while still fitting the
+    // largest cases (fused pre-add + gamma + beta) in L1.
+    // There is room for optimization here based on different
+    // conditions (like what buffers are actually used),
+    // but having two constants for all cases is simpler.
+    constexpr uint32_t with_weights_max_size = 56;
+    constexpr uint32_t without_weights_max_size = 112;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -260,20 +258,20 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            WtB = with_weights_max_size;
+            Wt_next_block_up = with_weights_max_size;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            WtB = no_weights_max_size;
+            Wt_next_block_up = without_weights_max_size;
         }
     }
     if (large_tensor_needed) {
-        in0_t = WtB;
-        im0_t = WtB;  // buffer for saving xmm
-        im3_t = WtB;  // buffer for xmm^2
-        in5_t = WtB;  // buffer for gamma
-        in6_t = WtB;  // buffer for beta
+        in0_t = Wt_next_block_up;
+        im0_t = Wt_next_block_up;  // buffer for saving xmm
+        im3_t = Wt_next_block_up;  // buffer for xmm^2
+        in5_t = Wt_next_block_up;  // buffer for gamma
+        in6_t = Wt_next_block_up;  // buffer for beta
         if (b) {
-            im6_t = WtB;
+            im6_t = Wt_next_block_up;
             in0_t = 2 * block_size;
         }
     }
@@ -287,17 +285,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size ({})", in5_t, block_size);
     TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by block_size ({})", in6_t, block_size);
     TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible by block_size ({})", im6_t, block_size);
-    TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
-    TT_FATAL(
-        num_gamma_tiles % block_size == 0,
-        "Number of gamma tiles ({}) must be divisible by block_size ({})",
-        num_gamma_tiles,
-        block_size);
-    TT_FATAL(
-        num_beta_tiles % block_size == 0,
-        "Number of beta tiles ({}) must be divisible by block_size ({})",
-        num_beta_tiles,
-        block_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -377,11 +364,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    union {
-        float f;
-        uint32_t u;
-    } winv{};
-    winv.f = 1.0f / W;
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
@@ -392,7 +374,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     } else {
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
-        compute_args.push_back(winv.u);
+        compute_args.push_back(W);
     }
 
     // The large-tensor non-Welford reduce kernel needs
@@ -438,6 +420,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         CreateCircularBuffer(program, all_cores, cb_intermed1_config);
     }
     if (!use_welford) {
+        // Scaler for reduce
         CircularBufferConfig cb_in2_config =
             CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
                 .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
@@ -520,13 +503,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     }
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } e{}, one{};
-    e.f = eps;
-    one.f = 1.0f;
-    auto bfloat_one_value = bfloat16(one.f);
+    auto bfloat_one_value = bfloat16(1);
     uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -543,22 +520,22 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 
         uint32_t tile_offset = curr_row * Wt;
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
-            core,
-            {a_addr,
-             num_tile_rows_per_core,
-             Wt,
-             tile_offset,
-             packed_one_value,
-             e.u,  // 0-5
-             gamma_dram_addr,
-             beta_dram_addr,
-             b_dram_addr}  // 6-8
-        );
+        std::vector<uint32_t> reader_runtime_args = {
+            a_addr,
+            num_tile_rows_per_core,
+            Wt,
+            tile_offset,
+            packed_one_value,
+            std::bit_cast<uint32_t>(eps),
+            gamma_dram_addr,
+            beta_dram_addr,
+            b_dram_addr};
+        if (!(use_welford && large_tensor_needed)) {
+            reader_runtime_args.push_back(W);
+        }
+        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
         SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-        SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+        SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, Wt, num_tile_rows_per_core, tile_offset});
         curr_row += num_tile_rows_per_core;
     }
 

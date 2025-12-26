@@ -11,6 +11,8 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
+pytestmark = pytest.mark.use_module_device
+
 
 # Test for int types
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
