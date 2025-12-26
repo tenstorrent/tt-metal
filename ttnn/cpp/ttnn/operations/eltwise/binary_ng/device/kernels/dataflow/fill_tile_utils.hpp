@@ -155,3 +155,53 @@ FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
         }
     }
 }
+
+// TODO: Optimize for BF16 Layout and big reads and writes
+FORCE_INLINE void fill_tile_with_first_column_rm(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    // is it not possible to read like QWORD to make this more efficiently and bulk read and write here ?
+    for (uint32_t i = 1; i < row_width; i++) {
+        ptr[i] = ptr[0];
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(ptr_arg);
+    // is it not possible to read like QWORD to make this more efficnelty and bulk read and write here ?
+    for (uint32_t i = 1; i < num_rows; i++) {
+        for (uint32_t j = 0; j < row_width; j++) {
+            ptr[i * row_width + j] = ptr[j];
+        }
+    }
+}
+FORCE_INLINE void fill_tile_with_first_column_rm_bfloat16(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ptr_arg);
+    const uint16_t first_elem = ptr16[0];
+    const uint32_t packed = (static_cast<uint32_t>(first_elem) << 16) | first_elem;
+    const uint32_t row_width_words = row_width >> 1;
+    auto* ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t i = 0; i < row_width_words; i++) {
+        ptr32[i] = packed;
+    }
+    if (row_width & 1) {
+        ptr16[row_width - 1] = first_elem;
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm_bfloat16(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    const uint32_t row_width_words = row_width >> 1;
+    auto* ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t i = 1; i < num_rows; i++) {
+        const uint32_t row_offset = i * row_width_words;
+        for (uint32_t j = 0; j < row_width_words; j++) {
+            ptr32[row_offset + j] = ptr32[j];
+        }
+    }
+    if (row_width & 1) {
+        auto* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ptr_arg);
+        const uint32_t last_elem = row_width - 1;
+        for (uint32_t i = 1; i < num_rows; i++) {
+            ptr16[i * row_width + last_elem] = ptr16[last_elem];
+        }
+    }
+}
