@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
@@ -19,7 +20,8 @@ std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     if (p_is_negative) {
         p = -p;
     }
-    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
+    // Pass p as float bits (IEEE 754 format) since power_tile expects float bits
+    return std::make_tuple(std::bit_cast<uint32_t>(p), decimal, p_is_negative);
 }
 
 MorehClipGradNormStep2Operation::ProgramFactory::cached_program_t
