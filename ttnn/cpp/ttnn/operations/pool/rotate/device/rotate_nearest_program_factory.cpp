@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
-#include <ttnn/operations/pool/fixed_point_arithmetic.hpp>
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include <ttnn/operations/pool/pool_utils.hpp>
 
 #include <cmath>

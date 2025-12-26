@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
-#include <ttnn/operations/pool/fixed_point_arithmetic.hpp>
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
 void kernel_main() {
     uint32_t input_addr = get_arg_val<uint32_t>(0);
