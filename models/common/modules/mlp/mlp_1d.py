@@ -24,7 +24,7 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tensor_utils import pad_dim_to_size
+from models.common.modules.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 from models.common.utility_functions import is_blackhole
 
@@ -37,8 +37,6 @@ from models.common.utility_functions import is_blackhole
 class MLP1DConfig:
     """
     Central configuration for MLP1D - the single source of truth for all settings.
-
-    After __post_init__, all None fields are populated with derived defaults.
 
     Simple usage (all defaults):
         config = MLP1DConfig(w1, w2, w3)
@@ -65,7 +63,6 @@ class MLP1DConfig:
     tt_ccl: TT_CCL | None = None
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
     num_reduce_scatter_links: int = 1
-    tile_size: int = 32
 
     # Optional: derived from weights if None
     dim: int | None = None
@@ -184,7 +181,7 @@ class MLP1D(LightweightModule):
 
         self._device_weights_loaded = True
 
-    def decode_forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def decode_forward(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
         Decode forward - NO if-else, fully flattened.
 
@@ -259,7 +256,7 @@ class MLP1D(LightweightModule):
 
         return w2_out_reduced
 
-    def prefill_forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def prefill_forward(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
         Prefill forward - minimal runtime logic for seq_len-dependent configs.
 
@@ -342,7 +339,7 @@ class MLP1D(LightweightModule):
 
         return w2_out_reduced
 
-    def forward(self, x: ttnn.Tensor, mode: str) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor | LazyWeight, mode: str) -> ttnn.Tensor:
         """Dispatch to the appropriate forward method based on mode."""
         if mode == "decode":
             return self.decode_forward(x)
@@ -465,7 +462,7 @@ class MLP1D(LightweightModule):
 
         # Compute memory configs for weights
         num_devices = mesh_device.get_num_devices()
-        tile_size = 32
+        tile_size = TILE_SIZE
         dram_size = mesh_device.dram_grid_size()
         dram_grid = ttnn.CoreRangeSet(
             {
@@ -636,26 +633,29 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
 
 def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
     """Get output subblock width that divides per_core_n and satisfies constraints."""
-    for w in range(min(8, per_core_n), 0, -1):
-        if per_core_n % w == 0 and w * out_subblock_h <= 8:
-            return w
-    return 1
+    # [ALIGNED] Exactly matching models/tt_transformers/tt/common.py:get_out_subblock_w
+    out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
 
 
-def _dram_shard_core_grid(k: int, tile_size: int = 32) -> ttnn.CoreGrid:
+def _dram_shard_core_grid(k: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
     """Get core grid for DRAM sharding based on K dimension."""
     rows, cols = _find_grid(k // tile_size)
     return ttnn.CoreGrid(x=cols, y=rows)
 
 
-def _dram_shard_core_grid_k_n(k: int, n: int, tile_size: int = 32) -> ttnn.CoreGrid:
+def _dram_shard_core_grid_k_n(k: int, n: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
     """Get core grid for DRAM sharding based on K and N dimensions."""
     rows, cols = _find_grid_k_n(k // tile_size, n // tile_size)
     return ttnn.CoreGrid(x=cols, y=rows)
 
 
 def _dram_matmul_config(
-    m: int, k: int, n: int, num_cores: int, tile_size: int = 32, fused_activation=None
+    m: int, k: int, n: int, num_cores: int, tile_size: int = TILE_SIZE, fused_activation=None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
     """Create DRAM-sharded matmul program config."""
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -671,7 +671,7 @@ def _matmul_config(
     k: int,
     n: int,
     grid_size: tuple[int, int],
-    tile_size: int = 32,
+    tile_size: int = TILE_SIZE,
     in0_block_w: int = None,
     fuse_batch: bool = False,
     fused_activation=None,
@@ -714,7 +714,7 @@ def _compute_kernel_config_hifi2_fp16() -> ttnn.WormholeComputeKernelConfig:
 
 
 def _create_dram_sharded_mem_config(
-    k: int, n: int, dram_grid: ttnn.CoreRangeSet, tile_size: int = 32, dram_cores: int = 12
+    k: int, n: int, dram_grid: ttnn.CoreRangeSet, tile_size: int = TILE_SIZE, dram_cores: int = 12
 ) -> ttnn.MemoryConfig:
     """Create DRAM-sharded memory config for weight tensors."""
     padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
@@ -776,8 +776,11 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     # --- Phase 2: Derived fields ---
 
     num_devices = mesh_device.get_num_devices()
-    tile_size = config.tile_size
+    tile_size = TILE_SIZE
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
+
+    # Compute padded hidden_dim for memory configs (must match auto-padding in LazyWeight)
+    padded_hidden_dim = get_padded_hidden_dim(hidden_dim, num_devices, tile_size)
 
     # Always computed (not user-overridable None fields)
     w1_w3_dtype = config.w1_w3_dtype
@@ -805,8 +808,9 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         to_set["ff2_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
 
     # --- Phase 3: Decode program configs ---
+    # Note: Use padded_hidden_dim to match auto-padding in LazyWeight
 
-    mlp_core_grid = _dram_shard_core_grid_k_n(dim, hidden_dim // num_devices)
+    mlp_core_grid = _dram_shard_core_grid_k_n(dim, padded_hidden_dim // num_devices)
 
     if config.decode_input_memcfg is None:
         to_set["decode_input_memcfg"] = ttnn.create_sharded_memory_config(
@@ -821,23 +825,23 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         to_set["decode_w1_w3_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
             k=dim,
-            n=hidden_dim // num_devices,
+            n=padded_hidden_dim // num_devices,
             num_cores=mlp_core_grid.num_cores,
         )
 
-    mlp2_core_grid = _dram_shard_core_grid_k_n(hidden_dim // num_devices, dim)
+    mlp2_core_grid = _dram_shard_core_grid_k_n(padded_hidden_dim // num_devices, dim)
 
     if config.decode_w2_prg_config is None:
         to_set["decode_w2_prg_config"] = _dram_matmul_config(
             m=tile_padded_batch_rows,
-            k=hidden_dim // num_devices,
+            k=padded_hidden_dim // num_devices,
             n=dim,
             num_cores=mlp2_core_grid.num_cores,
         )
 
     if config.decode_mlp2_input_memcfg is None:
         to_set["decode_mlp2_input_memcfg"] = ttnn.create_sharded_memory_config(
-            (tile_padded_batch_rows, hidden_dim // num_devices // mlp2_core_grid.num_cores),
+            (tile_padded_batch_rows, padded_hidden_dim // num_devices // mlp2_core_grid.num_cores),
             mlp2_core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -862,7 +866,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     if config.prefill_w1_w3_prg_config is None:
         prefill_rows = 8
         prefill_mlp_grid_size = _find_prefill_grid(prefill_rows, dim // tile_size)
-        n_w1_w3 = hidden_dim // num_devices
+        n_w1_w3 = padded_hidden_dim // num_devices
         dram_shard_grid_width = 8
 
         @lru_cache
@@ -881,13 +885,13 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         n_w2 = dim
         dram_shard_grid_width = 8
         prefill_rows = 8
-        grid_size = _find_prefill_grid(prefill_rows, hidden_dim // tile_size)
+        grid_size = _find_prefill_grid(prefill_rows, padded_hidden_dim // tile_size)
 
         @lru_cache
         def w2_prg_config(seq_len: int):
             return _matmul_config(
                 m=min(seq_len, prefill_len_cutoff),
-                k=hidden_dim,
+                k=padded_hidden_dim,
                 n=n_w2,
                 grid_size=grid_size,
                 per_core_n=math.ceil(n_w2 / (tile_size * dram_shard_grid_width)),
@@ -911,7 +915,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     if w1_w3_memcfg is None:
         w1_w3_memcfg = _create_dram_sharded_mem_config(
             k=dim,
-            n=hidden_dim // num_devices,
+            n=padded_hidden_dim // num_devices,
             dram_grid=dram_grid,
             tile_size=tile_size,
             dram_cores=dram_grid_size.x,
@@ -921,7 +925,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     w2_memcfg = config.w2_memcfg
     if w2_memcfg is None:
         w2_memcfg = _create_dram_sharded_mem_config(
-            k=hidden_dim // num_devices,
+            k=padded_hidden_dim // num_devices,
             n=dim,
             dram_grid=dram_grid,
             tile_size=tile_size,
@@ -975,6 +979,10 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         [resolved_config.w1.is_resolved(), resolved_config.w2.is_resolved(), resolved_config.w3.is_resolved()]
     ), "All weights must be resolved!"
     assert resolved_config.is_resolved(), "Config must be resolved!"
+    # check that the padded shapes match the config
+    assert resolved_config.w1.padded_shape == (dim, padded_hidden_dim), "w1 padded_shape does not match the config!"
+    assert resolved_config.w2.padded_shape == (padded_hidden_dim, dim), "w2 padded_shape does not match the config!"
+    assert resolved_config.w3.padded_shape == (dim, padded_hidden_dim), "w3 padded_shape does not match the config!"
 
     return resolved_config
 

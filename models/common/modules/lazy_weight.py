@@ -24,6 +24,11 @@ from typing import Optional
 from loguru import logger
 
 import ttnn
+from models.common.modules.tensor_utils import (
+    get_padded_hidden_dim,
+    pad_to_shape,
+    parse_shard_dims_from_mesh_mapper_config,
+)
 
 
 # todo)) maybe useful to support a mechanism that can be used to disable the cache for every LazyWeight instance
@@ -123,7 +128,7 @@ class LazyWeight:
             weight_name=weight_name,
         )
         if cache_file_name and cache_file_name.exists():
-            logger.info(f"Loading tensor from cache: {cache_file_name}")
+            logger.info(f"\033[32m[cache hit]\033[0m Loading tensor from cache: {cache_file_name}")
             self._value = ttnn.load_tensor(str(cache_file_name), device=self.device)
             return self._value
 
@@ -133,6 +138,8 @@ class LazyWeight:
         # Get mesh mapper (created from config)
         if self.mesh_mapper_config is not None:
             mesh_mapper = ttnn.create_mesh_mapper(self.device, self.mesh_mapper_config)
+            # Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint
+            tensor = _auto_pad_for_sharding(tensor, self.padded_shape)
         else:
             # None config means replicate
             mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
@@ -183,7 +190,8 @@ class LazyWeight:
         parts = []
 
         # source
-        # todo)) add fingerprinting for the source tensor to enable cache invalidation when the source tensor changes
+        # todo)) add better fingerprinting for the source tensor to enable cache invalidation when the source tensor changes; for now, use shape.
+        parts.append(f"srcshape_{'_'.join(str(dim) for dim in self.source.shape)}")
 
         # dtype
         parts.append(f"dtype_{self.dtype.name}")
@@ -223,6 +231,58 @@ class LazyWeight:
         # Hash to keep fingerprint short but unique
         config_hash = hashlib.md5(config_repr.encode()).hexdigest()[:12]
         return f"mapper_{config_hash}"
+
+    @property
+    def padded_shape(self) -> tuple[int, ...]:
+        """
+        Returns the shape after padding for tile alignment.
+        Requires device and mesh_mapper_config to be set.
+
+        Note: source.shape remains the canonical unpadded shape.
+        """
+        assert self.is_resolved(), "LazyWeight must be resolved to compute padded_shape"
+
+        if self.device is None:
+            raise ValueError("device must be set to compute padded_shape")
+
+        shape = list(self.source.shape)
+        if self.mesh_mapper_config is None:
+            return tuple(shape)  # replicated, no padding
+
+        num_devices = self.device.get_num_devices()
+        if num_devices == 1:
+            return tuple(shape)
+
+        shard_dims = parse_shard_dims_from_mesh_mapper_config(self.mesh_mapper_config)
+        for shard_dim in shard_dims:
+            if shard_dim < 0:
+                shard_dim = len(shape) + shard_dim
+            shape[shard_dim] = get_padded_hidden_dim(shape[shard_dim], num_devices)
+
+        return tuple(shape)
+
+
+def _auto_pad_for_sharding(
+    tensor: "torch.Tensor",
+    padded_shape: tuple[int, ...],
+) -> "torch.Tensor":
+    """
+    Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint for sharding.
+
+    ttnn.from_torch requires physical shard shapes to be tile-aligned. This function
+    pads the global tensor to the pre-computed padded_shape.
+
+    Args:
+        tensor: Source torch tensor
+        padded_shape: Target shape after padding (from LazyWeight.padded_shape)
+
+    Returns:
+        Padded tensor if padding was needed, otherwise original tensor
+    """
+    if tensor.shape != padded_shape:
+        logger.debug(f"Auto-padding from {tuple(tensor.shape)} to {padded_shape} for tile alignment")
+        return pad_to_shape(tensor, padded_shape)
+    return tensor
 
 
 def _from_torch_and_dump(
@@ -271,7 +331,7 @@ def _from_torch_and_dump(
     assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
 
     assert cache_file_name is not None, "cache_file_name must be provided for caching"
-    logger.debug(f"Generating cache for {cache_file_name}")
+    logger.debug(f"\033[33m[cache miss]\033[0m Generating cache for {cache_file_name}")
     pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(cache_file_name), tensor)
 
