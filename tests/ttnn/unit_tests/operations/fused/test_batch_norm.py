@@ -69,6 +69,9 @@ def test_batch_norm_tests(
     if check_mean != check_var:
         pytest.xfail("running_mean and running_var must either both be None or neither be None")
 
+    if not training and not (check_mean and check_var):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
+
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
         running_mean=mean_tensor,
@@ -216,6 +219,9 @@ def test_batch_norm_fp32(
     if check_mean != check_var:
         pytest.xfail("running_mean and running_var must either both be None or neither be None")
 
+    if not training and not (check_mean and check_var):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
+
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
         running_mean=mean_tensor,
@@ -277,6 +283,9 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
 
     if check_mean != check_var:
         pytest.xfail("running_mean and running_var must either both be None or neither be None")
+
+    if not training and not (check_mean and check_var):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
