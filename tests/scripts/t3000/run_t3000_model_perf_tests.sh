@@ -21,6 +21,46 @@ run_t3000_falcon7b_tests() {
   fi
 }
 
+run_t3000_falcon3_1b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon3_1b_tests"
+
+  hf_model=tiiuae/Falcon3-1B-Instruct
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon3_1b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_falcon3_7b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon3_7b_tests"
+
+  hf_model=tiiuae/Falcon3-7B-Instruct
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon3_7b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_mistral7b_perf_tests() {
   # Record the start time
   fail=0
