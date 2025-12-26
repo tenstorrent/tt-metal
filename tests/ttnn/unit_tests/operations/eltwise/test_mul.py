@@ -147,3 +147,25 @@ def test_binary_mul_div_bf16(device):
 
     assert_with_ulp(z_torch_mul, tt_out_mul, 0)
     assert_with_ulp(z_torch_div, tt_out_div, 0)
+
+
+def test_binary_mul_div_bf16_scalar(device):
+    torch_dtype = torch.bfloat16
+    ttnn_dtype = ttnn.bfloat16
+
+    x_torch = torch.tensor([[508]], dtype=torch_dtype)
+    y_torch = 748
+
+    z_torch_mul = torch.mul(x_torch, y_torch)
+    z_torch_div = torch.div(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = y_torch
+    z_tt_mul = ttnn.mul(x_tt, y_tt, use_legacy=False)
+    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)
+
+    tt_out_mul = ttnn.to_torch(z_tt_mul)
+    tt_out_div = ttnn.to_torch(z_tt_div)
+
+    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
+    assert_with_ulp(z_torch_div, tt_out_div, 0)
