@@ -559,14 +559,6 @@ typename device_operation_t::tensor_return_value_t invoke(
     tensor_return_value_t tensor_return_value;
     tensor_return_value = detail::launch_on_device<device_operation_t>(operation_attributes, tensor_args);
 
-    // Should every output tensor be tracked?
-    /*
-    if (GraphTracker::instance().is_enabled()) {
-        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id,
-    tensor_return_value);
-    }
-    */
-
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
 }
