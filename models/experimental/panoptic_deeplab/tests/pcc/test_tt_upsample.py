@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ...tt.tt_upsample import BilinearUpsampleMatmulTTNN
 from ...tt.tt_upsample import BilinearUpsampleTorch
 from ...tt.common import PDL_L1_SMALL_SIZE
-from ...tests.pcc.common import skip_if_not_blackhole_130_cores, skip_if_not_blackhole_20_cores
+from ...tests.pcc.common import skip_if_not_blackhole_110_cores, skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
@@ -69,9 +69,9 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
     "pcc_threshold, skip_check",
     [
         (0.99, skip_if_not_blackhole_20_cores),
-        (0.99, skip_if_not_blackhole_130_cores),
+        (0.99, skip_if_not_blackhole_110_cores),
     ],
-    ids=["20_cores", "130_cores"],
+    ids=["20_cores", "110_cores"],
 )
 @pytest.mark.parametrize(
     "b, h, w, c, scale, input_channels_first, output_channels_first, memory_config",
@@ -168,9 +168,9 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
     "pcc_threshold, skip_check",
     [
         (0.99, skip_if_not_blackhole_20_cores),
-        (0.99, skip_if_not_blackhole_130_cores),
+        (0.99, skip_if_not_blackhole_110_cores),
     ],
-    ids=["20_cores", "130_cores"],
+    ids=["20_cores", "110_cores"],
 )
 @pytest.mark.parametrize(
     "b, h, w, c, scale, input_channels_first, output_channels_first, memory_config, output_dtype",

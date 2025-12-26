@@ -26,7 +26,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
     check_ttnn_output,
-    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
 )
 
@@ -234,15 +234,15 @@ def test_resnet_layer_pcc(
         ),
         (
             {
-                "res2": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res3": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.6},
-                "res4": {"pcc": 0.999, "abs_err": 0.5, "rel_err": 0.3},
-                "res5": {"pcc": 0.992, "abs_err": 0.5, "rel_err": 0.7},
+                "res2": {"pcc": 0.999, "abs_err": 0.1, "rel_err": 0.3},
+                "res3": {"pcc": 0.999, "abs_err": 0.04, "rel_err": 0.6},
+                "res4": {"pcc": 0.999, "abs_err": 0.02, "rel_err": 0.3},
+                "res5": {"pcc": 0.993, "abs_err": 0.02, "rel_err": 0.7},
             },
-            skip_if_not_blackhole_130_cores,
+            skip_if_not_blackhole_110_cores,
         ),
     ],
-    ids=["20_cores", "130_cores"],
+    ids=["20_cores", "110_cores"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
