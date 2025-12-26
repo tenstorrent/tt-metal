@@ -240,7 +240,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
                 tt::tt_metal::TensorLayout(
-                    conv_config.weights_dtype.value(),
+                    weight_dtype,
                     tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                     MemoryConfig{
                         TensorMemoryLayout::INTERLEAVED,
@@ -253,7 +253,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
                 tt::tt_metal::TensorSpec(
                     ttnn::Shape({1, 1, 1, out_channels}),
                     tt::tt_metal::TensorLayout(
-                        conv_config.weights_dtype.value(),
+                        weight_dtype,
                         tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                         MemoryConfig{
                             TensorMemoryLayout::INTERLEAVED,
