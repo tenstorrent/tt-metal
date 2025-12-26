@@ -83,7 +83,7 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -xv --tb=short", merge_gate: false },
+            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false },
           ]]
     steps:
       - name: Compute tests

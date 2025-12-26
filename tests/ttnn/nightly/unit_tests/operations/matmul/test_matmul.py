@@ -116,7 +116,18 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     ),
 )
 def test_sdxl_matmul(
-    device, core_grid, M, K, N, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, has_gelu
+    device,
+    core_grid,
+    M,
+    K,
+    N,
+    in0_block_w,
+    out_subblock_h,
+    out_subblock_w,
+    per_core_M,
+    per_core_N,
+    has_gelu,
+    perf_test_mode=False,
 ):
     torch.manual_seed(0)
 
@@ -131,9 +142,11 @@ def test_sdxl_matmul(
     tt_act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
     tt_weights = ttnn.from_torch(torch_weights, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat8_b)
     tt_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat8_b)
-    torch_output_tensor = torch_act @ torch_weights + torch_bias
-    if has_gelu:
-        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
+
+    if not perf_test_mode:
+        torch_output_tensor = torch_act @ torch_weights + torch_bias
+        if has_gelu:
+            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         act_shape,
@@ -170,5 +183,8 @@ def test_sdxl_matmul(
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
     )
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    ttnn.synchronize_device(device)
+
+    if not perf_test_mode:
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
