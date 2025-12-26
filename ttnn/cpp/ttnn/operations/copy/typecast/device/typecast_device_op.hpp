@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "typecast_program_factory.hpp"
 #include "typecast_sharded_program_factory.hpp"
+#include "typecast_row_major_program_factory.hpp"
 #include "typecast_device_op_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -26,7 +26,8 @@ struct TypecastDeviceOperation {
     using program_factory_t = std::variant<
         program::TypecastProgramFactory,
         program::TypecastShardedProgramFactory,
-        program::TypecastSubgridProgramFactory>;
+        program::TypecastSubgridProgramFactory,
+        program::TypecastRowMajorProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

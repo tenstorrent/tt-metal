@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -23,7 +22,7 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input;
+    Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
