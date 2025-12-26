@@ -630,12 +630,7 @@ class MasterConfigLoader:
                     if parsed_dtype and parsed_layout and parsed_mem_config:
                         # Hardcode specific operation requirements
                         # tilize and tilize_with_val_padding: JSON doesn't have layout field, but these ops require ROW_MAJOR_LAYOUT
-                        if operation_name in [
-                            "tilize",
-                            "ttnn::tilize",
-                            "tilize_with_val_padding",
-                            "ttnn::tilize_with_val_padding",
-                        ]:
+                        if self._matches_operation(operation_name, "tilize") or self._matches_operation(operation_name, "tilize_with_val_padding"):
                             parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
