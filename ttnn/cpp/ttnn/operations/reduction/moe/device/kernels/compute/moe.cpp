@@ -18,6 +18,7 @@
 #include "compute_kernel_api/pack.h"
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 using namespace ckernel;
 
 namespace NAMESPACE {
@@ -164,45 +165,24 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t out_cb,
-    uint32_t rows,
-    uint32_t cols>
-void reduce_c() {
-    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
+template <PoolType pool_type, ReduceDim reduce_dim>
+void reduce_c(uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+    // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
-    // Postcondition: in0_cb has rows*cols produced
-    // Precondition: scale_cb has 1 produced
+    // Postcondition: in_cb has rows*cols produced
+    // Postcondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-    reconfig_data_format(in0_cb, scale_cb);
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
+    reconfig_data_format(in_cb, scale_cb);
+    pack_reconfig_data_format(out_cb);
 
-    constexpr uint32_t reduce_dst_idx = 0;
+    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+        in_cb, scale_cb, out_cb, rows, cols, 1);
 
-    for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        }
-
-        cb_reserve_back(out_cb, 1);
-        pack_reconfig_data_format(out_cb);
-        pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-
-    reduce_uninit();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
@@ -408,9 +388,9 @@ void MAIN {
     eqz_block_inplace(output_ind_cb_index, Ht * Kt);
 
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt);
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt);
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
@@ -418,6 +398,6 @@ void MAIN {
     mul_block_inplace(values_cb_index, output_ind_cb_index, Ht * Kt);
 
     // final sum
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, out_cb_index, Ht, Kt);
 }
 }  // namespace NAMESPACE

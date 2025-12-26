@@ -18,8 +18,9 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
-#include "debug/dprint_tensix.h"
+// #include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -276,25 +277,16 @@ void normalize_scores(
     const uint32_t cb_normalized_scores) {
     reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
     pack_reconfig_data_format(cb_normalized_scores);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate);
 
     cb_wait_front(cb_gathered_sigmoid, 1);
     cb_wait_front(cb_reduce_ones_scalar, 1);
 
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_gathered_sigmoid, cb_reduce_ones_scalar, 0, 0, 0);
-    tile_regs_commit();
-    reduce_uninit();
+    // Use PRELOADED mode to keep cb_gathered_sigmoid in CB for later broadcast multiply
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate, 1, 1, 1);
 
-    // 2. Pack sums to intermediate to add epsilon
-    tile_regs_wait();
-    cb_reserve_back(cb_reduce_intermediate, 1);
-    pack_tile(0, cb_reduce_intermediate);
-    tile_regs_release();
-    cb_push_back(cb_reduce_intermediate, 1);
-    // 3. Add epsilon
+    // 2. Add epsilon to intermediate results
     tile_regs_acquire();
     cb_wait_front(cb_epsilon_scalar, 1);
     cb_wait_front(cb_reduce_intermediate, 1);
