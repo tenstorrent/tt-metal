@@ -1705,101 +1705,10 @@ class MasterConfigLoader:
 
         return None
 
-    def _extract_permute_dims(self, config: List) -> Optional[List[int]]:
-        """Extract dims parameter from permute operation config"""
-        try:
-            # Look for arg1 which should contain the dims parameter
-            for arg in config:
-                if isinstance(arg, dict) and "arg1" in arg:
-                    dims_str = arg["arg1"]
-                    # The dims are in format '[0, 2, 3, 1]' or similar
-                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
-                        # Parse the list string
-                        dims_str = dims_str.strip("[]")
-                        if dims_str:
-                            dims = [int(x.strip()) for x in dims_str.split(",")]
-                            return dims
-            return None
-        except Exception as e:
-            return None
 
-    def _parse_list_from_string(self, value) -> Optional[List]:
-        """Parse a list from string representation or return if already a list"""
-        try:
-            # If already a list, return it
-            if isinstance(value, list):
-                return value
-            # If string, try to parse it
-            if isinstance(value, str):
-                value = value.strip()
-                if value.startswith("[") and value.endswith("]"):
-                    # Use json.loads for safer parsing
-                    return json.loads(value.replace("'", '"'))
-            return None
-        except Exception as e:
-            return None
 
-    def _parse_numeric_value(self, value):
-        """Parse numeric value from string or return if already numeric"""
-        try:
-            # If already a number, return it
-            if isinstance(value, (int, float)):
-                return value
-            # If list, check if it's a numeric list or parse each element
-            if isinstance(value, list):
-                # Could be a list of numbers for value parameter
-                return value
-            # If string, try to parse it
-            if isinstance(value, str):
-                value = value.strip()
-                # Try as list first
-                if value.startswith("["):
-                    parsed = self._parse_list_from_string(value)
-                    if parsed is not None:
-                        return parsed
-                # Try as float
-                if "." in value:
-                    return float(value)
-                # Try as int
-                return int(value)
-            return None
-        except Exception as e:
-            return None
 
-    def _extract_shape_parameter(self, config: List, arg_name: str = "arg1") -> Optional[List[int]]:
-        """Extract Shape parameter from config (e.g., for untilize_with_unpadding end_shape, reshape target_shape)"""
-        try:
-            for arg in config:
-                if isinstance(arg, dict) and arg_name in arg:
-                    shape_data = arg[arg_name]
-                    # Handle dict with 'Shape' key
-                    if isinstance(shape_data, dict) and "Shape" in shape_data:
-                        shape = shape_data["Shape"]
-                        if isinstance(shape, list):
-                            return shape
-                    # Handle string representation of list
-                    elif isinstance(shape_data, str):
-                        parsed = self._parse_list_from_string(shape_data)
-                        if parsed is not None and isinstance(parsed, list):
-                            return parsed
-                    # Handle direct list
-                    elif isinstance(shape_data, list):
-                        return shape_data
-            return None
-        except Exception as e:
-            return None
 
-    def _extract_int_parameter(self, config: List, arg_name: str) -> Optional[int]:
-        """Extract integer parameter from config (e.g., for transpose dim0, dim1)"""
-        try:
-            for arg in config:
-                if isinstance(arg, dict) and arg_name in arg:
-                    value = arg[arg_name]
-                    if isinstance(value, (int, str)):
-                        return int(value)
-            return None
-        except Exception as e:
-            return None
 
     def _get_conv2d_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
@@ -1898,7 +1807,7 @@ class MasterConfigLoader:
                     continue
 
                 # Extract linear-specific parameters
-                linear_params = self._extract_linear_parameters(config)
+                linear_params = OperationParameterExtractors._extract_linear_parameters(config)
                 if not linear_params:
                     continue
 
@@ -2694,18 +2603,18 @@ class MasterConfigLoader:
                 if "arg7" in arg:
                     params["input_width"] = int(arg["arg7"]) if isinstance(arg["arg7"], (int, str)) else None
                 if "arg8" in arg:
-                    kernel = self._parse_list_from_string(arg["arg8"]) if isinstance(arg["arg8"], str) else arg["arg8"]
+                    kernel = OperationParameterExtractors._parse_list_from_string(arg["arg8"]) if isinstance(arg["arg8"], str) else arg["arg8"]
                     if kernel and len(kernel) >= 2:
                         params["kernel_height"] = kernel[0]
                         params["kernel_width"] = kernel[1]
                 if "arg9" in arg:
-                    stride = self._parse_list_from_string(arg["arg9"]) if isinstance(arg["arg9"], str) else arg["arg9"]
+                    stride = OperationParameterExtractors._parse_list_from_string(arg["arg9"]) if isinstance(arg["arg9"], str) else arg["arg9"]
                     if stride and len(stride) >= 2:
                         params["stride_h"] = stride[0]
                         params["stride_w"] = stride[1]
                 if "arg10" in arg:
                     padding = (
-                        self._parse_list_from_string(arg["arg10"]) if isinstance(arg["arg10"], str) else arg["arg10"]
+                        OperationParameterExtractors._parse_list_from_string(arg["arg10"]) if isinstance(arg["arg10"], str) else arg["arg10"]
                     )
                     if padding:
                         if len(padding) >= 4:
@@ -2718,7 +2627,7 @@ class MasterConfigLoader:
                             params["pad_w"] = padding[1]
                 if "arg11" in arg:
                     dilation = (
-                        self._parse_list_from_string(arg["arg11"]) if isinstance(arg["arg11"], str) else arg["arg11"]
+                        OperationParameterExtractors._parse_list_from_string(arg["arg11"]) if isinstance(arg["arg11"], str) else arg["arg11"]
                     )
                     if dilation and len(dilation) >= 2:
                         params["dilation_h"] = dilation[0]
@@ -2782,51 +2691,6 @@ class MasterConfigLoader:
         except Exception as e:
             return None
 
-    def _extract_linear_parameters(self, config: List) -> Optional[Dict]:
-        """Extract all parameters for linear operation"""
-        try:
-            # Linear parameter mapping:
-            # arg0: input tensor, arg1: weight tensor, arg2: bias tensor (optional)
-            # arg3: transpose_a, arg4: transpose_b
-
-            params = {}
-
-            # Extract transpose flags
-            for arg in config:
-                if not isinstance(arg, dict):
-                    continue
-                if "arg3" in arg:
-                    params["transpose_a"] = bool(int(arg["arg3"])) if isinstance(arg["arg3"], (int, str)) else False
-                if "arg4" in arg:
-                    params["transpose_b"] = bool(int(arg["arg4"])) if isinstance(arg["arg4"], (int, str)) else False
-
-            # Extract tensor shapes
-            tensor_shapes = []
-            for arg in config:
-                if isinstance(arg, dict):
-                    # Check for direct tensor
-                    if "arg1" in arg or "arg2" in arg:
-                        for key in ["arg1", "arg2"]:
-                            if key in arg and isinstance(arg[key], dict) and "Tensor" in arg[key]:
-                                tensor_spec = arg[key]["Tensor"]["tensor_spec"]
-                                shape = tensor_spec["logical_shape"]
-                                tensor_shapes.append(shape)
-                    # Check for UnparsedElement (input tensor)
-                    if "UnparsedElement" in arg:
-                        tc = self.extract_tensor_config(arg)
-                        if tc and hasattr(tc, "shape"):
-                            tensor_shapes.insert(0, tc.shape)
-
-            if len(tensor_shapes) >= 2:
-                params["input_shape"] = tensor_shapes[0]
-                params["weight_shape"] = tensor_shapes[1]
-                params["bias_shape"] = tensor_shapes[2] if len(tensor_shapes) >= 3 else None
-                params["has_bias"] = len(tensor_shapes) >= 3
-                return params
-
-            return None
-        except Exception as e:
-            return None
 
     def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
         """Extract tensor configuration from argument data
