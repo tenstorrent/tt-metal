@@ -19,8 +19,8 @@ void run_kernel()
 {
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
-    const uint BUF_DESC_ID_A = 0;
-    const uint BUF_DESC_ID_B = 1;
+    const uint buf_desc_id_a = 0;
+    const uint buf_desc_id_b = 1;
 
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -35,7 +35,7 @@ void run_kernel()
     bd_val_A.f.z_dim       = num_faces;
 
     td_val_A.buf_desc        = bd_val_A;
-    td_val_A.buf_desc_id     = BUF_DESC_ID_A;
+    td_val_A.buf_desc_id     = buf_desc_id_a;
     td_val_A.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     bd_val_B.f.l1_addr_16B = buffer_B[0] / 16;
@@ -45,13 +45,13 @@ void run_kernel()
     bd_val_B.f.z_dim       = num_faces;
 
     td_val_B.buf_desc        = bd_val_B;
-    td_val_B.buf_desc_id     = BUF_DESC_ID_B;
+    td_val_B.buf_desc_id     = buf_desc_id_b;
     td_val_B.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     TileShape tile_shape_A = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = false};
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-    _llk_unpack_reduce_init_<BUF_DESC_ID_A, BUF_DESC_ID_B, REDUCE_DIM>(1 /*num_tiles_per_pack*/, tile_shape_A);
+    _llk_unpack_reduce_init_<REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, 1 /*num_tiles_per_pack*/, tile_shape_A);
     for (int i = 0; i < TILE_CNT; ++i)
     {
         _llk_unpack_reduce_(i, 0);
@@ -96,7 +96,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    uint32_t const BUF_DESC = 8;
+    uint32_t const buf_desc_id = 8;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -110,11 +110,11 @@ void run_kernel()
     bd_val.f.z_dim       = num_faces;
 
     tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = BUF_DESC;
+    tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0, BUF_DESC>(1 /*num_tiles_per_pack*/);
+    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>();
     for (int i = 0; i < TILE_CNT; ++i)
     {

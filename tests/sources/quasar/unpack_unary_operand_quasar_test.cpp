@@ -19,7 +19,7 @@
 void run_kernel()
 {
     tdma_descriptor_t td_val;
-    const uint BUF_DESC_ID          = 0;
+    const uint buf_desc_id          = 0;
     const uint num_tiles_per_unpack = TILE_CNT;
 
     // Setup data valid scheme
@@ -56,7 +56,7 @@ void run_kernel()
     bd_val.f.z_dim       = num_faces;
 
     td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = BUF_DESC_ID;
+    td_val.buf_desc_id     = buf_desc_id;
     td_val.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     if (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -69,7 +69,7 @@ void run_kernel()
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, BUF_DESC_ID, TRANSPOSE_EN, is_fp32_dest_acc_en>(num_tiles_per_unpack);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
 
     if (unpack_to_dest)
@@ -122,7 +122,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    uint32_t const BUF_DESC       = 8;
+    uint32_t const buf_desc_id    = 8;
     const uint num_tiles_per_pack = TILE_CNT;
 
     if (unpack_to_dest)
@@ -144,11 +144,11 @@ void run_kernel()
     bd_val.f.z_dim       = num_faces;
 
     tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = BUF_DESC;
+    tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0, BUF_DESC>(num_tiles_per_pack);
+    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
     _llk_pack_<p_pacr::PACK0>(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

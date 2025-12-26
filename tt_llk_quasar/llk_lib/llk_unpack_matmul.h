@@ -9,8 +9,8 @@
 using namespace ckernel;
 
 /**
- * @brief Initializes unpacker to unpack operand 0 (BUF_DESC_ID_0) into SrcB
- * and unpacks operand 1 (BUF_DESC_ID_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
+ * @brief Initializes unpacker to unpack operand 0 (buf_desc_id_0) into SrcB
+ * and unpacks operand 1 (buf_desc_id_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
  * In order to get output of rowmajor matrix multiplication input 0 * Input 1, need to initialize
  * SrcA and SrcB to be input 1 & input 0 respectively.
  * The following matrix multiply has the following dimensions:
@@ -18,36 +18,33 @@ using namespace ckernel;
  * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
  * kt_dim is assumed to be iterated over outside this api call
  * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @tparam BUF_DESC_ID_0/1: The buffer descriptor ID where the buffer information is
+ * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 32
  * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
  * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
  * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
  */
-template <uint32_t BUF_DESC_ID_0, uint32_t BUF_DESC_ID_1>
-inline void _llk_unpack_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
+inline void _llk_unpack_matmul_mop_config_(
+    std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
 {
-    static_assert((BUF_DESC_ID_0 < 32 && BUF_DESC_ID_0 >= 0), "BUF_DESC_ID_0 should be between 0-32 for unpackers");
-    static_assert((BUF_DESC_ID_1 < 32 && BUF_DESC_ID_1 >= 0), "BUF_DESC_ID_1 should be between 0-32 for unpackers");
-
     const bool reuse_a                = ct_dim >= rt_dim;
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     const uint32_t MOP_INNER_LOOP     = reuse_a ? ct_dim : rt_dim;
     uint unpack_instrn;
     // static uint inc_l1_instrn;
-    static uint unpack_reuse_instrn;
+    uint unpack_reuse_instrn;
 
     if (reuse_a)
     {
-        unpack_instrn = TT_OP_UNPACR0_TILE_INC(0, 1, BUF_DESC_ID_1, 1 /*Set Dvalid*/);
+        unpack_instrn = TT_OP_UNPACR0_TILE_INC(0, 1, buf_desc_id_1, 1 /*Set Dvalid*/);
         // inc_l1_instrn = TT_OP_NOP;//TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 1);
-        unpack_reuse_instrn = TT_OP_UNPACR1_TILE_INC(0, 0, BUF_DESC_ID_0, 1 /*Set Dvalid*/);
+        unpack_reuse_instrn = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
     }
     else
     {
-        unpack_instrn = TT_OP_UNPACR1_TILE_INC(0, kt_dim, BUF_DESC_ID_0, 1 /*Set Dvalid*/);
+        unpack_instrn = TT_OP_UNPACR1_TILE_INC(0, kt_dim, buf_desc_id_0, 1 /*Set Dvalid*/);
         // inc_l1_instrn = TT_OP_NOP;//TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, KT_DIM);
-        unpack_reuse_instrn = TT_OP_UNPACR0_TILE_INC(0, 0, BUF_DESC_ID_1, 1 /*Set Dvalid*/);
+        unpack_reuse_instrn = TT_OP_UNPACR0_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_instrn /*, inc_l1_instrn*/);
     temp.set_start_op(unpack_reuse_instrn);
@@ -55,8 +52,8 @@ inline void _llk_unpack_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_
 }
 
 /**
- * @brief Initializes unpacker to unpack operand 0 (BUF_DESC_ID_0) into SrcB
- * and unpacks operand 1 (BUF_DESC_ID_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
+ * @brief Initializes unpacker to unpack operand 0 (buf_desc_id_0) into SrcB
+ * and unpacks operand 1 (buf_desc_id_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
  * In order to get output of rowmajor matrix multiplication input 0 * Input 1, need to initialize
  * SrcA and SrcB to be input 1 & input 0 respectively.
  * The following matrix multiply has the following dimensions:
@@ -65,21 +62,21 @@ inline void _llk_unpack_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_
  * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
  * kt_dim is assumed to be iterated over outside this api call
  * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @tparam BUF_DESC_ID_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, currently only supported for SrcA,
  * but can support other unpackers
+ * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
  * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
  * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
  */
-template <uint32_t BUF_DESC_ID_0, uint32_t BUF_DESC_ID_1, bool TRANSPOSE_EN>
-inline void _llk_unpack_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
+template <bool TRANSPOSE_EN>
+inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
 {
     static_assert((TRANSPOSE_EN == false), "TODO: Transpose srcA not available yet");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
 
-    _llk_unpack_matmul_mop_config_<BUF_DESC_ID_0, BUF_DESC_ID_1>(ct_dim, rt_dim, kt_dim);
+    _llk_unpack_matmul_mop_config_(buf_desc_id_0, buf_desc_id_1, ct_dim, rt_dim, kt_dim);
 }
 
 /**
@@ -100,7 +97,6 @@ inline void _llk_unpack_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim, s
  * start_l1_tile_idx_0 -> UNPACKER1 -> SRCB
  * start_l1_tile_idx_1 -> UNPACKER0 -> SRCA
  */
-template <uint32_t BUF_DESC_ID_0, uint32_t BUF_DESC_ID_1>
 inline void _llk_unpack_matmul_(
     std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim, const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {

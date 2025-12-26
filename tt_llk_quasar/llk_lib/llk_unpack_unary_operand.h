@@ -14,38 +14,35 @@ using namespace ckernel;
  * works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_mop_config_(const uint32_t num_tiles)
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_mop_config_(const uint32_t buf_desc_id, const uint32_t num_tiles)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
-    static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
 
     const uint32_t MOP_OUTER_LOOP     = num_tiles;
     constexpr uint32_t MOP_INNER_LOOP = 1;
 
     // RT: Use defines to remove these constexpr, and replace with a single TT_OP_UNPACR_FACE_INC
-    constexpr static uint unpack_tile_instrn = []() constexpr
+    uint unpack_tile_instrn;
+    if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
-        if constexpr (UNP_SEL == p_unpacr::UNP_A)
-        {
-            return TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, BUF_DESC_ID, 1 /*Set Dvalid*/);
-        }
-        else if constexpr (UNP_SEL == p_unpacr::UNP_B)
-        {
-            return TT_OP_UNPACR1_TILE_INC(0, 1 /*Src Tile Idx*/, BUF_DESC_ID, 1 /*Set Dvalid*/);
-        }
-        else if constexpr (UNP_SEL == p_unpacr::UNP_DEST)
-        {
-            return TT_OP_UNPACR_DEST_TILE_INC(1, 1 /*Src Tile Idx*/, BUF_DESC_ID, 0 /*Set Dvalid*/);
-        }
-    }();
+        unpack_tile_instrn = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+    }
+    else if constexpr (UNP_SEL == p_unpacr::UNP_B)
+    {
+        unpack_tile_instrn = TT_OP_UNPACR1_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+    }
+    else if constexpr (UNP_SEL == p_unpacr::UNP_DEST)
+    {
+        unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
+    }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
@@ -66,16 +63,15 @@ inline void _llk_unpack_unary_operand_mop_config_(const uint32_t num_tiles)
 /**
  * @brief MOP configuration for unpack to SrcA or SrcB with a tile transpose, implements input A -> A^T or B -> B^T
  * @tparam UNP_SEL: Selects which unpacker resource to use, supports p_unpacr::UNP_A or p_unpacr::UNP_B
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t num_tiles)
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t buf_desc_id, const uint32_t num_tiles)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
-    static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
 
     const uint32_t MOP_OUTER_LOOP = num_tiles;
     const uint32_t MOP_INNER_LOOP = 1;
@@ -83,21 +79,21 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t num_t
     constexpr uint replay_buf_len = NUM_FACES;
 
     load_replay_buf<0, replay_buf_len>(
-        []
+        [buf_desc_id]
         {
             if constexpr (UNP_SEL == p_unpacr::UNP_A)
             {
-                TTI_UNPACR0_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);                   // Unpacks face 0 into dest offset 0
-                TTI_UNPACR0_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);                   // Unpacks face 2 into dest offset 1
-                TTI_UNPACR0_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);                   // Unpacks face 1 into dest offset 2
-                TTI_UNPACR0_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 1 /*Set DataValid*/); // Unpacks face 3 into dest offset 3
+                TT_UNPACR0_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 0 into dest offset 0
+                TT_UNPACR0_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 2 into dest offset 1
+                TT_UNPACR0_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 1 into dest offset 2
+                TT_UNPACR0_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, buf_desc_id, 1 /*Set DataValid*/); // Unpacks face 3 into dest offset 3
             }
             else if constexpr (UNP_SEL == p_unpacr::UNP_B)
             {
-                TTI_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);
-                TTI_UNPACR1_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);
-                TTI_UNPACR1_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 0);
-                TTI_UNPACR1_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, BUF_DESC_ID, 1 /*Set DataValid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
+                TT_UNPACR1_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
+                TT_UNPACR1_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
+                TT_UNPACR1_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, buf_desc_id, 1 /*Set DataValid*/);
             }
         });
     ckernel_template temp(
@@ -126,14 +122,14 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t num_t
  * @brief Initialized unpacker to unpack a single operand by tiles
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_init_(const uint32_t num_tiles)
+template <uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_init_(const uint32_t buf_desc_id, const uint32_t num_tiles)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
@@ -146,11 +142,11 @@ inline void _llk_unpack_unary_operand_init_(const uint32_t num_tiles)
 
     if constexpr (TRANSPOSE_EN)
     {
-        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN>(num_tiles);
+        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
     }
     else
     {
-        _llk_unpack_unary_operand_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN>(num_tiles);
+        _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
     }
 }
 
