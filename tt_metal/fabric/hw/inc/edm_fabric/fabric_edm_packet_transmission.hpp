@@ -298,17 +298,19 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = cached_routing_fields.value - decrement_val;
 }
 
+/**
+ * Update packet header for next hop (1D Low Latency routing)
+ * Shifts routing field by 2 bits to consume current hop instruction.
+ * Automatically handles refill from route buffer for >16 hop packets.
+ */
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    uint64_t routing_value = cached_routing_fields.value;
-    if ((routing_value >> 32) == 0) [[likely]] {
-        uint32_t lower_bits = static_cast<uint32_t>(routing_value);
-        packet_header->routing_fields.value =
-            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH);
-    } else {
-        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
-    }
+    // Consume current hop and shift to next (handles refill automatically)
+    cached_routing_fields.consume_and_shift();
+
+    // Copy updated routing fields back to packet header
+    cached_routing_fields.copy_to(&packet_header->routing_fields);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(

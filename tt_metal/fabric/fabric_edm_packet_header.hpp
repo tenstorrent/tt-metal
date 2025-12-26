@@ -704,7 +704,42 @@ struct LowLatencyRoutingFieldsT : LowLatencyRoutingFieldsConstants {
 
     uint32_t value;                         // Active routing field (always read by router)
     uint32_t route_buffer[ExtensionWords];  // Extension storage
-};
+
+    /**
+     * Consume current hop instruction and shift to next hop.
+     * Automatically refills from route_buffer when value is exhausted.
+     * This is the core operation used by the router at each hop.
+     */
+    FORCE_INLINE void consume_and_shift() {
+        value >>= FIELD_WIDTH;
+
+        if constexpr (ExtensionWords > 0) {
+            // Refill logic: when value is exhausted, load next word from buffer
+            if (value == 0) [[unlikely]] {
+                value = route_buffer[0];
+
+                // Shift buffer left by one word
+                for (uint32_t i = 0; i < ExtensionWords - 1; i++) {
+                    route_buffer[i] = route_buffer[i + 1];
+                }
+                route_buffer[ExtensionWords - 1] = 0;
+            }
+        }
+    }
+
+    /**
+     * Copy routing fields to volatile destination (packet header).
+     * Needed because router updates a cached copy then writes back to packet.
+     */
+    FORCE_INLINE void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
+        dest->value = this->value;
+        if constexpr (ExtensionWords > 0) {
+            for (uint32_t i = 0; i < ExtensionWords; i++) {
+                dest->route_buffer[i] = this->route_buffer[i];
+            }
+        }
+    }
+} __attribute__((packed));
 
 // Partial specialization for 16-hop mode
 template <>
@@ -713,7 +748,20 @@ struct LowLatencyRoutingFieldsT<0> : LowLatencyRoutingFieldsConstants {
     static constexpr uint32_t MAX_NUM_ENCODINGS = 16;  // 16 hops max
 
     uint32_t value;  // Only field - no route_buffer member
-};
+
+    /**
+     * Consume current hop (no refill needed in 16-hop mode)
+     */
+    FORCE_INLINE void consume_and_shift() {
+        value >>= FIELD_WIDTH;
+        // No refill logic - compiles to single shift instruction
+    }
+
+    /**
+     * Copy to packet header (value only in 16-hop mode)
+     */
+    FORCE_INLINE void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
+} __attribute__((packed));
 
 // Template for 1D packet headers with variable routing field sizes
 template <uint32_t ExtensionWords = 0>
@@ -747,36 +795,21 @@ public:
     uint8_t padding0[padding_size()];
 
     // Helper to calculate routing fields for unicast
+    // Used during packet initialization on host-side.
     template <uint32_t EW = ExtensionWords>
     static LowLatencyRoutingFieldsT<EW> calculate_chip_unicast_routing_fields(uint8_t distance_in_hops) {
         LowLatencyRoutingFieldsT<EW> result{};
 
-        // Determine which word contains the WRITE operation
-        const uint32_t write_hop_index = distance_in_hops - 1;
-        const uint32_t write_word_index = write_hop_index / LowLatencyRoutingFieldsConstants::BASE_HOPS;
-        const uint32_t write_bit_pos = (write_hop_index % LowLatencyRoutingFieldsConstants::BASE_HOPS) *
-                                       LowLatencyRoutingFieldsConstants::FIELD_WIDTH;
+        // Use canonical encoder
+        constexpr uint32_t num_words = 1 + EW;
+        uint32_t buffer[num_words];
+        routing_encoding::encode_1d_unicast(distance_in_hops, buffer, num_words);
 
-        // Build the word containing the WRITE: FORWARDs up to write position, then WRITE
-        const uint32_t forward_mask = (1U << write_bit_pos) - 1;
-        const uint32_t write_word_value = (LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD & forward_mask) |
-                                          (LowLatencyRoutingFieldsConstants::WRITE_ONLY << write_bit_pos);
-
-        // Fill result.value (word 0)
-        result.value = (write_word_index == 0) ? write_word_value : LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD;
-
-        // Fill route_buffer (words 1, 2, 3...) with loop
-        if constexpr (EW >= 1) {
+        // Convert buffer to struct
+        result.value = buffer[0];
+        if constexpr (EW > 0) {
             for (uint32_t i = 0; i < EW; i++) {
-                const uint32_t curr_word_index = i + 1;  // route_buffer[0] is word 1, etc.
-                if (curr_word_index < write_word_index) {
-                    result.route_buffer[i] =
-                        LowLatencyRoutingFieldsConstants::FWD_ONLY_FIELD;  // Words before write: all forwards
-                } else if (curr_word_index == write_word_index) {
-                    result.route_buffer[i] = write_word_value;  // The word with write
-                } else {
-                    result.route_buffer[i] = 0;  // Words after write: NOOPs
-                }
+                result.route_buffer[i] = buffer[i + 1];
             }
         }
 

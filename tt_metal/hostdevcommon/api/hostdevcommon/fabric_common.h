@@ -121,6 +121,309 @@ struct __attribute__((packed)) compressed_route_2d_t {
 
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
+// ============================================================================
+// Dynamic Packet Header Configuration (Phase 1)
+// ============================================================================
+
+// Centralized build-time configuration for packet headers
+struct FabricHeaderConfig {
+    // 1D Routing Configuration
+#ifdef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
+    static constexpr uint32_t LOW_LATENCY_EXTENSION_WORDS = FABRIC_1D_PKT_HDR_EXTENSION_WORDS;
+#else
+    // Default for host compilation or if not specified (Backward Compatibility)
+    static constexpr uint32_t LOW_LATENCY_EXTENSION_WORDS = 1;
+#endif
+
+    // Derived Constants (Centralized Logic)
+    static constexpr uint32_t LOW_LATENCY_NUM_WORDS = 1 + LOW_LATENCY_EXTENSION_WORDS;
+
+    // 2D Routing Configuration
+#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE;
+#else
+    // Default: 32 bytes (96B header)
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 32;
+#endif
+
+    // Validation (Fail fast)
+    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 1, "Phase 1 only supports up to 1 extension word (32 hops)");
+};
+
+// Centralized routing field constants (single source of truth)
+struct RoutingFieldsConstants {
+    // 1D Constants (Low Latency)
+    struct LowLatency {
+        static constexpr uint32_t FIELD_WIDTH = 2;
+        static constexpr uint32_t FIELD_MASK = 0b11;
+        static constexpr uint32_t NOOP = 0b00;
+        static constexpr uint32_t WRITE_ONLY = 0b01;
+        static constexpr uint32_t FORWARD_ONLY = 0b10;
+        static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
+        static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
+        static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
+        static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
+    };
+
+    // 2D Constants (Mesh)
+    struct Mesh {
+        static constexpr uint32_t FIELD_WIDTH = 8;    // 8 bits per hop command
+        static constexpr uint32_t FIELD_MASK = 0xFF;  // 8-bit mask
+
+        // Direction commands (4-bit encoding for each direction)
+        static constexpr uint8_t NOOP = 0b0000;
+        static constexpr uint8_t FORWARD_EAST = 0b0001;
+        static constexpr uint8_t FORWARD_WEST = 0b0010;
+        static constexpr uint8_t FORWARD_NORTH = 0b0100;
+        static constexpr uint8_t FORWARD_SOUTH = 0b1000;
+
+        // Write-and-forward commands (same values - opposite direction chosen at destination)
+        static constexpr uint8_t WRITE_NORTH = 0b0100;
+        static constexpr uint8_t WRITE_SOUTH = 0b1000;
+        static constexpr uint8_t WRITE_EAST = 0b0001;
+        static constexpr uint8_t WRITE_WEST = 0b0010;
+
+        // Multicast flags (combine NS and EW)
+        static constexpr uint8_t WRITE_AND_FORWARD_NS = FORWARD_NORTH | FORWARD_SOUTH;  // 0b1100
+        static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
+    };
+};
+
+// Ensure FORCE_INLINE is available (fallback for host builds)
+#ifndef FORCE_INLINE
+#define FORCE_INLINE inline
+#endif
+
+// Centralized routing encoding functions (stateless, buffer-based primitives)
+namespace routing_encoding {
+
+//=============================================================================
+// 1D Routing Encoders
+//=============================================================================
+
+/**
+ * Canonical 1D unicast routing pattern encoder
+ *
+ * Generates bit pattern where:
+ *   - Each hop uses 2 bits (FIELD_WIDTH = 2)
+ *   - FORWARD_ONLY (0b10) for transit hops
+ *   - WRITE_ONLY (0b01) for final hop
+ *
+ * @param num_hops Number of hops (0 = self-route, 1-32 supported)
+ * @param buffer Output buffer (uint32_t array)
+ *        buffer[0] = value (active routing field)
+ *        buffer[1..n] = route_buffer entries (if num_words > 1)
+ * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
+ *
+ * Example: 3 hops with num_words=1
+ *   Pattern: FWD FWD WR (bits 0-1: 10, bits 2-3: 10, bits 4-5: 01)
+ *   Result: buffer[0] = 0b01'10'10 = 0x1A
+ */
+FORCE_INLINE void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t num_words) {
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    // Zero-initialize
+    for (uint32_t i = 0; i < num_words; i++) {
+        buffer[i] = 0;
+    }
+
+    if (num_hops == 0) {
+        return;  // Self-route
+    }
+
+    // Logic: FWD_ONLY for (hops-1), then WRITE_ONLY
+    const uint32_t write_hop_index = num_hops - 1;
+    const uint32_t write_word_index = write_hop_index / LowLatencyFields::BASE_HOPS;
+    const uint32_t write_bit_pos = (write_hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+
+    const uint32_t forward_mask = (1U << write_bit_pos) - 1;
+    const uint32_t write_word_value =
+        (LowLatencyFields::FWD_ONLY_FIELD & forward_mask) | (LowLatencyFields::WRITE_ONLY << write_bit_pos);
+
+    for (uint32_t i = 0; i < num_words; i++) {
+        if (i < write_word_index) {
+            buffer[i] = LowLatencyFields::FWD_ONLY_FIELD;
+        } else if (i == write_word_index) {
+            buffer[i] = write_word_value;
+        }
+    }
+}
+
+/**
+ * Canonical 1D multicast routing pattern encoder
+ *
+ * Generates bit pattern for multicast routing:
+ *   - FORWARD_ONLY (0b10) before range
+ *   - WRITE_AND_FORWARD (0b11) within range
+ *   - WRITE_ONLY (0b01) at final hop
+ *
+ * @param start_hop First hop to start writing (1-indexed)
+ * @param range_hops Number of hops in multicast range
+ * @param buffer Output buffer (uint32_t array)
+ * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
+ */
+FORCE_INLINE void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t* buffer, uint32_t num_words) {
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    for (uint32_t i = 0; i < num_words; i++) {
+        buffer[i] = 0;
+    }
+
+    const uint32_t end_hop = start_hop + range_hops - 1;
+
+    auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+        const uint32_t word_idx = hop_index / LowLatencyFields::BASE_HOPS;
+
+        // Bounds check (replaces constexpr check from original method)
+        if (word_idx < num_words) {
+            const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+            buffer[word_idx] |= (field_value << bit_pos);
+        }
+    };
+
+    // 1. Prefix: Forward to start
+    for (uint32_t hop = 0; hop < start_hop - 1; hop++) {
+        set_hop_field(hop, LowLatencyFields::FORWARD_ONLY);
+    }
+
+    // 2. Range: Write & Forward
+    for (uint32_t hop = start_hop - 1; hop < end_hop; hop++) {
+        set_hop_field(hop, LowLatencyFields::WRITE_AND_FORWARD);
+    }
+
+    // 3. Tail: Write Only (stop)
+    set_hop_field(end_hop, LowLatencyFields::WRITE_ONLY);
+}
+
+//=============================================================================
+// 2D Routing Encoders
+//=============================================================================
+
+/**
+ * Canonical 2D unicast routing pattern encoder
+ *
+ * Handles NS -> EW routing with proper write command selection.
+ * Note: Write command uses opposite direction (destination determines write direction).
+ *
+ * This matches the existing decode_route_to_buffer logic (fabric_routing_path_interface.h lines 45-75):
+ * - Final hop uses opposite-direction bit (no forward) to indicate write
+ * - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW write (opposite)
+ * - If only NS: emit (ns_hops - 1) NS forwards, then 1 NS write (opposite)
+ * - If only EW: emit (ew_hops - 1) EW forwards, then 1 EW write (opposite)
+ *
+ * @param ns_hops Number of North/South hops
+ * @param ew_hops Number of East/West hops
+ * @param ns_dir North/South direction (0=North, 1=South)
+ * @param ew_dir East/West direction (0=West, 1=East)
+ * @param buffer Output buffer (uint8_t array)
+ * @param max_buffer_size Size of buffer (8/16/24/32 bytes)
+ * @param prepend_one_hop If true, adds one extra forward hop at the start (used by routers)
+ */
+FORCE_INLINE void encode_2d_unicast(
+    uint8_t ns_hops,
+    uint8_t ew_hops,
+    uint8_t ns_dir,
+    uint8_t ew_dir,
+    uint8_t* buffer,
+    uint32_t max_buffer_size,
+    bool prepend_one_hop = false) {
+    using MeshFields = RoutingFieldsConstants::Mesh;
+    uint32_t idx = 0;
+
+    // Forward commands based on direction
+    const uint8_t ns_fwd = (ns_dir == 1) ? MeshFields::FORWARD_SOUTH : MeshFields::FORWARD_NORTH;
+    const uint8_t ew_fwd = (ew_dir == 1) ? MeshFields::FORWARD_EAST : MeshFields::FORWARD_WEST;
+
+    // Write commands use OPPOSITE direction (destination decides)
+    const uint8_t ns_write = (ns_dir == 1) ? MeshFields::WRITE_NORTH : MeshFields::WRITE_SOUTH;
+    const uint8_t ew_write = (ew_dir == 1) ? MeshFields::WRITE_WEST : MeshFields::WRITE_EAST;
+
+    if (ns_hops > 0 && ew_hops > 0) {
+        // NS -> EW turn: (ns_hops-1 + prepend) NS forwards, ew_hops EW forwards, 1 EW write
+        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+            buffer[idx++] = ns_fwd;
+        }
+        for (uint8_t i = 0; i < ew_hops; ++i) {
+            buffer[idx++] = ew_fwd;
+        }
+        buffer[idx++] = ew_write;
+    } else if (ns_hops > 0) {
+        // Only NS: (ns_hops-1 + prepend) NS forwards, 1 NS write
+        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+            buffer[idx++] = ns_fwd;
+        }
+        buffer[idx++] = ns_write;
+    } else if (ew_hops > 0) {
+        // Only EW: (ew_hops-1 + prepend) EW forwards, 1 EW write
+        for (uint8_t i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
+            buffer[idx++] = ew_fwd;
+        }
+        buffer[idx++] = ew_write;
+    }
+
+    // Fill remainder with NOOP
+    while (idx < max_buffer_size) {
+        buffer[idx++] = MeshFields::NOOP;
+    }
+}
+
+/**
+ * Encodes a linear segment of a 2D multicast route.
+ *
+ * 2D Multicast routes are built from multiple segments (Spine N/S, Branch E/W).
+ * This function is called multiple times by fabric_set_mcast_route to build the tree.
+ * Matches logic in fabric_set_route (tt_fabric_api.h lines 74-95).
+ *
+ * Multicast logic:
+ * - For spine (N/S): forwards with potential branch flags at last hop
+ * - For branches (E/W): just forwards
+ * - branch_forward contains WRITE_AND_FORWARD_EW flags for E/W branching
+ *
+ * @param direction Direction of this segment (0=EAST, 1=WEST, 2=NORTH, 3=SOUTH)
+ * @param branch_forward Branch flags (WRITE_AND_FORWARD_EW bits for 2D mcast branching)
+ * @param start_hop Starting index in the route vector
+ * @param segment_length Length of this segment
+ * @param buffer Output buffer (uint8_t array)
+ */
+FORCE_INLINE void encode_2d_mcast_segment(
+    uint8_t direction, uint32_t branch_forward, uint32_t start_hop, uint32_t segment_length, uint8_t* buffer) {
+    using MeshFields = RoutingFieldsConstants::Mesh;
+
+    // Determine forward command based on direction
+    uint8_t forward_cmd = 0;
+    switch (direction) {
+        case 0: forward_cmd = MeshFields::FORWARD_EAST; break;   // EAST
+        case 1: forward_cmd = MeshFields::FORWARD_WEST; break;   // WEST
+        case 2: forward_cmd = MeshFields::FORWARD_NORTH; break;  // NORTH
+        case 3: forward_cmd = MeshFields::FORWARD_SOUTH; break;  // SOUTH
+    }
+
+    // OR in branch_forward flags (for N/S spine with E/W branches)
+    forward_cmd |= static_cast<uint8_t>(branch_forward);
+
+    const uint32_t end_hop = start_hop + segment_length;
+
+    for (uint32_t i = start_hop; i < end_hop; i++) {
+        uint8_t val = forward_cmd;
+
+        // For multicast spine (N/S with branch_forward):
+        // Last hop gets only the branch flags (E/W), not the spine forward
+        if (i == end_hop - 1 && branch_forward) {
+            // Check if this is a N/S mcast that needs to branch E/W
+            uint32_t mcast_branch = (forward_cmd & MeshFields::WRITE_AND_FORWARD_NS)
+                                        ? (branch_forward & MeshFields::WRITE_AND_FORWARD_EW)
+                                        : 0;
+            val = static_cast<uint8_t>(mcast_branch);
+        }
+
+        buffer[i] = val;
+    }
+}
+
+}  // namespace routing_encoding
+
+// ============================================================================
+
 static const uint16_t MAX_CHIPS_LOWLAT_1D = 32;
 static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
 static const uint16_t SINGLE_ROUTE_SIZE_1D = 8;
@@ -130,12 +433,8 @@ template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
 
-    // For 1D: Create LowLatencyPacketHeader pattern
-    static const uint32_t FIELD_WIDTH = 2;
-    static const uint32_t WRITE_ONLY = 0b01;
-    static const uint32_t FORWARD_ONLY = 0b10;
-    static const uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
-
+    // 2D Direction constants (kept for backward compatibility during transition)
+    // TODO: Remove after Phase 1 - use RoutingFieldsConstants::Mesh instead
     static const uint8_t NOOP = 0b0000;
     static const uint8_t FORWARD_EAST = 0b0001;
     static const uint8_t FORWARD_WEST = 0b0010;
