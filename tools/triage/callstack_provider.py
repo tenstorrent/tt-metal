@@ -14,6 +14,9 @@ Options:
 
 Description:
     Provides callstack extraction functionality for RISC cores on devices.
+
+Owner:
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass

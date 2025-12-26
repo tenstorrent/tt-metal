@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Checking that code binaries are the way they were uploaded to the device (both firmware and kernel).
+
+Owner:
+    tt-vjovanovic
 """
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
