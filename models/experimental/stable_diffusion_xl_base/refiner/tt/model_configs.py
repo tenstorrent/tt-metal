@@ -136,11 +136,56 @@ class RefinerModelOptimisations(ModelOptimisations):
             act_block_h_override=64,
         )
 
+        self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,
+            per_core_M=8,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=24,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=3,
+            per_core_M=16,
+            per_core_N=12,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
     def get_matmul_config(self, matmul_path):
+        # # # GEGLU # # #
+        if "net.0.proj" in matmul_path:
+            if "mid_block" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"]
+            elif "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.2" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"]
         return None
 
     def get_mm_compute_config(self, module_path):
-        return None
+        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_conv_config(self, conv_path):
         if "downsamplers" in conv_path:
