@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
