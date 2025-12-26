@@ -922,6 +922,34 @@ class ModelOptimisations:
         }
         # endregion
 
+        # region SDPA CONFIGS
+        self.sdpa_configs = {}
+        self.sdpa_configs["1024_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=1024,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["512_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["256_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["128_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        # endregion
+
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -1298,7 +1326,19 @@ class ModelOptimisations:
         return config["op_config"], config["memory_config"], mask, negative_mask, gamma, beta
 
     def get_layernorm_config(self, module_path):
-        if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
-            return self.layernorm_configs["640_config"]
-        else:
-            return self.layernorm_configs["1280_config"]
+        if "decoder" not in module_path and "encoder" not in module_path:
+            if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                return self.layernorm_configs["640_config"]
+            else:
+                return self.layernorm_configs["1280_config"]
+        return None
+
+    def get_sdpa_config(self, module_path, is_self_attention):
+        if "decoder" not in module_path and "encoder" not in module_path:
+            if not is_self_attention:
+                return self.sdpa_configs["128_K"]
+            if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                return self.sdpa_configs["512_K"]
+            else:
+                return self.sdpa_configs["1024_K"]
+        return None

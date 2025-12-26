@@ -275,3 +275,12 @@ class RefinerModelOptimisations(ModelOptimisations):
 
     def get_layernorm_config(self, module_path):
         return ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
+
+    def get_sdpa_config(self, module_path, is_self_attention):
+        if not is_self_attention:
+            return self.sdpa_configs["128_K"]
+        # TODO: 512 should be possible, latents base optimizations regressed this
+        if "down_blocks.1" in module_path or "up_blocks.2" in module_path:
+            return self.sdpa_configs["256_K"]
+        else:
+            return self.sdpa_configs["512_K"]

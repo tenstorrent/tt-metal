@@ -32,13 +32,6 @@ class TtAttention(LightweightModule):
         self.heads = out_dim // dim_head if out_dim is not None else heads
         self.head_dim = dim_head
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
-        )
-
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
@@ -48,6 +41,9 @@ class TtAttention(LightweightModule):
 
         self.is_self_attention = (
             q_weights.shape[-1] == k_weights.shape[-1] and q_weights.shape[-1] == v_weights.shape[-1]
+        )
+        self.sdpa_program_config = model_config.get_sdpa_config(
+            module_path=module_path, is_self_attention=self.is_self_attention
         )
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -60,14 +56,6 @@ class TtAttention(LightweightModule):
         attention_weights_dtype = model_config.attention_weights_dtype
 
         if self.is_self_attention == True:
-            self.sdpa_program_config.q_chunk_size = 128
-            if out_dim == 640 or out_dim == 1536:
-                self.sdpa_program_config.k_chunk_size = 512
-            # TODO: 512 should be possible, latents base optimizations regressed this
-            elif out_dim == 768:
-                self.sdpa_program_config.k_chunk_size = 256
-            else:
-                self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
