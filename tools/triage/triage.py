@@ -396,13 +396,60 @@ def process_arguments(args: ScriptArguments) -> None:
 
 
 def parse_triage_arguments() -> None:
-    """Parse early triage-only arguments to set verbosity and init console before script loading."""
-    from docopt import docopt
+    """Parse early triage-only arguments to set verbosity and init the main script. Arguments for other scripts are parsed later."""
+    from docopt import (
+        parse_defaults,
+        parse_pattern,
+        formal_usage,
+        printable_usage,
+        parse_argv,
+        TokenStream,
+        DocoptExit,
+    )
 
     # Parse only triage's __doc__, ignoring script args
-    assert __doc__ is not None, "Script docstring must be provided."
+    assert __doc__ is not None, "triage.py docstring must be set."
+    triage_options = parse_defaults(__doc__)
 
-    args = docopt(__doc__, argv=sys.argv[1:], help=False, options_first=True)
+    # Build set of triage's recognized option names
+    recognized_options = set(["-h", "--help", "/?"])  # Always include help options
+    for opt in triage_options:
+        recognized_options.add(opt.short) if opt.short else None
+        recognized_options.add(opt.long) if opt.long else None
+
+    # Filter sys.argv to only include triage's recognized options
+    argv = sys.argv[1:]
+    filtered_argv = []
+    skip_next = False
+
+    for i, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+
+        # Handle --option=value format
+        if "=" in arg:
+            option_name = arg.split("=")[0]
+            if option_name in recognized_options:
+                filtered_argv.append(arg)
+        # Handle standalone option
+        elif arg in recognized_options:
+            filtered_argv.append(arg)
+            # Check if option takes a value (next arg doesn't start with -)
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                filtered_argv.append(argv[i + 1])
+                skip_next = True
+
+    try:
+        usage = printable_usage(__doc__)
+        pattern = parse_pattern(formal_usage(usage), triage_options)
+        parsed_argv = parse_argv(TokenStream(filtered_argv, DocoptExit), list(triage_options), options_first=False)
+        _, _, collected = pattern.fix().match(parsed_argv)
+        args = dict((a.name, a.value) for a in (pattern.flat() + collected))
+    except Exception:
+        # If parsing fails, use defaults - full validation happens later
+        args = dict((opt.name, opt.value) for opt in triage_options)
+
     triage_args = ScriptArguments(args)
     process_arguments(triage_args)
 
