@@ -447,11 +447,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     ttnn::Shape output_shape =
         ttnn::Shape{B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH};
     auto output = tt::tt_metal::create_device_tensor(
-        output_shape,
-        input_tensor_a.dtype(),
-        input_tensor_a.layout(),
-        input_tensor_a.device(),
-        input_tensor_a.memory_config());
+        ttnn::TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor_a.dtype(),
+                tt::tt_metal::PageConfig(input_tensor_a.layout()),
+                input_tensor_a.memory_config())),
+        input_tensor_a.device());
 
     tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
     tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
