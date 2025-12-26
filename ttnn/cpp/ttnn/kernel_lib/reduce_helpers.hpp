@@ -169,8 +169,8 @@ ALWI void reduce(
     // Initialization
     if constexpr (init) {
         reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, ocb);
-        cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
     }
+    cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
 
     constexpr uint32_t onetile = 1;
 
