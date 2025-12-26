@@ -39,6 +39,10 @@ class MeshDevice;
 class MeshWorkload;
 }  // namespace distributed
 struct ProgramCommandSequence;
+namespace experimental {
+
+class ShardDataTransferHelper;
+}  // namespace experimental
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -51,6 +55,8 @@ struct MeshCoreDataReadDescriptor;
 
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
+
+class ShardDataTransfer;
 
 // THREAD SAFETY: All methods are thread safe.
 class MeshCommandQueue {
@@ -77,7 +83,7 @@ public:
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
 
     // Specifies host data to be written to or read from a MeshBuffer shard.
-    struct ShardDataTransfer {
+    struct [[deprecated("Use distributed::ShardDataTransfer instead.")]] ShardDataTransfer {
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
         std::optional<BufferRegion> region;
@@ -92,18 +98,23 @@ public:
         std::optional<BufferRegion> region = std::nullopt) = 0;
     virtual void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
-    virtual void enqueue_write_shards(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
-        bool blocking) = 0;
     virtual void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+    virtual void enqueue_write_shards(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        bool blocking) = 0;
+    [[deprecated("Use enqueue_write_shards with distributed::ShardDataTransfer instead.")]]
+    void enqueue_write_shards(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        bool blocking);
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
         void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;
     virtual void enqueue_read_shards(
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking) = 0;
     // TODO: does "enqueue" make sense anymore? Return the object by value instead.
@@ -112,6 +123,11 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
+    [[deprecated("Use enqueue_read_shards with distributed::ShardDataTransfer instead.")]]
+    void enqueue_read_shards(
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking);
 
     virtual MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
@@ -134,6 +150,40 @@ public:
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}
+};
+
+// Specifies host data to be written to or read from a MeshBuffer shard.
+class ShardDataTransfer {
+private:
+    MeshCoordinate shard_coord_;
+    void* host_data_ = nullptr;
+    std::optional<BufferRegion> region_;
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory_ = nullptr;
+    friend class experimental::ShardDataTransferHelper;
+
+public:
+    explicit ShardDataTransfer(const MeshCoordinate& shard_coord) : shard_coord_(shard_coord) {}
+    explicit ShardDataTransfer(const MeshCommandQueue::ShardDataTransfer& shard_data_transfer) :
+        shard_coord_(shard_data_transfer.shard_coord),
+        host_data_(shard_data_transfer.host_data),
+        region_(shard_data_transfer.region) {}
+
+    MeshCoordinate shard_coord() const { return shard_coord_; }
+    void* host_data() const { return host_data_; }
+    std::optional<BufferRegion> region() const { return region_; }
+
+    ShardDataTransfer& shard_coord(const MeshCoordinate& shard_coord) {
+        shard_coord_ = shard_coord;
+        return *this;
+    }
+    ShardDataTransfer& host_data(void* host_data) {
+        host_data_ = host_data;
+        return *this;
+    }
+    ShardDataTransfer& region(std::optional<BufferRegion> region) {
+        region_ = region;
+        return *this;
+    }
 };
 
 }  // namespace tt::tt_metal::distributed
