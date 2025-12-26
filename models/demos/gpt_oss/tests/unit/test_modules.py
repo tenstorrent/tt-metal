@@ -56,7 +56,7 @@ def run_attention_component(
         hidden_states=hidden_states,
         position_embeddings=position_embeddings,
         attention_mask=mask,
-        use_cache=True,
+        use_cache=False,
     )
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
@@ -65,6 +65,7 @@ def run_attention_component(
 
     # Compare outputs
     passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.95)
+    logger.info(f"Attention test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -90,6 +91,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
 
     # Compare outputs
     passing, output = run_component_comparison(tt_output, ref_output, mesh_device, pcc_threshold=0.99)
+    logger.info(f"RMS norm test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"RMS norm test failed. Output: {output}"
 
 
@@ -113,6 +115,7 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     # Compare outputs
     for tt_output, reference_output in zip(tt_router_scores, router_scores):
         passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.945)
+        logger.info(f"TopK router test: {'passed' if passing else 'failed'} with output: {output}")
         assert passing, f"TopK router test failed. Output: {output}"
 
 
@@ -163,6 +166,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
+    logger.info(f"Experts test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"Experts test failed. Output: {output}"
 
 
@@ -185,6 +189,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.88)
 
+    logger.info(f"MLP test: {'passed' if passing else 'failed'} with output: {output}")
     assert passing, f"MLP test failed. Output: {output}"
 
 
@@ -201,6 +206,10 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     [
         (1, 8),
         (4, 8),
+    ],
+    ids=[
+        "mesh_1x8",
+        "mesh_4x8",
     ],
 )
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, test_modules, reset_seeds):
@@ -226,9 +235,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     model_name = getattr(setup["model_args"], "model_name", None)
-
-    if seq_len >= 4096 and model_name == "gpt-oss-20b":
-        pytest.skip("prefill seq_len=4096 currently unsupported for gpt-oss-20b")
 
     config = setup["config"]
 
@@ -400,7 +406,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         passing, output = run_component_comparison(
             tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         )
-        logger.info(f"Decoder layer test: {passing} with output: {output}")
+        logger.info(f"Decoder layer test: {'passed' if passing else 'failed'} with output: {output}")
         assert passing, f"Decoder layer test failed. Output: {output}"
 
     tested_modules = [m for m in modules_to_test if m != "router" or seq_len == 1]
