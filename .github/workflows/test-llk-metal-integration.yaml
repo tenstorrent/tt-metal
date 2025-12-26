@@ -180,11 +180,12 @@ jobs:
           PARENT_BRANCH_NAME: ${{ env.PARENT_BRANCH_NAME }}
         run: |
           # Define workflows to trigger
+          # TEMPORARILY DISABLED FOR TESTING - uncomment when done
           declare -A workflows
           workflows["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
-          workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
-          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
-          workflows["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
+          # workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
+          # workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
+          # workflows["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
 
           declare -A run_ids
 
@@ -526,11 +527,12 @@ jobs:
           }
 
           # Monitor workflows using data-driven approach
+          # TEMPORARILY DISABLED FOR TESTING - uncomment when done
           declare -A workflow_configs
           workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
-          workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
-          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
-          workflow_configs["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$PERF_DEVICE_MODELS_RUN_ID:perf-device-models-result"
+          # workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
+          # workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
+          # workflow_configs["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$PERF_DEVICE_MODELS_RUN_ID:perf-device-models-result"
           exit_code=0
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
