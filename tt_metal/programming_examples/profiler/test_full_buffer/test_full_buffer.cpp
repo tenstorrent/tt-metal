@@ -71,13 +71,16 @@ void RunFillUpAllBuffers(
     }
 
     workload.add_program(device_range, std::move(program));
-    if (fast_dispatch) {
-        for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
-            // Enqueue the same mesh workload multiple times to generate profiler traffic
+    int num_loops = std::getenv("NUM_LOOPS") ? std::atoi(std::getenv("NUM_LOOPS")) : 1;
+    for (int it = 0; it < num_loops; ++it) {
+        if (fast_dispatch) {
+            for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
+                // Enqueue the same mesh workload multiple times to generate profiler traffic
+                distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+            }
+        } else {
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }
-    } else {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
 }
 

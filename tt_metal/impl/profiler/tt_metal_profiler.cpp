@@ -704,17 +704,29 @@ void InitDeviceProfiler(IDevice* device) {
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
     const uint32_t bank_size_bytes =
         get_profiler_dram_bank_size_per_risc_bytes() * hal.get_max_processors_per_core() * num_cores_per_dram_bank;
-    TT_ASSERT(bank_size_bytes <= hal.get_dev_size(HalDramMemAddrType::PROFILER));
+    const uint32_t profiler_size = hal.get_dev_size(HalDramMemAddrType::PROFILER);
+    TT_ASSERT(bank_size_bytes <= profiler_size);
 
     const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
     auto& profiler = profiler_state_manager->device_profiler_map.at(device_id);
     profiler.setLastFDReadAsNotDone();
-    profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
-    profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
+    profiler.setProfileBufferBankSizeBytes(bank_size_bytes, num_dram_banks);
+    profiler.setProfileNumBuffersPerRisc(1);
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+
+    if (MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled()) {
+        // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
+        profiler.setProfileNumBuffersPerRisc(2);
+    }
+
     setControlBuffer(device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
@@ -753,7 +765,8 @@ bool onlyProfileDispatchCores(const ProfilerReadState state) {
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
-void ReadDeviceProfilerResults(
+// Shared implementation for reading device profiler results
+static void ReadDeviceProfilerResultsImpl(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
@@ -817,6 +830,30 @@ void ReadDeviceProfilerResults(
         profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
 #endif
+}
+
+void ReadDeviceProfilerResults(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
+#if defined(TRACY_ENABLE)
+    if (getDeviceDebugDumpEnabled()) {
+        return;
+    }
+
+    ReadDeviceProfilerResultsImpl(device, virtual_cores, state, metadata);
+#endif
+}
+
+void ReadDeviceProfilerResultsInternal(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    // Note: This function bypasses the getDeviceDebugDumpEnabled() check
+    // It is intended only for use by ProfilerStateManager during cleanup
+    ReadDeviceProfilerResultsImpl(device, virtual_cores, state, metadata);
 }
 
 bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
@@ -917,6 +954,12 @@ void ReadDeviceProfilerResults(
         return;
     }
 
+    // Manual reading of device profiler results is not supported when there is already another thread reading the
+    // results
+    if (getDeviceDebugDumpEnabled()) {
+        return;
+    }
+
     TT_ASSERT(device->is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
@@ -1003,6 +1046,12 @@ void ReadMeshDeviceProfilerResults(
     ZoneScoped;
 
     if (!getDeviceProfilerState()) {
+        return;
+    }
+
+    // Manual reading of device profiler results is not supported when there is already another thread reading the
+    // results
+    if (getDeviceDebugDumpEnabled()) {
         return;
     }
 
@@ -1109,6 +1158,16 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 
 #endif
     return all_programs_perf_data;
+}
+
+void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices) {
+    std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map;
+    for (IDevice* device : active_devices) {
+        virtual_cores_map[device->id()] = detail::getVirtualCoresForProfiling(device, ProfilerReadState::NORMAL);
+        ;
+    }
+
+    MetalContext::instance().profiler_state_manager()->start_debug_dump_thread(active_devices, virtual_cores_map);
 }
 
 }  // namespace experimental
