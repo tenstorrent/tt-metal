@@ -116,13 +116,12 @@ void MAIN {
     current_idx_col = start_col;
     current_idx_row = start_row;
 
-    uint32_t sticks_per_chunk = 0;
+    constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
     cb_wait_front(right_inc_cb_id, 1);
     cb_wait_front(down_left_wrap_inc_cb_id, 1);
     cb_wait_front(up_left_wrap_inc_cb_id, 1);
     cb_wait_front(in_idx_cb_id, 1);
     if (is_large_kernel) {
-        sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
         cb_wait_front(intra_kernel_right_inc_cb_id, 1);
         cb_wait_front(intra_kernel_down_left_wrap_inc_cb_id, 1);
     }
@@ -165,7 +164,7 @@ void MAIN {
             cb_wait_front(compute_tmp_idx_cb_id, 1);
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
             copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);  // move indexes back to DST
-            if (is_large_kernel) {
+            if constexpr (is_large_kernel) {
                 copy_dest_values_init();
                 copy_dest_values(index_dst_idx, index_temp_dst_idx);  // make a copy for large kernel use
             }
@@ -229,6 +228,7 @@ void MAIN {
                 // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
                 // smaller than 9 as the excess sticks are just filled with padding values
                 constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
+                // TODO update SFPU to do DST accumulation
                 max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                     data_dst_idx, index_dst_idx);
 

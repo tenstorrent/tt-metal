@@ -178,7 +178,7 @@ ALWI void initialize_return_indices_data() {
     fill_inc(up_left_wrap_inc_cb_id, up_left_wrap_inc);
     cb_push_back(up_left_wrap_inc_cb_id, 1);
 
-    if (is_large_kernel) {
+    if constexpr (is_large_kernel) {
         cb_reserve_back(intra_kernel_right_inc_cb_id, 1);
         fill_inc(intra_kernel_right_inc_cb_id, intra_kernel_right_inc);
         cb_push_back(intra_kernel_right_inc_cb_id, 1);
@@ -201,7 +201,6 @@ template <
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
-    bool is_avg_pool,
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
@@ -228,107 +227,76 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
     max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
+    constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+        uint32_t read_bytes = in_nbytes_c;
+        if constexpr (wide_reduction) {
+            read_bytes =
+                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
+        }
+
+        uint32_t in_l1_write_addr = 0;
         if constexpr (reader_id == 0) {
-            uint32_t read_bytes = in_nbytes_c;
-            if constexpr (wide_reduction) {
-                read_bytes =
-                    (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
-            }
-
-            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+            in_l1_write_addr = get_write_ptr(in_cb_id);
             cb_reserve_back(in_cb_id, 1);
-            uint32_t processed_sticks = 0;
-            // page zeroing is only necessary for tiled block output format so that scale is not affected by
-            // junk/padding data
-            if constexpr (zero_pages) {
-                if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                    zero_out_page<in_cb_id>();
-                }
-            }
-            for (uint32_t h = 0; h < kernel_h; ++h) {
-                auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                    const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
-                    in_l1_write_addr += max_write_inc * w_multiple;
-                    processed_sticks += w_multiple;
-                    if constexpr (is_large_kernel) {
-                        if ((processed_sticks % max_sticks_for_reduction) == 0 ||
-                            processed_sticks == total_elems_to_reduce) {
-                            noc_async_read_barrier();
-                            cb_push_back(in_cb_id, 1);
-                            cb_reserve_back(in_cb_id, 1);
-                            in_l1_write_addr = get_write_ptr(in_cb_id);
-                            // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                            // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                            // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                            // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                            // initialized the entire CB with the init value, but for avg pool we need to fill the
-                            // entire CB with the init value since the junk data will contribute to the average.
-                            if constexpr (is_avg_pool) {
-                                // clear the in CB
-                                if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
-                                    processed_sticks != total_elems_to_reduce) {
-                                    clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                                        get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
-                                }
-                            }
-                        }
-                    }
-                };
-
-                // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
-                // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
-                // tile is partial we have to read the smaller stick width. Therefore we need to write out the next
-                // stick right bellow the previous one and this is when increment of the write pointer and the read
-                // stick size is not compliant.
-                bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
-                                           dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
-                if constexpr (is_large_kernel) {
-                    bool whole_row_remaining =
-                        kernel_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
-                    use_contiguous_read &= whole_row_remaining;
-                }
-
-                if (use_contiguous_read) {
-                    process_h(0, kernel_w);
-                } else {  // read rows stick by stick with dilation
-                    for (uint32_t w = 0; w < kernel_w; ++w) {
-                        process_h(w * dilation_w, 1);
-                    }
-                }
+        }
+        uint32_t processed_sticks = 0;
+        // page zeroing is only necessary for tiled block output format so that scale is not affected by
+        // junk/padding data
+        if constexpr (zero_pages && reader_id == 0) {
+            if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                zero_out_page<in_cb_id>();
             }
         }
-        if constexpr (!is_large_kernel) {
-            if (reader_id == 0) {
-                noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
-            }
-            if constexpr (reader_id == 1) {
-                constexpr uint32_t num_faces_in_output_tile = 2;
-                constexpr uint32_t num_faces_in_last_output_tile =
-                    last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
-                uint32_t output_faces =
-                    c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
+        for (uint32_t h = 0; h < kernel_h; ++h) {
+            auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
+                const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
+                const uint32_t read_offset =
+                    in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
+                in_l1_write_addr += max_write_inc * w_multiple;
+                processed_sticks += w_multiple;
+                if ((is_large_kernel && (processed_sticks % sticks_per_chunk == 0)) ||
+                    processed_sticks == total_elems_to_reduce) {
+                    if constexpr (reader_id == 0) {  // push a chunk
+                        noc_async_read_barrier();
+                        cb_push_back(in_cb_id, 1);
+                        cb_reserve_back(in_cb_id, 1);
+                        in_l1_write_addr = get_write_ptr(in_cb_id);
+                    } else {
+                        if (processed_sticks == total_elems_to_reduce) {  // write output once all chunks are done
+                            constexpr uint32_t num_faces_in_output_tile = 2;
+                            constexpr uint32_t num_faces_in_last_output_tile =
+                                last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+                            uint32_t output_faces =
+                                c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                cb_wait_front(pack_tmp_cb_id, 1);
-                noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(pack_tmp_cb_id)),
-                    get_write_ptr(out_cb_id),
-                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-                cb_wait_front(pack_idx_tmp_cb_id, 1);
-                noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(pack_idx_tmp_cb_id)),
-                    get_write_ptr(out_idx_cb_id),
-                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-                noc_async_read_barrier();
-                cb_pop_front(pack_tmp_cb_id, 1);
-                cb_pop_front(pack_idx_tmp_cb_id, 1);
+                            cb_wait_front(pack_tmp_cb_id, 1);
+                            noc_async_read_one_packet(
+                                get_noc_addr(get_read_ptr(pack_tmp_cb_id)),
+                                get_write_ptr(out_cb_id),
+                                output_faces * FACE_WIDTH * BYTES_PER_ELEM);
 
-                cb_push_back(out_cb_id, output_faces);
-                cb_push_back(out_idx_cb_id, output_faces);
+                            cb_wait_front(pack_idx_tmp_cb_id, 1);
+                            noc_async_read_one_packet(
+                                get_noc_addr(get_read_ptr(pack_idx_tmp_cb_id)),
+                                get_write_ptr(out_idx_cb_id),
+                                output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+
+                            noc_async_read_barrier();
+                            cb_pop_front(pack_tmp_cb_id, 1);
+                            cb_pop_front(pack_idx_tmp_cb_id, 1);
+
+                            cb_push_back(out_cb_id, output_faces);
+                            cb_push_back(out_idx_cb_id, output_faces);
+                        }
+                    }
+                }
+            };
+
+            // TODO - contiguous reads for some cases
+            for (uint32_t w = 0; w < kernel_w; ++w) {
+                process_h(w * dilation_w, 1);
             }
         }
     }
@@ -411,7 +379,6 @@ void kernel_main() {
     constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(25);
     constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(30);
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(31);
@@ -450,7 +417,7 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (need_to_initialize_in_cb) {
         if constexpr (reader_id == 0) {
             fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             cb_push_back(clear_value_cb_id, 1);
@@ -535,7 +502,6 @@ void kernel_main() {
                 in_c,
                 max_sticks_for_reduction,
                 total_elems_to_reduce,
-                is_avg_pool,
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
