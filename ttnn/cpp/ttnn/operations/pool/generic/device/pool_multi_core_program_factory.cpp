@@ -425,6 +425,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t up_left_wrap_inc_cb_id = 32;
     uint32_t intra_kernel_right_inc_cb_id = 32;
     uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
+    uint32_t compute_tmp_idx_cb_id = 32;
     uint16_t right_inc = 0;
     uint16_t down_left_wrap_inc = 0;
     uint16_t up_left_wrap_inc = 0;
@@ -492,6 +493,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 intra_kernel_down_left_wrap_inc_cb_id,
                 params.index_nbytes * tile_elems,
                 1);
+
+            uint32_t compute_tmp_idx_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                compute_tmp_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+            log_debug(
+                tt::LogOp, "CB {} :: PS = {}, NP = {}", compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1);
 
             // for large kernels we process row by row since inc's aren't consistent if we just process 32 stick batches
             // this means we process multiple top left positions within the kernel for a single top left position in the
@@ -744,8 +751,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pad_l,                                  // 30
         intra_kernel_right_inc_cb_id,           // 31
         intra_kernel_down_left_wrap_inc_cb_id,  // 32
-        kernel_h,                               // 33
-        kernel_w                                // 34
+        compute_tmp_idx_cb_id,                  // 33
+        kernel_h,                               // 34
+        kernel_w                                // 35
     };
 
     // Get device arch for compute kernel config initialization
