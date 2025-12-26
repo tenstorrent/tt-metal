@@ -22,6 +22,12 @@ inline void llk_math_eltwise_unary_sfpu_mask_posinf(uint dst_index, int vector_m
 }
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_mask_neginf(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_mask_neginf<APPROXIMATE>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_mask(
     uint dst_index, DataFormat data_format, int vector_mode = (int)VectorMode::RC) {
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {

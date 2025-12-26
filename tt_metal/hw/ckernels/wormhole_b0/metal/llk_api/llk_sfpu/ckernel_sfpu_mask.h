@@ -52,5 +52,18 @@ inline void calculate_mask_posinf() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_mask_neginf() {
+    const bool exponent_size_8 = true;
+    const int mask_val_idx = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat mask = dst_reg[mask_val_idx];
+        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { dst_reg[0] = -std::numeric_limits<float>::infinity(); }
+        v_endif;
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

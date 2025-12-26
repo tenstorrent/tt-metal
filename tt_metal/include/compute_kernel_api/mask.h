@@ -47,4 +47,8 @@ ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
     MATH((llk_math_eltwise_unary_sfpu_mask_posinf<true>(idst_data)));
 }
 
+ALWI void mask_neginf_tile(uint32_t idst_data, uint32_t idst2_mask) {
+    MATH((llk_math_eltwise_unary_sfpu_mask_neginf<true>(idst_data)));
+}
+
 }  // namespace ckernel
