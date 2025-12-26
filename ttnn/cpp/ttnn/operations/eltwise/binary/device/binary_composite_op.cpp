@@ -235,6 +235,7 @@ Tensor ExecuteDiv::invoke(
             rhs_activations,
             post_activations,
             use_legacy,
+            std::nullopt,
             sub_core_grids);
     } else {
         output_tensor = ttnn::multiply(
@@ -247,6 +248,7 @@ Tensor ExecuteDiv::invoke(
             rhs_activations,
             post_activations,
             use_legacy,
+            std::nullopt,
             sub_core_grids);
     }
 
@@ -476,6 +478,7 @@ Tensor run_remainder(
             FusedActivations{},
             FusedActivations{},
             false,
+            std::nullopt,
             sub_core_grids),
         std::nullopt,
         output_mem_config,
