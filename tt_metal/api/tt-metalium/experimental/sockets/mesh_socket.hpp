@@ -189,9 +189,8 @@ private:
     SocketEndpoint socket_endpoint_type_;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;
     // TODO: replace with enchantum::array
-    std::
-        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
-            fabric_node_id_map_;
+    std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
+        fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed

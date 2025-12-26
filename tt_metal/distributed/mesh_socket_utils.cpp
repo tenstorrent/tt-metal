@@ -513,12 +513,15 @@ void forward_descriptor_to_peer(
     // Once all descriptors are validated, forward the socket descriptor from the controller to all peers.
     if (context->rank() == controller_rank) {
         for (const auto& peer_rank : peer_mesh_id_ranks) {
-            context->send(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_descriptor_size_bytes), sizeof(local_descriptor_size_bytes)),
-                Rank{peer_rank},
-                desc.exchange_tag  // Forward this descriptor over the specified tag
-            );
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&local_descriptor_size_bytes),
+                        sizeof(local_descriptor_size_bytes)),
+                    Rank{peer_rank},
+                    desc.exchange_tag  // Forward this descriptor over the specified tag
+                );
+            });
             // Send the serialized descriptor
             execute_with_timeout([&]() {
                 context->send(
