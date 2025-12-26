@@ -166,4 +166,70 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 // clang-format on
 ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
+// clang-format off
+/**
+ * Initializes the pack rows operation. This function prepares the packer hardware to pack
+ * a specified number of rows from the destination register to L1 memory in row-major order.
+ * Each row contains 16 datums by default.
+ *
+ * The pack rows operation is useful when you need to pack data from the destination register
+ * to L1 memory in a row-major layout, as opposed to the tile-based layout used by standard
+ * pack operations.
+ *
+ * This initialization function should be called before using `pack_rows` to perform the
+ * actual packing.
+ *
+ * NOTE: Before calling this function, ensure that the packer hardware has been configured
+ * for the output circular buffer (e.g., via an earlier initialization function that sets
+ * up the destination format).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                                                    | Type     | Valid Range | Required |
+ * |------------|----------|----------------------------------------------------------------|----------|-------------|----------|
+ * | Function   | num_rows | Number of rows to pack from dest to L1 (each row = 16 datums)  | uint32_t | 1 to 64     | True     |
+ */
+// clang-format on
+ALWI void pack_rows_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
+
+// clang-format off
+/**
+ * Packs rows from a destination register to the output circular buffer in row-major order.
+ * Before calling this function:
+ * 1. Initialize the pack rows operation with `pack_rows_init`
+ * 2. Ensure cb_reserve_back has been called on the output CB
+ * 3. Data must be present in the destination register (from unpack/math operations)
+ *
+ * Each call to `pack_rows` will pack the configured number of rows (set via `pack_rows_init`)
+ * from the data in the destination register to the output circular buffer.
+ *
+ * After pack_rows operation is complete, call `pack_rows_uninit` to restore the packer
+ * to its default state.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|--------------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Function   | idst         | The index in the DEST register                    | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | ocb          | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ * | Function   | output_index | The index in the output CB to write to            | uint32_t | Must be less than the size of the CB                 | False    |
+ */
+// clang-format on
+ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
+    PACK((llk_pack_rows(ocb, idst, output_index)));
+}
+
+// clang-format off
+/**
+ * Uninitializes the pack rows operation and restores the packer to its default state.
+ * This function should be called after the pack_rows operation is complete.
+ *
+ * The function restores packer address modifiers and counters to default values,
+ * allowing other packing operations to function correctly.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
+
 }  // namespace ckernel
