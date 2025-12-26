@@ -24,7 +24,7 @@ jobs:
     container:
       image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
       volumes:
-        - /work
+        - ${{ github.workspace }}:/work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
@@ -35,7 +35,6 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@v4
         with:
-          path: /work
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             tests/
