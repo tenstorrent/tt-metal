@@ -661,192 +661,6 @@ class MasterConfigLoader:
             traceback.print_exc()
             return {"traced_config_name": []}
 
-    def _extract_and_parse_unary_config(
-        self, operation_name: str, config: List, source: str, machine_info: Any
-    ) -> Optional[Dict]:
-        """
-        Extract and parse a single unary configuration from raw JSON.
-
-        Returns:
-            Dictionary with parsed shape, dtype, layout, memory_config, output_memory_config, etc.
-            None if extraction/parsing fails.
-        """
-        try:
-            # Extract first tensor from config
-            tensor_config = None
-            for arg in config:
-                tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
-                if tensor_config:
-                    break
-
-            if not tensor_config:
-                return None
-
-            # Parse the config to TTNN types
-            parsed_dtype = self.parse_dtype(tensor_config.dtype)
-            parsed_layout = self.parse_layout(tensor_config.layout)
-            parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-            if not (parsed_dtype and parsed_layout and parsed_mem_config):
-                return None
-
-            # Apply operation-specific overrides
-            parsed_layout, parsed_mem_config = self._apply_unary_operation_overrides(
-                operation_name, config, tensor_config, parsed_layout, parsed_mem_config
-            )
-
-            # Determine output memory config
-            output_mem_config = self._determine_unary_output_memory_config(
-                operation_name, config, tensor_config, parsed_mem_config
-            )
-
-            # Extract storage_type
-            storage_type_str = (
-                tensor_config.storage_type if hasattr(tensor_config, "storage_type") else "StorageType::DEVICE"
-            )
-
-            config_dict = {
-                "shape": tensor_config.shape,
-                "dtype": parsed_dtype,
-                "layout": parsed_layout,
-                "memory_config": parsed_mem_config,
-                "output_memory_config": output_mem_config,
-                "storage_type": storage_type_str,
-                "traced_source": source,
-                "traced_machine_info": machine_info,
-            }
-
-            # Extract operation-specific parameters using registry extractors
-            clean_op_name = operation_name.replace("ttnn::", "")
-            op_params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
-            if not op_params:
-                op_params = OperationParameterExtractors.extract_parameters(operation_name, config)
-
-            if op_params:
-                config_dict.update(op_params)
-
-                # Special handling for reshape - if validation failed, return None
-                if operation_name == "reshape" and "target_shape" not in op_params:
-                    return None
-
-            return config_dict
-        except Exception:
-            return None
-
-    def _apply_unary_operation_overrides(
-        self,
-        operation_name: str,
-        config: List,
-        tensor_config: Any,
-        parsed_layout: Any,
-        parsed_mem_config: Any,
-    ) -> tuple:
-        """
-        Apply operation-specific overrides for layout and memory config.
-
-        Returns:
-            Tuple of (layout, memory_config) with any necessary overrides applied.
-        """
-        # tilize and tilize_with_val_padding: require ROW_MAJOR_LAYOUT
-        if operation_name in [
-            "tilize",
-            "ttnn::tilize",
-            "tilize_with_val_padding",
-            "ttnn::tilize_with_val_padding",
-        ]:
-            parsed_layout = ttnn.ROW_MAJOR_LAYOUT
-
-        # pad: If padding has front padding, use ROW_MAJOR layout
-        elif operation_name in ["pad", "ttnn::pad"]:
-            padding = self._extract_pad_padding(config)
-            if padding and self._has_front_padding(padding):
-                parsed_layout = ttnn.ROW_MAJOR_LAYOUT
-
-        # upsample: Requires INTERLEAVED memory layout
-        elif operation_name in ["upsample", "ttnn::upsample"]:
-            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
-
-            # Check if shape is tile-aligned
-            if tensor_config.shape and isinstance(tensor_config.shape, list) and len(tensor_config.shape) >= 4:
-                h, w = tensor_config.shape[1], tensor_config.shape[2]
-                if h % 32 != 0 or w % 32 != 0:
-                    parsed_layout = ttnn.ROW_MAJOR_LAYOUT
-
-        return parsed_layout, parsed_mem_config
-
-    def _extract_pad_padding(self, config: List) -> Optional[List]:
-        """Extract padding parameter from pad operation config."""
-        for arg in config:
-            if isinstance(arg, dict) and "arg1" in arg:
-                padding_str = arg["arg1"]
-                if isinstance(padding_str, str):
-                    try:
-                        import ast
-
-                        return ast.literal_eval(padding_str)
-                    except Exception:
-                        return OperationParameterExtractors._parse_list_from_string(padding_str)
-                elif isinstance(padding_str, list):
-                    return padding_str
-        return None
-
-    def _has_front_padding(self, padding: List) -> bool:
-        """Check if padding has non-zero front padding."""
-        if not isinstance(padding, list):
-            return False
-
-        # Handle nested format: [[dim0_front, dim0_back], [dim1_front, dim1_back], ...]
-        if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
-            for dim_pad in padding:
-                if len(dim_pad) >= 1 and dim_pad[0] != 0:
-                    return True
-        # Handle flat format: [front_H, back_H, front_W, back_W]
-        elif len(padding) == 4 and all(isinstance(x, int) for x in padding):
-            if padding[0] != 0 or padding[2] != 0:
-                return True
-
-        return False
-
-    def _determine_unary_output_memory_config(
-        self,
-        operation_name: str,
-        config: List,
-        tensor_config: Any,
-        parsed_mem_config: Any,
-    ) -> Any:
-        """
-        Determine output memory config for unary operation.
-
-        Returns:
-            Output memory config (TTNN MemoryConfig object).
-        """
-        # Try to extract output memory config from arg1 (for interleaved_to_sharded)
-        if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
-            for arg in config:
-                if isinstance(arg, dict) and "arg1" in arg:
-                    if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
-                        try:
-                            return self.parse_memory_config(arg["arg1"]["MemoryConfig"], tensor_config.shape)
-                        except Exception:
-                            pass
-
-        # Operation-specific defaults
-        if operation_name == "sharded_to_interleaved":
-            return ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
-        elif operation_name in ["upsample", "ttnn::upsample"]:
-            return ttnn.DRAM_MEMORY_CONFIG
-        elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
-            if parsed_mem_config.memory_layout in [
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ]:
-                return ttnn.DRAM_MEMORY_CONFIG
-            else:
-                return parsed_mem_config
-        else:
-            return parsed_mem_config
-
     def _get_unary_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -854,52 +668,212 @@ class MasterConfigLoader:
         Get parameters for unary operations (single tensor input).
         """
         # Extract PAIRED configurations (shape + dtype + layout + memory_config)
+        # This ensures we get N exact configs, not a Cartesian product
         paired_configs = []
         failed_configs = 0
         seen_input_signatures = set() if deduplicate_inputs else None
 
         for config_idx, (config, source, machine_info) in enumerate(configs):
-            config_dict = self._extract_and_parse_unary_config(operation_name, config, source, machine_info)
+            try:
+                # Extract first tensor from each config
+                # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
+                tensor_config = None
+                for arg in config:
+                    # arg is a dict, could be {"UnparsedElement": ...} or {"arg0": {...}} etc.
+                    # Pass the entire arg dict to extract_tensor_config
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
+                    if tensor_config:
+                        break  # Found tensor, proceed to parse it
 
-            if config_dict is None:
+                if not tensor_config:
+                    failed_configs += 1
+                    continue
+
+                # Parse the config to TTNN types
+                try:
+                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                    parsed_layout = self.parse_layout(tensor_config.layout)
+                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                    if parsed_dtype and parsed_layout and parsed_mem_config:
+                        # Hardcode specific operation requirements
+                        # tilize and tilize_with_val_padding: JSON doesn't have layout field, but these ops require ROW_MAJOR_LAYOUT
+                        if operation_name in [
+                            "tilize",
+                            "ttnn::tilize",
+                            "tilize_with_val_padding",
+                            "ttnn::tilize_with_val_padding",
+                        ]:
+                            parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                        # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
+                        # (TILE layout doesn't support front padding, but ROW_MAJOR does)
+                        if operation_name in ["pad", "ttnn::pad"]:
+                            # Extract padding from config to check for front padding
+                            padding = None
+                            for arg in config:
+                                if isinstance(arg, dict) and "arg1" in arg:
+                                    padding_str = arg["arg1"]
+                                    # Parse padding string/list
+                                    if isinstance(padding_str, str):
+                                        # Try parsing as JSON list string like "[[0, 0], [0, 13], [0, 0], [0, 0]]"
+                                        try:
+                                            import ast
+
+                                            padding = ast.literal_eval(padding_str)
+                                        except Exception:
+                                            padding = OperationParameterExtractors._parse_list_from_string(padding_str)
+                                    elif isinstance(padding_str, list):
+                                        padding = padding_str
+                                    break
+
+                            if padding:
+                                # Check if any dimension has front padding (non-zero first element)
+                                has_front_padding = False
+                                if isinstance(padding, list):
+                                    # Handle nested format: [[dim0_front, dim0_back], [dim1_front, dim1_back], ...]
+                                    if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
+                                        for dim_pad in padding:
+                                            if len(dim_pad) >= 1:
+                                                if dim_pad[0] != 0:  # Front padding is non-zero
+                                                    has_front_padding = True
+                                                    break
+                                    # Handle flat format: [front_H, back_H, front_W, back_W] (4 elements)
+                                    elif len(padding) == 4 and all(isinstance(x, int) for x in padding):
+                                        # Check front padding for H and W dimensions (indices 0 and 2)
+                                        if padding[0] != 0 or padding[2] != 0:
+                                            has_front_padding = True
+
+                                if has_front_padding:
+                                    parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                        # upsample: C++ code requires INTERLEAVED memory layout (see upsample_op.cpp:22-23)
+                        # Also, if shape is not tile-aligned, use ROW_MAJOR layout (TILE layout requires tile-aligned shapes)
+                        if operation_name in ["upsample", "ttnn::upsample"]:
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+
+                            # Check if shape is tile-aligned
+                            if (
+                                tensor_config.shape
+                                and isinstance(tensor_config.shape, list)
+                                and len(tensor_config.shape) >= 4
+                            ):
+                                h, w = tensor_config.shape[1], tensor_config.shape[2]
+                                if h % 32 != 0 or w % 32 != 0:
+                                    # Shape is not tile-aligned, use ROW_MAJOR layout
+                                    parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                        # Determine output memory config based on operation
+                        # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
+                        output_mem_config = None
+                        if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
+                            # interleaved_to_sharded has output memory config in arg1
+                            for arg in config:
+                                if isinstance(arg, dict) and "arg1" in arg:
+                                    if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
+                                        try:
+                                            output_mem_config = self.parse_memory_config(
+                                                arg["arg1"]["MemoryConfig"], tensor_config.shape
+                                            )
+                                            break
+                                        except Exception as e:
+                                            # If parsing fails, continue to next arg or use default
+                                            pass
+
+                        # If not extracted from arg1, use operation-specific defaults
+                        if output_mem_config is None:
+                            if operation_name == "sharded_to_interleaved":
+                                # This operation converts sharded to interleaved, so output must be INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
+                            elif operation_name in ["upsample", "ttnn::upsample"]:
+                                # upsample output also needs INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+                            elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
+                                # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
+                                # (see untilize_with_unpadding_op.cpp:37)
+                                if parsed_mem_config.memory_layout in [
+                                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                                ]:
+                                    output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                                else:
+                                    output_mem_config = parsed_mem_config
+                            else:
+                                # For most unary ops, output matches input
+                                output_mem_config = parsed_mem_config
+
+                        # Extract storage_type from tensor_config
+                        storage_type_str = (
+                            tensor_config.storage_type
+                            if hasattr(tensor_config, "storage_type")
+                            else "StorageType::DEVICE"
+                        )
+
+                        config_dict = {
+                            "shape": tensor_config.shape,
+                            "dtype": parsed_dtype,
+                            "layout": parsed_layout,
+                            "memory_config": parsed_mem_config,
+                            "output_memory_config": output_mem_config,
+                            "storage_type": storage_type_str,
+                            "traced_source": source,
+                            "traced_machine_info": machine_info,
+                        }
+
+                        # Extract operation-specific parameters using registry extractors
+                        clean_op_name = operation_name.replace("ttnn::", "")
+                        op_params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
+                        if not op_params:
+                            # Try with full operation name
+                            op_params = OperationParameterExtractors.extract_parameters(operation_name, config)
+
+                        if op_params:
+                            # Merge extracted parameters into config_dict
+                            config_dict.update(op_params)
+
+                            # Special handling for reshape - if validation failed, skip this config
+                            if operation_name == "reshape" and "target_shape" not in op_params:
+                                failed_configs += 1
+                                continue
+
+                        # If deduplicating, check if we've seen this config before
+                        # For reshape, include target_shape in deduplication signature
+                        # because each (input_shape, target_shape) pair is unique
+                        if deduplicate_inputs:
+                            import hashlib
+
+                            if operation_name == "reshape" and "target_shape" in config_dict:
+                                # For reshape, deduplicate based on (input, target_shape) pair
+                                target_shape = config_dict["target_shape"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            target_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
+                            else:
+                                # For other operations, deduplicate based on input signature only
+                                input_sig = hashlib.md5(
+                                    str((tensor_config.shape, parsed_dtype, parsed_layout, parsed_mem_config)).encode()
+                                ).hexdigest()
+
+                            if input_sig in seen_input_signatures:
+                                continue  # Skip this config, we already have one with this signature
+                            seen_input_signatures.add(input_sig)
+
+                        paired_configs.append(config_dict)
+                    else:
+                        failed_configs += 1
+                except (AttributeError, Exception) as e:
+                    failed_configs += 1
+            except Exception as e:
                 failed_configs += 1
-                continue
-
-            # If deduplicating, check if we've seen this config before
-            if deduplicate_inputs:
-                import hashlib
-
-                if operation_name == "reshape" and "target_shape" in config_dict:
-                    # For reshape, deduplicate based on (input, target_shape) pair
-                    input_sig = hashlib.md5(
-                        str(
-                            (
-                                config_dict["shape"],
-                                config_dict["dtype"],
-                                config_dict["layout"],
-                                config_dict["memory_config"],
-                                config_dict["target_shape"],
-                            )
-                        ).encode()
-                    ).hexdigest()
-                else:
-                    # For other operations, deduplicate based on input signature only
-                    input_sig = hashlib.md5(
-                        str(
-                            (
-                                config_dict["shape"],
-                                config_dict["dtype"],
-                                config_dict["layout"],
-                                config_dict["memory_config"],
-                            )
-                        ).encode()
-                    ).hexdigest()
-
-                if input_sig in seen_input_signatures:
-                    continue  # Skip this config, we already have one with this signature
-                seen_input_signatures.add(input_sig)
-
-            paired_configs.append(config_dict)
 
         # Build parameter dictionary based on all_cases flag
         if paired_configs:
@@ -1869,29 +1843,20 @@ class MasterConfigLoader:
                             else:
                                 continue
 
-                            # Build param tuple using helper with special embedding_args and output_dtype
-                            cfg_with_extras = cfg.copy()
-                            cfg_with_extras["embedding_args"] = embedding_args
-                            cfg_with_extras["output_dtype"] = cfg["input_b_dtype"]  # Output dtype matches weight dtype
+                            # Create tuple with all parameters to keep configs together
                             param_tuples.append(
-                                self._build_param_tuple_from_config(
-                                    cfg_with_extras,
-                                    [
-                                        "embedding_args",
-                                        "input_a_dtype",
-                                        "input_b_dtype",
-                                        "output_dtype",
-                                        "input_a_layout",
-                                        "input_b_layout",
-                                        "input_a_memory_config",
-                                        "input_b_memory_config",
-                                        "output_memory_config",
-                                        "traced_source",
-                                        "traced_machine_info",
-                                    ],
-                                    extracted_sources,
-                                    extracted_machine_infos,
-                                    idx,
+                                (
+                                    embedding_args,
+                                    cfg["input_a_dtype"],
+                                    cfg["input_b_dtype"],
+                                    cfg["input_b_dtype"],  # Output dtype matches weight dtype
+                                    cfg["input_a_layout"],
+                                    cfg["input_b_layout"],
+                                    cfg["input_a_memory_config"],
+                                    cfg["input_b_memory_config"],
+                                    cfg["output_memory_config"],
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
                                 )
                             )
 
@@ -2022,87 +1987,70 @@ class MasterConfigLoader:
 
                     # For concat operation (vector of tensors input)
                     elif clean_op_name == "concat":
-                        param_spec = "input_shape,dim,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_a_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                            "input_b_layout": ttnn.TILE_LAYOUT,
-                            "input_b_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                        }
-                        param_tuples = [
-                            self._build_param_tuple_from_config(
-                                params, param_spec.split(","), extracted_sources, extracted_machine_infos, idx, defaults
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("input_shape"),
+                                    params.get("dim"),
+                                    params.get("input_a_dtype"),
+                                    params.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    params.get("input_a_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("input_b_dtype"),
+                                    params.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    params.get("input_b_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
                             )
-                            for idx, params in enumerate(extracted_params)
-                        ]
-                        return {param_spec: param_tuples}
+                        param_name = "input_shape,dim,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
 
                     # For nlp_create_qkv_heads operation
                     elif (
                         clean_op_name == "experimental::nlp_create_qkv_heads" or clean_op_name == "nlp_create_qkv_heads"
                     ):
-                        # Extractor returns: shape, dtype, layout, memory_config, num_q_heads, num_kv_heads, output_memory_config
-                        # But test expects: input_shape, input_a_dtype, input_a_layout, input_a_memory_config, num_q_heads, num_kv_heads, output_memory_config
-                        # So we need to remap the keys
-                        remapped_params = [
-                            {
-                                "input_shape": p.get("shape"),
-                                "input_a_dtype": p.get("dtype"),
-                                "input_a_layout": p.get("layout"),
-                                "input_a_memory_config": p.get("memory_config"),
-                                "num_q_heads": p.get("num_q_heads"),
-                                "num_kv_heads": p.get("num_kv_heads"),
-                                "output_memory_config": p.get("output_memory_config"),
-                            }
-                            for p in extracted_params
-                        ]
-                        param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_q_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_a_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                        }
-                        param_tuples = [
-                            self._build_param_tuple_from_config(
-                                params, param_spec.split(","), extracted_sources, extracted_machine_infos, idx, defaults
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("shape"),
+                                    params.get("dtype"),
+                                    params.get("layout", ttnn.TILE_LAYOUT),
+                                    params.get("memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("num_q_heads"),
+                                    params.get("num_kv_heads"),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
                             )
-                            for idx, params in enumerate(remapped_params)
-                        ]
-                        return {param_spec: param_tuples}
+                        param_name = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_q_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
 
                     # For nlp_create_qkv_heads_decode operation
                     elif (
                         clean_op_name == "experimental::nlp_create_qkv_heads_decode"
                         or clean_op_name == "nlp_create_qkv_heads_decode"
                     ):
-                        # Extractor returns: shape, dtype, layout, memory_config, num_heads, num_kv_heads, output_memory_config
-                        # Test expects: input_shape, input_a_dtype, input_a_layout, input_a_memory_config, num_heads, num_kv_heads, output_memory_config
-                        remapped_params = [
-                            {
-                                "input_shape": p.get("shape"),
-                                "input_a_dtype": p.get("dtype"),
-                                "input_a_layout": p.get("layout"),
-                                "input_a_memory_config": p.get("memory_config"),
-                                "num_heads": p.get("num_heads"),
-                                "num_kv_heads": p.get("num_kv_heads"),
-                                "output_memory_config": p.get("output_memory_config"),
-                            }
-                            for p in extracted_params
-                        ]
-                        param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_a_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                        }
-                        param_tuples = [
-                            self._build_param_tuple_from_config(
-                                params, param_spec.split(","), extracted_sources, extracted_machine_infos, idx, defaults
+                        param_tuples = []
+                        for idx, params in enumerate(extracted_params):
+                            param_tuples.append(
+                                (
+                                    params.get("shape"),
+                                    params.get("dtype"),
+                                    params.get("layout", ttnn.TILE_LAYOUT),
+                                    params.get("memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    params.get("num_heads"),
+                                    params.get("num_kv_heads"),
+                                    params.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
                             )
-                            for idx, params in enumerate(remapped_params)
-                        ]
-                        return {param_spec: param_tuples}
+                        param_name = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,num_heads,num_kv_heads,output_memory_config,traced_source,traced_machine_info"
+                        return {param_name: param_tuples}
 
                     # For other operations, return the transformed configs directly
                     # This would need to be customized per operation
