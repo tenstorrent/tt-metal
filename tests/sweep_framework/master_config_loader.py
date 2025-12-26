@@ -70,77 +70,6 @@ class MasterConfigLoader:
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
 
-    @staticmethod
-    def _build_param_tuple_from_config(
-        cfg: Dict,
-        param_names: List[str],
-        idx: int = 0,
-        extracted_sources: List = None,
-        extracted_machine_infos: List = None,
-        defaults: Dict = None,
-    ) -> tuple:
-        """
-        Build a parameter tuple from a config dict.
-
-        Args:
-            cfg: Configuration dictionary
-            param_names: List of parameter names to extract from cfg
-            idx: Index for source/machine_info arrays
-            extracted_sources: List of traced sources
-            extracted_machine_infos: List of traced machine infos
-            defaults: Default values for parameters
-
-        Returns:
-            Tuple of parameter values in the order of param_names
-        """
-        defaults = defaults or {}
-        params = []
-
-        for param in param_names:
-            if param == "traced_source":
-                value = extracted_sources[idx] if extracted_sources and idx < len(extracted_sources) else "unknown"
-            elif param == "traced_machine_info":
-                value = (
-                    extracted_machine_infos[idx]
-                    if extracted_machine_infos and idx < len(extracted_machine_infos)
-                    else None
-                )
-            else:
-                value = cfg.get(param, defaults.get(param))
-            params.append(value)
-
-        return tuple(params)
-
-    @staticmethod
-    def _format_multi_tensor_params(
-        transformed_configs: List[Dict],
-        param_spec: str,
-        extracted_sources: List,
-        extracted_machine_infos: List,
-        defaults: Dict = None,
-    ) -> Dict:
-        """
-        Format multi-tensor operation parameters into the expected tuple format.
-
-        Args:
-            transformed_configs: List of transformed configuration dicts
-            param_spec: Comma-separated string of parameter names
-            extracted_sources: List of traced sources
-            extracted_machine_infos: List of traced machine infos
-            defaults: Default values for parameters (e.g., {"input_a_layout": ttnn.TILE_LAYOUT})
-
-        Returns:
-            Dictionary with param_spec as key and list of tuples as value
-        """
-        param_names = [p.strip() for p in param_spec.split(",")]
-        param_tuples = [
-            MasterConfigLoader._build_param_tuple_from_config(
-                cfg, param_names, idx, extracted_sources, extracted_machine_infos, defaults
-            )
-            for idx, cfg in enumerate(transformed_configs)
-        ]
-        return {param_spec: param_tuples}
-
     def load_master_data(self):
         """Load the master JSON file"""
         if self.master_data is None:
@@ -1865,79 +1794,211 @@ class MasterConfigLoader:
                         return {param_name: param_tuples}
 
                     elif clean_op_name == "linear":
-                        param_spec = "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
-                        return self._format_multi_tensor_params(
-                            transformed_configs, param_spec, extracted_sources, extracted_machine_infos
-                        )
+                        param_names = [
+                            "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg["input_shape"],
+                                    cfg["weight_shape"],
+                                    cfg["bias_shape"],
+                                    cfg["input_a_dtype"],
+                                    cfg["input_b_dtype"],
+                                    cfg["input_a_layout"],
+                                    cfg["input_b_layout"],
+                                    cfg["input_a_memory_config"],
+                                    cfg["input_b_memory_config"],
+                                    cfg["output_memory_config"],
+                                    cfg["transpose_a"],
+                                    cfg["transpose_b"],
+                                    cfg["has_bias"],
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
 
                     # For all_gather_async, we need to return parameters in the correct format
                     elif clean_op_name == "experimental::all_gather_async" or clean_op_name == "all_gather_async":
-                        param_spec = "input_shape,input_dtype,input_layout,input_memory_config,output_memory_config,traced_source,traced_machine_info"
-                        # Note: input_dtype maps to input_a_dtype in param spec but is input_dtype in cfg
-                        # We need to remap the keys
-                        remapped_configs = [
-                            {
-                                "input_shape": cfg.get("input_shape"),
-                                "input_dtype": cfg.get("input_dtype"),
-                                "input_layout": cfg.get("input_layout", ttnn.TILE_LAYOUT),
-                                "input_memory_config": cfg.get("input_memory_config"),
-                                "output_memory_config": cfg.get("output_memory_config"),
-                            }
-                            for cfg in transformed_configs
+                        # Extract parameters from transformed configs
+                        input_shapes = []
+                        input_a_dtypes = []
+                        input_a_layouts = []
+                        input_a_memory_configs = []
+                        output_memory_configs = []
+
+                        for cfg in transformed_configs:
+                            input_shapes.append(cfg.get("input_shape"))
+                            input_a_dtypes.append(cfg.get("input_dtype"))
+                            input_a_layouts.append(cfg.get("input_layout", ttnn.TILE_LAYOUT))
+                            input_a_memory_configs.append(cfg.get("input_memory_config"))
+                            output_memory_configs.append(cfg.get("output_memory_config"))
+
+                        # Create tuples of exact configurations
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source,traced_machine_info"
                         ]
-                        return self._format_multi_tensor_params(
-                            remapped_configs,
-                            param_spec,
-                            extracted_sources,
-                            extracted_machine_infos,
-                            defaults={"input_layout": ttnn.TILE_LAYOUT},
-                        )
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_dtype"),
+                                    cfg.get("input_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
 
                     # For paged_scaled_dot_product_attention_decode, extract parameters from transformed configs
                     elif (
                         clean_op_name == "transformer::paged_scaled_dot_product_attention_decode"
                         or clean_op_name == "paged_scaled_dot_product_attention_decode"
                     ):
-                        param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_b_layout": ttnn.TILE_LAYOUT,
-                            "input_c_layout": ttnn.TILE_LAYOUT,
-                            "input_d_layout": ttnn.TILE_LAYOUT,
-                            "input_e_layout": ttnn.TILE_LAYOUT,
-                        }
-                        return self._format_multi_tensor_params(
-                            transformed_configs, param_spec, extracted_sources, extracted_machine_infos, defaults
-                        )
+                        # Extract parameters from transformed configs
+                        input_shapes = []
+                        input_a_dtypes = []
+                        input_a_layouts = []
+                        input_a_memory_configs = []
+                        input_b_dtypes = []
+                        input_b_layouts = []
+                        input_b_memory_configs = []
+                        input_c_dtypes = []
+                        input_c_layouts = []
+                        input_c_memory_configs = []
+                        input_d_dtypes = []
+                        input_d_layouts = []
+                        input_d_memory_configs = []
+                        input_e_dtypes = []
+                        input_e_layouts = []
+                        input_e_memory_configs = []
+                        output_memory_configs = []
+
+                        for cfg in transformed_configs:
+                            input_shapes.append(cfg.get("input_shape"))
+                            input_a_dtypes.append(cfg.get("input_a_dtype"))
+                            input_a_layouts.append(cfg.get("input_a_layout", ttnn.TILE_LAYOUT))
+                            input_a_memory_configs.append(cfg.get("input_a_memory_config"))
+                            input_b_dtypes.append(cfg.get("input_b_dtype"))
+                            input_b_layouts.append(cfg.get("input_b_layout", ttnn.TILE_LAYOUT))
+                            input_b_memory_configs.append(cfg.get("input_b_memory_config"))
+                            input_c_dtypes.append(cfg.get("input_c_dtype"))
+                            input_c_layouts.append(cfg.get("input_c_layout", ttnn.TILE_LAYOUT))
+                            input_c_memory_configs.append(cfg.get("input_c_memory_config"))
+                            input_d_dtypes.append(cfg.get("input_d_dtype"))
+                            input_d_layouts.append(cfg.get("input_d_layout", ttnn.TILE_LAYOUT))
+                            input_d_memory_configs.append(cfg.get("input_d_memory_config"))
+                            input_e_dtypes.append(cfg.get("input_e_dtype"))
+                            input_e_layouts.append(cfg.get("input_e_layout", ttnn.TILE_LAYOUT))
+                            input_e_memory_configs.append(cfg.get("input_e_memory_config"))
+                            output_memory_configs.append(cfg.get("output_memory_config"))
+
+                        # Create tuples of exact configurations
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("input_c_dtype"),
+                                    cfg.get("input_c_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_c_memory_config"),
+                                    cfg.get("input_d_dtype"),
+                                    cfg.get("input_d_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_d_memory_config"),
+                                    cfg.get("input_e_dtype"),
+                                    cfg.get("input_e_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_e_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
 
                     # For scaled_dot_product_attention_decode (non-paged), extract parameters including scalar params
                     elif (
                         clean_op_name == "transformer::scaled_dot_product_attention_decode"
                         or clean_op_name == "scaled_dot_product_attention_decode"
                     ):
-                        param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_b_layout": ttnn.TILE_LAYOUT,
-                            "input_c_layout": ttnn.TILE_LAYOUT,
-                            "input_d_layout": ttnn.TILE_LAYOUT,
-                        }
-                        return self._format_multi_tensor_params(
-                            transformed_configs, param_spec, extracted_sources, extracted_machine_infos, defaults
-                        )
+                        # Build parameter tuples including scalar parameters
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("input_c_dtype"),
+                                    cfg.get("input_c_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_c_memory_config"),
+                                    cfg.get("input_d_dtype"),
+                                    cfg.get("input_d_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_d_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    cfg.get("scale"),  # Scalar parameter
+                                    cfg.get("k_chunk_size"),  # Scalar parameter
+                                    cfg.get("is_causal"),  # Scalar parameter
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
 
                     # For paged_update_cache (4 tensor inputs)
                     elif clean_op_name == "experimental::paged_update_cache" or clean_op_name == "paged_update_cache":
-                        param_spec = "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info"
-                        defaults = {
-                            "input_a_layout": ttnn.TILE_LAYOUT,
-                            "input_b_layout": ttnn.TILE_LAYOUT,
-                            "input_c_layout": ttnn.TILE_LAYOUT,
-                            "input_d_layout": ttnn.TILE_LAYOUT,
-                        }
-                        return self._format_multi_tensor_params(
-                            transformed_configs, param_spec, extracted_sources, extracted_machine_infos, defaults
-                        )
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("input_c_dtype"),
+                                    cfg.get("input_c_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_c_memory_config"),
+                                    cfg.get("input_d_dtype"),
+                                    cfg.get("input_d_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_d_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
 
                     # For conv2d operation (special input_specs format)
                     elif clean_op_name == "conv2d":
