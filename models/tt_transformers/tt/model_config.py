@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum, auto
+from enum import Enum
 from pathlib import Path
 from typing import Tuple
 
@@ -33,7 +33,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     load_hf_state_dict,
-    load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -42,11 +41,6 @@ from models.tt_transformers.tt.load_checkpoints import (
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
-
-class CheckpointType(Enum):
-    Meta = auto()
-    HuggingFace = auto()
 
 
 class TensorGroup(Enum):
@@ -543,8 +537,6 @@ class ModelArgs:
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
 
-        # Set checkpoint type - always HuggingFace since we only support HF_MODEL now
-        self.checkpoint_type = CheckpointType.HuggingFace
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
@@ -1950,11 +1942,8 @@ class ModelArgs:
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-            self.is_mixture_of_experts = any(["experts" in k for k in state_dict.keys()])
         else:
-            assert self.checkpoint_type == CheckpointType.HuggingFace
+            # Always HuggingFace since we only support HF_MODEL now
             if self.from_hf_url:
                 # Use get_hf_model_cls() from main branch, but handle special cases
                 # Special case Qwen2.5-VL models until they are fully integrated into a HF release
@@ -2628,70 +2617,66 @@ class ModelArgs:
         return layer
 
     def reference_rms_norm(self):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
-
-            return RMSNorm(self.dim, self.norm_eps)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layers = getattr(model, "layers", getattr(model, "model", {}).layers)
-            layer = layers[0].input_layernorm
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        # Always HuggingFace since we only support HF_MODEL now
+        model = self.reference_transformer(wrap=False)
+        layers = getattr(model, "layers", getattr(model, "model", {}).layers)
+        layer = layers[0].input_layernorm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig
+        # Always HuggingFace since we only support HF_MODEL now
+        from transformers import AutoConfig
 
-            model_cls = self.get_hf_model_cls()
+        model_cls = self.get_hf_model_cls()
 
-            if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                if hasattr(config, "text_config"):
-                    config.text_config.num_layers = self.n_layers
-                    config.text_config.num_hidden_layers = self.n_layers
-                else:
-                    config.num_layers = self.n_layers
-                    config.num_hidden_layers = self.n_layers
-
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
-                        config=config,
-                        torch_dtype="auto",
-                        trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=True,
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        if self.dummy_weights and not load_checkpoint:
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            if hasattr(config, "text_config"):
+                config.text_config.num_layers = self.n_layers
+                config.text_config.num_hidden_layers = self.n_layers
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
 
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
-                    from transformers import Mistral3ForConditionalGeneration
+            try:
+                # .from_pretrained + _init_weights works faster than .from_config
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    config=config,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=True,
+                )
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        else:
+            if "gemma-3" in self.model_name:
+                from transformers import Gemma3ForConditionalGeneration
 
-                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
-                else:
-                    from transformers import AutoModelForCausalLM
+                model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+            elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
+                from transformers import Mistral3ForConditionalGeneration
 
-                    if self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    else:
-                        model = self.cached_hf_model
-                    model.model.layers = model.model.layers[: self.n_layers]
-            if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
-                return wrapper
+                model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
             else:
-                return model
+                from transformers import AutoModelForCausalLM
+
+                if self.cached_hf_model is None:
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
+                else:
+                    model = self.cached_hf_model
+                model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            wrapper = HfModelWrapper(model, self.head_dim)
+            return wrapper
+        else:
+            return model
 
     def reference_gemma_model(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -2779,39 +2764,6 @@ class ModelArgs:
         else:
             # For other models: vision_tower.vision_model.encoder
             layer = model.vision_tower.vision_model.encoder
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_pixtral_image_block(self, layer_num=0):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[layer_num]
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_vision_rms(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[0].ffn_norm
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_conv2d_patch(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.patch_conv
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_vision_rot_emb(self):
-        model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.patch_positional_embedding
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
