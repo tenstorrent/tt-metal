@@ -20,7 +20,6 @@ chunksize_list = [1, 2, 4, 5]
 dims = [0, 1, 2, 3, 4]
 
 
-@pytest.mark.skip(reason="Skipping due to test failure - github issue ##35085")
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("dtype", dtypes)
 @pytest.mark.parametrize("shape", shapes)
