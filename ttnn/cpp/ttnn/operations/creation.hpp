@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -86,7 +87,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false);
+        tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
     } else if (device != nullptr) {
         return host_tensor.to_device(device, output_mem_config);
