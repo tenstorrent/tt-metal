@@ -34,6 +34,9 @@ class GraphRef;
 class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
+class LogicalFabricNodeId;
+class PhysicalAsicPosition;
+class AsicPinning;
 }  // namespace proto
 
 inline namespace v1_1 {
@@ -86,12 +89,24 @@ private:
 };
 }  // namespace v1_1
 
+// FabricNodeId is now defined in fabric_types.hpp (already included above)
+
+// Use ASICPosition type alias for consistency with TopologyMapper
+using AsicPosition = tt::tt_metal::ASICPosition;
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+
+    // Copy constructor
+    MeshGraphDescriptor(const MeshGraphDescriptor& other);
+
+    // Copy assignment operator
+    MeshGraphDescriptor& operator=(const MeshGraphDescriptor& other);
+
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
@@ -165,6 +180,8 @@ public:
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
+    const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
+
 private:
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -190,6 +207,8 @@ private:
     std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
@@ -210,6 +229,7 @@ private:
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
@@ -219,6 +239,9 @@ private:
 
     // Populate Descriptors
     void populate_descriptors();
+
+    // Populate Pinnings
+    void populate_pinnings();
 
     // Populate Instances
     void populate_top_level_instance();
@@ -245,6 +268,9 @@ private:
 
     void add_to_fast_lookups(const InstanceData& instance);
     void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
+
+    // Helper function to update descriptor pointers after copying
+    void update_descriptor_pointers();
 };
 
 }  // namespace tt::tt_fabric

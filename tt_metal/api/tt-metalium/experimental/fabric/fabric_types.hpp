@@ -5,6 +5,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <iosfwd>
+#include <utility>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
@@ -82,12 +84,29 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
+// Logical fabric node identifier (mesh_id, chip_id)
+class FabricNodeId {
+public:
+    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    MeshId mesh_id{0};
+    std::uint32_t chip_id = 0;
+};
+
+bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
+
 }  // namespace tt::tt_fabric
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using ASICPosition = std::pair<TrayID, ASICLocation>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;

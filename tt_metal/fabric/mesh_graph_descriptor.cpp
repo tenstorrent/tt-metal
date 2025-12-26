@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -163,6 +164,51 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
+MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) :
+    proto_(std::make_unique<proto::MeshGraphDescriptor>(*other.proto_)),
+    instances_(other.instances_),
+    connections_(other.connections_),
+    instances_by_name_(other.instances_by_name_),
+    instances_by_type_(other.instances_by_type_),
+    device_instances_(other.device_instances_),
+    mesh_instances_(other.mesh_instances_),
+    graph_instances_(other.graph_instances_),
+    switch_instances_(other.switch_instances_),
+    top_level_id_(other.top_level_id_),
+    connections_by_instance_id_(other.connections_by_instance_id_),
+    connections_by_type_(other.connections_by_type_),
+    connections_by_source_device_id_(other.connections_by_source_device_id_),
+    pinnings_(other.pinnings_) {
+    // Update descriptor maps and pointers to point to the new proto_ object
+    update_descriptor_pointers();
+}
+
+MeshGraphDescriptor& MeshGraphDescriptor::operator=(const MeshGraphDescriptor& other) {
+    if (this != &other) {
+        // Deep copy the protobuf object
+        proto_ = std::make_unique<proto::MeshGraphDescriptor>(*other.proto_);
+
+        // Copy all member data structures
+        top_level_id_ = other.top_level_id_;
+        instances_ = other.instances_;
+        connections_ = other.connections_;
+        instances_by_name_ = other.instances_by_name_;
+        instances_by_type_ = other.instances_by_type_;
+        device_instances_ = other.device_instances_;
+        mesh_instances_ = other.mesh_instances_;
+        graph_instances_ = other.graph_instances_;
+        switch_instances_ = other.switch_instances_;
+        connections_by_instance_id_ = other.connections_by_instance_id_;
+        connections_by_type_ = other.connections_by_type_;
+        connections_by_source_device_id_ = other.connections_by_source_device_id_;
+        pinnings_ = other.pinnings_;
+
+        // Update descriptor maps and pointers to point to the new proto_ object
+        update_descriptor_pointers();
+    }
+    return *this;
+}
+
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
@@ -267,6 +313,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
         validate_switch_descriptors(proto, all_errors);
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
+        validate_pinnings(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -292,6 +339,8 @@ void MeshGraphDescriptor::populate() {
     pre_populate_connections_lookups();
 
     populate_connections();
+
+    populate_pinnings();
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -784,6 +833,34 @@ void MeshGraphDescriptor::populate_descriptors() {
     for (int i = 0; i < proto_->switch_descriptors_size(); ++i) {
         const auto& switch_desc = proto_->switch_descriptors(i);
         switch_desc_by_name_.emplace(switch_desc.name(), &switch_desc);
+    }
+}
+
+void MeshGraphDescriptor::update_descriptor_pointers() {
+    // First, repopulate the descriptor maps to point to the new proto_ object
+    populate_descriptors();
+
+    // Then, update all descriptor pointers in instances_ to point to the new proto_ object
+    for (auto& [id, instance] : instances_) {
+        if (instance.kind == NodeKind::Mesh) {
+            const auto* old_mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            const auto it = mesh_desc_by_name_.find(old_mesh_desc->name());
+            TT_FATAL(it != mesh_desc_by_name_.end(), "Mesh descriptor {} not found after copy", old_mesh_desc->name());
+            instance.desc = it->second;
+        } else if (instance.kind == NodeKind::Graph) {
+            const auto* old_graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+            const auto it = graph_desc_by_name_.find(old_graph_desc->name());
+            TT_FATAL(
+                it != graph_desc_by_name_.end(), "Graph descriptor {} not found after copy", old_graph_desc->name());
+            instance.desc = it->second;
+        } else if (instance.kind == NodeKind::Switch) {
+            const auto* old_switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+            const auto it = switch_desc_by_name_.find(old_switch_desc->name());
+            TT_FATAL(
+                it != switch_desc_by_name_.end(), "Switch descriptor {} not found after copy", old_switch_desc->name());
+            instance.desc = it->second;
+        }
+        // Device instances don't have descriptors, so no update needed
     }
 }
 
@@ -1513,5 +1590,51 @@ void MeshGraphDescriptor::print_all_nodes() {
 
     // Start from top-level and recursively print in local-id order
     print_node(top_level_id_, 0);
+}
+
+void MeshGraphDescriptor::populate_pinnings() {
+    pinnings_.clear();
+
+    // Extract pinnings from top-level pinnings section
+    for (const auto& pinning : proto_->pinnings()) {
+        // Extract LogicalFabricNodeId from proto
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+
+        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
+        const auto& physical_pos = pinning.physical_asic_position();
+        AsicPosition asic_pos(
+            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
+
+        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
+        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
+        pinnings_.emplace_back(asic_pos, fabric_node);
+    }
+}
+
+void MeshGraphDescriptor::validate_pinnings(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Track duplicate pinnings for the same logical_fabric_node_id
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
+
+    for (const auto& pinning : proto.pinnings()) {
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+
+        uint32_t mesh_id = logical_node_id.mesh_id();
+        uint32_t chip_id = logical_node_id.chip_id();
+
+        // Check for duplicate pinnings
+        auto key = std::make_pair(mesh_id, chip_id);
+        fabric_node_pinning_count[key]++;
+        if (fabric_node_pinning_count[key] > 1) {
+            error_messages.push_back(
+                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        }
+
+        // Validate that mesh_id exists in the mesh instances
+        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
+        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
+        // More precise validation would require checking the top_level_instance structure
+    }
 }
 }  // namespace tt::tt_fabric

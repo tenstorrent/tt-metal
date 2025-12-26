@@ -20,22 +20,7 @@ class TopologyMapper;
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
 
-// TODO: first pass at switching over MeshId/ChipId to proper struct
-// Need to update the usage in routing table generator
-class FabricNodeId {
-public:
-    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
-    MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
-};
-
-bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
-std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
+// FabricNodeId is now defined in fabric_types.hpp
 
 class RoutingTableGenerator {
 public:
