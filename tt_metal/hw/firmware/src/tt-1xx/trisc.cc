@@ -39,6 +39,11 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
+#if defined(WATCHER_ENABLED)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
+
 namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
@@ -165,6 +170,19 @@ int main(int argc, char* argv[]) {
                                              launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+#if defined(WATCHER_ENABLED)
+        // BEEF pattern (0xBEEF****) indicates no args set by host
+        if ((rta_l1_base[0] & 0xFFFF0000) != 0xBEEF0000) {
+            rta_count = rta_l1_base[0];
+            rta_l1_base = rta_l1_base + 1;
+        } else {
+            rta_count = 0;
+        }
+
+        crta_count = crta_l1_base[0];
+        crta_l1_base = crta_l1_base + 1;
+#endif
 
         WAYPOINT("R");
         int index =
