@@ -1,0 +1,174 @@
+name: "[internal] ops unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 40
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
+
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 40
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  define-ops-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      ops-tests: ${{ steps.compute-tests.outputs.ops-tests }}
+    strategy:
+      matrix:
+        default-ops-tests:
+          [[
+            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false },
+          ]]
+    steps:
+      - name: Compute tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+          echo "[info] Outputing default values"
+          default_ops_tests='${{ toJSON(matrix.default-ops-tests) }}'
+          echo $default_ops_tests
+          echo $default_ops_tests | jq
+          requested_ops_tests=$default_ops_tests
+
+          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ops_tests")
+          echo "[info] after filtering for requested workflow tests: $requested_ops_tests"
+
+          # Check that we have a valid test list that's not empty
+          echo "$requested_ops_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+          echo "ops-tests=$(echo $requested_ops_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "[info] Showing GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  ops:
+    needs: define-ops-tests
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.define-ops-tests.outputs.ops-tests) }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    container:
+      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
+          slow-dispatch-timeout: 10.0
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08VC9954CE # David Popov
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
