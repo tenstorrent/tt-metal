@@ -20,12 +20,12 @@ namespace ttnn::operations::reduction {
  * enabling compile-time branching with if constexpr for zero runtime overhead.
  */
 enum class OpType : uint32_t {
-    IDENTITY = 0,  // Pass-through: tilize -> untilize (no Phase 2 operation)
+    IDENTITY = 0,      // Pass-through: tilize -> untilize (no Phase 2 operation)
+    REDUCE_W_SUM = 1,  // Sum reduction along width
+    REDUCE_W_MAX = 2,  // Max reduction along width
+    REDUCE_W_AVG = 3,  // Average reduction along width
     // Future operations:
-    // REDUCE_W_SUM = 1,   // Sum reduction along width
-    // REDUCE_W_MAX = 2,   // Max reduction along width
-    // REDUCE_W_AVG = 3,   // Average reduction along width
-    // RELU = 4,           // ReLU activation
+    // RELU = 4,      // ReLU activation
 };
 
 }  // namespace ttnn::operations::reduction

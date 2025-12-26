@@ -21,11 +21,13 @@
 #include "ttnn/operations/reduction/topk/topk_nanobind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_nanobind.hpp"
 #include "ttnn/operations/reduction/tilize_untilize/tilize_untilize_nanobind.hpp"
+#include "ttnn/operations/reduction/tilize_untilize/device/kernels/op_types.hpp"
 
 namespace ttnn::operations::reduction {
 
 void py_module(nb::module_& mod) {
     export_enum<ttnn::operations::reduction::ReduceType>(mod, "ReduceType");
+    export_enum<ttnn::operations::reduction::OpType>(mod, "TilizeUntilizeOpType");
 
     // Generic reductions
     detail::bind_reduction_operation(mod, ttnn::sum);

@@ -123,3 +123,162 @@ def test_tilize_untilize_cliff_cores(device, batch_size, channels, height, width
 
     # Identity operation: output should match input exactly
     assert_with_pcc(torch_input, torch_output, pcc=0.9999)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_avg(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_AVG operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 32] - width reduced to TILE_WIDTH
+
+    The reduced value (mean) is stored in column 0; columns 1-31 are zeros.
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_AVG)
+
+    # Verify output shape: width reduced to 32 (TILE_WIDTH)
+    expected_shape = (batch_size, channels, height, 32)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: mean along width dimension
+    torch_expected = torch.mean(torch_input, dim=-1, keepdim=True)
+
+    # Extract first column from output (where reduced values are stored)
+    torch_output_col0 = torch_output[:, :, :, 0:1]
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output_col0, pcc=0.999)
+
+    # Verify columns 1-31 are zeros
+    assert torch.all(torch_output[:, :, :, 1:] == 0), "Columns 1-31 should be zeros"
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_sum(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_SUM operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 32] - width reduced to TILE_WIDTH
+
+    The reduced value (sum) is stored in column 0; columns 1-31 are zeros.
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_SUM)
+
+    # Verify output shape: width reduced to 32 (TILE_WIDTH)
+    expected_shape = (batch_size, channels, height, 32)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: sum along width dimension
+    torch_expected = torch.sum(torch_input, dim=-1, keepdim=True)
+
+    # Extract first column from output (where reduced values are stored)
+    torch_output_col0 = torch_output[:, :, :, 0:1]
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output_col0, pcc=0.999)
+
+    # Verify columns 1-31 are zeros
+    assert torch.all(torch_output[:, :, :, 1:] == 0), "Columns 1-31 should be zeros"
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("height", [32, 64, 128])
+@pytest.mark.parametrize("width", [32, 64, 128])
+def test_tilize_untilize_reduce_w_max(device, batch_size, channels, height, width):
+    """
+    Test REDUCE_W_MAX operation which reduces along the width dimension.
+
+    Input shape: [batch_size, channels, height, width]
+    Output shape: [batch_size, channels, height, 32] - width reduced to TILE_WIDTH
+
+    The reduced value (max) is stored in column 0; columns 1-31 are zeros.
+    """
+    torch.manual_seed(0)
+
+    shape = (batch_size, channels, height, width)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.tilize_untilize(input_tensor, op_type=ttnn.TilizeUntilizeOpType.REDUCE_W_MAX)
+
+    # Verify output shape: width reduced to 32 (TILE_WIDTH)
+    expected_shape = (batch_size, channels, height, 32)
+    assert (
+        output_tensor.shape == expected_shape
+    ), f"Shape mismatch: expected {expected_shape}, got {output_tensor.shape}"
+    assert (
+        output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    ), f"Layout mismatch: expected ROW_MAJOR_LAYOUT, got {output_tensor.layout}"
+
+    # Convert back to torch for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Compute expected: max along width dimension
+    torch_expected = torch.max(torch_input, dim=-1, keepdim=True).values
+
+    # Extract first column from output (where reduced values are stored)
+    torch_output_col0 = torch_output[:, :, :, 0:1]
+
+    # Verify reduced values match expected
+    assert_with_pcc(torch_expected, torch_output_col0, pcc=0.999)
+
+    # Verify columns 1-31 are zeros
+    assert torch.all(torch_output[:, :, :, 1:] == 0), "Columns 1-31 should be zeros"

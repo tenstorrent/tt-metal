@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#ifdef REDUCE_OP
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#endif
 
 /**
  * Reader kernel for tilize_untilize operation.
@@ -28,10 +31,10 @@
 // Operation type enum - must match host-side and compute kernel definition
 enum class OpType : uint32_t {
     IDENTITY = 0,
+    REDUCE_W_SUM = 1,
+    REDUCE_W_MAX = 2,
+    REDUCE_W_AVG = 3,
     // Future:
-    // REDUCE_W_SUM = 1,
-    // REDUCE_W_MAX = 2,
-    // REDUCE_W_AVG = 3,
     // RELU = 4,
 };
 
@@ -61,10 +64,12 @@ void kernel_main() {
     if constexpr (op_type == OpType::IDENTITY) {
         // No auxiliary CB setup needed for identity operation
     }
-    // Future: reduction operations would generate scaler here
-    // else if constexpr (op_type == OpType::REDUCE_W_SUM || ...) {
-    //     generate_reduce_scaler(cb_scaler, packed_scaler);
-    // }
+#ifdef REDUCE_OP
+    else if constexpr (
+        op_type == OpType::REDUCE_W_SUM || op_type == OpType::REDUCE_W_MAX || op_type == OpType::REDUCE_W_AVG) {
+        generate_reduce_scaler(cb_scaler, packed_scaler);
+    }
+#endif
 
     // ========== Core Data Reading (shared by all operations) ==========
     const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
