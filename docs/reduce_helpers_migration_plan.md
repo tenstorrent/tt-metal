@@ -79,24 +79,88 @@ Dual reductions (MAX + SUM) requiring two passes:
 
 **Challenge:** MAX reduce → exp/sub → SUM reduce with intermediate transformations. Can use library's `init=false`/`uninit=false` for multi-pass control.
 
-### Priority 2: Moreh Operations
+### Priority 2: Moreh Operations - ⚠️ BLOCKED
 
-Large set of operations with consistent patterns:
+**Status: Cannot migrate with current library API**
 
-| Category | Files | Reduce Types |
-|----------|-------|--------------|
-| Moreh Dot | `moreh_dot.cpp` | SCALAR |
-| Moreh Softmax | `moreh_softmax_w.cpp`, `moreh_softmax_h.cpp`, `*_large.cpp` | ROW, COL |
-| Moreh Softmax Backward | `moreh_softmax_backward_*.cpp` | ROW, COL |
-| Moreh Layer Norm | `moreh_layer_norm_small_kernel.cpp`, `*_large_kernel.cpp` | SCALAR |
-| Moreh Layer Norm Backward | `moreh_layer_norm_backward_*.cpp` | SCALAR |
-| Moreh Mean | `moreh_mean_h.cpp` | COL |
-| Moreh Norm | `moreh_norm_w_kernel.cpp` | ROW |
-| Moreh Bias Backward | `moreh_bias_backward_*.cpp` | ROW, SCALAR |
+Moreh operations use `moreh_common.hpp` with specialized helpers like `reduce_tile_to_cb<>()`. After detailed analysis, **ALL Moreh kernels are blocked** from migration due to a fundamental architectural incompatibility.
 
-**Strategy:** Moreh operations use `moreh_common.hpp` with specialized helpers. Options:
-1. Migrate `moreh_common.hpp` to use `reduce_helpers.hpp` internally
-2. Migrate individual kernels directly
+#### Blocking Issue: Manual Accumulation Pattern
+
+All Moreh kernels use a **manual accumulation pattern** that requires injecting previous accumulator values into DST registers between `tile_regs_acquire()` and `reduce_tile()`:
+
+```cpp
+// Common Moreh pattern (e.g., moreh_dot.cpp:40-64, moreh_mean_h.cpp:91-101, moreh_bias_backward:86-107)
+for each block:
+  tile_regs_acquire()
+  if (enable_reload):
+    copy_tile(cb_accumulator → DST[0])  // ← INJECT previous accumulator
+  reduce_init(...)
+  reduce_tile(...)  // ← Adds to DST[0]
+  reduce_uninit()
+  pack_tile(DST[0] → cb_accumulator)
+  tile_regs_release()
+```
+
+**Library's pattern** (ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp:239-256):
+```cpp
+tile_regs_acquire()  // ← Can't inject between here and reduce_tile
+for each tile:
+  reduce_tile(...)
+tile_regs_commit()
+pack_tile()
+tile_regs_release()
+```
+
+#### Detailed Assessment by Category
+
+| Category | Files | Pattern | Can Migrate? | Blocker |
+|----------|-------|---------|--------------|---------|
+| **Moreh Dot** | `moreh_dot.cpp` | Per-tile reduce with cross-block accumulation | ❌ No | Needs reload between acquire/reduce |
+| **Moreh Softmax** | `moreh_softmax_w.cpp`<br>`moreh_softmax_h.cpp` | MAX reduce (with reload for masking)<br>+ SUM reduce on exp values | ❌ No | MAX reduce uses reload pattern (lines 51-58) |
+| **Moreh Softmax Backward** | `moreh_softmax_backward_w.cpp`<br>`moreh_softmax_backward_h.cpp` | Uses `reduce_tile_to_cb` helper<br>Multi-tile streaming reduces | ⚠️ Partial | Could migrate non-accumulating reduces, but relies on moreh_common.hpp |
+| **Moreh Layer Norm** | `moreh_layer_norm_small_kernel.cpp` | Complex multi-pass:<br>• Sum[x] with manual accumulation (lines 78-161)<br>• Reduce to E[x] (lines 172-174)<br>• Sum[(x-E[x])²] with manual accumulation (lines 251-298)<br>• Reduce to Var[x] (lines 309-311) | ❌ No | Manual accumulation for sums;<br>individual reduces are trivial (3 lines) |
+| **Moreh Layer Norm Backward** | `moreh_layer_norm_backward_input_grad_small_kernel.cpp` | Similar to forward: manual accumulation + simple reduces | ❌ No | Same as forward |
+| **Moreh Mean** | `moreh_mean_h.cpp` | Reduce Ht-1 tiles → accumulate<br>Reload accumulator → reduce last tile | ❌ No | Reload pattern (lines 94-96) |
+| **Moreh Norm** | `moreh_norm_w_kernel.cpp` | Single reduce (lines 134-136) embedded in complex power/log operations | ⚠️ Minimal | Reduce is 3 lines; migration overhead not worth it |
+| **Moreh Bias Backward** | `moreh_bias_backward_multi_core_h.cpp`<br>`moreh_bias_backward_single_core_hw.cpp` | Per-tile reduce with cross-tile accumulation + reload | ❌ No | Reload pattern (lines 87-95) |
+
+#### Why Moreh Common Helpers Don't Help
+
+The `moreh_common.hpp` provides `reduce_tile_to_cb<>()` which handles **multi-tile streaming reduces** (lines 593-626):
+- Accepts `size` parameter to reduce multiple tiles
+- Manages `reduce_init`, loop of `reduce_tile`, `reduce_uninit`
+- BUT: Does NOT support reloading previous accumulators
+
+Even if we migrated `moreh_common.hpp` to use `reduce_helpers.hpp`, the accumulation pattern issue remains.
+
+#### Required Library Changes
+
+To unblock Moreh operations, `reduce_helpers.hpp` needs:
+
+1. **Option 1: External DST Management**
+   ```cpp
+   template <bool skip_acquire = false, bool skip_release = false>
+   void reduce(...);
+   ```
+   Allow kernels to manage `tile_regs_acquire/release` externally
+
+2. **Option 2: Accumulator Injection**
+   ```cpp
+   template <bool load_accumulator = false>
+   void reduce(uint32_t accumulator_cb = 0, ...);
+   ```
+   Support loading previous accumulator before reduce
+
+3. **Option 3: Specialized Accumulating Reduce**
+   ```cpp
+   void reduce_accumulating(
+       uint32_t icb, uint32_t scaler_cb, uint32_t accumulator_cb,
+       uint32_t ocb, uint32_t num_iterations, ...);
+   ```
+   Dedicated function for multi-pass accumulation patterns
+
+**Recommendation:** Until library API is extended, Moreh operations must remain as-is using `moreh_common.hpp` helpers.
 
 ### Priority 3: Complex/Specialized Operations
 
@@ -122,11 +186,19 @@ These have specialized patterns - evaluate case-by-case:
 2. Use library with `init`/`uninit` control for multi-pass reduces
 3. Test with existing softmax test suite
 
-### Phase 5: Moreh Operations Migration
+### ~~Phase 5: Moreh Operations Migration~~ - ⚠️ BLOCKED
 
-1. Evaluate `moreh_common.hpp` integration approach
-2. Start with simple kernels (`moreh_dot.cpp`)
-3. Migrate remaining moreh kernels as needed
+**Status:** Cannot proceed until `reduce_helpers.hpp` API is extended to support accumulation patterns.
+
+**Blockers identified:**
+1. All Moreh kernels require manual accumulator reload between `tile_regs_acquire()` and `reduce_tile()`
+2. Current library manages full DST lifecycle without injection points
+3. `moreh_common.hpp` helpers also don't support this pattern
+
+**Next actions:**
+1. ~~Evaluate `moreh_common.hpp` integration approach~~ → Not viable, same limitation
+2. ~~Start with simple kernels (`moreh_dot.cpp`)~~ → Blocked (see Priority 2 analysis)
+3. **DECISION NEEDED:** Extend library API (see 3 options in Priority 2) OR keep Moreh operations using existing patterns
 
 ### Phase 6: Complex Operations (Case-by-Case)
 
