@@ -58,3 +58,8 @@ inline void _llk_math_welfords_sfpu_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
     _program_welfords_replay_buffer_();
 }
+
+inline void _llk_math_welfords_sfpu_uninit_()
+{
+    // No state to restore - all states are transient or default
+}
