@@ -2,10 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import os
 import sys
-from rich.theme import Theme
-from rich.style import Style
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rich.theme import Theme
 
 
 def should_use_color() -> bool:
@@ -30,6 +33,9 @@ def should_use_color() -> bool:
 
 def create_console_theme(disable_colors: bool) -> Theme:
     """Create a Rich theme for console output based on color support."""
+    from rich.theme import Theme
+    from rich.style import Style
+
     blue = Style(color="blue")
     red = Style(color="red")
     green = Style(color="green")

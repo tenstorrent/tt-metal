@@ -222,6 +222,11 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Fast dispatch is not enabled, no dispatch core info to return
+        results.initCoresByCategory(0);
+        return;
+    }
     // This returns a map of command queue id to event id for all active devices
     auto cq_to_event_by_device =
         tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
