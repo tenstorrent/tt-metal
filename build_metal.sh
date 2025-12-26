@@ -51,6 +51,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --no-avx                         Build without AVX optimizations (targets x86-64-v2 baseline)."
 }
 
 clean() {
@@ -97,6 +98,7 @@ configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
+enable_avx="ON"
 
 declare -a cmake_args
 
@@ -136,6 +138,7 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+no-avx
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -199,6 +202,8 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
+        --no-avx)
+            enable_avx="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -283,12 +288,14 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+echo "INFO: Enable AVX Optimizations: $enable_avx"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
+cmake_args+=("-DTT_METAL_ENABLE_AVX=$enable_avx")
 
 if [ "$cxx_compiler_path" != "" ]; then
     echo "INFO: C++ compiler: $cxx_compiler_path"
