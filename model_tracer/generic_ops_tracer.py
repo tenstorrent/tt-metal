@@ -990,7 +990,7 @@ def detect_pytest_tests(test_path):
         return False
 
 
-def run_test_with_tracing(test_path, output_dir, keep_traces=False):
+def run_test_with_tracing(test_path, output_dir, keep_traces=False, extra_args=None):
     """
     Run test with operations tracing enabled.
     Automatically detects if it's a pytest test or standalone Python script.
@@ -999,10 +999,12 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False):
         test_path: Path to test (e.g., /path/to/test.py or /path/to/test.py::test_function)
         output_dir: Directory to save trace outputs
         keep_traces: If True, keep individual trace files after adding to master JSON
+        extra_args: Additional arguments to pass to pytest or standalone script
 
     Returns:
         dict: Results of the test run
     """
+    extra_args = extra_args or []
 
     print(f"🚀 Running test with operations tracing...")
     plugin_file = create_tracing_plugin(output_dir)
@@ -1016,8 +1018,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False):
 
     if is_pytest:
         print(f"✅ Detected pytest test cases, running with pytest...")
+        if extra_args:
+            print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
         result = subprocess.run(
-            [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"],
+            [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
             cwd=BASE_DIR,
             capture_output=False,
             text=True,
@@ -1220,14 +1224,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples (Pytest tests):
-    python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
-    python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
+    # Run specific test with pytest -k filter
+    python model_tracer/generic_ops_tracer.py test.py -k "test_pow"
+
+    # Run with pytest markers and verbose output
+    python model_tracer/generic_ops_tracer.py test.py -m "slow" -v
+
+    # Mix tracer args with pytest args
+    python model_tracer/generic_ops_tracer.py test.py --store -k "test_name"
 
 Examples (Standalone Python scripts):
-    python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
-    python model_tracer/generic_ops_tracer.py /path/to/script.py --output-dir ./my_traces --store
+    # Run script with custom arguments
+    python model_tracer/generic_ops_tracer.py model.py --model-name resnet50 --batch 32
 
-Note: The tracer automatically detects whether to use pytest or run as a standalone script.
+    # With tracer args
+    python model_tracer/generic_ops_tracer.py model.py --store --output-dir ./my_traces
+
+Note: The tracer automatically detects pytest vs standalone scripts.
+      Unknown arguments are automatically passed to pytest or the script.
         """,
     )
     parser.add_argument(
@@ -1246,17 +1260,19 @@ Note: The tracer automatically detects whether to use pytest or run as a standal
         help="Keep individual trace files after adding to master JSON (default: delete them)",
     )
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     print("🚀 TTNN Operations Tracer")
     print("=" * 50)
     print(f"📁 {os.path.basename(args.test_path)}")
     if args.store:
         print(f"💾 Keeping individual trace files")
+    if extra_args:
+        print(f"📎 Extra arguments: {' '.join(extra_args)}")
     print("=" * 50)
 
     try:
-        result = run_test_with_tracing(args.test_path, args.output_dir, args.store)
+        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, extra_args)
 
         print("\\n" + "=" * 50)
         print("📋 RESULTS")
