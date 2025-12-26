@@ -33,6 +33,7 @@
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
+#include "utils/memory_utils.hpp"
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
@@ -320,6 +321,8 @@ int main(int argc, char **argv) {
     TrainingConfig training_config = parse_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
+
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
@@ -733,6 +736,8 @@ int main(int argc, char **argv) {
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
+                    ttml::utils::MemoryUsageTracker::end_capture();
+                    ttml::utils::MemoryUsageTracker::print_memory_usage();
                 }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
