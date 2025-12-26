@@ -698,7 +698,7 @@ class MasterConfigLoader:
                         # Determine output memory config based on operation
                         # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
                         output_mem_config = None
-                        if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
+                        if self._matches_operation(operation_name, "interleaved_to_sharded"):
                             # interleaved_to_sharded has output memory config in arg1
                             for arg in config:
                                 if isinstance(arg, dict) and "arg1" in arg:
@@ -900,25 +900,25 @@ class MasterConfigLoader:
                     else None
                 )
                 # max_pool2d specific parameters
-                batch_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                input_h_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                input_w_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                channels_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                kernel_size_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                stride_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                padding_list_maxpool = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                dilation_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
-                applied_shard_scheme_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
+                batch_size_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                input_h_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                input_w_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                channels_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                kernel_size_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                stride_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                padding_list_maxpool = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                dilation_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
+                applied_shard_scheme_list = [] if self._matches_operation(operation_name, "max_pool2d") else None
                 # upsample specific parameters
                 scale_factor_list = [] if self._matches_operation(operation_name, "upsample") else None
                 mode_list = [] if self._matches_operation(operation_name, "upsample") else None
                 # typecast specific parameters
-                output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
+                output_dtype_list = [] if self._matches_operation(operation_name, "typecast") else None
                 # gt specific parameters
-                scalar_list = [] if operation_name in ["gt", "ttnn::gt"] else None
+                scalar_list = [] if self._matches_operation(operation_name, "gt") else None
                 # where specific parameters
-                scalar_if_true_list = [] if operation_name in ["where", "ttnn::where"] else None
-                scalar_if_false_list = [] if operation_name in ["where", "ttnn::where"] else None
+                scalar_if_true_list = [] if self._matches_operation(operation_name, "where") else None
+                scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
@@ -1000,7 +1000,7 @@ class MasterConfigLoader:
                     ):
                         num_heads_list.append(cfg["num_heads"])
                     # Extract max_pool2d parameters
-                    if operation_name in ["max_pool2d", "ttnn::max_pool2d"]:
+                    if self._matches_operation(operation_name, "max_pool2d"):
                         if "batch_size" in cfg:
                             batch_size_list.append(cfg["batch_size"])
                         if "input_h" in cfg:
@@ -1026,7 +1026,7 @@ class MasterConfigLoader:
                         if "mode" in cfg:
                             mode_list.append(cfg["mode"])
                     # Extract typecast parameters
-                    if operation_name in ["typecast", "ttnn::typecast"]:
+                    if self._matches_operation(operation_name, "typecast"):
                         if "output_dtype" in cfg:
                             # Parse output_dtype string to TTNN dtype
                             output_dtype_str = cfg["output_dtype"]
@@ -1034,11 +1034,11 @@ class MasterConfigLoader:
                             if parsed_output_dtype:
                                 output_dtype_list.append(parsed_output_dtype)
                     # Extract gt parameters
-                    if operation_name in ["gt", "ttnn::gt"]:
+                    if self._matches_operation(operation_name, "gt"):
                         if "scalar" in cfg:
                             scalar_list.append(cfg["scalar"])
                     # Extract where parameters
-                    if operation_name in ["where", "ttnn::where"]:
+                    if self._matches_operation(operation_name, "where"):
                         if "scalar_if_true" in cfg:
                             scalar_if_true_list.append(cfg["scalar_if_true"])
                         if "scalar_if_false" in cfg:
@@ -1130,7 +1130,7 @@ class MasterConfigLoader:
                     param_names.append("num_heads")
                     param_lists.append(num_heads_list)
                 # Add max_pool2d parameters
-                if operation_name in ["max_pool2d", "ttnn::max_pool2d"]:
+                if self._matches_operation(operation_name, "max_pool2d"):
                     if batch_size_list and input_h_list and input_w_list and channels_list:
                         param_names.extend(["batch_size", "input_h", "input_w", "channels"])
                         param_lists.extend([batch_size_list, input_h_list, input_w_list, channels_list])
@@ -1158,17 +1158,17 @@ class MasterConfigLoader:
                         param_names.append("mode")
                         param_lists.append(mode_list)
                 # Add typecast parameters
-                if operation_name in ["typecast", "ttnn::typecast"]:
+                if self._matches_operation(operation_name, "typecast"):
                     if output_dtype_list:
                         param_names.append("output_dtype")
                         param_lists.append(output_dtype_list)
                 # Add gt parameters
-                if operation_name in ["gt", "ttnn::gt"]:
+                if self._matches_operation(operation_name, "gt"):
                     if scalar_list:
                         param_names.append("scalar")
                         param_lists.append(scalar_list)
                 # Add where parameters
-                if operation_name in ["where", "ttnn::where"]:
+                if self._matches_operation(operation_name, "where"):
                     if scalar_if_true_list:
                         param_names.append("scalar_if_true")
                         param_lists.append(scalar_if_true_list)
@@ -1466,7 +1466,7 @@ class MasterConfigLoader:
                         f"⚠️ Failed to parse {failed_configs} configurations (including invalid configs filtered out)"
                     )
                 # For matmul, add note if configs were filtered
-                if operation_name in ["matmul", "ttnn::matmul"] and len(paired_configs) == 0 and len(configs) > 0:
+                if self._matches_operation(operation_name, "matmul") and len(paired_configs) == 0 and len(configs) > 0:
                     print(f"   ℹ️ All matmul configs were filtered out (input_b must be INTERLEAVED)")
 
             return result
