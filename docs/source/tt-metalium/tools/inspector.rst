@@ -17,7 +17,6 @@ Configure the Inspector by setting the following environment variables:
 .. code-block::
 
    export TT_METAL_INSPECTOR=1                                  # optional: enable/disable the Inspector. Default is `1` (enabled).
-   export TT_METAL_INSPECTOR_LOG_PATH=logging_path              # optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`
    export TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=1      # optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).
    export TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS=0         # optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).
    export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=localhost:50051 # optional: set the address of the Inspector RPC server. Default is `localhost:50051`.

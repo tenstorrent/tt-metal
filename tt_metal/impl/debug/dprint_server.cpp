@@ -496,7 +496,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
@@ -1218,7 +1218,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
             const ChipId chip_id = get<0>(risc_key);
             const umd::CoreDescriptor& logical_core = get<1>(risc_key);
             const int risc_id = get<2>(risc_key);
-            string filename = rtoptions.get_root_dir() + logfile_path;
+            string filename = rtoptions.get_logs_dir() + logfile_path;
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
