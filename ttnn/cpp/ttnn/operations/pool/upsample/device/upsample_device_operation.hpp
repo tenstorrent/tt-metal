@@ -44,7 +44,8 @@ struct UpsampleOperation {
         const std::string& mode,
         const MemoryConfig& output_mem_config,
         const DeviceComputeKernelConfig& compute_kernel_config,
-        std::optional<ttnn::operations::sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt);
+        const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config =
+            std::nullopt);
 };
 
 }  // namespace ttnn::operations::pool::upsample

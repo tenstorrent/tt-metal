@@ -164,7 +164,7 @@ std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_
     const std::string& mode,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::operations::sliding_window::SlidingWindowConfig> sliding_window_config) {
+    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
     return {
         operation_attributes_t{
             .scale_factor_h = scale_factor_h,
