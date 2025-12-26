@@ -763,6 +763,33 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     return result;
 }
 
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes_with_active_traces() const {
+    std::vector<std::shared_ptr<MeshDevice>> result;
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            // Check if any command queue on this submesh has an active trace
+            for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
+                if (submesh->mesh_command_queue(cq_id).trace_id().has_value()) {
+                    result.push_back(submesh);
+                    break;  // Only add once per submesh
+                }
+            }
+        }
+    }
+    return result;
+}
+
+std::shared_ptr<MeshDevice> MeshDevice::get_submesh_for_coordinate(const MeshCoordinate& coord) const {
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            if (submesh->get_view().contains(coord)) {
+                return submesh;
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_program_cache() {
@@ -1183,9 +1210,17 @@ void MeshDevice::quiesce_devices() {
         for (auto& device : get_devices()) {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
-                "Last completed event is not 0");
+                "Last completed event is not 0 for device {} and command queue {}",
+                device->id(),
+                command_queue->id());
             TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
         }
+    }
+}
+
+void MeshDevice::reset_cq_in_use() {
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->reset_in_use();
     }
 }
 

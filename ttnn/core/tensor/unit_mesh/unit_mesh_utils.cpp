@@ -108,6 +108,12 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     TT_FATAL(
         mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id(),
         "Cannot disaggregate tensor when parent mesh has non-default sub-device manager");
+
+    // Reset the in_use flag on parent mesh CQs. This is safe because CCL operations have
+    // built-in synchronization across devices - by the time we disaggregate, the CCL has completed.
+    // This avoids the expensive quiesce_devices() call while allowing submeshes to close cleanly.
+    mesh_device->reset_cq_in_use();
+
     const auto submeshes = mesh_device->get_submeshes();
     TT_FATAL(
         submeshes.size() == mesh_device->shape().mesh_size(),
