@@ -58,15 +58,16 @@ spec_return_value_t TilizeUntilizeDeviceOperation::compute_output_specs(
 
     // Output shape computation - start with input shape
     auto output_shape = input.logical_shape();
+    auto output_padded = output_shape;
 
-    // For REDUCE_W operations, output width is TILE_WIDTH (32)
-    // The kernel untilizes one reduced tile per row, producing 32 elements per row
+    // For REDUCE_W operations:
+    // - Logical width is 1 (the reduced value)
+    // - Padded width stays TILE_WIDTH (32) for kernel compatibility
     if (operation_attributes.op_type == OpType::REDUCE_W_SUM || operation_attributes.op_type == OpType::REDUCE_W_MAX ||
         operation_attributes.op_type == OpType::REDUCE_W_AVG) {
-        output_shape[-1] = tt::constants::TILE_WIDTH;
+        output_shape[-1] = 1;
+        output_padded[-1] = tt::constants::TILE_WIDTH;
     }
-
-    auto output_padded = output_shape;
     auto output_dtype = input.dtype();
 
     return TensorSpec(
