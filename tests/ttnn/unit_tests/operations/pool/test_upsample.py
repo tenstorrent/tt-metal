@@ -10,8 +10,9 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+
+from ttnn.operations.pool import golden_upsample
 
 TILE_WIDTH = 32
 
@@ -90,8 +91,18 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
         pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
 
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
+
+    torch_input_formatted = input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
+    torch_result = golden_upsample(
+        input_tensor=torch_input_formatted,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode="nearest",
+    )
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
 
     scale_factor = (scale_h, scale_w)
 
@@ -100,13 +111,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     output_tensor = ttnn.to_torch(output_tensor)
 
     torch_result = torch_result.permute(0, 2, 3, 1)
-    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor)
-    logger.info(pcc_message)
-    allclose = torch.allclose(output_tensor, torch_result)
-    isclose = torch.all(torch.isclose(output_tensor, torch_result))
     isequal = torch.equal(output_tensor, torch_result)
-    assert allclose
-    assert isclose
     assert isequal
 
 
@@ -127,13 +132,25 @@ def upsample_multicore_common(
     torch.manual_seed(0)
     input = torch.rand(input_shape, dtype=torch.bfloat16)
 
-    ## golden reference using torch
+    ## golden reference using golden function
+    from ttnn.operations.pool import golden_upsample
+
     scale_factor = (scale_h, scale_w)
-    if mode == "bilinear":
-        torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="bilinear", align_corners=False)
-    else:
-        torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
+    mode_str = "bilinear" if mode == "bilinear" else "nearest"
+    align_corners = False if mode == "bilinear" else None
+
+    torch_input_formatted = input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, num_channels)
+    torch_result = golden_upsample(
+        input_tensor=torch_input_formatted,
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=num_channels,
+        scale_factor=scale_factor,
+        mode=mode_str,
+        align_corners=align_corners,
+    )
+    torch_result = torch_result.reshape(batch_size, height * scale_h, width * scale_w, num_channels).permute(0, 3, 1, 2)
 
     ## permute to N H W C, which is what the upsample op expects
     tt_input = input.permute(0, 2, 3, 1)
