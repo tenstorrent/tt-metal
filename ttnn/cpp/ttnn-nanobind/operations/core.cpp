@@ -208,14 +208,13 @@ void py_module(nb::module_& mod) {
         )doc",
         ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("dtype")});
 
-    mod
-        .def(
-            "allocate_tensor_on_device",
-            [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-                return tt::tt_metal::allocate_tensor_on_device(spec, device);
-            },
-            nb::arg("tensor_spec"),
-            nb::arg("mesh_device"))
+    mod.def(
+           "allocate_tensor_on_device",
+           [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+               return tt::tt_metal::create_device_tensor(spec, device);
+           },
+           nb::arg("tensor_spec"),
+           nb::arg("mesh_device"))
         .def(
             "allocate_tensor_on_host",
             [](const ttnn::TensorSpec& spec, MeshDevice* device) {
@@ -224,26 +223,25 @@ void py_module(nb::module_& mod) {
             nb::arg("tensor_spec"),
             nb::arg("mesh_device"));
 
-    mod
-        .def(
-            "allocate_tensor_on_device",
-            [](const ttnn::Shape& shape,
-               ttnn::DataType dtype,
-               ttnn::Layout layout,
-               MeshDevice* device,
-               const std::optional<ttnn::MemoryConfig>& mem_config) {
-                return tt::tt_metal::allocate_tensor_on_device(
-                    TensorSpec(
-                        shape,
-                        tt::tt_metal::TensorLayout(
-                            dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
-                    device);
-            },
-            nb::arg("shape"),
-            nb::arg("dtype"),
-            nb::arg("layout"),
-            nb::arg("mesh_device"),
-            nb::arg("memory_config") = nb::none())
+    mod.def(
+           "allocate_tensor_on_device",
+           [](const ttnn::Shape& shape,
+              ttnn::DataType dtype,
+              ttnn::Layout layout,
+              MeshDevice* device,
+              const std::optional<ttnn::MemoryConfig>& mem_config) {
+               return tt::tt_metal::create_device_tensor(
+                   TensorSpec(
+                       shape,
+                       tt::tt_metal::TensorLayout(
+                           dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                   device);
+           },
+           nb::arg("shape"),
+           nb::arg("dtype"),
+           nb::arg("layout"),
+           nb::arg("mesh_device"),
+           nb::arg("memory_config") = nb::none())
         .def(
             "allocate_tensor_on_host",
             [](const ttnn::Shape& shape,
