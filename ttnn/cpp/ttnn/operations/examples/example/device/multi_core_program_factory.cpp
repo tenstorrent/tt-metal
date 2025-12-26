@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "example_device_operation.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -29,12 +30,13 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    auto* device = input_tensor.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    auto compute_cores = device->get_compute_cores();
+    log_debug(tt::LogOp, "Available compute cores: {}", compute_cores.num_cores());
+    constexpr bool row_wise = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        tt::tt_metal::split_work_to_cores(compute_cores, num_tiles, row_wise);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
@@ -99,8 +101,9 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
                 .compile_args = compute_kernel_args_group_2});
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    const auto cores = tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, row_wise);
+    for (uint32_t i = 0, num_tiles_written = 0; i < cores.size(); i++) {
+        const CoreCoord& core = cores[i];
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -123,7 +126,8 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
          .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+         .all_cores = all_cores,
+         .row_wise = row_wise}};
 }
 
 void ExampleDeviceOperation::MultiCore::override_runtime_arguments(
@@ -134,8 +138,8 @@ void ExampleDeviceOperation::MultiCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& all_cores = cached_program.shared_variables.all_cores;
+    auto row_wise = cached_program.shared_variables.row_wise;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
@@ -143,9 +147,8 @@ void ExampleDeviceOperation::MultiCore::override_runtime_arguments(
     auto* src_buffer = input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    const auto cores = tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, row_wise);
+    for (const auto& core : cores) {
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();

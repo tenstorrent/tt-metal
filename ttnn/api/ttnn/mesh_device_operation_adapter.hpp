@@ -149,6 +149,12 @@ struct MeshDeviceOperationAdapter {
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             ttsl::hash::hash_combine(hash, coord);
         }
+
+        auto compute_cores = mesh_device->get_compute_cores();
+        auto sub_device_manager_id = mesh_device->get_active_sub_device_manager_id();
+
+        ttsl::hash::hash_combine(hash, compute_cores);
+        ttsl::hash::hash_combine(hash, sub_device_manager_id);
         return hash;
     }
 

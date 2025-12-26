@@ -136,6 +136,41 @@ def command_queue(cq_id: int):
 
 
 @contextmanager
+def sub_device(device: ttnn.MeshDevice, sub_device_id: ttnn.SubDeviceId):
+    """
+    Context manager to set a default sub device for all TTNN operations within this context.
+
+    Operations within this context will use the specified sub_device_id on the given device unless
+    they explicitly provide their own sub_device_id parameter, which takes precedence.
+
+    Args:
+        device (ttnn.MeshDevice): The device on which to set the sub device context.
+        sub_device_id (ttnn.SubDeviceId or int): The sub device ID to use for operations in this context.
+
+    Returns:
+        None
+
+    Example:
+        with ttnn.sub_device(device, 0):
+            result = ttnn.some_operation(tensor)  # Will use sub_device_id 0
+            result2 = ttnn.other_operation(tensor, sub_device_id=1)  # Will use sub_device_id 1 (overrides context)
+
+    Note:
+        If an operation within the context explicitly provides its own sub_device_id parameter,
+        that value will override the context's sub_device_id for that operation.
+    """
+    # Pybind expects a SubDeviceId object, but most Python call-sites naturally pass an int.
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+
+    guard = device.set_current_sub_device(sub_device_id)
+    try:
+        yield
+    finally:
+        guard.release()
+
+
+@contextmanager
 def register_post_operation_hook(hook):
     """
 
@@ -367,19 +402,19 @@ class FastOperation:
         return hash(self.python_fully_qualified_name)
 
     def __call__(self, *function_args, **function_kwargs):
-        cq_id = None
+        from contextlib import nullcontext
+
         if "queue_id" in function_kwargs:
             cq_id = function_kwargs.pop("queue_id")
-        elif "cq_id" in function_kwargs:
-            cq_id = function_kwargs.pop("cq_id")
-
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
         else:
-            with command_queue(cq_id):
-                result = self.function(*function_args, **function_kwargs)
+            cq_id = function_kwargs.pop("cq_id", None)
+        sub_device_id = function_kwargs.pop("sub_device_id", None)
 
-        return result
+        cq_ctx = command_queue(cq_id) if cq_id is not None else nullcontext()
+        sd_ctx = sub_device(ttnn.GetDefaultDevice(), sub_device_id) if sub_device_id is not None else nullcontext()
+
+        with cq_ctx, sd_ctx:
+            return self.function(*function_args, **function_kwargs)
 
     def __post_init__(self):
         if self.function.__doc__ is None:
