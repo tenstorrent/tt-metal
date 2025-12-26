@@ -48,8 +48,8 @@ SendAsyncMeshWorkloadFactory::create_at(
     tensor_return_value_t& tensor_return_value) {
     auto mesh_socket = operation_attributes.mesh_socket;
     const auto& input_tensor = tensor_args.input_tensor;
-    auto* mesh_device = input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
+    const auto* mesh_device = mesh_socket.get_config_buffer()->device();
+    auto my_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -63,11 +63,10 @@ SendAsyncMeshWorkloadFactory::create_at(
 
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
         const auto& connection = socket_connection_config[conn_idx];
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+        if (mesh_device->get_fabric_node_id(connection.sender_core.device_coord) == my_fabric_node_id) {
             sender_core_coords.push_back(connection.sender_core.core_coord);
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
-            sender_fabric_node_ids.push_back(
-                input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord));
+            sender_fabric_node_ids.push_back(mesh_device->get_fabric_node_id(connection.sender_core.device_coord));
             receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord));
             connection_indices.push_back(conn_idx);
@@ -95,7 +94,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     }
 
     auto max_alignment = std::max(
-        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        mesh_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         input_tensor.buffer()->alignment());
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
@@ -220,7 +219,7 @@ SendAsyncMeshWorkloadFactory::create_at(
                 mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
         } else {
             // Assign DRAM banks in round-robin for each receiver core
-            auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+            auto num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
             bank_id = core_idx % num_dram_banks;
         }
         std::vector<uint32_t> writer_rt_args = {

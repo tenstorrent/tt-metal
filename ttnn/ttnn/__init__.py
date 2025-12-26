@@ -159,6 +159,7 @@ from ttnn._ttnn.fabric import (
     FabricUDMMode,
     FabricManagerMode,
     set_fabric_config,
+    MeshId,
 )
 
 # Import cluster functions and types

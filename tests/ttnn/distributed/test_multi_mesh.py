@@ -24,13 +24,12 @@ def run_multiprocess_workload():
     # Sockets are used to route data between meshes
     mesh_shape = ttnn.MeshShape(4, 4)
     device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
-
     # The distributed context gets initialized once a device is opened.
     # This allows the user to use Multi-Host APIs without having to explicitly initialize the distributed context.
     if not ttnn.distributed_context_is_initialized():
         raise ValueError("Distributed context not initialized")
-    if int(ttnn.distributed_context_get_size()) != 2:
-        raise ValueError("This test requires 2 processes to run")
+    if int(ttnn.distributed_context_get_size()) not in [2, 4]:
+        raise ValueError("This test requires 2 or 4 processes to run.")
 
     # Setup the sender and receiver sockets
     # Each socket endpoint is bound to a single core (0, 0)
@@ -48,12 +47,12 @@ def run_multiprocess_workload():
     # Setup the socket intermediate buffer in L1 and initialize its size to 4KB
     socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096)
     # Process 0 is the sender and process 1 is the receiver. Reflect this in the socket config
-    sender_rank = 0
-    receiver_rank = 1
-    socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config, sender_rank, receiver_rank)
+    sender_mesh_id = ttnn.MeshId(0)
+    receiver_mesh_id = ttnn.MeshId(1)
+    socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config, sender_mesh_id, receiver_mesh_id)
 
     # Initialize random input tensor and move it to the device
-    torch_input = torch.randn(1, 1, 1024, 1024, dtype=torch.float32)
+    torch_input = torch.randn(1, 1, 2048, 2048, dtype=torch.float32)
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=device,
@@ -64,7 +63,7 @@ def run_multiprocess_workload():
     def torch_op_chain(tensor):
         return torch.exp(torch.nn.functional.relu(tensor))
 
-    if int(ttnn.distributed_context_get_rank()) == 0:
+    if int(device.get_mesh_id()) == 0:
         # Create send socket, run the first op on the input tensor and forward the result to the receiver
         send_socket = ttnn.MeshSocket(device, socket_config)
         ttnn.experimental.send_async(ttnn.relu(ttnn_input), send_socket)

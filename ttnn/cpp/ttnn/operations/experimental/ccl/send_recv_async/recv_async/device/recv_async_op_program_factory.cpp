@@ -49,12 +49,10 @@ RecvAsyncMeshWorkloadFactory::create_at(
     tensor_return_value_t& tensor_return_value) {
     auto mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args.output_tensor;
-    auto* mesh_device = output_tensor.device();
-    IDevice* target_device =
-        mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.output_tensor.device();
+    const auto* mesh_device = mesh_socket.get_config_buffer()->device();
+    auto my_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
 
     tt::tt_metal::Program program{};
-    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
     std::vector<CoreCoord> receiver_core_coords;
@@ -65,10 +63,9 @@ RecvAsyncMeshWorkloadFactory::create_at(
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {
         const auto& connection = socket_connection_config[i];
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (mesh_device->get_fabric_node_id(connection.receiver_core.device_coord) == my_fabric_node_id) {
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
-            receiver_fabric_node_ids.push_back(
-                output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
+            receiver_fabric_node_ids.push_back(mesh_device->get_fabric_node_id(connection.receiver_core.device_coord));
             sender_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord));
             connection_indices.push_back(i);
@@ -97,7 +94,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
     // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
     auto max_alignment = std::max(
-        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        mesh_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         output_tensor.buffer()->alignment());
     auto output_page_size = output_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(output_page_size, max_alignment);
@@ -286,11 +283,11 @@ RecvAsyncMeshWorkloadFactory::create_at(
             uint32_t bank_id = 0;
             if (socket_storage_in_dram) {
                 // Assign DRAM banks in round-robin for each receiver core
-                auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+                auto num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
                 bank_id = core_idx % num_dram_banks;
             } else {
                 // L1 mode: use logical core mapping
-                bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
+                bank_id = mesh_device->allocator()->get_bank_ids_from_logical_core(
                     mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
             }
 

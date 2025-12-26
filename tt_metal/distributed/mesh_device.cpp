@@ -553,6 +553,24 @@ tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coo
     return view_->get_fabric_node_id(coord);
 }
 
+tt_fabric::MeshId MeshDevice::get_mesh_id() const {
+    std::optional<tt_fabric::MeshId> mesh_id = std::nullopt;
+    for (const auto& coord : MeshCoordinateRange(view_->shape())) {
+        if (view_->is_local(coord)) {
+            if (mesh_id.has_value()) {
+                TT_FATAL(
+                    mesh_id == view_->get_fabric_node_id(coord).mesh_id,
+                    "Mesh id mismatch for device at coordinate {}",
+                    coord);
+            } else {
+                mesh_id = view_->get_fabric_node_id(coord).mesh_id;
+            }
+        }
+    }
+    TT_FATAL(mesh_id.has_value(), "Mesh id not found for mesh device");
+    return *mesh_id;
+}
+
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 

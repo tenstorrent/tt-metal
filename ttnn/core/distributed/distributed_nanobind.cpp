@@ -249,6 +249,7 @@ void py_module(nb::module_& mod) {
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
+        .def("get_mesh_id", &MeshDevice::get_mesh_id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device_id",

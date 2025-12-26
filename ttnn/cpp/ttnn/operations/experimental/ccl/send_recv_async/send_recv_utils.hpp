@@ -37,14 +37,15 @@ MeshCoordinateRangeSet get_workload_coords(
     const ttnn::MeshCoordinateRangeSet& tensor_coords, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     ttnn::MeshCoordinateRangeSet workload_coords;
     const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
-
+    const auto* mesh_device = mesh_socket.get_config_buffer()->device();
     const auto tensor_coords_flattened = tensor_coords.coords();
     for (const auto& connection : socket_connections) {
         const auto& device_coord = socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER
                                        ? connection.sender_core.device_coord
                                        : connection.receiver_core.device_coord;
         if (std::find(tensor_coords_flattened.begin(), tensor_coords_flattened.end(), device_coord) !=
-            tensor_coords_flattened.end()) {
+                tensor_coords_flattened.end() &&
+            mesh_device->is_local(device_coord)) {
             workload_coords.merge(MeshCoordinateRange(device_coord, device_coord));
         }
     }

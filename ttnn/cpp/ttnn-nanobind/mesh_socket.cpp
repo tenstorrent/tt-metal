@@ -68,30 +68,30 @@ void py_module_types(nb::module_& mod) {
             [](tt::tt_metal::distributed::SocketConfig* config,
                std::vector<tt::tt_metal::distributed::SocketConnection> connections,
                tt::tt_metal::distributed::SocketMemoryConfig memory_config,
-               std::optional<int> sender_rank,
-               std::optional<int> receiver_rank) {
+               std::optional<tt::tt_fabric::MeshId> sender_mesh_id,
+               std::optional<tt::tt_fabric::MeshId> receiver_mesh_id) {
                 new (config) tt::tt_metal::distributed::SocketConfig();
                 config->socket_connection_config = std::move(connections);
                 config->socket_mem_config = memory_config;
-                if (sender_rank.has_value()) {
-                    config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
+                if (sender_mesh_id.has_value()) {
+                    config->sender_mesh_id = sender_mesh_id.value();
                 }
-                if (receiver_rank.has_value()) {
-                    config->receiver_rank = tt::tt_metal::distributed::multihost::Rank(receiver_rank.value());
+                if (receiver_mesh_id.has_value()) {
+                    config->receiver_mesh_id = receiver_mesh_id.value();
                 }
             },
             nb::arg("connections"),
             nb::arg("memory_config"),
-            nb::arg("sender_rank") = nb::none(),
-            nb::arg("receiver_rank") = nb::none(),
+            nb::arg("sender_mesh_id") = nb::none(),
+            nb::arg("receiver_mesh_id") = nb::none(),
             R"doc(
                 Initialize a SocketConfig with connections and memory config.
 
                 Args:
                     connections (List[SocketConnection]): The connections of the socket
                     memory_config (SocketMemoryConfig): The memory config of the socket
-                    sender_rank (int, optional): The rank of the sender host in a multi-host context
-                    receiver_rank (int, optional): The rank of the receiver host in a multi-host context
+                    sender_mesh_id (MeshId, optional): The mesh id of the sender
+                    receiver_mesh_id (MeshId, optional): The mesh id of the receiver
             )doc");
     nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
         .def(

@@ -279,6 +279,7 @@ public:
     IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+    tt_fabric::MeshId get_mesh_id() const;
 
     DeviceIds get_device_ids() const;
 

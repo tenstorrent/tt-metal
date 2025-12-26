@@ -14,6 +14,20 @@
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
+    // Bind MeshId strong type
+    nb::class_<tt::tt_fabric::MeshId>(mod, "MeshId", "Unique identifier for a mesh in the fabric")
+        .def(nb::init<uint32_t>())
+        .def("__int__", [](const tt::tt_fabric::MeshId& m) { return *m; })
+        .def("__repr__", [](const tt::tt_fabric::MeshId& m) { return nb::str("MeshId({})").format(*m); })
+        .def("__str__", [](const tt::tt_fabric::MeshId& m) { return nb::str("{}").format(*m); })
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self)
+        .def(nb::self < nb::self)
+        .def(nb::self <= nb::self)
+        .def(nb::self > nb::self)
+        .def(nb::self >= nb::self)
+        .def("__hash__", [](const tt::tt_fabric::MeshId& m) { return std::hash<tt::tt_fabric::MeshId>{}(m); });
+
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricConfig>(mod, "FabricConfig")
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
