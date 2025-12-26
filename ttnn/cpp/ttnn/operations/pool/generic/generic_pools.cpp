@@ -856,13 +856,9 @@ Pool2dSliceAttr::get_input_slice_and_padding(const IOShape& output_slice_start, 
             "Pool2d Slicing: Additional output width of {} added to the right side.",
             additional_padded_width);
 
-        pad_right += additional_padded_width * stride[1];
         output_slice_width += additional_padded_width;
-
-        if (input_slice_width < kernel_size[1]) {
-            pad_right += kernel_size[1] - input_slice_width;
-            log_trace(tt::LogOp, "Pool2d Slicing: Adjusted pad_right to {} to cover kernel size.", pad_right);
-        }
+        pad_right = (output_slice_width - 1) * stride[1] - input_slice_width +
+                    ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
     }
     return {
         {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
