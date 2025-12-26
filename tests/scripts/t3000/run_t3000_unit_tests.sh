@@ -550,11 +550,7 @@ run_t3000_ccl_tests() {
 
   # all reduce: 1 test should be enough
   # 4 chip test with bfloat8_b
-  if [[ -n "${NANOBIND}" ]]; then
-    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-ReduceType.Sum-2x4x2048x32-bfloat8_b-DRAM-4-1]
-  else
-    pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-math_op0-2x4x2048x32-bfloat8_b-DRAM-4-1]
-  fi
+  pytest -n auto tests/nightly/t3000/ccl/test_all_reduce.py::test_ring_all_reduce_post_commit[wormhole_b0-True-device_params0-ReduceType.Sum-2x4x2048x32-bfloat8_b-DRAM-4-1]
 
   # p2p: 1 test should be enough
   # trace test with device delay

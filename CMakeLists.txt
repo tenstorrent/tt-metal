@@ -279,7 +279,7 @@ if(BUILD_TELEMETRY)
 endif()
 
 ############################################################################################################################
-# Install targets for build artifacts and pybinds
+# Install targets for build artifacts and nanobinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
