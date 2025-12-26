@@ -3,14 +3,19 @@
 
 import pytest
 from helpers.format_config import DataFormat
-from helpers.llk_params import Transpose
+from helpers.llk_params import PerfRunType, Transpose
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfRunType, perf_benchmark, update_report
+from helpers.profiler import ProfilerConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHING_FACE,
+)
 
 
 @pytest.mark.perf
 @parametrize(
-    test_name="unpack_transpose_perf",
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
@@ -19,10 +24,10 @@ from helpers.perf import PerfRunType, perf_benchmark, update_report
 )
 def test_perf_unpack_transpose(
     perf_report,
-    test_name,
     formats,
     unpack_transpose_faces,
     unpack_transpose_within_face,
+    workers_tensix_coordinates,
 ):
 
     if (
@@ -39,15 +44,28 @@ def test_perf_unpack_transpose(
             "Skipping test for unpack_transpose_faces=False and unpack_transpose_within_face=False"
         )
 
-    test_config = {
-        "testname": test_name,
-        "formats": formats,
-        "tile_cnt": 16,
-        "unpack_transpose_faces": unpack_transpose_faces,
-        "unpack_transpose_within_face": unpack_transpose_within_face,
-    }
+    tile_count = 16
 
-    results = perf_benchmark(
-        test_config, run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE]
+    configuration = ProfilerConfig(
+        "sources/unpack_transpose_perf.cpp",
+        formats,
+        run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE],
+        templates=[],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            UNPACK_TRANS_FACES(unpack_transpose_faces),
+            UNPACK_TRANS_WITHING_FACE(unpack_transpose_within_face),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
     )
-    update_report(perf_report, test_config, results)
+
+    configuration.run(perf_report, location=workers_tensix_coordinates)

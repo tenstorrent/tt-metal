@@ -5,7 +5,6 @@ from itertools import chain, product
 
 import pytest
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     MatmulGolden,
@@ -22,8 +21,24 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
 from helpers.param_config import input_output_formats
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_face_matmul_data
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    DEST_INDEX,
+    DEST_SYNC,
+    IN_TILE_DIMS,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    NUM_FACES,
+    PARTIAL_FACE,
+    STOCHASTIC_ROUNDING,
+    THROTTLE_LEVEL,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHING_FACE,
+)
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -63,14 +78,14 @@ ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
         (
-            ("math_matmul_test", fidelity, combinations, throttle)
+            (fidelity, combinations, throttle)
             for fidelity, combinations, throttle in product(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
         # Tiny tiles matmul with throttle level 1 only
         (
-            ("math_matmul_test", fidelity, combinations, 0)
+            (fidelity, combinations, 0)
             for fidelity, combinations in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
@@ -80,18 +95,14 @@ ALL_TEST_PARAMS = list(
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize(
-    "test_name,math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS
-)
-def test_math_matmul(test_name, math_fidelity, matmul_config, throttle):
-
+@pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
+def test_math_matmul(
+    math_fidelity, matmul_config, throttle, workers_tensix_coordinates
+):
     formats = matmul_config.formats
-    dest_acc = matmul_config.dest_acc
     input_A_dimensions = matmul_config.tile_dimensions.input_A_dimensions
     input_B_dimensions = matmul_config.tile_dimensions.input_B_dimensions
     transpose = matmul_config.face_layout_config.unpack_transpose_faces
-    stochastic_rnd = matmul_config.stochastic_rnd
-    tile_cnt_A = matmul_config.tile_dimensions.tile_cnt_A
     tile_cnt_B = matmul_config.tile_dimensions.tile_cnt_B
     num_faces_A = matmul_config.face_layout_config.num_faces_A
     num_faces_B = matmul_config.face_layout_config.num_faces_B
@@ -150,52 +161,57 @@ def test_math_matmul(test_name, math_fidelity, matmul_config, throttle):
         src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "math_fidelity": math_fidelity,
-        "tile_cnt": matmul_config.tile_dimensions.tile_cnt,
-        "input_A_dimensions": input_A_dimensions,
-        "input_B_dimensions": input_B_dimensions,
-        "output_dimensions": matmul_config.tile_dimensions.output_dimensions,
-        "rt_dim": matmul_config.tile_dimensions.rt_dim,
-        "ct_dim": matmul_config.tile_dimensions.ct_dim,
-        "kt_dim": matmul_config.tile_dimensions.kt_dim,
-        "in0_tile_r_dim": matmul_config.tile_dimensions.in0_tile_r_dim,
-        "in0_tile_c_dim": matmul_config.tile_dimensions.in0_tile_c_dim,
-        "in1_tile_r_dim": matmul_config.tile_dimensions.in1_tile_r_dim,
-        "in1_tile_c_dim": matmul_config.tile_dimensions.in1_tile_c_dim,
-        "stochastic_rnd": stochastic_rnd,
-        "unpack_transpose_faces": transpose,
-        "unpack_transpose_within_face": transpose,  # matmul transposes both faces and within faces, there is no option for one or the other
-        "num_faces_A": num_faces_A,  # Number of active faces for matrix A
-        "num_faces_B": num_faces_B,  # Number of active faces for matrix B
-        "num_faces": num_faces,  # Number of active faces for result matrix
-        "partial_face_A": matmul_config.face_layout_config.partial_face_A,  # Partial face setting for matrix A
-        "partial_face_B": matmul_config.face_layout_config.partial_face_B,  # Partial face setting for matrix B
-        "tiny_tiles": matmul_config.tile_dimensions.in0_tile_r_dim <= 16,
-        "throttle": throttle,
-        "dst_index": matmul_config.dst_index,
-        "dest_sync": matmul_config.dest_sync,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        tilized_A.flatten(),
-        tilized_B.flatten(),
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt_A,
-        tile_count_B=tile_cnt_B,
+    configuration = TestConfig(
+        "sources/math_matmul_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_A_dimensions, input_B_dimensions),
+            STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
+            MATH_FIDELITY(math_fidelity),
+            THROTTLE_LEVEL(throttle),
+            DEST_SYNC(matmul_config.dest_sync),
+        ],
+        runtimes=[
+            TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
+            NUM_FACES(num_faces, num_faces_A, num_faces_B),
+            UNPACK_TRANS_FACES(transpose),
+            UNPACK_TRANS_WITHING_FACE(transpose),
+            PARTIAL_FACE(
+                partial_a=matmul_config.face_layout_config.partial_face_A,
+                partial_face_pack=matmul_config.face_layout_config.partial_face_A,
+                partial_b=matmul_config.face_layout_config.partial_face_B,
+                partial_face_math=matmul_config.face_layout_config.partial_face_B,
+            ),
+            CRK_TILE_DIMM(
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.kt_dim,
+            ),
+            IN_TILE_DIMS(
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                matmul_config.tile_dimensions.in0_tile_c_dim,
+                matmul_config.tile_dimensions.in1_tile_r_dim,
+                matmul_config.tile_dimensions.in1_tile_c_dim,
+            ),
+            DEST_INDEX(matmul_config.dst_index),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=matmul_config.tile_dimensions.tile_cnt_A,
+            tile_count_B=matmul_config.tile_dimensions.tile_cnt_B,
+            tile_count_res=matmul_config.tile_dimensions.tile_cnt,
+        ),
+        dest_acc=matmul_config.dest_acc,
     )
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    run_test(test_config)
-
-    res_from_L1 = collect_results(
-        formats, tile_count=matmul_config.tile_dimensions.tile_cnt, address=res_address
-    )
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     if num_faces < 4:
@@ -214,6 +230,8 @@ def test_math_matmul(test_name, math_fidelity, matmul_config, throttle):
                     start : start + num_elements_per_tile
                 ],  # Only compare active faces in this tile
                 formats.output_format,
-            )
+            ), f"Assert on tile {i}/{tile_cnt} against golden failed"
     else:
-        assert passed_test(golden_tensor, res_tensor, formats.output_format)
+        assert passed_test(
+            golden_tensor, res_tensor, formats.output_format
+        ), "Assert against golden failed"

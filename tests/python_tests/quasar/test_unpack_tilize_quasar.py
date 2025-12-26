@@ -5,10 +5,6 @@ from typing import List
 
 import pytest
 import torch
-from helpers.device import (
-    collect_results,
-    write_stimuli_to_l1,
-)
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     TilizeGolden,
@@ -26,8 +22,19 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, run_test
+from helpers.test_config import BootMode, TestConfig
+from helpers.test_variant_parameters import (
+    DATA_COPY_TYPE,
+    DEST_SYNC,
+    IMPLIED_MATH_FORMAT,
+    INPUT_DIMENSIONS,
+    NUM_FACES,
+    TEST_FACE_DIMS,
+    TILE_COUNT,
+    UNPACKER_ENGINE_SEL,
+)
 from helpers.utils import passed_test
 
 
@@ -87,12 +94,12 @@ ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    test_name="unpack_tilize_quasar_test",
     formats_dest_acc_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
 )
 def test_unpack_tilize_quasar(
-    test_name, formats_dest_acc_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
+    formats_dest_acc_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT
 ):
+    formats_dest_acc_unpack_sel_dimensions = formats_dest_acc_unpack_sel_dimensions[0]
     formats = formats_dest_acc_unpack_sel_dimensions[0]
     dest_acc = formats_dest_acc_unpack_sel_dimensions[1]
     unpacker_sel = formats_dest_acc_unpack_sel_dimensions[2]
@@ -101,10 +108,11 @@ def test_unpack_tilize_quasar(
     if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
         pytest.skip("Fails for now.")
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_golden = get_golden_generator(TilizeGolden)
@@ -113,47 +121,53 @@ def test_unpack_tilize_quasar(
         golden_src, input_dimensions, formats.output_format, num_faces=4
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": unpack_to_dest,
-        "tile_cnt": tile_cnt,
-        "unpacker_engine_sel": unpacker_sel,
-        "implied_math_format": ImpliedMathFormat.Yes,
-        "data_copy_type": (
-            DataCopyType.B2D
-            if unpacker_sel == UnpackerEngine.UnpB
-            else DataCopyType.A2D
+    configuration = TestConfig(
+        "sources/quasar/unpack_tilize_quasar_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            UNPACKER_ENGINE_SEL(unpacker_sel),
+            DATA_COPY_TYPE(
+                DataCopyType.B2D
+                if unpacker_sel == UnpackerEngine.UnpB
+                else DataCopyType.A2D
+            ),
+            DEST_SYNC(),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(),
+            NUM_FACES(),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_cnt_A,
+            num_faces=4,
         ),
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-        num_faces=4,
+        # Determine unpack_to_dest based on format and accumulation mode
+        # This follows the same logic as pack_test
+        unpack_to_dest=(
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        ),
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
     )
 
-    run_test(test_config, boot_mode=boot_mode)
+    res_from_L1 = configuration.run()
 
-    res_from_L1 = collect_results(
-        formats, tile_count=tile_cnt, address=res_address, num_faces=4
-    )
-
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

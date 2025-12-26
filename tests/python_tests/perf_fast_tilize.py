@@ -3,11 +3,16 @@
 
 import pytest
 from conftest import skip_for_blackhole
-from helpers.device import write_stimuli_to_l1
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation
-from helpers.perf import PerfRunType, perf_benchmark, update_report
-from helpers.stimuli_generator import generate_stimuli
+from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.param_config import parametrize
+from helpers.profiler import ProfilerConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    LOOP_FACTOR,
+    TILE_COUNT,
+)
 
 
 def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
@@ -45,43 +50,42 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 
 @skip_for_blackhole
 @pytest.mark.perf
-@pytest.mark.parametrize("input_format", [DataFormat.Float32, DataFormat.Float16_b])
-@pytest.mark.parametrize(
-    "output_format", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+@parametrize(
+    input_format=[DataFormat.Float32, DataFormat.Float16_b],
+    output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    input_dimensions=generate_input_dimensions(16),
 )
-@pytest.mark.parametrize("fp32_dest", [DestAccumulation.Yes, DestAccumulation.No])
-@pytest.mark.parametrize("input_width, input_height", generate_input_dimensions(16))
 def test_fast_tilize_perf(
-    perf_report, input_format, output_format, fp32_dest, input_width, input_height
+    perf_report,
+    input_format,
+    output_format,
+    dest_acc,
+    input_dimensions,
+    workers_tensix_coordinates,
 ):
-
-    input_dimensions = [input_height * 32, input_width * 32]
-
-    src_A, src_B, tile_cnt = generate_stimuli(
-        input_format, input_format, input_dimensions=input_dimensions
-    )
+    tile_count = input_dimensions[0] * input_dimensions[1]
+    input_dimensions = (input_dimensions[0] * 32, input_dimensions[1] * 32)
 
     formats = InputOutputFormat(input_format, output_format)
 
-    test_config = {
-        "formats": formats,
-        "testname": "fast_tilize_test",
-        "loop_factor": 1024,
-        "tile_cnt": input_height * input_width,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "dest_acc": fp32_dest,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        input_format,
-        input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
+    configuration = ProfilerConfig(
+        "sources/fast_tilize_test.cpp",
+        formats,
+        run_types=[PerfRunType.L1_TO_L1],
+        templates=[INPUT_DIMENSIONS(input_dimensions, input_dimensions)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(1024)],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        dest_acc=dest_acc,
     )
 
-    results = perf_benchmark(test_config, [PerfRunType.L1_TO_L1], 2)
-    update_report(perf_report, test_config, results)
+    configuration.run(perf_report, run_count=2, location=workers_tensix_coordinates)

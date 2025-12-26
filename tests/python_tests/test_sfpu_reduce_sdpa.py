@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
+from conftest import skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -11,14 +11,21 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    MATH_OP,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 
+# Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
+@skip_for_coverage
 @parametrize(
-    test_name="sfpu_reduce_sdpa_test",
     formats=input_output_formats(
         [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
         same=True,
@@ -31,17 +38,22 @@ from helpers.utils import passed_test
     ],
 )
 def test_sfpu_reduce_sdpa(
-    test_name, formats, dest_acc, mathop, reduce_pool, input_dimensions
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    workers_tensix_coordinates,
 ):
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     src_A = tilize_block(src_A, input_dimensions).flatten()
-
-    # Generate dummy src_B
-    src_B = torch.zeros_like(src_A)
 
     # GOLDEN GENERATION
     # *******************************************************
@@ -58,31 +70,29 @@ def test_sfpu_reduce_sdpa(
 
     # *******************************************************
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "mathop": mathop,
-        "pool_type": reduce_pool,
-        "unpack_to_dest": False,  # Must be False since math kernel does A2D copy
-        "tile_cnt": tile_cnt,  # Keep tile_cnt for future multi-tile support
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
+    configuration = TestConfig(
+        "sources/sfpu_reduce_sdpa_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+        ],
+        runtimes=[TILE_COUNT(tile_cnt_A)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        unpack_to_dest=False,  # Must be False since math kernel does A2D copy
+        dest_acc=dest_acc,
     )
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    run_test(test_config)
-
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 

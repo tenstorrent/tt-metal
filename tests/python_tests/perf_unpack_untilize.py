@@ -3,13 +3,19 @@
 
 import pytest
 from helpers.format_config import DataFormat
+from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfRunType, perf_benchmark, update_report
+from helpers.profiler import ProfilerConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    LOOP_FACTOR,
+    TILE_COUNT,
+)
 
 
 @pytest.mark.perf
 @parametrize(
-    test_name="unpack_untilize_perf",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -22,23 +28,27 @@ from helpers.perf import PerfRunType, perf_benchmark, update_report
     full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_unpack_untilize(
-    perf_report, test_name, formats, full_rt_dim, full_ct_dim
+    perf_report, formats, full_rt_dim, full_ct_dim, workers_tensix_coordinates
 ):
-
-    run_types = [
-        PerfRunType.L1_TO_L1,
-    ]
-
     tile_count = full_rt_dim * full_ct_dim
-    dimensions = [full_rt_dim * 32, full_ct_dim * 32]
+    input_dimensions = [full_rt_dim * 32, full_ct_dim * 32]
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_count,
-        "input_A_dimensions": dimensions,
-        "input_B_dimensions": dimensions,
-    }
+    configuration = ProfilerConfig(
+        "sources/unpack_untilize_perf.cpp",
+        formats,
+        [PerfRunType.L1_TO_L1],
+        templates=[INPUT_DIMENSIONS(input_dimensions, input_dimensions)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+    )
 
-    results = perf_benchmark(test_config, run_types)
-    update_report(perf_report, test_config, results)
+    configuration.run(perf_report, location=workers_tensix_coordinates)

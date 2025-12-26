@@ -1,39 +1,49 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import fcntl
+import glob
 import os
+import shutil
+import struct
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields
 from enum import Enum
+from hashlib import sha256
 from pathlib import Path
+from typing import ClassVar
+
+import numpy as np
+import pytest
+from ttexalens.tt_exalens_lib import (
+    TTException,
+    load_elf,
+    parse_elf,
+    read_from_device,
+    read_word_from_device,
+    write_to_device,
+    write_words_to_device,
+)
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
+    CHIP_DEFAULT_BOOT_MODES,
     BootMode,
-    resolve_default_boot_mode,
-    run_elf_files,
+    RiscCore,
+    exalens_device_setup,
+    reset_mailboxes,
+    set_tensix_soft_reset,
     wait_for_tensix_operations_finished,
 )
 from .format_config import DataFormat, FormatConfig
 from .llk_params import (
-    FPU_BINARY_OPERATIONS,
-    REDUCE_OPERATIONS,
-    SFPU_BINARY_OPERATIONS,
-    SFPU_UNARY_OPERATIONS,
-    ApproximationMode,
-    DataCopyType,
     DestAccumulation,
-    DestSync,
-    ImpliedMathFormat,
-    MathFidelity,
-    MathOperation,
-    StochasticRounding,
-    Tilize,
-    Transpose,
-    UnpackerEngine,
-    format_tile_sizes,
 )
-from .matmul_sweep import validate_tile_dimensions
-from .utils import run_shell_command
+from .stimuli_config import StimuliConfig
+from .test_variant_parameters import RuntimeParameter, TemplateParameter
 
 
 class ProfilerBuild(Enum):
@@ -41,561 +51,908 @@ class ProfilerBuild(Enum):
     No = "false"
 
 
-def _generate_operation_constants(mathop: MathOperation) -> list[str]:
-    """Generate the appropriate operation constants based on the math operation type."""
-    constants = []
+class CoverageBuild(Enum):
+    Yes = "true"
+    No = "false"
 
-    if mathop in SFPU_UNARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+
+from .test_variant_parameters import (
+    IN_TILE_DIMS,
+    NUM_FACES,
+    RuntimeParameter,
+    TemplateParameter,
+)
+from .utils import create_directories, run_shell_command
+
+
+class TestMode(Enum):
+    DEFAULT = "Compile and consume sequentially"
+    PRODUCE = "Just compile tests without executing them"
+    CONSUME = "Just execute pre-compiled elfs"
+
+
+class TestConfig:
+
+    # === STATIC VARIABLES ===
+
+    # Architecture Selection
+    ARCH_NON_COMPUTE: ClassVar[str]
+    ARCH_COMPUTE: ClassVar[str]
+    ARCH_DEFINE: ClassVar[str]
+    ARCH_LLK_ROOT: ClassVar[str]
+    ARCH: ClassVar[str]
+    CHIP_ARCH: ClassVar[ChipArchitecture]
+
+    # Artefact directories
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build/")
+    ARTEFACTS_DIR: ClassVar[Path]
+    SHARED_DIR: ClassVar[str]
+    SHARED_OBJ_DIR: ClassVar[str]
+    SHARED_ELF_DIR: ClassVar[str]
+    COVERAGE_INFO_DIR: ClassVar[str]
+    SYNC_DIR: ClassVar[Path]
+
+    # Sources directories
+    LLK_ROOT: ClassVar[Path]
+    TESTS_WORKING_DIR: ClassVar[Path]
+    TOOL_PATH: ClassVar[Path]
+    HEADER_DIR: ClassVar[Path]
+
+    HELPERS: ClassVar[Path]
+    RISCV_SOURCES: ClassVar[Path]
+    LINKER_SCRIPTS: ClassVar[Path]
+
+    # Toolchain paths
+    GXX: ClassVar[str]
+    OBJDUMP: ClassVar[str]
+    OBJCOPY: ClassVar[str]
+    GCOV: ClassVar[str]
+    GCOV_TOOL: ClassVar[str]
+
+    # Compilation options
+    OPTIONS_ALL: ClassVar[str] = None
+    OPTIONS_LINK: ClassVar[str] = None
+    INITIAL_OPTIONS_COMPILE: ClassVar[str] = None
+    INCLUDES: ClassVar[str] = None
+    WITH_COVERAGE: ClassVar[bool] = False
+
+    OPTIONS_COMPILE: ClassVar[str] = None
+    MEMORY_LAYOUT_LD_SCRIPT: ClassVar[str] = None
+    NON_COVERAGE_OPTIONS_COMPILE: ClassVar[str] = None
+
+    SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
+    KERNEL_COMPONENTS: ClassVar[list[str]] = ["unpack", "math", "pack"]
+
+    # === Runtime static variables, for keeping context of multiple test runs
+    CURRENT_CONFIG: ClassVar[str] = "uninitialised"
+    MODE: ClassVar[TestMode] = TestMode.DEFAULT
+    SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
+
+    # === Addresses ===
+    TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
+    TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
+
+    @staticmethod
+    def setup_arch():
+        TestConfig.CHIP_ARCH = get_chip_architecture()
+        match TestConfig.CHIP_ARCH:
+            case ChipArchitecture.WORMHOLE:
+                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-wh"
+                TestConfig.ARCH_COMPUTE = "-mcpu=tt-wh-tensix"
+                TestConfig.ARCH_DEFINE = "-DARCH_WORMHOLE"
+                TestConfig.ARCH_LLK_ROOT = "tt_llk_wormhole_b0"
+                TestConfig.ARCH = ChipArchitecture.WORMHOLE
+            case ChipArchitecture.BLACKHOLE:
+                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-bh"
+                TestConfig.ARCH_COMPUTE = "-mcpu=tt-bh-tensix"
+                TestConfig.ARCH_DEFINE = "-DARCH_BLACKHOLE"
+                TestConfig.ARCH_LLK_ROOT = "tt_llk_blackhole"
+                TestConfig.ARCH = ChipArchitecture.BLACKHOLE
+            case ChipArchitecture.QUASAR:
+                # until there is official support for quasar in SFPI fallback to BH
+                TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-bh"
+                TestConfig.ARCH_COMPUTE = "-mcpu=tt-bh-tensix"
+                TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
+                TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
+                TestConfig.ARCH = ChipArchitecture.QUASAR
+            case _:
+                raise ValueError(
+                    "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
+                )
+
+    @staticmethod
+    def setup_paths(sources_path: Path):
+        TestConfig.LLK_ROOT = sources_path
+        TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
+        TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
+        TestConfig.HEADER_DIR = (
+            TestConfig.TESTS_WORKING_DIR / f"hw_specific/{TestConfig.ARCH.value}/inc"
         )
-    elif mathop in SFPU_BINARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
+
+        TestConfig.HELPERS = TestConfig.TESTS_WORKING_DIR / "helpers"
+        TestConfig.RISCV_SOURCES = TestConfig.TESTS_WORKING_DIR / "helpers/src"
+        TestConfig.LINKER_SCRIPTS = TestConfig.TESTS_WORKING_DIR / "helpers/ld"
+
+        # Toolchain paths
+        TestConfig.GXX = str((TestConfig.TOOL_PATH / "riscv-tt-elf-g++").absolute())
+        TestConfig.OBJDUMP = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-objdump").absolute()
         )
-    elif mathop in FPU_BINARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
+        TestConfig.OBJCOPY = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-objcopy").absolute()
+        )
+        TestConfig.GCOV = str((TestConfig.TOOL_PATH / "riscv-tt-elf-gcov").absolute())
+        TestConfig.GCOV_TOOL = str(
+            (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-    return constants
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+        TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
+        TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
+        TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
+        TestConfig.PROFILER_META = TestConfig.ARTEFACTS_DIR / "profiler_meta"
+        TestConfig.SYNC_DIR = TestConfig.ARTEFACTS_DIR / "sync_primitives"
 
+        create_directories(
+            [
+                TestConfig.SYNC_DIR,
+                TestConfig.ARTEFACTS_DIR,
+                TestConfig.SHARED_DIR,
+                TestConfig.SHARED_OBJ_DIR,
+                TestConfig.SHARED_ELF_DIR,
+                TestConfig.COVERAGE_INFO_DIR,
+            ]
+        )
 
-def generate_build_header(test_config):
-    """
-    Generate the contents of a C++ header file (build.h) with all configuration defines.
+    @staticmethod
+    def setup_compilation_options(
+        with_coverage: bool = False, detailed_artefacts: bool = False
+    ):
+        TestConfig.OPTIONS_ALL = f"-O3 -std=c++17 -ffast-math"
+        TestConfig.WITH_COVERAGE = with_coverage
 
-    This function creates a list of preprocessor #define statements based on the provided
-    test configuration and profiler build option. The generated header is used to control
-    build-time options for tests, such as data formats, math fidelity, accumulation modes,
-    and other test-specific parameters.
+        if detailed_artefacts:
+            TestConfig.OPTIONS_ALL += (
+                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
+            )
 
-    The resulting header content includes:
-      - Basic configuration constants
-      - Profiler and accumulation settings
-      - Data format and math operation defines
-      - Special configuration for multi-tile tests
+        TestConfig.OPTIONS_LINK = "-nodefaultlibs -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
+        TestConfig.INITIAL_OPTIONS_COMPILE = f"-fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Wunused-parameter -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -nostdlib -fno-builtin -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA {TestConfig.ARCH_DEFINE}"
+        TestConfig.INCLUDES = f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib -I../{TestConfig.ARCH_LLK_ROOT}/common/inc -I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu -Isfpi/compiler/lib/gcc/riscv-tt-elf/*/include -I{TestConfig.HEADER_DIR} -Ifirmware/riscv/common -Isfpi/include -Ihelpers/include"
 
-    Data Format Inference:
-      - Receive format configuration from test_config["formats"] and infers all formats for LLK APIs (unpack, math, pack) using the Python data format inference model.
-      - A C++ FormatConfig struct is generated in build.h containing all format values,
-        allowing C++ test files to access formats via `formats.unpack_src`, etc.
+    @staticmethod
+    def setup_build(
+        sources_path: Path,
+        with_coverage: bool = False,
+        detailed_artefacts: bool = False,
+    ):
+        TestConfig.setup_arch()
+        TestConfig.setup_paths(sources_path)
+        TestConfig.setup_compilation_options(with_coverage, detailed_artefacts)
 
-    Args:
-        test_config (dict): Dictionary containing test configuration parameters.
+    @staticmethod
+    def setup_mode(compile_consumer: bool = False, compile_producer: bool = False):
 
-    Returns:
-        str: The complete contents of the build.h header file as a string.
+        if compile_consumer and compile_producer:
+            raise ValueError(
+                "Pytest can be configured to be either compilation producer or compilation consumer, not both"
+            )
 
-    File location: <repository>/tests/helpers/include/build.h
-    """
+        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+        TestConfig.MODE = TestMode.DEFAULT
 
-    header_content = [
-        "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
-        "//",
-        "// SPDX-License-Identifier: Apache-2.0",
-        "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",
-        "",
-        "#pragma once",
-        "",
-        "#include <array>",
-        "#include <type_traits>",
-        "",
-        '#include "operand.h"',
-        '#include "llk_defs.h"',
-        '#include "llk_sfpu_types.h"',
-    ]
+        if compile_producer:
+            TestConfig.MODE = TestMode.PRODUCE
 
-    # Conditionally include perf.h based on architecture
-    if get_chip_architecture() != ChipArchitecture.QUASAR:
-        header_content.append('#include "perf.h"')
+        if compile_consumer:
+            TestConfig.MODE = TestMode.CONSUME
 
-    header_content.extend(
-        [
-            '#include "tensix_types.h"',
+        # Always have a fresh build when compiling
+        if TestConfig.MODE != TestMode.CONSUME:
+            shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    # === Instance fields and methods ===
+    def __init__(
+        self,
+        # Required arguments
+        test_name: str,
+        formats: FormatConfig,
+        templates: set[TemplateParameter],
+        runtimes: set[RuntimeParameter],
+        variant_stimuli: StimuliConfig = None,
+        # Optional compilation arguments with their default values
+        boot_mode: BootMode = BootMode.DEFAULT,
+        profiler_build: ProfilerBuild = ProfilerBuild.No,
+        L1_to_L1_iterations: int = 1,
+        unpack_to_dest: bool = False,
+        disable_format_inference: bool = False,
+        dest_acc: DestAccumulation = DestAccumulation.No,
+    ):
+        self.coverage_build = (
+            CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
+        )
+        self.test_name = test_name
+        self.formats = formats
+        self.templates = templates
+        self.runtimes = runtimes
+        self.variant_stimuli = variant_stimuli
+        self.boot_mode = boot_mode
+        self.profiler_build = profiler_build
+        self.L1_to_L1_iterations = L1_to_L1_iterations
+        self.unpack_to_dest = unpack_to_dest
+        self.disable_format_inference = disable_format_inference
+        self.dest_acc = dest_acc
+
+        self.process_runtime_args()
+
+        if (
+            self.coverage_build == CoverageBuild.Yes
+            and self.profiler_build == ProfilerBuild.Yes
+        ):
+            raise ValueError(
+                "You can't build profiler and coverage build at the same time, profiling tests will fail."
+            )
+
+    RUNTIME_ADDRESS: ClassVar[int] = 0x64000
+
+    def process_runtime_args(self):
+
+        # Generate runtime parameter struct
+        lines = [
+            "// Struct that has a runtme parameter layout",
+            "struct RuntimeParams {",
+        ]
+
+        self.runtime_format = "@"
+        for parameter in self.runtimes:
+            field_str, param_field_types = parameter.convert_to_struct_fields()
+            lines.append(field_str)
+            self.runtime_format += param_field_types
+        lines.append("};")
+
+        self.runtime_params_struct = lines
+
+    def write_runtimes_to_L1(self, location: str = "0,0"):
+        argument_data = []
+        for param in self.runtimes:
+            argument_data.extend(
+                [
+                    (
+                        getattr(param, f.name).value
+                        if issubclass(f.type, Enum)
+                        else getattr(param, f.name)
+                    )
+                    for f in fields(param)
+                ]
+            )
+
+        serialised_data = struct.pack(self.runtime_format, *argument_data)
+
+        if len(serialised_data) != 0:
+            write_to_device(location, TestConfig.RUNTIME_ADDRESS, serialised_data)
+
+    def collect_hash(self):
+        lock_file = Path("/tmp/tt-llk-build-print.lock")
+        lock_file.touch(exist_ok=True)
+
+        with open(lock_file, "w") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                print(self.variant_id, file=sys.stderr)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+        pytest.skip()
+
+    def generate_variant_hash(self):
+        NON_COMPILATION_ARGUMETNS = [
+            "variant_stimuli",
+            "run_configs",
+            "variant_id",
+            "runtime_params_struct",
+            "runtime_format",
+            "runtimes",
+        ]
+
+        temp_str = [
+            str(value)
+            for field_name, value in self.__dict__.items()
+            if field_name not in NON_COMPILATION_ARGUMETNS
+        ]
+        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+
+    def resolve_compile_options(self) -> tuple[str, str, str]:
+
+        if (
+            TestConfig.OPTIONS_COMPILE is not None
+            and TestConfig.MEMORY_LAYOUT_LD_SCRIPT is not None
+            and TestConfig.NON_COVERAGE_OPTIONS_COMPILE is not None
+        ):
+            return (
+                TestConfig.OPTIONS_COMPILE,
+                MEMORY_LAYOUT_LD_SCRIPT,
+                NON_COVERAGE_OPTIONS_COMPILE,
+            )
+
+        MEMORY_LAYOUT_LD_SCRIPT = (
+            f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
+        )
+        OPTIONS_COMPILE = f"{TestConfig.INCLUDES} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+
+        if self.boot_mode == BootMode.TRISC:
+            OPTIONS_COMPILE += "-DLLK_BOOT_MODE_TRISC "
+        else:
+            OPTIONS_COMPILE += "-DLLK_BOOT_MODE_BRISC "
+
+        NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
+
+        if self.coverage_build == CoverageBuild.Yes:
+            NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
+            OPTIONS_COMPILE += (
+                "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
+            )
+            MEMORY_LAYOUT_LD_SCRIPT = (
+                f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
+            )
+
+        if self.profiler_build == ProfilerBuild.Yes:
+            OPTIONS_COMPILE += "-DLLK_PROFILER "
+
+        return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
+
+    def build_shared_artefacts(self):
+        if TestConfig.SHARED_ARTEFACTS_AVAILABLE:
+            return
+
+        TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
+        sync_file = open("/tmp/tt-llk-build-worker.sync", "w")
+
+        # Determining which worker will build shared artefacts, others just wait until that's done
+        try:
+            fcntl.flock(sync_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            skip_shared_compilation = False
+        except BlockingIOError:
+            fcntl.flock(sync_file.fileno(), fcntl.LOCK_SH)
+            skip_shared_compilation = True
+
+        if skip_shared_compilation:
+            fcntl.flock(sync_file.fileno(), fcntl.LOCK_UN)
+            sync_file.close()
+            return
+
+        # Kernel mains
+        kernel_trisc_flag = ""
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            kernel_trisc_flag = "-DCOMPILE_FOR_TRISC="
+
+        local_options_compile, local_memory_layout_ld, local_non_coverage = (
+            self.resolve_compile_options()
+        )
+
+        # tmu-crt0.o : tmu-crt0.S
+        run_shell_command(
+            f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} -c -o {TestConfig.SHARED_OBJ_DIR / "tmu-crt0.o"} {TestConfig.HELPERS / "tmu-crt0.S"}""",
+            TestConfig.TESTS_WORKING_DIR,
+        )
+
+        # brisc.o : brisc.cpp
+
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            run_shell_command(
+                f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} -c -o {TestConfig.SHARED_OBJ_DIR / "brisc.o"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}""",
+                TestConfig.TESTS_WORKING_DIR,
+            )
+
+        COVERAGE_DEPS = ""
+        if self.coverage_build == CoverageBuild.Yes:
+            COVERAGE_DEPS = f"{TestConfig.SHARED_OBJ_DIR}/coverage.o -lgcov"
+            # coverage.o : coverage.cpp
+            run_shell_command(
+                f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} -fno-strict-aliasing -c -o {TestConfig.SHARED_OBJ_DIR / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}""",
+                TestConfig.TESTS_WORKING_DIR,
+            )
+
+        def build_kernel_part_main(name: str):
+            run_shell_command(  # main_%.o
+                f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} {kernel_trisc_flag} -DLLK_TRISC_{name.upper()} -c -o {TestConfig.SHARED_OBJ_DIR / f"main_{name}.o"} {TestConfig.RISCV_SOURCES / "trisc.cpp"}""",
+                TestConfig.TESTS_WORKING_DIR,
+            )
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [
+                executor.submit(build_kernel_part_main, name)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ]
+            for fut in futures:
+                fut.result()
+
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            # brisc.elf : tmu-crt0.o brisc.o
+            run_shell_command(
+                f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {TestConfig.SHARED_OBJ_DIR / "tmu-crt0.o"} {TestConfig.SHARED_OBJ_DIR / "brisc.o"} {COVERAGE_DEPS} -T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} -o {TestConfig.SHARED_ELF_DIR / "brisc.elf"}""",
+                TestConfig.TESTS_WORKING_DIR,
+            )
+
+        # Letting other pytest workers know that shared artefacts are built
+        fcntl.flock(sync_file.fileno(), fcntl.LOCK_UN)
+        sync_file.close()
+
+    def infer_data_formats(self) -> list[str]:
+        header_content: list[str] = [
+            "// Data formats inferred by Python inference model"
+        ]
+
+        dest_acc = self.dest_acc
+        # Check if this is an outlier format combination that requires dest_acc to be enabled
+        # Automatically enable dest_acc for outlier combinations
+        if is_format_combination_outlier(
+            self.formats.input_format, self.formats.output_format, self.dest_acc
+        ):
+            dest_acc = DestAccumulation.Yes
+
+        # Dest accumulation
+        header_content.append(f"constexpr bool is_fp32_dest_acc_en = {dest_acc.value};")
+
+        # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
+        # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration
+        # L1_to_L1_iterations is the number of times we perform llk operations from L1 input tensor to L1 output tensor
+        # If L1_to_L1_ITERATIONS is 1, we take input tensor from L1 -> unpack -> math -> pack -> L1
+        # If L1_to_L1_ITERATIONS is greater than 1, we perform multiple iterations of unpack -> math -> pack, by taking results tensor in L1 to be input tensor of next iteration
+
+        formats_config = data_formats(
+            input_format=self.formats.input_format,
+            output_format=self.formats.output_format,
+            is_fp32_dest_acc_en=dest_acc,
+            num_iterations=self.L1_to_L1_iterations,
+            unpacking_to_dest=self.unpack_to_dest,
+            chip_arch=TestConfig.CHIP_ARCH,
+            disable_format_inference=self.disable_format_inference,
+        )
+
+        header_content.append(
+            f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};"
+        )
+
+        # Check if we need to generate multiple format configurations
+
+        if self.L1_to_L1_iterations > 1:
+            # Generate format data as arrays that params.h can use to construct FormatConfig objects
+            header_content.extend(
+                [
+                    "// Format data for multiple L1-to-L1 iterations",
+                    f"constexpr std::uint32_t L1_to_L1_ITERATIONS = {self.L1_to_L1_iterations};",
+                    "#define FUSED_MULTIPLE_RUNS true",
+                ]
+            )
+
+            # Create array of format configurations for multiple L1-to-L1 iterations
+            unpack_a_in_values = [
+                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_src.name})"
+                for fmt in formats_config
+            ]
+            unpack_a_out_values = [
+                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_dst.name})"
+                for fmt in formats_config
+            ]
+            math_values = [
+                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.math.name})"
+                for fmt in formats_config
+            ]
+            pack_in_values = [
+                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_src.name})"
+                for fmt in formats_config
+            ]
+            pack_out_values = [
+                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_dst.name})"
+                for fmt in formats_config
+            ]
+
+            header_content.extend(
+                [
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_IN_LIST = {{{', '.join(unpack_a_in_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_OUT_LIST = {{{', '.join(unpack_a_out_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
+                ]
+            )
+
+        else:
+            # Single iteration - use simple format inference
+            # Generate format data as individual constants for single iteration
+            formats_config = formats_config[0]
+            header_content.extend(
+                [
+                    "// Format data for single L1-to-L1 iteration",
+                    f"constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_src.name});",
+                    f"constexpr auto UNPACK_A_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_dst.name});",
+                    f"constexpr auto MATH_FORMAT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.math.name});",
+                    f"constexpr auto PACK_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_src.name});",
+                    f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_dst.name});",
+                ]
+            )
+
+        header_content.append("")
+
+        return header_content
+
+    def generate_build_header(self) -> str:
+        header_content: list[str] = [
+            "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
+            "//",
+            "// SPDX-License-Identifier: Apache-2.0",
+            "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",
             "",
+            "#pragma once",
+            "",
+            "#include <array>",
+            "#include <type_traits>",
+            "",
+            '#include "operand.h"',
+            '#include "llk_defs.h"',
+            '#include "llk_sfpu_types.h"',
+            # Conditionally include perf.h based on architecture
+            (
+                '#include "perf.h"'
+                if get_chip_architecture() != ChipArchitecture.QUASAR
+                else ""
+            ),
+            '#include "tensix_types.h"',
             "",
             "// Basic configuration",
             "constexpr std::uint32_t TILE_SIZE_CNT = 0x1000;",
         ]
-    )
 
-    loop_factor = test_config.get("loop_factor", 1)
-
-    header_content.append(f"constexpr int LOOP_FACTOR = {loop_factor};")
-
-    # Dest accumulation
-    dest_acc = test_config.get("dest_acc", DestAccumulation.No)
-
-    # Unpack to dest
-    unpack_to_dest = str(test_config.get("unpack_to_dest", False)).lower()
-    header_content.append(f"constexpr bool UNPACKING_TO_DEST = {unpack_to_dest};")
-
-    # Unpack transpose faces
-    unpack_transpose_faces = test_config.get("unpack_transpose_faces", Transpose.No)
-    header_content.append(
-        f"constexpr bool UNPACK_TRANSPOSE_FACES = {unpack_transpose_faces.value};"
-    )
-
-    # Unpack transpose within face
-    unpack_transpose_within_face = test_config.get(
-        "unpack_transpose_within_face", Transpose.No
-    )
-    header_content.append(
-        f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {unpack_transpose_within_face.value};"
-    )
-
-    # ******** QUASAR specific ********
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        # Implied math format
-        implied_math_format = test_config.get(
-            "implied_math_format", ImpliedMathFormat.No
-        )
-        header_content.append(
-            f"constexpr bool IMPLIED_MATH_FORMAT = {implied_math_format.value};"
+        header_content.extend(
+            self.variant_stimuli.generate_stimuli_header_addresses(self.formats)
         )
 
-        # Select unpacker
-        unpacker_engine_sel = test_config.get(
-            "unpacker_engine_sel", UnpackerEngine.UnpA
-        )
-        header_content.append(
-            f"constexpr uint UNPACKER_ENGINE_SEL = p_unpacr::{unpacker_engine_sel.value};"
-        )
-    # *********************************
-
-    # Throttle level
-    throttle = test_config.get("throttle", 0)
-    header_content.append(f"constexpr int THROTTLE_LEVEL = {throttle};")
-
-    # Math transpose faces
-    math_transpose_faces = test_config.get("math_transpose_faces", Transpose.No).value
-    header_content.append(
-        f"constexpr bool MATH_TRANSPOSE_FACES = {math_transpose_faces};"
-    )
-    # Stochastic Rounding
-    stochastic_rnd = test_config.get("stochastic_rnd", StochasticRounding.No)
-    header_content.append(
-        f"constexpr auto STOCHASTIC_RND = ckernel::{stochastic_rnd.value};"
-    )
-
-    # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
-    # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration
-    # L1_to_L1_iterations is the number of times we perform llk operations from L1 input tensor to L1 output tensor
-    # If L1_to_L1_ITERATIONS is 1, we take input tensor from L1 -> unpack -> math -> pack -> L1
-    # If L1_to_L1_ITERATIONS is greater than 1, we perform multiple iterations of unpack -> math -> pack, by taking results tensor in L1 to be input tensor of next iteration
-    fused_L1_to_L1 = test_config.get("L1_to_L1_iterations", 1)
-    header_content.append(
-        f"constexpr std::uint32_t L1_to_L1_ITERATIONS = {fused_L1_to_L1};"
-    )
-
-    # Data copy type
-    data_copy_type = test_config.get("data_copy_type", DataCopyType.A2D)
-    header_content.append(
-        f"constexpr auto DATA_COPY_TYPE = ckernel::DataCopyType::{data_copy_type.value};"
-    )
-
-    # Broadcast type
-    if "broadcast_type" in test_config:
-        broadcast_type = test_config["broadcast_type"]
-        header_content.append(
-            f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{broadcast_type.value};"
-        )
-
-    # Accumulate to dest
-    if "acc_to_dest" in test_config:
-        acc_to_dest = str(test_config["acc_to_dest"]).lower()
-        header_content.append(f"constexpr bool ACC_TO_DEST = {acc_to_dest};")
-
-    # Reuse destination type
-    if "reuse_dest" in test_config:
-        reuse_dest = test_config["reuse_dest"]
-        header_content.append(
-            f"constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::{reuse_dest.name};"
-        )
-
-    if "disable_src_zero_flag" in test_config:
-        disable_src_zero_flag = str(test_config["disable_src_zero_flag"]).lower()
-        header_content.append(
-            f"constexpr bool disable_src_zero_flag = {disable_src_zero_flag};"
-        )
-
-    if "num_faces" in test_config:
-        num_faces = test_config["num_faces"]
-        header_content.append(f"constexpr std::uint32_t NUM_FACES = {num_faces};")
-
-    if "narrow_tile" in test_config:
-        narrow_tile = test_config["narrow_tile"].value
-        header_content.append(f"constexpr bool NARROW_TILE = {narrow_tile};")
-
-    if "relu_config" in test_config:
-        relu_config = test_config["relu_config"]
-        header_content.append(f"constexpr int RELU_CONFIG = {relu_config};")
-
-    # Math fidelity & Approximation mode
-    header_content.append(
-        f"constexpr std::uint32_t MATH_FIDELITY = {test_config.get('math_fidelity', MathFidelity.LoFi).value};"
-    )
-    header_content.append(
-        f"constexpr bool APPROX_MODE = {test_config.get('approx_mode', ApproximationMode.No).value};"
-    )
-
-    # Tiny tile flag, used to handle dimension
-    tiny_tiles = test_config.get("tiny_tiles", False)
-
-    # partial face - support separate configurations for A and B
-    partial_face_A = str(
-        test_config.get("partial_face_A", test_config.get("partial_face", False))
-    ).lower()
-    partial_face_B = str(
-        test_config.get("partial_face_B", test_config.get("partial_face", False))
-    ).lower()
-    header_content.append(f"constexpr bool PARTIAL_FACE_A = {partial_face_A};")
-    header_content.append(f"constexpr bool PARTIAL_FACE_B = {partial_face_B};")
-
-    # General partial_face constant for unpack_A operations
-    partial_face = str(test_config.get("partial_face", False)).lower()
-    header_content.append(f"constexpr bool PARTIAL_FACE = {partial_face};")
-
-    header_content.append(f"constexpr bool PARTIAL_FACE_PACK = {partial_face_A};")
-    header_content.append(f"constexpr bool PARTIAL_FACE_MATH = {partial_face_B};")
-
-    # Number of faces - support separate configurations for A and B
-    num_faces = test_config.get("num_faces", 4)
-    num_faces_A = test_config.get("num_faces_A", test_config.get("num_faces", 4))
-    num_faces_B = test_config.get("num_faces_B", test_config.get("num_faces", 4))
-    header_content.append(f"constexpr int num_faces = {num_faces};")
-    header_content.append(f"constexpr int num_faces_A = {num_faces_A};")
-    header_content.append(f"constexpr int num_faces_B = {num_faces_B};")
-
-    # input tile dimensions
-    in0_tile_r_dim = test_config.get("in0_tile_r_dim", 32)
-    in0_tile_c_dim = test_config.get("in0_tile_c_dim", 32)
-    in1_tile_r_dim = test_config.get("in1_tile_r_dim", 32)
-    in1_tile_c_dim = test_config.get("in1_tile_c_dim", 32)
-    header_content.append(f"constexpr int in0_tile_r_dim = {in0_tile_r_dim};")
-    header_content.append(f"constexpr int in0_tile_c_dim = {in0_tile_c_dim};")
-    header_content.append(f"constexpr int in1_tile_r_dim = {in1_tile_r_dim};")
-    header_content.append(f"constexpr int in1_tile_c_dim = {in1_tile_c_dim};")
-
-    # face dimensions - use TEST_ prefix to avoid namespace collision with ckernel::FACE_R_DIM
-    face_r_dim = test_config.get("face_r_dim", 16)
-    face_c_dim = test_config.get(
-        "face_c_dim", 16
-    )  # Face column dimension, typically 16
-    header_content.append(f"constexpr int TEST_FACE_R_DIM = {face_r_dim};")
-    header_content.append(f"constexpr int TEST_FACE_C_DIM = {face_c_dim};")
-
-    # tile size
-    formats = test_config.get("formats")
-    if formats:
-        # Tile byte size mapping
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
             DataFormat.Float32: 256,
         }
-        # face_r_dim is now generated directly as TEST_FACE_R_DIM above
 
-        pack_size = TILE_SIZES.get(formats.output_format, 128)
-        unpack_size_a = TILE_SIZES.get(formats.input_format, 128)
-        unpack_size_b = TILE_SIZES.get(formats.input_format, 128)
+        pack_size = TILE_SIZES.get(self.formats.output_format, 128)
+        unpack_size_a = TILE_SIZES.get(self.formats.input_format, 128)
+        unpack_size_b = TILE_SIZES.get(self.formats.input_format, 128)
 
-        if tiny_tiles:
-            pack_size = (pack_size // num_faces) * (in0_tile_r_dim // face_r_dim)
-            unpack_size_a = (unpack_size_a // num_faces_A) * (
-                in0_tile_r_dim // face_r_dim
+        itd_param = next(
+            (param for param in self.runtimes if isinstance(param, IN_TILE_DIMS)), None
+        )
+        faces_param = next(
+            (param for param in self.runtimes if isinstance(param, NUM_FACES)), None
+        )
+        if itd_param and faces_param:
+            temp_num_faces_A = (
+                faces_param.num_faces_A
+                if faces_param.num_faces_A
+                else faces_param.num_faces
             )
-
-        header_content.append(f"constexpr std::uint32_t TILE_SIZE_PACK = {pack_size};")
-        header_content.append(
-            f"constexpr std::uint32_t TILE_SIZE_UNPACK_A = {unpack_size_a};"
-        )
-        header_content.append(
-            f"constexpr std::uint32_t TILE_SIZE_UNPACK_B = {unpack_size_b};"
-        )
-
-        # Legacy TILE_SIZE for tests that still use it (e.g., tilize sweep)
-        tile_size = 16 * 16 * num_faces
-        header_content.append(f"constexpr std::uint32_t TILE_SIZE = {tile_size};")
-
-    # Dest synchronisation mode
-    dest_sync = test_config.get("dest_sync", DestSync.Half)
-    header_content.append(
-        f"constexpr auto dest_sync = ckernel::DstSync::Sync{dest_sync.name};"
-    )
-
-    # Destination index configuration
-    dst_index = test_config.get("dst_index", 0)
-    header_content.append(f"constexpr int DST_INDEX = {dst_index};")
-
-    # Tilize
-    tilize_en = test_config.get("tilize", Tilize.No)
-    header_content.append(f"constexpr bool tilize_en = {tilize_en.value};")
-
-    # Reuse A times
-    srca_reuse_count = test_config.get("srca_reuse_count", 4)
-    header_content.append(f"constexpr int SRCA_REUSE_COUNT = {srca_reuse_count};")
-
-    # === DATA FORMAT INFERENCE & CONFIGURATION ===
-
-    # Data Format Inference will now occur from the python-end, gives visibility on all formats for test case
-    # DATA_FORMAT_INFERENCE_MODEL is no longer defined in build.h, thus inference is deactivated, only enabled from python-end
-    header_content.append("// Data formats inferred by Python inference model")
-
-    # Profiler Tests don't pass formats to the test config, so we need to set them here
-    testname = test_config.get("testname", "")
-    if "profiler" in testname:
-        format = DataFormat.Float16
-        formats = FormatConfig(format, format, format, format, format)
-    if formats is None:
-        raise ValueError("Format Config not passed in test config")
-
-    # Check if this is an outlier format combination that requires dest_acc to be enabled
-    # This check is not relevant for Quasar as Quasar packer can handle 8-bit exp to 5-bit exp conversion
-    if (
-        is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and get_chip_architecture() != ChipArchitecture.QUASAR
-    ):
-        # Automatically enable dest_acc for outlier combinations
-        dest_acc = DestAccumulation.Yes
-
-    # Set dest_acc_en_input after potential outlier adjustment
-    header_content.append(f"constexpr bool dest_acc_en_input = {dest_acc.value};")
-
-    # Check if we need to generate multiple format configurations
-    l1_to_l1_iterations = test_config.get("L1_to_L1_iterations", 1)
-
-    formats_config = data_formats(
-        input_format=formats.input_format,
-        output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
-        num_iterations=l1_to_l1_iterations,
-        unpacking_to_dest=unpack_to_dest == "true",
-        chip_arch=get_chip_architecture(),
-        disable_format_inference=test_config.get("disable_format_inference", False),
-    )
-
-    if l1_to_l1_iterations > 1:
-        # Generate format data as arrays that params.h can use to construct FormatConfig objects
-        header_content.append("// Format data for multiple L1-to-L1 iterations")
-        header_content.append("#define FUSED_MULTIPLE_RUNS true")
-
-        # Create array of format configurations for multiple L1-to-L1 iterations
-        unpack_a_in_values = [
-            f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_src.name})"
-            for fmt in formats_config
-        ]
-        unpack_a_out_values = [
-            f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_dst.name})"
-            for fmt in formats_config
-        ]
-        math_values = [
-            f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.math.name})"
-            for fmt in formats_config
-        ]
-        pack_in_values = [
-            f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_src.name})"
-            for fmt in formats_config
-        ]
-        pack_out_values = [
-            f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_dst.name})"
-            for fmt in formats_config
-        ]
-
-        header_content.extend(
-            [
-                f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_IN_LIST = {{{', '.join(unpack_a_in_values)}}};",
-                f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_A_OUT_LIST = {{{', '.join(unpack_a_out_values)}}};",
-                f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
-                f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
-                f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
-            ]
-        )
-
-    else:
-        # Single iteration - use simple format inference
-        # Generate format data as individual constants for single iteration
-        formats_config = formats_config[0]
-        header_content.append("// Format data for single L1-to-L1 iteration")
-        header_content.extend(
-            [
-                f"constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_src.name});",
-                f"constexpr auto UNPACK_A_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_dst.name});",
-                f"constexpr auto MATH_FORMAT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.math.name});",
-                f"constexpr auto PACK_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_src.name});",
-                f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_dst.name});",
-            ]
-        )
-
-    # Math operation configuration
-    mathop = test_config.get("mathop", "no_mathop")
-    if mathop != "no_mathop":
-        header_content.extend(["", "// Math operation configuration"])
-        header_content.extend(_generate_operation_constants(mathop))
-
-        # Handle reduce operations
-        if mathop in REDUCE_OPERATIONS:
-            header_content.append(
-                f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{mathop.cpp_enum_value};"
-            )
-            pool_type = test_config.get("pool_type", None)
-            if pool_type is not None:
-                header_content.append(
-                    f"constexpr auto POOL_TYPE = ckernel::PoolType::{pool_type.value};"
+            if itd_param.in0_r_dim <= 16:
+                pack_size = (pack_size // faces_param.num_faces) * (
+                    itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+                )
+                unpack_size_a = (unpack_size_a // temp_num_faces_A) * (
+                    itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
                 )
 
-    # Optional extra unary operation (used when both a binary and unary op
-    # need to be present in the same kernel, e.g. binary-eltwise followed by
-    # SFPU unary).  If 'unary_op' exists, append its constant.
-    unary_extra = test_config.get("unary_op", None)
-    if unary_extra is not None:
-        # Only add if we haven't already added a unary operation from the main mathop
-        if mathop == "no_mathop" or mathop not in SFPU_UNARY_OPERATIONS:
-            header_content.extend(["", "// Additional SFPU unary operation"])
-            header_content.append(
-                f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{unary_extra.cpp_enum_value};"
+        # All are RT, used in only few tests, but there wasn't any mechanism not to include them
+        header_content.extend(
+            [
+                f"constexpr std::uint32_t TILE_SIZE_PACK = {pack_size};",
+                f"constexpr std::uint32_t TILE_SIZE_UNPACK_A = {unpack_size_a};",
+                f"constexpr std::uint32_t TILE_SIZE_UNPACK_B = {unpack_size_b};",
+            ]
+        )
+
+        for parameter in self.templates:
+            header_content.append(parameter.covert_to_cpp())
+
+        header_content.extend(self.infer_data_formats())
+        header_content.extend(self.runtime_params_struct)
+
+        return "\n".join(header_content)
+
+    def should_skip_building(self, variant_dir: Path) -> bool:
+
+        return variant_dir.exists()
+
+        # TODO Implement some level of sync against elfs, if need be
+        # sync_file = open(
+        #     TestConfig.SYNC_DIR / f"{self.test_name}_{self.variant_id}.sync", "w"
+        # )
+        # return_status = False
+
+        # try:
+        #     fcntl.flock(sync_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        #     return_status = not variant_dir.exists()
+        #     variant_dir.mkdir(exist_ok=True, parents=True)
+        #     fcntl.flock(sync_file.fileno(), fcntl.LOCK_UN)
+        # except BlockingIOError:
+        #     pass
+
+        # sync_file.close()
+        # return return_status
+
+    def build_elfs(self):
+        self.build_shared_artefacts()
+
+        VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+
+        if self.should_skip_building(VARIANT_DIR):
+            return
+
+        VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
+        VARIANT_ELF_DIR = VARIANT_DIR / "elf"
+
+        create_directories([VARIANT_OBJ_DIR, VARIANT_ELF_DIR])
+
+        local_options_compile, local_memory_layout_ld, _ = (
+            self.resolve_compile_options()
+        )
+
+        header_content = self.generate_build_header()
+        with open(VARIANT_DIR / "build.h", "w") as f:
+            f.write(header_content)
+
+        kernel_trisc_flag = ""
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            kernel_trisc_flag = "-DCOMPILE_FOR_TRISC="
+
+        SFPI_DEPS = ""
+        COVERAGE_DEPS = ""
+        if self.coverage_build == CoverageBuild.Yes:
+            SFPI_DEPS = "-lgcov"
+            COVERAGE_DEPS = TestConfig.SHARED_OBJ_DIR / "coverage.o"
+
+        def build_kernel_part(name: str):
+            run_shell_command(  # kernel_%.o
+                f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} -I{VARIANT_DIR} {local_options_compile} {kernel_trisc_flag} -DLLK_TRISC_{name.upper()} -c -o {VARIANT_OBJ_DIR / f"kernel_{name}.o"} {TestConfig.TESTS_WORKING_DIR / self.test_name}""",
+                TestConfig.TESTS_WORKING_DIR,
             )
 
-    # Destination sync mode configuration
-    dst_sync = test_config.get("dst_sync", None)
-    if dst_sync is not None:
-        header_content.extend(["", "// Destination sync configuration"])
-        header_content.append(
-            f"constexpr auto DST_SYNC = ckernel::DstSync::{dst_sync.value};"
+            run_shell_command(  # %.elf : main_%.o kernel_%.o [coverage.o] tmu-crt0.o
+                f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {TestConfig.SHARED_OBJ_DIR / f"main_{name}.o"} {VARIANT_OBJ_DIR / f"kernel_{name}.o"} {COVERAGE_DEPS} {TestConfig.SHARED_OBJ_DIR / "tmu-crt0.o"} {SFPI_DEPS} -T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / f"{name}.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} -o {VARIANT_ELF_DIR / f"{name}.elf"}""",
+                TestConfig.TESTS_WORKING_DIR,
+            )
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [
+                executor.submit(build_kernel_part, name)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ]
+            for fut in futures:
+                fut.result()
+
+        if self.profiler_build == ProfilerBuild.Yes:
+            # Extract profiler metadata
+            PROFILER_VARIANT_META_DIR = Path(
+                TestConfig.PROFILER_META / self.test_name / self.variant_id
+            )
+
+            PROFILER_VARIANT_META_DIR.mkdir(exist_ok=True, parents=True)
+
+            for component in TestConfig.KERNEL_COMPONENTS:
+                elf_path = VARIANT_ELF_DIR / f"{component}.elf"
+                meta_bin_path = PROFILER_VARIANT_META_DIR / f"{component}.meta.bin"
+                run_shell_command(
+                    f"{TestConfig.OBJCOPY} -O binary -j .profiler_meta {elf_path} {meta_bin_path}",
+                    TestConfig.TESTS_WORKING_DIR,
+                )
+
+    def read_coverage_data_from_device(self, location="0,0"):
+        VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        # Extracting coverage stream from device, for all kernel parts, for all their compilation units
+        coverage_stream = b""
+        for trisc_name in TestConfig.KERNEL_COMPONENTS:
+            temp_elf = parse_elf(VARIANT_DIR / f"elf/{trisc_name}.elf")
+            coverage_start = temp_elf.symbols["__coverage_start"].value
+            if not coverage_start:
+                raise TTException(
+                    f"__coverage_start not found in variant's {trisc_name}.elf"
+                )
+            length = read_word_from_device(location, addr=coverage_start)
+            coverage_stream += read_from_device(
+                location, coverage_start + 4, num_bytes=length - 4
+            )
+
+        with open(
+            VARIANT_DIR
+            / f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream",
+            "wb",
+        ) as fd:
+            fd.write(coverage_stream)
+
+    BRISC_ELF_LOADED: ClassVar[bool] = False
+
+    def run_elf_files(self, location="0,0") -> list:
+        if self.boot_mode == BootMode.DEFAULT:
+            boot_mode = CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
+
+        if (
+            TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            and self.boot_mode != BootMode.TRISC
+        ):
+            raise ValueError("Quasar only supports TRISC boot mode")
+
+        reset_mailboxes(location)
+
+        # Perform soft reset
+        set_tensix_soft_reset(1, location=location)
+
+        VARIANT__ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
         )
 
-    tile_cnt = test_config.get("tile_cnt", 1)
-
-    header_content.append("")
-    # Multi-tile test configuration
-    header_content.append("// Multi-tile test configuration")
-    header_content.append(f"constexpr int TILE_CNT = {tile_cnt};")
-
-    # Unpack + result buffer addresses arrays generations
-    buffer_A_address = test_config.get("buffer_A_address", 0x1A000)
-    buffer_B_address = test_config.get("buffer_B_address", 0x1B000)
-    buffer_C_address = test_config.get("buffer_C_address", None)
-    result_buffer_address = test_config.get("result_buffer_address", 0x1C000)
-
-    # Generate buffer declarations with optional buffer_C
-    buffer_A_line = f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats is not None else DataFormat.Float16_b]});"
-    buffer_B_line = f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats is not None else DataFormat.Float16_b]});"
-    buffer_Res_line = f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats is not None else DataFormat.Float16_b]});"
-
-    header_content.append(buffer_A_line)
-    header_content.append(buffer_B_line)
-
-    # Add optional buffer_C if specified
-    if buffer_C_address is not None:
-        buffer_C_line = f"constexpr Operand buffer_C({hex(buffer_C_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
-        header_content.append(buffer_C_line)
-
-    header_content.append(buffer_Res_line)
-
-    input_A_dimensions = test_config.get("input_A_dimensions", [32, 32])
-    input_B_dimensions = test_config.get("input_B_dimensions", [32, 32])
-
-    num_rows = 32
-    num_cols = 32
-    validate_tile_dimensions(input_A_dimensions[0], num_rows)
-    validate_tile_dimensions(input_A_dimensions[1], num_cols)
-    validate_tile_dimensions(input_B_dimensions[0], num_rows)
-    validate_tile_dimensions(input_B_dimensions[1], num_cols)
-    full_rt_dim = input_A_dimensions[0] // num_rows
-    full_ct_dim = input_B_dimensions[1] // num_cols
-
-    block_rt_dim = test_config.get("block_rt_dim", full_rt_dim)
-    block_ct_dim = test_config.get("block_ct_dim", full_ct_dim)
-
-    header_content.extend(
-        [
-            f"constexpr uint32_t FULL_RT_DIM = {full_rt_dim};",
-            f"constexpr uint32_t FULL_CT_DIM = {full_ct_dim};",
-            f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim};",
-            f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim};",
+        elfs = [
+            str((VARIANT__ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
+
+        # Load TRISC ELF files
+        for i, elf in enumerate(elfs):
+            if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+                start_address = load_elf(
+                    elf_file=elf,
+                    location=location,
+                    risc_name=f"trisc{i}",
+                    neo_id=(
+                        0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
+                    ),
+                    return_start_address=True,
+                )
+                write_words_to_device(
+                    location, TestConfig.TRISC_START_ADDRS[i], [start_address]
+                )
+            else:
+                load_elf(
+                    elf_file=elf,
+                    location=location,
+                    risc_name=f"trisc{i}",
+                    neo_id=(
+                        0 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR else None
+                    ),
+                )
+
+        # Reset the profiler barrier
+        write_words_to_device(
+            location, TestConfig.TRISC_PROFILER_BARRIER_ADDRESS, [0, 0, 0]
+        )
+
+        match boot_mode:
+            case BootMode.BRISC:
+                if not TestConfig.BRISC_ELF_LOADED:
+                    TestConfig.BRISC_ELF_LOADED = True
+                    load_elf(
+                        elf_file=str(
+                            (TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()
+                        ),
+                        location=location,
+                        risc_name="brisc",
+                    )
+                set_tensix_soft_reset(0, [RiscCore.BRISC], location)
+            case BootMode.TRISC:
+                set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
+            case BootMode.EXALENS:
+                exalens_device_setup(TestConfig.CHIP_ARCH, location)
+                set_tensix_soft_reset(
+                    0, [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], location
+                )
+
+        return elfs
+
+    def run(self, location="0,0", delete_artefacts: bool = False):
+        self.generate_variant_hash()
+        if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
+            self.build_elfs()
+
+        if TestConfig.MODE == TestMode.PRODUCE:
+            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+        self.variant_stimuli.write(location)
+        self.write_runtimes_to_L1(location)
+        elfs = self.run_elf_files(location)
+        wait_for_tensix_operations_finished(elfs, location)
+
+        if self.coverage_build == CoverageBuild.Yes:
+            self.read_coverage_data_from_device(location)
+
+        if delete_artefacts:
+            shutil.rmtree(TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id)
+
+        return self.variant_stimuli.collect_results(location)
+
+
+def process_coverage_run_artefacts() -> bool:
+    start = time.time()
+    sources = Path(TestConfig.ARTEFACTS_DIR) / "sources"
+
+    compiled_variants = []
+    for test_names in sources.iterdir():
+        compiled_variants.extend(variant for variant in test_names.iterdir())
+
+    def process_variants(compiled_variants: Path):
+        for variant in compiled_variants:
+            stream_runs = glob.glob(os.path.join(variant, "*.stream"))
+
+            for stream in stream_runs:
+
+                with open(stream, "rb") as fd:
+                    coverage_stream = fd.read()
+                run_shell_command(
+                    f"{TestConfig.GCOV_TOOL} merge-stream",
+                    TestConfig.TESTS_WORKING_DIR,
+                    coverage_stream,
+                    text=False,
+                )
+
+                info_hash = sha256(str(stream).encode()).hexdigest()
+                command = (
+                    f"lcov --gcov-tool {TestConfig.GCOV} --capture "
+                    f"--directory {variant / 'obj/'} "
+                    f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
+                    "--rc lcov_branch_coverage=1"
+                )
+                run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
+
+    worker_num = 25
+
+    print(f"Processing code coverage data")
+    with ThreadPoolExecutor(max_workers=worker_num) as executor:
+        futures = [
+            executor.submit(process_variants, work)
+            for work in np.array_split(compiled_variants, worker_num)
+        ]
+        for fut in futures:
+            fut.result()
+
+    end = time.time()
+
+    if not Path(TestConfig.COVERAGE_INFO_DIR).is_dir():
+        print(f"{TestConfig.COVERAGE_INFO_DIR} does not exist. Early exit.")
+        return
+
+    info_files = glob.glob(os.path.join(TestConfig.COVERAGE_INFO_DIR, "*.info"))
+    print(
+        f"Generated {len(info_files)} coverage .info files from streams in {end - start:.2f}s, unifying"
     )
 
-    # Add matrix multiplication tile dimensions if they exist
-    if "rt_dim" in test_config:
-        header_content.append(f"constexpr uint32_t RT_DIM = {test_config['rt_dim']};")
-    if "ct_dim" in test_config:
-        header_content.append(f"constexpr uint32_t CT_DIM = {test_config['ct_dim']};")
-    if "kt_dim" in test_config:
-        header_content.append(f"constexpr uint32_t KT_DIM = {test_config['kt_dim']};")
+    start = time.time()
 
-    # Pack rows parameters
-    if "num_rows_to_pack" in test_config:
-        header_content.append(
-            f"constexpr uint32_t NUM_ROWS_TO_PACK = {test_config['num_rows_to_pack']};"
-        )
+    for i in range(worker_num):
+        merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
+        shutil.copyfile(str(info_files[0]), merged_path)
+        info_files.pop(0)
 
-    # Add top row flag
-    add_top_row = test_config.get("add_top_row", False)
-    if add_top_row:
-        header_content.append("constexpr bool ADD_TOP_ROW = true;")
+    def combine_files(index, info_files):
+        merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{index}.info"
+        for info_file in info_files:
+            cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+            result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
-    header_content.append("")
+            if result.returncode:
+                print(f"Warning: Failed to merge {info_file}, skipping")
+                print(f"Error: {result.stderr}")
 
-    if perf_run_type := test_config.get("perf_run_type"):
-        header_content.append("")
-        header_content.append(
-            f"constexpr auto PERF_RUN_TYPE = PerfRunType::{perf_run_type.name};"
-        )
+    with ThreadPoolExecutor(max_workers=worker_num) as executor:
+        futures = [
+            executor.submit(combine_files, i, work)
+            for i, work in enumerate(np.array_split(info_files, worker_num))
+        ]
+        for fut in futures:
+            fut.result()
 
-    header_content.append("")
-    return "\n".join(header_content)
+    merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage.info"
+    shutil.copyfile(TestConfig.ARTEFACTS_DIR / f"merged_coverage_0.info", merged_path)
 
+    for i in range(1, worker_num):
+        info_file = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
+        cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+        result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
-def write_build_header(test_config):
-    header_content = generate_build_header(test_config)
-    llk_home = Path(os.environ.get("LLK_HOME"))
-    with open(llk_home / "tests/helpers/include/build.h", "w") as f:
-        f.write(header_content)
+        if result.returncode:
+            print(f"Warning: Failed to merge {info_file}, skipping")
+            print(f"Error: {result.stderr}")
 
-
-def generate_make_command(
-    test_config,
-    boot_mode: BootMode,
-    profiler_build: ProfilerBuild,
-):
-    """Generate make command"""
-
-    boot_mode = resolve_default_boot_mode(boot_mode)
-    # Simplified make command - only basic build parameters
-    make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} bootmode={boot_mode.value} profiler_build={profiler_build.value} all "
-
-    if profiler_build == ProfilerBuild.Yes:
-        make_cmd += "profiler "
-
-    return make_cmd
-
-
-def build_test(
-    test_config,
-    boot_mode: BootMode,
-    profiler_build: ProfilerBuild,
-):
-    """Only builds the files required to run a test"""
-    llk_home = Path(os.environ.get("LLK_HOME"))
-    tests_dir = str((llk_home / "tests").absolute())
-    write_build_header(test_config)
-    make_cmd = generate_make_command(test_config, boot_mode, profiler_build)
-
-    run_shell_command(make_cmd, cwd=tests_dir)
-
-
-def run_test(
-    test_config,
-    boot_mode: BootMode = BootMode.DEFAULT,  # global override boot mode here
-    profiler_build: ProfilerBuild = ProfilerBuild.No,
-):
-    """Run the test with the given configuration"""
-
-    build_test(test_config, boot_mode, profiler_build)
-
-    # run test
-    elfs = run_elf_files(test_config["testname"], boot_mode)
-    wait_for_tensix_operations_finished(elfs)
+    end = time.time()
+    print(f"Combined {len(info_files)} in {end - start:.2f}s")

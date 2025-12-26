@@ -28,21 +28,22 @@ static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     {
         ZONE_SCOPED("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-        _llk_unpack_A_init_<>(UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_src, formats.unpack_dst);
+        _llk_unpack_A_init_<>(
+            params->UNPACK_TRANSPOSE_FACES, params->UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_src, formats.unpack_dst);
         PROFILER_SYNC();
     }
 
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
         {
             _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_src, formats.unpack_dst);
         }
@@ -57,7 +58,7 @@ void run_kernel()
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     {
         ZONE_SCOPED("INIT")
@@ -77,12 +78,12 @@ void run_kernel()
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // _llk_unpack_A     sets both A and B valid
-            return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            return _perf_math_loop_clear_valid<true, true>(params->TILE_CNT * TILE_NUM_FACES);
         }
 
-        for (uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+        for (uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
         {
-            uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+            uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
@@ -103,7 +104,7 @@ void run_kernel()
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     {
         ZONE_SCOPED("INIT")
@@ -120,9 +121,9 @@ void run_kernel()
             return;
         }
 
-        for (uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+        for (uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
         {
-            uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+            uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
             _llk_packer_wait_for_math_done_();
             for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)

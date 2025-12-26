@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+import sys
 from collections import namedtuple
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -40,15 +42,19 @@ def print_faces(operand1):
     print("\n" * 3)
 
 
-def run_shell_command(command: str, cwd: str | None = None):
+def run_shell_command(
+    command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
+):
     result = subprocess.run(
         command,
         cwd=cwd,
         shell=True,
-        text=True,
+        text=text,
+        input=stdin_data,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
+
     if result.returncode != 0:
         raise RuntimeError(f"Build failed: {command}\n{result.stderr}")
     return result
@@ -161,6 +167,7 @@ def passed_test(
     res_tensor,
     output_data_format: DataFormat = DataFormat.Float16_b,
     L1_to_L1_iterations: int = 1,
+    print_erros: bool = True,
 ):
     Tolerance = namedtuple("Tolerance", ["atol", "rtol"])
 
@@ -195,14 +202,50 @@ def passed_test(
     is_valid = is_close | is_nan
     is_within_tolerance = torch.all(is_valid)
 
-    if not is_within_tolerance:
-        # Find all indices where values differ
-        diff_indices = torch.where(~is_valid)[0]
-        print(f"Found {len(diff_indices)} differences:")
-        for idx in diff_indices:
+    if print_erros:
+        try:
+            if not is_within_tolerance:
+                diff_indices = torch.where(~is_valid)[0]
+                num_tiles = (res_tensor.size()[0]) // 1024
+                tile_shape = (32, 32)
+
+                for tile_no in range(num_tiles):
+
+                    tile_str = f"Row\t === Tile {tile_no+1} ===\n"
+                    res_tile = res_tensor[tile_no * 1024 : (tile_no + 1) * 1024].view(
+                        tile_shape
+                    )
+                    # golden_tile = golden_tensor[tile_no*1024:(tile_no+1)*1024].view(tile_shape)
+                    error_tile = ~is_valid[tile_no * 1024 : (tile_no + 1) * 1024].view(
+                        tile_shape
+                    )
+
+                    for row in range(32):
+                        row_str = ""
+                        for col in range(32):
+                            row_str += (
+                                "\033[41m" if error_tile[row, col] else "\033[42m"
+                            )
+                            row_str += f"{res_tile[row, col]:7.2f}\033[0m"
+
+                            if col == 15:
+                                row_str += " "
+
+                        tile_str += f"{(row+1):02d}. {row_str}\n"
+
+                        if row == 15:
+                            tile_str += "\n"
+
+                    print(tile_str, file=sys.stderr)
+
+        except RuntimeError:
             print(
-                f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}"
+                f"Could not reshape to 32x32 matrix, showing linear indices: {res_tensor.size()[0]}"
             )
+            for idx in diff_indices[:10]:
+                print(
+                    f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}"
+                )
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
     target_pcc = 0.99
@@ -212,5 +255,9 @@ def passed_test(
     #     values with less precision (Bfp8_b) and drops below 99% in that case
     if output_data_format == DataFormat.Bfp8_b:
         target_pcc = pow(0.99, L1_to_L1_iterations)
-    print("PCC:", pcc)
     return is_within_tolerance and (pcc > target_pcc)
+
+
+def create_directories(dirs: list[Path]):
+    for dir in dirs:
+        dir.mkdir(exist_ok=True, parents=True)

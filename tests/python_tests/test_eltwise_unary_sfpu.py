@@ -4,8 +4,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import collect_results, write_stimuli_to_l1
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,13 +14,19 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    INPUT_DIMENSIONS,
+    MATH_OP,
+    TILE_COUNT,
+)
 from helpers.utils import passed_test
 
 
 @parametrize(
-    test_name="eltwise_unary_sfpu_test",
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -58,10 +63,45 @@ from helpers.utils import passed_test
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_eltwise_unary_sfpu_float(test_name, formats, approx_mode, mathop, dest_acc):
-    arch = get_chip_architecture()
+def test_eltwise_unary_sfpu_float(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    workers_tensix_coordinates: str,
+):
+    if TestConfig.WITH_COVERAGE and mathop in [
+        MathOperation.Acosh,
+        MathOperation.Log,
+        MathOperation.Reciprocal,
+        MathOperation.Sin,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+        MathOperation.Square,
+        MathOperation.Celu,
+        MathOperation.Silu,
+        MathOperation.Neg,
+        MathOperation.Exp2,
+        MathOperation.Hardsigmoid,
+        MathOperation.Threshold,
+        MathOperation.ReluMax,
+        MathOperation.ReluMin,
+    ]:
+        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
+        pytest.skip(
+            reason="When these SPFU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
+        )
 
-    if dest_acc == DestAccumulation.No and arch == ChipArchitecture.BLACKHOLE:
+    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
+        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
+        pytest.skip(
+            reason="Compilation error when this mathop gets compiled with coverage"
+        )
+
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
         if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
             DataFormat.Float32, DataFormat.Float16
         ):
@@ -79,11 +119,17 @@ def test_eltwise_unary_sfpu_float(test_name, formats, approx_mode, mathop, dest_
             reason="Exp-related operations are not supported for bf8_b format in approximation mode."
         )
 
-    eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        workers_tensix_coordinates,
+    )
 
 
 @parametrize(
-    test_name="eltwise_unary_sfpu_int",
     formats=input_output_formats([DataFormat.Int32]),
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
     mathop=[
@@ -92,20 +138,43 @@ def test_eltwise_unary_sfpu_float(test_name, formats, approx_mode, mathop, dest_
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_unary_sfpu_int(test_name, formats, approx_mode, mathop, dest_acc):
+def test_eltwise_unary_sfpu_int(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    workers_tensix_coordinates: str,
+):
     if formats.input_format == DataFormat.Int32:
         pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
 
-    eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_int.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        workers_tensix_coordinates,
+    )
 
 
-def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
+def eltwise_unary_sfpu(
+    test_name,
+    formats: list[InputOutputFormat],
+    dest_acc,
+    approx_mode,
+    mathop,
+    workers_tensix_coordinates,
+):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
     input_dimensions = [64, 64]
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -118,41 +187,43 @@ def eltwise_unary_sfpu(test_name, formats, dest_acc, approx_mode, mathop):
         input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit()
-        and dest_acc
-        == DestAccumulation.Yes  # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+    configuration = TestConfig(
+        test_name,
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            APPROX_MODE(approx_mode),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[TILE_COUNT(tile_cnt_A)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+        unpack_to_dest=(
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        ),
     )
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "mathop": mathop,
-        "approx_mode": approx_mode,
-        "unpack_to_dest": unpack_to_dest,
-        "tile_cnt": tile_cnt,
-    }
 
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-    )
-
-    run_test(test_config)
-
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
     # res_from_L1 = res_from_L1[:1024]
-    assert len(res_from_L1) == len(golden_tensor)
+    # golden_tensor = golden_tensor[:1024]
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

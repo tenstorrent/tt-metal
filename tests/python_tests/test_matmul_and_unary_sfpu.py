@@ -4,8 +4,8 @@
 
 import pytest
 import torch
+from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     MatmulGolden,
@@ -20,14 +20,27 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    MATH_OP,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
+# SFPI Issue link:
+# When some of these SPFU ops get compiled with coverage, `#pragma GCC unroll X` marked loops become invalid assembly
+@skip_for_coverage
+@skip_for_blackhole
+@skip_for_wormhole
 @parametrize(
-    test_name="matmul_and_unary_sfpu_test",
+    test_name="sources/matmul_and_unary_sfpu_test.cpp",
     formats=input_output_formats(
         [
             DataFormat.Float16,
@@ -60,7 +73,13 @@ from helpers.utils import passed_test
     ],
 )
 def test_matmul_and_unary_sfpu(
-    test_name, formats, mathop, approx_mode, dest_acc, math_fidelity
+    test_name,
+    formats,
+    mathop,
+    approx_mode,
+    dest_acc,
+    math_fidelity,
+    workers_tensix_coordinates,
 ):
     input_dimensions = [32, 32]
 
@@ -83,8 +102,11 @@ def test_matmul_and_unary_sfpu(
         pytest.skip("BFP8 does not support Log and Reciprocal operations")
 
     torch_format = format_dict.get(formats.output_format)
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_matmul_golden = get_golden_generator(MatmulGolden)
@@ -109,39 +131,34 @@ def test_matmul_and_unary_sfpu(
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "math_fidelity": math_fidelity,
-        "approx_mode": approx_mode,
-        "mathop": mathop,
-        "L1_to_L1_iterations": 2,  # This is a fused test does two runs of L1-L1, result tensor from first run (matmul) is used as input for second run (sfpu operation)
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        tilize(src_A, formats.input_format),
-        tilize(src_B, formats.input_format),
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
+    configuration = TestConfig(
+        test_name,
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_FIDELITY(math_fidelity),
+            APPROX_MODE(approx_mode),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[TILE_COUNT(tile_cnt_A)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        L1_to_L1_iterations=2,
     )
 
-    run_test(test_config)
-
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        test_config.get(
-            "L1_to_L1_iterations"  # Needed to calculate accumulated precision loss for fused tests that copy result tensor as input for next runs
-        ),
-    )
+        golden_tensor, res_tensor, formats.output_format, 2
+    ), "Assert against golden failed"

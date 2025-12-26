@@ -3,18 +3,21 @@
 
 import pytest
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    TILE_COUNT,
+)
 from helpers.utils import passed_test
 
 
 @parametrize(
-    test_name="unpack_untilize_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -24,7 +27,8 @@ from helpers.utils import passed_test
         ]
     ),
 )
-def test_unpack_untilize(test_name, formats):
+def test_unpack_untilize(formats, workers_tensix_coordinates):
+    formats = formats[0]
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip(
             "BFP8 format is not supported for unpack_untilize operation for multiple tiles"
@@ -37,40 +41,47 @@ def test_unpack_untilize(test_name, formats):
             32,
         ]  # Multiple tile unpack untilize not supported for Float32, @ldjurovic can take a look to extend this
 
-    src_A, _, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
-
-    src_B = torch.full((1024 * tile_cnt,), 0)
 
     generate_golden = get_golden_generator(UntilizeGolden)
     golden_tensor = generate_golden(
         src_A, formats.output_format, dimensions=input_dimensions
     )
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_cnt,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
+    configuration = TestConfig(
+        "sources/unpack_untilize_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
     )
 
-    run_test(test_config)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

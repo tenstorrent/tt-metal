@@ -3,22 +3,26 @@
 
 import pytest
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, DstSync, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    INPUT_DIMENSIONS,
+    TILE_COUNT,
+)
 from helpers.utils import passed_test
 
 
 @parametrize(
-    test_name="pack_untilize_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -30,9 +34,11 @@ from helpers.utils import passed_test
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[32, 128], [128, 32], [64, 64], [32, 64], [64, 32]],
-    dst_sync=[DstSync.SyncHalf, DstSync.SyncFull],
+    dest_sync=[DestSync.Half, DestSync.Full],
 )
-def test_pack_untilize(test_name, formats, dest_acc, input_dimensions, dst_sync):
+def test_pack_untilize(
+    formats, dest_acc, input_dimensions, dest_sync, workers_tensix_coordinates
+):
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
 
@@ -48,49 +54,56 @@ def test_pack_untilize(test_name, formats, dest_acc, input_dimensions, dst_sync)
     ):
         pytest.skip("Dest must be in 32bit mode when input and output are Int32")
 
-    # dst_sync and dest_sync are different enums representing the same concept.
-    # TODO: unify them once the enum conflict is resolved in test_config.
     if input_dimensions not in generate_unary_input_dimensions(
-        dest_acc, DestSync.Full if dst_sync == DstSync.SyncFull else DestSync.Half
+        dest_acc, DestSync.Full if dest_sync == DestSync.Full else DestSync.Half
     ):
         pytest.skip(
-            "Input dimensions not supported for the given dest_acc and dst_sync configuration"
+            "Input dimensions not supported for the given dest_acc and dest_sync configuration"
         )
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        sfpu=False,
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_cnt,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": formats.input_format.is_32_bit()
+    configuration = TestConfig(
+        "sources/pack_untilize_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            DEST_SYNC(dest_sync),
+        ],
+        runtimes=[TILE_COUNT(tile_cnt_A)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            sfpu=False,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit()
         and dest_acc == DestAccumulation.Yes,
-        "dest_acc": dest_acc,
-        "dst_sync": dst_sync,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
     )
 
-    run_test(test_config)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

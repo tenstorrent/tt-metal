@@ -121,9 +121,13 @@ _UNPACKERS = {
 
 
 def unpack_res_tiles(
-    packed_list, formats, tile_count=1, sfpu=False, num_faces=4, face_r_dim=16
+    packed_list,
+    output_format: DataFormat,
+    tile_count: int = 1,
+    sfpu: bool = False,
+    num_faces: int = 4,
+    face_r_dim: int = 16,
 ):
-    output_format = formats.output_format
     output_dtype = format_dict[output_format]
 
     # Calculate tile size and determine elements per tile needed
@@ -159,7 +163,7 @@ def unpack_res_tiles(
         tile_data = packed_list[start_idx:end_idx]
 
         if unpack_func == unpack_bfp8_b:
-            unpacked_tile = unpack_func(tile_data, num_faces=num_faces)
+            unpacked_tile = unpack_func(tile_data, sfpu=sfpu, num_faces=num_faces)
         else:
             unpacked_tile = unpack_func(tile_data)
 

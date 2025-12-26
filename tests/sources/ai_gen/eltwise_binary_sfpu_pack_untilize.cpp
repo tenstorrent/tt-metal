@@ -25,7 +25,7 @@ const uint32_t tile_size = 16 * 16 * 4; // bytes per face
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     // Configure unpacker for two-input AB operation (single tile each)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -48,7 +48,7 @@ void run_kernel()
 #include "params.h"
 #include "sfpu_operations.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_(formats.math, formats.math);
@@ -78,7 +78,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);

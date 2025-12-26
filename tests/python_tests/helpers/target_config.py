@@ -14,7 +14,11 @@ class TestTargetConfig:
         return cls._instance
 
     def __init__(
-        self, run_simulator=False, simulator_port=5555, device_id=0, log_level="INFO"
+        self,
+        run_simulator=False,
+        simulator_port=5555,
+        device_id=0,
+        log_level="INFO",
     ):
         """
             Initializes the test configuration in regards to using the simulator.

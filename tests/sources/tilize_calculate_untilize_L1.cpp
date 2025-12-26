@@ -27,7 +27,7 @@ constexpr uint32_t buffer_B_tilized = 0x17000;
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
     int run                          = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
@@ -91,7 +91,7 @@ void run_kernel()
 
 using namespace ckernel;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     const bool is_int_fpu_en                = false;
     const std::uint32_t operand_A_dst_index = 1;
@@ -137,7 +137,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     const std::uint32_t operand_A_dst_index = 1;
     const std::uint32_t operand_B_dst_index = 2;

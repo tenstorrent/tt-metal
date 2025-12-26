@@ -15,7 +15,7 @@
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams*)
 {
     tdma_descriptor_t td_val;
     const uint buf_desc_id = 0;
@@ -88,7 +88,7 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams*)
 {
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -111,7 +111,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams*)
 {
     uint32_t const buf_desc_id    = 8;
     const uint num_tiles_per_pack = TILE_CNT;

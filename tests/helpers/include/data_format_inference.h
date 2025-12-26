@@ -129,7 +129,7 @@ constexpr FormatConfig get_data_formats(DataFormat unpack_in, DataFormat unpack_
 template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC>
 constexpr DataFormat infer_unpack_out()
 {
-    if constexpr (INPUT == DataFormat::Float32 && !UNPACKING_TO_DEST)
+    if constexpr (INPUT == DataFormat::Float32 && !unpack_to_dest)
     {
         // When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         // Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
@@ -167,7 +167,7 @@ constexpr DataFormat infer_pack_in()
         // allowing the packer to handle the conversion successfully.
         return DataFormat::Float32;
     }
-    else if constexpr (INPUT == DataFormat::Float32 && !UNPACKING_TO_DEST)
+    else if constexpr (INPUT == DataFormat::Float32 && !unpack_to_dest)
     {
         // When input is Float32 in L1 and we are unpacking the input tensor to source registers (not directly to dest registers)
         if constexpr (FP32_ACC || is_exponentB(OUTPUT))

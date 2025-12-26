@@ -4,7 +4,6 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,13 +14,22 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    NARROW_TILE,
+    NUM_FACES,
+    STOCHASTIC_ROUNDING,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHING_FACE,
+)
 from helpers.utils import passed_test
 
 
 @parametrize(
-    test_name="unpack_tilize_sweep_test",
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -43,7 +51,6 @@ from helpers.utils import passed_test
     input_dimensions=[[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]],
 )
 def test_unpack_tilize_comprehensive(
-    test_name,
     formats,
     stoch_rnd_type,
     transpose,
@@ -51,6 +58,7 @@ def test_unpack_tilize_comprehensive(
     dest_acc,
     num_faces,
     input_dimensions,
+    workers_tensix_coordinates,
 ):
     """Comprehensive parameter sweep test for unpack_tilize operation."""
 
@@ -98,18 +106,12 @@ def test_unpack_tilize_comprehensive(
             "Bfp8_b output with StochasticRounding.Pack/All causes the resulting value to be 0 when input is -508"
         )
 
-    # Determine unpack_to_dest based on format
-    unpack_to_dest = formats.input_format in [DataFormat.Int32, DataFormat.UInt32]
-
-    # Generate test data (tilize is unary, only src_A is used)
-    src_A, _, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
-
-    # Create dummy src_B for write_stimuli_to_l1 (required by interface but not used)
-    src_B = torch.full((1024 * tile_cnt,), 0)
 
     torch_format = format_dict[formats.output_format]
 
@@ -121,54 +123,44 @@ def test_unpack_tilize_comprehensive(
         formats.output_format,
         num_faces,
     )
-
     golden_tensor = golden_tensor.to(torch_format)
 
-    # Build test config
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_cnt,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": unpack_to_dest,
-        "stochastic_rnd": stoch_rnd_type,
-        "unpack_transpose_faces": Transpose.No,
-        "unpack_transpose_within_face": transpose,
-        "dest_acc": dest_acc,
-        "num_faces": num_faces,
-        "narrow_tile": narrow_tile,
-    }
-
-    # Write stimuli to L1
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-        num_faces=num_faces,
+    configuration = TestConfig(
+        "sources/unpack_tilize_sweep_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(stoch_rnd_type),
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHING_FACE(transpose),
+            NARROW_TILE(narrow_tile),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+        ),
+        unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
+        dest_acc=dest_acc,
     )
 
-    # Execute the kernel
-    run_test(test_config)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    # Collect results from L1 memory
-    res_from_L1 = collect_results(
-        formats, tile_count=tile_cnt, address=res_address, num_faces=num_faces
-    )
-
-    # Verify result size matches expected
     assert len(res_from_L1) == len(
         golden_tensor
-    ), f"Result size mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
+    ), "Result tensor and golder tensor are not of the same length"
 
-    # Convert to tensor for comparison
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # Verify results match golden reference
-    test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
-
-    assert test_passed
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

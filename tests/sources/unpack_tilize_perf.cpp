@@ -9,6 +9,7 @@
 #include "build.h"
 #include "ckernel.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "params.h"
 #include "perf.h"
@@ -18,9 +19,6 @@
 uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
-
-// Invariants for the test to run correctly
-static_assert(BLOCK_RT_DIM * BLOCK_CT_DIM == TILE_CNT, "BLOCK_RT_DIM * BLOCK_CT_DIM must be equal to TILE_CNT");
 
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for unpack_tilize");
 
@@ -33,9 +31,10 @@ static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
-    constexpr uint32_t src = 0x1A000;
+    LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == params->TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to params->TILE_CNT");
+    constexpr uint32_t src = 0x65000;
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -51,7 +50,7 @@ void run_kernel()
             return;
         }
 
-        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
             for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
@@ -77,7 +76,7 @@ const bool TILIZE = true;
 
 using namespace ckernel;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     const bool is_int_fpu_en = false;
 
@@ -108,19 +107,19 @@ void run_kernel()
 #ifdef ARCH_BLACKHOLE
             // Due to the blackhole tilize bug mitigation
             // DVALID is set for each tile, instead of each face.
-            constexpr uint32_t NUM_DVALIDS = TILE_CNT;
+            const uint32_t NUM_DVALIDS = params->TILE_CNT;
 #else
-            constexpr uint32_t NUM_DVALIDS = TILE_CNT * TILE_NUM_FACES;
+            const uint32_t NUM_DVALIDS = params->TILE_CNT * TILE_NUM_FACES;
 #endif
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);
+                _perf_math_loop_clear_valid<true, true>(params->LOOP_FACTOR * NUM_DVALIDS);
                 return;
             }
 
-            for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t i = 0; i < TILE_CNT; i++)
+                for (uint32_t i = 0; i < params->TILE_CNT; i++)
                 {
                     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                         i, formats.math, formats.math);
@@ -129,9 +128,9 @@ void run_kernel()
             return;
         }
 
-        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            uint32_t remaining_tiles = TILE_CNT;
+            uint32_t remaining_tiles = params->TILE_CNT;
             while (remaining_tiles > 0)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -158,9 +157,9 @@ void run_kernel()
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
-    constexpr uint32_t dst = 0x1E000;
+    constexpr uint32_t dst = 0x70000;
     const bool UNTILIZE    = false;
 
     {
@@ -187,9 +186,9 @@ void run_kernel()
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t i = 0; i < TILE_CNT; ++i)
+                for (uint32_t i = 0; i < params->TILE_CNT; ++i)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(i, L1_ADDRESS(dst + (i % 8) * 0x1000)); // TODO SS<-LP use PERF_ADDRESS here
                 }
@@ -198,9 +197,9 @@ void run_kernel()
             return;
         }
 
-        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            uint32_t remaining_tiles = TILE_CNT;
+            uint32_t remaining_tiles = params->TILE_CNT;
             while (remaining_tiles > 0)
             {
                 uint32_t num_tiles = std::min(remaining_tiles, MAX_TILES_DEST);

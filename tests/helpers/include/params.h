@@ -31,12 +31,7 @@ constexpr std::underlying_type_t<DataFormat> get_data_format(DataFormat format)
 }
 } // namespace
 
-constexpr bool unpack_to_dest = UNPACKING_TO_DEST;
-
 /*DATA FORMAT CONFIGURATION*/
-
-// Given input and output formats, infer the rest of the format configuration
-constexpr bool is_fp32_dest_acc_en = dest_acc_en_input; // dest_acc doesn't require adjustment; configuration is hard-coded
 
 // Build formats configurations L1-L1 run(s)
 #if FUSED_MULTIPLE_RUNS
