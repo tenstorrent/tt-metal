@@ -64,6 +64,16 @@ enum class ReduceInputMode {
     PRELOADED   // New: tiles already in CB, use indexing
 };
 
+/**
+ * @brief Default no-op functor for post_reduce_op parameter
+ *
+ * When no custom post-reduce operation is needed, this empty functor is used.
+ * It compiles away completely due to inlining.
+ */
+struct NoOp {
+    ALWI void operator()() const {}
+};
+
 // =============================================================================
 // Single Unified Reduce Function
 // =============================================================================
@@ -149,6 +159,18 @@ enum class ReduceInputMode {
  *   // PRELOADED mode for REDUCE_SCALAR: all tiles pre-loaded
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, ReduceInputMode::PRELOADED>(
  *       cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *
+ * @example
+ *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
+ *   // Set uninit=false since lambda calls reduce_uninit() before recip
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
+ *       true, false, ENABLE_FP32_DEST_ACC>(
+ *       cb_exps, cb_scaler, cb_out, 1, Wt, 1, 0, 0,
+ *       []() {
+ *           reduce_uninit();
+ *           recip_tile_init();
+ *           recip_tile(0);
+ *       });
  */
 template <
     PoolType reduce_type = REDUCE_OP,
@@ -156,7 +178,8 @@ template <
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     bool init = true,
     bool uninit = true,
-    bool enforce_fp32_accumulation = false>
+    bool enforce_fp32_accumulation = false,
+    typename PostReduceOp = NoOp>
 ALWI void reduce(
     uint32_t icb,
     uint32_t icb_scaler,
@@ -165,7 +188,8 @@ ALWI void reduce(
     uint32_t Wt,
     uint32_t num_batches,
     uint32_t row_chunk = 0,
-    uint32_t input_stride = 0) {
+    uint32_t input_stride = 0,
+    PostReduceOp post_reduce_op = {}) {
     // Initialization
     if constexpr (init) {
         reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, ocb);
@@ -247,6 +271,11 @@ ALWI void reduce(
                             icb, icb_scaler, wt + index_offset, 0, 0);
                     }
                 }
+
+                // Call post-reduce operation (e.g., recip_tile for softmax)
+                // User's lambda can include reduce_uninit() if needed before custom ops
+                post_reduce_op();
+
                 if constexpr (input_mode == ReduceInputMode::STREAMING) {
                     cb_reserve_back(ocb, onetile);
                 }
