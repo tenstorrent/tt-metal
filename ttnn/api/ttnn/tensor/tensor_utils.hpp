@@ -26,12 +26,6 @@ constexpr auto compute_flat_input_index = [](const auto& indices, const auto& st
     return flat_index;
 };
 
-// Returns true if architecture is GRAYSKULL.
-bool is_arch_gs(const tt::ARCH& arch);
-
-// Returns true if architecture is WORMHOLE_B0.
-bool is_arch_whb0(const tt::ARCH& arch);
-
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
 
