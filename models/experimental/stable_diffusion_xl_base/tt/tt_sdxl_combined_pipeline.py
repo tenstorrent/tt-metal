@@ -438,8 +438,8 @@ class TtSDXLCombinedPipeline:
                 refiner_add_text_embeds,
             ) = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=torch.randn(
-                    self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
-                ),
+                    1, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
+                ).repeat(self.batch_size, 1, 1, 1),
                 torch_add_text_embeds=torch_add_text_embeds,
                 torch_image=base_latents,
                 fixed_seed_for_batch=True,
