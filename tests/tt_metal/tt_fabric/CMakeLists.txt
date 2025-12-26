@@ -4,6 +4,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_solver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_registry.cpp
