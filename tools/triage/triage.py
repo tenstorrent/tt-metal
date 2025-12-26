@@ -395,12 +395,8 @@ def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
 
 
-def parse_triage_arguments() -> None:
-    parse_arguments({}, only_triage_script_args=True)
-
-
 def parse_arguments(
-    scripts: dict[str, TriageScript],
+    scripts: dict[str, TriageScript] = {},
     script_path: str | None = None,
     argv: list[str] | None = None,
     only_triage_script_args=False,
@@ -728,7 +724,8 @@ class TTTriageError(Exception):
 def main():
     triage_start = time()
 
-    parse_triage_arguments()
+    # Parse only tt-triage script arguments first to initialize logging and console
+    parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
