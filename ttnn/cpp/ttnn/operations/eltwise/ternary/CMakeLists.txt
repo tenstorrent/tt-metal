@@ -1,7 +1,7 @@
 add_library(ttnn_op_eltwise_ternary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Ternary ALIAS ttnn_op_eltwise_ternary)
 
-target_precompile_headers(ttnn_op_eltwise_ternary REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_eltwise_ternary REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_ternary)
 set_target_properties(
     ttnn_op_eltwise_ternary
