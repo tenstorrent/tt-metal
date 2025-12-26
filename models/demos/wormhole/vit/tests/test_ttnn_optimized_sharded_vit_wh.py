@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import numpy as np
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from PIL import Image
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -85,8 +86,9 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = load_torch_model(model_location_generator, embedding=True)
 
-    dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
-    image = dataset["test"]["image"][0]
+    # Create a synthetic RGB image instead of loading from deprecated dataset
+    image_array = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+    image = Image.fromarray(image_array)
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
@@ -165,7 +167,8 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    torch_attention_mask = torch.ones(batch_size, sequence_size, dtype=torch.float32)
+    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -289,7 +292,8 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    torch_attention_mask = torch.ones(batch_size, sequence_size, dtype=torch.float32)
+    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -376,8 +380,9 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
-    image = dataset["test"]["image"][0]
+    # Create a synthetic RGB image instead of loading from deprecated dataset
+    image_array = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+    image = Image.fromarray(image_array)
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
