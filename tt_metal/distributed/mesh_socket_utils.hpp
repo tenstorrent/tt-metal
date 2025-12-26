@@ -23,8 +23,6 @@ struct SocketPeerDescriptor {
     SocketConfig config;
     DeviceAddr config_buffer_address = 0;
     DeviceAddr data_buffer_address = 0;
-    std::vector<uint32_t> mesh_ids;
-    std::vector<uint32_t> chip_ids;
     multihost::Tag exchange_tag = multihost::Tag{0};
 };
 
@@ -41,7 +39,8 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint);
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<MeshDevice>& peer_device = nullptr);
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
@@ -49,16 +48,21 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
-    const SocketPeerDescriptor& sender_descriptor,
-    const SocketPeerDescriptor& receiver_descriptor);
+    const std::shared_ptr<MeshDevice>& sender_device = nullptr,
+    const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
+
+std::vector<multihost::Rank> get_ranks_for_mesh_id(
+    tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 }  // namespace tt::tt_metal::distributed
