@@ -108,5 +108,6 @@ jobs:
           ASAN_OPTIONS: "color=always:detect_leaks=1:detect_stack_use_after_return=1"
           LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
           UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+          PYTHONPATH: /work
         run: |
           pytest tests/ttnn/unit_tests/tensor -v --timeout=60 -x -m "not disable_fast_runtime_mode"
