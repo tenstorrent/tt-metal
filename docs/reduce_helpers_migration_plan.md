@@ -164,17 +164,9 @@ To unblock Moreh operations, `reduce_helpers.hpp` needs:
 
 ### Priority 3: Complex/Specialized Operations
 
-These have specialized patterns - evaluate case-by-case:
-
 | Kernel | File | Notes |
 |--------|------|-------|
-| SDPA Decode | `transformer/sdpa_decode/.../compute_common.hpp` | Custom granularity, mixed ROW/COL |
-| SDPA | `transformer/sdpa/.../compute_common.hpp` | Block-based with custom chunk sizes |
-| MOE | `reduction/moe/.../moe.cpp` | Interspersed with topk operations |
-| Pool 2D | `pool/generic/.../compute_pool_2d.cpp` | Custom pool patterns with indices |
-| CCL Reduce | `ccl/reduce_to_root/.../compute_kernel.cpp` | Multi-pass all-reduce |
-| DeepSeek Grouped Gate | `experimental/reduction/deepseek_grouped_gate/...` | Expert gating with topk |
-| Welford GroupNorm | `normalization/groupnorm/.../welford_groupnorm.cpp` | Welford algorithm |
+| SDPA Decode | `transformer/sdpa_decode/.../compute_common.hpp` | Preloaded indexed pattern, valid candidate |
 
 ---
 
@@ -246,3 +238,224 @@ ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp
 ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp
 ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp
 ```
+
+---
+
+## 7. Complete Kernel Audit
+
+**Summary:** 73 files matched grep for "reduce_tile", but many only include headers or mention it in comments. Actual compute kernels using `reduce_tile()`:
+
+| Category | Count | Status |
+|----------|-------|--------|
+| Already Migrated | 10 | ✅ Done |
+| Easy Migration (distributed norms) | 7 | 🟢 Need `skip_dst_management` |
+| Softmax | 3 | 🟡 Need `skip_dst_management` |
+| Moreh | 26 | 🔴 Need `load_accumulator` |
+| Complex/Specialized | 5 | 🟠 Case-by-case |
+| Test Kernels | 10 | 🟤 Keep as reference |
+| Demo-specific | 1 | 📁 Low priority |
+| **Total** | **62** | |
+
+### Category 1: ✅ ALREADY MIGRATED (10 files)
+
+These kernels already use `reduce_helpers.hpp`:
+
+| File | Status |
+|------|--------|
+| `reduction/generic/.../reduce_h.cpp` | ✅ Uses library |
+| `reduction/generic/.../reduce_hw.cpp` | ✅ Uses library |
+| `reduction/generic/.../reduce_w.cpp` | ✅ Uses library |
+| `normalization/layernorm/.../layernorm_sharded.cpp` | ✅ Uses library |
+| `normalization/layernorm/.../layernorm_large_tensor.cpp` | ✅ Uses library |
+| `normalization/layernorm/.../layernorm_sharded_pre_allgather.cpp` | ✅ Uses library |
+| `normalization/layernorm/.../layernorm_sharded_post_allgather.cpp` | ✅ Uses library |
+| `normalization/groupnorm/.../groupnorm.cpp` | ✅ Uses library |
+| `normalization/groupnorm/.../groupnorm_sharded_v2.cpp` | ✅ Uses library |
+| `reduction/tilize_untilize/.../tilize_untilize_compute.cpp` | ✅ Uses library |
+
+---
+
+### Category 2: 🟢 EASY MIGRATION - Standard Row Reduce (Preloaded) (7 files)
+
+**Pattern:** Simple REDUCE_ROW with preloaded tiles, external DST management.
+
+**Library Support Required:**
+- `skip_dst_management` template parameter to allow kernel to manage `tile_regs_acquire/release` externally
+
+| File | Pattern | Assessment |
+|------|---------|------------|
+| `layernorm_distributed/.../layernorm_pre_allgather.cpp` | REDUCE_ROW, preloaded Wt tiles, two sequential reduces (sum(x²), sum(x)) | ✅ **Can migrate** - Use library 2x with `init=false`/`uninit=false` for second call. Need external DST management. |
+| `layernorm_distributed/.../layernorm_pre_allgather_2d.cpp` | Same as above + merge core logic | ✅ **Can migrate** - Same pattern, merge core uses add_tiles (unrelated) |
+| `layernorm_distributed/.../layernorm_post_allgather.cpp` | Two reduces: sum(x²) cols 0,2,4.. then sum(x) cols 1,3,5.. to different DST | ⚠️ **Partial** - Non-contiguous column access, library doesn't support stride patterns |
+| `rmsnorm_distributed/.../rmsnorm_pre_allgather.cpp` | REDUCE_ROW, preloaded, single reduce sum(x²) | ✅ **Can migrate** - Direct match with external DST management |
+| `rmsnorm_distributed/.../rmsnorm_pre_allgather_2d.cpp` | Same as above + merge core | ✅ **Can migrate** - Same pattern |
+| `rmsnorm_distributed/.../rmsnorm_post_allgather.cpp` | Similar to layernorm post | ⚠️ **Partial** - Same non-contiguous issue |
+| `sampling/.../sampling.cpp` | REDUCE_ROW in helper function `reduce_c()` | ✅ **Can migrate** - Standard preloaded pattern |
+
+**Library Extension Needed:**
+```cpp
+template <..., bool skip_dst_management = false>
+void reduce(...);
+```
+When `skip_dst_management=true`, library skips `tile_regs_acquire/commit/wait/release` and lets kernel handle it.
+
+---
+
+### Category 3: 🟡 MEDIUM MIGRATION - Softmax Pattern (3 files)
+
+**Pattern:** Dual reduce (MAX + SUM) with intermediate exp/sub operations.
+
+| File | Pattern | Assessment |
+|------|---------|------------|
+| `softmax/.../softmax.cpp` | Cumulative cb_wait_front, indexed access | ⚠️ **Medium** - Need PRELOADED mode + external DST |
+| `softmax/.../softmax_sharded.cpp` | PRELOADED, single reduce_tile per row then uninit | ⚠️ **Medium** - Need single-batch, single-row variant |
+| `softmax/.../softmax_large_tensor.cpp` | STREAMING single-tile reduce loop | ✅ **Easy** - Standard REDUCE_ROW streaming |
+
+**Library Extension Needed:**
+- Already have `init`/`uninit` params ✅
+- Need `skip_dst_management` for external register control
+
+---
+
+### Category 4: 🔴 BLOCKED - Moreh Operations (26 files)
+
+**Pattern:** Manual accumulator reload between `tile_regs_acquire()` and `reduce_tile()`.
+
+All Moreh kernels blocked due to:
+```cpp
+tile_regs_acquire();
+if (enable_reload):
+  copy_tile(cb_accumulator → DST[0])  // INJECT previous accumulator
+reduce_tile(...)  // Adds to DST[0]
+pack_tile(DST[0] → cb_accumulator)
+tile_regs_release();
+```
+
+**Files:**
+- `moreh_dot.cpp`, `moreh_mean_h.cpp`, `moreh_sum_h.cpp`
+- `moreh_softmax_w.cpp`, `moreh_softmax_h.cpp`, `moreh_softmax_w_large.cpp`, `moreh_softmax_h_large.cpp`
+- `moreh_softmax_backward_*.cpp` (4 files)
+- `moreh_layer_norm_*.cpp` (2 files)
+- `moreh_layer_norm_backward_*.cpp` (3 files)
+- `moreh_bias_backward_*.cpp` (2 files)
+- `moreh_clip_grad_norm_step1_kernel.cpp`
+- `moreh_norm_*.cpp` (4 files)
+- `moreh_sum_nc_*.cpp` (2 reader files - program factory level)
+
+**Library Extension Needed:**
+```cpp
+template <..., bool load_accumulator = false>
+void reduce(..., uint32_t accumulator_cb = 0);
+```
+Or new function:
+```cpp
+void reduce_with_accumulator(uint32_t icb, uint32_t scaler_cb, uint32_t accumulator_cb, uint32_t ocb, ...);
+```
+
+---
+
+### Category 5: 🟠 COMPLEX - Specialized Patterns (5 files)
+
+**Pattern:** Custom reduction logic tightly integrated with other operations.
+
+| File | Pattern | Assessment |
+|------|---------|------------|
+| `transformer/sdpa_decode/.../compute_common.hpp` | Preloaded indexed `r * cols + c` pattern with external DST | ✅ **Can migrate** - Standard PRELOADED pattern |
+| `experimental/ccl/rms_allgather/.../rms_compute.cpp` | Multi-stage reduce with interleaved ops | ⚠️ **Partial** - Could migrate individual reduce calls |
+| `experimental/transformer/fused_distributed_rmsnorm/.../rmsnorm_pre_allgather.cpp` | Multi-stage reduce pattern | ⚠️ **Partial** - Similar to distributed norm |
+| `experimental/transformer/fused_distributed_rmsnorm/.../rmsnorm_post_allgather.cpp` | Same | ⚠️ **Partial** |
+| `experimental/ssm/hc_sum_reduce/.../ssm_1d_sum_reduce.cpp` | Single-tile REDUCE_COL + transpose | ✅ **Can migrate** - Simple pattern |
+
+---
+
+### Category 6: 🔵 TT-TRAIN Kernels
+
+**No compute kernels use reduce_tile.** The grep matches were in dataflow/reader kernels (non-compute), which don't use this library.
+
+---
+
+### Category 7: 🟤 Test Kernels (10 files)
+
+**Pattern:** Unit test kernels, low priority.
+
+| File | Assessment |
+|------|------------|
+| `tests/tt_metal/.../reduce_h.cpp` | Test kernel - keep as reference |
+| `tests/tt_metal/.../reduce_hw.cpp` | Test kernel |
+| `tests/tt_metal/.../reduce_w.cpp` | Test kernel |
+| `tests/tt_metal/.../softmax.cpp` | Test kernel |
+| `tests/tt_metal/.../layernorm.cpp` | Test kernel |
+| `tests/tt_metal/.../rmsnorm.cpp` | Test kernel |
+| `tests/tt_metal/.../max_pool.cpp` | Test kernel |
+| `tests/tt_metal/.../max_pool_multi_core.cpp` | Test kernel |
+| `tests/tt_metal/.../test_reduce.cpp` | Test driver |
+
+**Recommendation:** Leave as-is. Test kernels serve as LLK reference implementations.
+
+---
+
+### Category 8: 📁 Demo/Model Specific (1 file)
+
+| File | Assessment |
+|------|------------|
+| `models/demos/deepseek_v3_b1/.../rmsnorm_compute.cpp` | Model-specific kernel | 🔍 **Investigate** - May follow standard pattern |
+
+---
+
+## 8. Library Extensions Summary
+
+### Required Extensions for Broader Migration
+
+| Extension | Priority | Unblocks |
+|-----------|----------|----------|
+| `skip_dst_management` template param | **HIGH** | 7 files (Cat 2) + 3 files (Cat 3) |
+| `load_accumulator` support | **MEDIUM** | 26 files (Cat 4 - Moreh) |
+| Non-contiguous column access (stride) | **LOW** | 2 files (post_allgather) |
+
+### Proposed API Extension
+
+```cpp
+template <
+    PoolType reduce_type = REDUCE_OP,
+    ReduceDim reduce_dim = REDUCE_DIM,
+    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    bool init = true,
+    bool uninit = true,
+    bool enforce_fp32_accumulation = false,
+    bool skip_dst_management = false,      // NEW: Let kernel manage tile_regs_*
+    bool load_accumulator = false>         // NEW: Load previous accumulator into DST
+ALWI void reduce(
+    uint32_t icb,
+    uint32_t icb_scaler,
+    uint32_t ocb,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t num_batches,
+    uint32_t row_chunk = 0,
+    uint32_t input_stride = 0,
+    uint32_t accumulator_cb = 0);          // NEW: CB for accumulator when load_accumulator=true
+```
+
+---
+
+## 9. Migration Roadmap
+
+### Phase 4: Easy Migrations (No Library Changes)
+- `softmax_large_tensor.cpp` - Standard streaming pattern
+- `ssm_1d_sum_reduce.cpp` - Simple single-tile reduce
+
+### Phase 5: With `skip_dst_management` Extension
+- `layernorm_pre_allgather.cpp`
+- `layernorm_pre_allgather_2d.cpp`
+- `rmsnorm_pre_allgather.cpp`
+- `rmsnorm_pre_allgather_2d.cpp`
+- `sampling.cpp`
+- `softmax.cpp`
+- `softmax_sharded.cpp`
+- `sdpa_decode/compute_common.hpp` - Standard PRELOADED indexed pattern
+
+### Phase 6: With `load_accumulator` Extension (Moreh)
+- All 26 Moreh kernels become candidates
+
+### Not Planned for Migration
+- Test kernels (reference implementations)

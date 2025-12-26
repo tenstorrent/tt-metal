@@ -269,33 +269,27 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
-        // SUM reduce with reciprocal operation
-        // NOTE: This reduce cannot use reduce_helpers library because it requires calling
-        // recip_tile() after reduce_uninit() but before tile_regs_commit/pack.
-        // The library manages tile_regs internally and doesn't support injecting custom
-        // operations between reduce and pack. This would require library enhancements.
-        tile_regs_acquire();
-        cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
-
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
-                /*iCB=*/cb_exps,
-                /*icb_scaler=*/cb_bcast_scaler,
-                /*itile=*/wt,
-                /*itile_scaler=*/bcast_scaler0,
-                /*idst0=*/dst0);
-        }
-        reduce_uninit();
-        recip_tile_init();
-        recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_recipsumexps);
-        tile_regs_release();
-        cb_push_back(cb_recipsumexps, 1);
+        // SUM reduce with reciprocal operation using reduce_helpers library with post-reduce lambda
+        cb_wait_front(cb_exps, Wt);
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputMode::PRELOADED,
+            true,  // init
+            true,  // uninit (called at end of helper)
+            ENABLE_FP32_DEST_ACC>(
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            1,   // Ht
+            Wt,  // Wt
+            1,   // num_batches
+            0,   // row_chunk (unused for REDUCE_ROW)
+            0,   // input_stride (use default)
+            []() {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
