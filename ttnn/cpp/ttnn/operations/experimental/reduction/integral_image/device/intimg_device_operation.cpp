@@ -48,8 +48,18 @@ IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-IntImgDeviceOperation::invocation_result_t IntImgDeviceOperation::invoke(const Tensor& input_tensor) {
-    return {operation_attributes_t{}, tensor_args_t{input_tensor}};
+}  // namespace ttnn::operations::experimental::reduction
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_value_t intimg(
+    const Tensor& input_tensor) {
+    using OperationType = ttnn::operations::experimental::reduction::IntImgDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::prim

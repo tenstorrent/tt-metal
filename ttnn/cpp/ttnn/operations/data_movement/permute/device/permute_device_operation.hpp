@@ -171,22 +171,14 @@ struct PermuteDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    // API call to map user arguments to operation attributes and tensor args.
-    // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const SmallVector<uint32_t>& dims,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor,
-        const std::optional<float>& pad_value = std::nullopt);
 };
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto permute =
-    ttnn::register_operation<"ttnn::prim::permute", ttnn::operations::data_movement::PermuteDeviceOperation>();
+ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
+    const Tensor& input_tensor,
+    const SmallVector<uint32_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<float>& pad_value = std::nullopt);
 }  // namespace ttnn::prim

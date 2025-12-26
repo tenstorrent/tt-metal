@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
 
@@ -49,22 +50,24 @@ tt::stl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operati
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
-std::tuple<UniformDeviceOperation::operation_attributes_t, UniformDeviceOperation::tensor_args_t>
-UniformDeviceOperation::invoke(
+}  // namespace ttnn::operations::uniform
+
+namespace ttnn::prim {
+ttnn::Tensor uniform(
     const Tensor& input,
     const float from,
     const float to,
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             from,
             to,
             seed,
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input}};
+        OperationType::tensor_args_t{input});
 }
-
-}  // namespace ttnn::operations::uniform
+}  // namespace ttnn::prim

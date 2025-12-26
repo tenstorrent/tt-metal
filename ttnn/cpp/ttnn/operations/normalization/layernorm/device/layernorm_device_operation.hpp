@@ -39,26 +39,24 @@ struct LayerNormDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        float epsilon,
-        const std::optional<const Tensor>& weight,
-        const std::optional<const Tensor>& bias,
-        const std::optional<const Tensor>& residual_input_tensor,
-        const MemoryConfig& output_mem_config,
-        const LayerNormProgramConfig& program_config,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        const std::optional<DataType>& dtype = std::nullopt,
-        LayerNormType norm_type = LayerNormType::LAYERNORM,
-        DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
-        const std::optional<const Tensor>& stats = std::nullopt);
 };
 
 }  // namespace ttnn::operations::normalization::layer_norm
 
 namespace ttnn::prim {
-constexpr auto layer_norm = ttnn::register_operation<
-    "ttnn::prim::layer_norm",
-    ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation>();
+ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_return_value_t layer_norm(
+    const Tensor& input_tensor,
+    float epsilon,
+    const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& bias,
+    const std::optional<const Tensor>& residual_input_tensor,
+    const MemoryConfig& output_mem_config,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<DataType>& dtype = std::nullopt,
+    ttnn::operations::normalization::LayerNormType norm_type =
+        ttnn::operations::normalization::LayerNormType::LAYERNORM,
+    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage =
+        ttnn::operations::normalization::DistributedLayerNormStage::NOT_DISTRIBUTED,
+    const std::optional<const Tensor>& stats = std::nullopt);
 }  // namespace ttnn::prim

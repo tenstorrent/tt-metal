@@ -3,22 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "copy_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 
 namespace ttnn::operations::data_movement::copy {
-
-using namespace tt::tt_metal;
-
-std::tuple<CopyDeviceOperation::operation_attributes_t, CopyDeviceOperation::tensor_args_t> CopyDeviceOperation::invoke(
-    const Tensor& input,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const tt::tt_metal::DataType& output_dtype,
-    const std::optional<Tensor>& preallocated_output,
-    bool backwards) {
-    return {
-        operation_attributes_t{output_mem_config, output_dtype, backwards}, tensor_args_t{input, preallocated_output}};
-}
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -94,9 +83,9 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
     const Tensor& input_tensor = tensor_args.input;
     return TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            PageConfig(input_tensor.layout()),
+            tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
@@ -126,3 +115,17 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
 }
 
 }  // namespace ttnn::operations::data_movement::copy
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t copy(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    const std::optional<Tensor>& preallocated_output,
+    bool backwards) {
+    using OperationType = ttnn::operations::data_movement::copy::CopyDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
+        OperationType::tensor_args_t{input, preallocated_output});
+}
+}  // namespace ttnn::prim

@@ -60,18 +60,16 @@ struct MorehClipGradNormStep2Operation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& tmp_pow_sum,
-        float norm_type,
-        const std::optional<Tensor>& total_norm,
-        const std::optional<MemoryConfig>& memory_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
 
 namespace ttnn::prim {
-constexpr auto moreh_clip_grad_norm_step2 = ttnn::register_operation<
-    "ttnn::prim::moreh_clip_grad_norm_step2",
-    ttnn::operations::moreh::moreh_clip_grad_norm_step2::MorehClipGradNormStep2Operation>();
+ttnn::operations::moreh::moreh_clip_grad_norm_step2::MorehClipGradNormStep2Operation::tensor_return_value_t
+moreh_clip_grad_norm_step2(
+    const Tensor& tmp_pow_sum,
+    float norm_type,
+    const std::optional<Tensor>& total_norm,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim

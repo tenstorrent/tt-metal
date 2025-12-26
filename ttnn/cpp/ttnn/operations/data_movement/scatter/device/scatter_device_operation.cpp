@@ -4,6 +4,7 @@
 
 #include "scatter_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <enchantum/enchantum.hpp>
@@ -82,17 +83,20 @@ ScatterDeviceOperation::create_op_performance_model(
     return result;
 }
 
-ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::scatter
+
+namespace ttnn::prim {
+ttnn::Tensor scatter(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const ScatterReductionType& reduction,
+    const operations::data_movement::scatter::ScatterReductionType& reduction,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return {
-        operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
-        tensor_args_t{input_tensor, index_tensor, source_tensor}};
+    using OperationType = ttnn::operations::data_movement::scatter::ScatterDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
+        OperationType::tensor_args_t{input_tensor, index_tensor, source_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim

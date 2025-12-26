@@ -4,6 +4,7 @@
 
 #include "batch_norm_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "batch_norm_utils.hpp"
@@ -167,22 +168,27 @@ tt::stl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() cons
     return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
 }
 
-std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch_norm(
     const Tensor& input,
     const Tensor& batch_mean,
     const Tensor& batch_var,
-    const float eps,
+    float eps,
     std::optional<Tensor> weight,
     std::optional<Tensor> bias,
     std::optional<Tensor> output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    operation_attributes_t operation_attributes{
+    using OperationType = ttnn::operations::normalization::BatchNormOperation;
+    OperationType::operation_attributes_t operation_attributes{
         eps,
         memory_config.value_or(input.memory_config()),
-        batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
+        ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
         input.dtype()};
-    tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
-    return {operation_attributes, tensor_args};
+    OperationType::tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

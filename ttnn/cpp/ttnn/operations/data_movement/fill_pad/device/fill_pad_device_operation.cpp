@@ -42,14 +42,16 @@ tensor_return_value_t FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-std::tuple<FillPadDeviceOperation::operation_attributes_t, FillPadDeviceOperation::tensor_args_t>
-FillPadDeviceOperation::invoke(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
-    return {
-        operation_attributes_t{
+}  // namespace ttnn::operations::data_movement::fill_pad
+
+namespace ttnn::prim {
+ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
+    using OperationType = ttnn::operations::data_movement::fill_pad::FillPadDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .fill_value = fill_value,
             .output_mem_config = output_memory_config,
         },
-        tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
-
-}  // namespace ttnn::operations::data_movement::fill_pad
+}  // namespace ttnn::prim

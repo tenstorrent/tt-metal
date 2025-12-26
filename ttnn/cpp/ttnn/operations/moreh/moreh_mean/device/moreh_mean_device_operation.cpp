@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_mean_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -102,21 +103,25 @@ MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tens
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
+}  // namespace ttnn::operations::moreh::moreh_mean
 
-std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tensor_args_t> MorehMeanOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_mean::MorehMeanOperation::tensor_return_value_t moreh_mean(
     const Tensor& input,
-    const int64_t dim,
-    const bool keepdim,
+    int64_t dim,
+    bool keepdim,
     const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {dim,
-         keepdim,
-         divisor,
-         memory_config.value_or(input.memory_config()),
-         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        {input, output}};
+    using OperationType = ttnn::operations::moreh::moreh_mean::MorehMeanOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        keepdim,
+        divisor,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_mean
+}  // namespace ttnn::prim

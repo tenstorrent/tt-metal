@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "tilize_multi_core_interleaved_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
@@ -130,8 +131,10 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<TilizeDeviceOperation::operation_attributes_t, TilizeDeviceOperation::tensor_args_t>
-TilizeDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::Tensor tilize(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
@@ -140,8 +143,9 @@ TilizeDeviceOperation::invoke(
     bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        TilizeDeviceOperation::operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::TilizeDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
@@ -150,7 +154,6 @@ TilizeDeviceOperation::invoke(
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,
         },
-        TilizeDeviceOperation::tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

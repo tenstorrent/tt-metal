@@ -30,18 +30,15 @@ struct ProfilerNoopOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const std::string& identifier,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::profiler_no_op::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_profiler_no_op = ttnn::register_operation<
-    "ttnn::prim::ttml_profiler_no_op",
-    ttml::metal::ops::profiler_no_op::device::ProfilerNoopOperation>();
+ttml::metal::ops::profiler_no_op::device::ProfilerNoopOperation::tensor_return_value_t ttml_profiler_no_op(
+    const ttnn::Tensor& input_tensor,
+    const std::string& identifier,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

@@ -18,7 +18,7 @@ struct CreateQKVHeadsSeparateTensorsOperation {
         std::optional<uint32_t> num_kv_heads,
         bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
+        const std::optional<std::array<Tensor, 3>>& optional_output_tensors = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer

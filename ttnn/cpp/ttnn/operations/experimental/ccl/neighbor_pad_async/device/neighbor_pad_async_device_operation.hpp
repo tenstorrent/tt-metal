@@ -29,27 +29,26 @@ struct NeighborPadAsyncDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        int32_t dim,
-        uint32_t padding_left,
-        uint32_t padding_right,
-        const std::string& padding_mode,
-        uint32_t cluster_axis,
-        const GlobalSemaphore& final_semaphore,
-        const GlobalSemaphore& barrier_semaphore,
-        std::optional<size_t> num_preferred_links,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<ttnn::ccl::Topology> topology,
-        std::optional<uint32_t> secondary_cluster_axis,
-        const std::optional<std::vector<uint32_t>>& secondary_mesh_shape);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::neighbor_pad
 
 namespace ttnn::prim {
-constexpr auto neighbor_pad_async = ttnn::register_operation<
-    "ttnn::prim::neighbor_pad_async",
-    ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation>();
+
+ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation::tensor_return_value_t
+neighbor_pad_async(
+    const Tensor& input_tensor,
+    int32_t dim,
+    uint32_t padding_left,
+    uint32_t padding_right,
+    const std::string& padding_mode,
+    uint32_t cluster_axis,
+    const GlobalSemaphore& final_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    std::optional<size_t> num_preferred_links,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::ccl::Topology> topology,
+    std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape);
+
 }  // namespace ttnn::prim

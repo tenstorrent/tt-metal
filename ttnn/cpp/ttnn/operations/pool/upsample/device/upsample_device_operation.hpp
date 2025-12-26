@@ -35,19 +35,16 @@ struct UpsampleOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        int scale_factor_h,
-        int scale_factor_w,
-        const std::string& mode,
-        const MemoryConfig& output_mem_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::pool::upsample
 
 namespace ttnn::prim {
-constexpr auto upsample =
-    ttnn::register_operation<"ttnn::prim::upsample", ttnn::operations::pool::upsample::UpsampleOperation>();
+ttnn::Tensor upsample(
+    const ttnn::Tensor& input_tensor,
+    int scale_factor_h,
+    int scale_factor_w,
+    const std::string& mode,
+    const MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
 }  // namespace ttnn::prim

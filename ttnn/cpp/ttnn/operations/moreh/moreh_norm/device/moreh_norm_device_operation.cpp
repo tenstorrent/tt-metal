@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 
@@ -172,7 +173,11 @@ MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input.device());
 }
 
-std::tuple<MorehNormOperation::operation_attributes_t, MorehNormOperation::tensor_args_t> MorehNormOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_norm
+
+namespace ttnn::prim {
+
+ttnn::operations::moreh::moreh_norm::MorehNormOperation::tensor_return_value_t moreh_norm(
     const Tensor& input,
     float p,
     int64_t dim,
@@ -180,18 +185,18 @@ std::tuple<MorehNormOperation::operation_attributes_t, MorehNormOperation::tenso
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            p,
-            dim,
-            keepdim,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        tensor_args_t{
-            input,
-            output,
-        },
+    using OperationType = ttnn::operations::moreh::moreh_norm::MorehNormOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        p,
+        dim,
+        keepdim,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
     };
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm
+
+}  // namespace ttnn::prim

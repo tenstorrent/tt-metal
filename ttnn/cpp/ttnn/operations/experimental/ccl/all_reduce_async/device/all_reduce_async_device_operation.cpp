@@ -125,8 +125,12 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
         output_dtype);
 }
 
-std::tuple<AllReduceAsyncDeviceOperation::operation_attributes_t, AllReduceAsyncDeviceOperation::tensor_args_t>
-AllReduceAsyncDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation::tensor_return_value_t
+all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     uint32_t cluster_axis,
@@ -139,25 +143,27 @@ AllReduceAsyncDeviceOperation::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    using OperationType = ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    return {
-        operation_attributes_t(
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            num_devices,
-            dtype.value_or(input_tensor.dtype()),
-            memory_config.value_or(input_tensor.memory_config()),
-            topology,
-            multi_device_global_semaphore,
-            subdevice_id,
-            use_noc1_only,
-            use_optimal_ccl_for_llama,
-            cluster_axis,
-            &mesh_device),
-        tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        num_devices,
+        dtype.value_or(input_tensor.dtype()),
+        memory_config.value_or(input_tensor.memory_config()),
+        topology,
+        multi_device_global_semaphore,
+        subdevice_id,
+        use_noc1_only,
+        use_optimal_ccl_for_llama,
+        cluster_axis,
+        &mesh_device);
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+}  // namespace ttnn::prim

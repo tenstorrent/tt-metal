@@ -35,20 +35,17 @@ struct BroadcastDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const MeshCoordinate& sender_coord,
-        uint32_t num_links,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        tt::tt_fabric::Topology topology,
-        std::optional<uint32_t> cluster_axis,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
 
 }  // namespace ttnn::operations::ccl::broadcast
 
 namespace ttnn::prim {
-constexpr auto broadcast =
-    ttnn::register_operation<"ttnn::prim::broadcast", ttnn::operations::ccl::broadcast::BroadcastDeviceOperation>();
+ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_t broadcast(
+    const ttnn::Tensor& input_tensor,
+    const MeshCoordinate& sender_coord,
+    uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 }  // namespace ttnn::prim

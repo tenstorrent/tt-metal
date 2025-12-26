@@ -9,6 +9,7 @@
 #include "rotary_embedding_llama_device_operation_types.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
 
@@ -27,21 +28,17 @@ struct RotaryEmbeddingLlamaDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const tt::tt_metal::Tensor& input_tensor,
-        const tt::tt_metal::Tensor& cos_cache,
-        const tt::tt_metal::Tensor& sin_cache,
-        const tt::tt_metal::Tensor& trans_mat,
-        bool is_decode_mode,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
 
 namespace ttnn::prim {
-constexpr auto rotary_embedding_llama = ttnn::register_operation<
-    "ttnn::prim::rotary_embedding_llama",
-    ttnn::operations::experimental::transformer::rotary_embedding_llama::RotaryEmbeddingLlamaDeviceOperation>();
+tt::tt_metal::Tensor rotary_embedding_llama(
+    const tt::tt_metal::Tensor& input_tensor,
+    const tt::tt_metal::Tensor& cos_cache,
+    const tt::tt_metal::Tensor& sin_cache,
+    const tt::tt_metal::Tensor& trans_mat,
+    bool is_decode_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 }  // namespace ttnn::prim

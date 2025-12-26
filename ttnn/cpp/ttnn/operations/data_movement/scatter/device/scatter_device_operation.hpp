@@ -39,21 +39,17 @@ struct ScatterDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
-
-    static invocation_result_t invoke(
-        const Tensor& input_tensor,
-        const int32_t& dim,
-        const Tensor& index_tensor,
-        const Tensor& source_tensor,
-        const MemoryConfig& output_memory_config,
-        const ScatterReductionType& opt_reduction,
-        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter
 
 namespace ttnn::prim {
-constexpr auto scatter =
-    ttnn::register_operation<"ttnn::prim::scatter", ttnn::operations::data_movement::scatter::ScatterDeviceOperation>();
-}
+ttnn::Tensor scatter(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const MemoryConfig& output_memory_config,
+    const ttnn::operations::data_movement::scatter::ScatterReductionType& opt_reduction,
+    const std::optional<CoreRangeSet>& sub_core_grid);
+}  // namespace ttnn::prim

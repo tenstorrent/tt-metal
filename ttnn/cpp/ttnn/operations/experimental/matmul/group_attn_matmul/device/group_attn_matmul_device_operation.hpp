@@ -41,25 +41,24 @@ struct GroupAttnMatmulDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<const DataType> output_dtype,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-        std::optional<const uint32_t> num_tokens,
-        std::optional<const bool> transpose_hw,
-        uint32_t out_subblock_w,
-        bool row_major,
-        std::optional<Tensor> preallocated_output);
 };
 
 }  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
 
 namespace ttnn::prim {
-constexpr auto group_attn_matmul = ttnn::register_operation<
-    "ttnn::prim::group_attn_matmul",
-    ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation>();
+
+ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation::tensor_return_value_t
+group_attn_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const CoreCoord& compute_with_storage_grid_size,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> output_dtype,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<const uint32_t> num_tokens,
+    std::optional<const bool> transpose_hw,
+    uint32_t out_subblock_w,
+    bool row_major,
+    std::optional<Tensor> preallocated_output);
+
 }  // namespace ttnn::prim

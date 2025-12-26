@@ -19,10 +19,10 @@ void bind_test_hang_device_operation(py::module& module) {
             Args:
                 * :attr:`input_tensor`: Input Tensor.
         )doc";
-    using OperationType = decltype(ttnn::prim::hang_device_operation);
+    using OperationType = decltype(ttnn::hang_device_operation);
     ttnn::bind_registered_operation(
         module,
-        ttnn::prim::hang_device_operation,
+        ttnn::hang_device_operation,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {

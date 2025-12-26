@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "full_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -62,23 +63,27 @@ FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
     return create_device_tensor(output_spec, operation_attributes.mesh_device);
 }
 
-std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> FullOperation::invoke(
+}  // namespace ttnn::operations::full
+
+namespace ttnn::prim {
+ttnn::operations::full::FullOperation::tensor_return_value_t full(
     ttnn::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
     const MemoryConfig& memory_config) {
-    return {
-        operation_attributes_t{
-            std::move(shape),
-            fill_value,
-            mesh_device,
-            dtype,
-            layout,
-            memory_config,
-        },
-        tensor_args_t{},
+    using OperationType = ttnn::operations::full::FullOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        std::move(shape),
+        fill_value,
+        mesh_device,
+        dtype,
+        layout,
+        memory_config,
     };
+    auto tensor_args = OperationType::tensor_args_t{};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::full
+}  // namespace ttnn::prim

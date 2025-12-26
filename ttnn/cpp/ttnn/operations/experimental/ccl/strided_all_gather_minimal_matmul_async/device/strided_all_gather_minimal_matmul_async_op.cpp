@@ -81,9 +81,13 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         tensor_args.input_tensor.memory_config());
 }
 
-std::
-    tuple<StridedAllGatherMinimalMatmulAsync::operation_attributes_t, StridedAllGatherMinimalMatmulAsync::tensor_args_t>
-    StridedAllGatherMinimalMatmulAsync::invoke(
+}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::StridedAllGatherMinimalMatmulAsync::
+    tensor_return_value_t
+    strided_all_gather_minimal_matmul_async(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -96,12 +100,15 @@ std::
         std::optional<uint32_t> cluster_axis,
         const std::optional<const Tensor>& bias,
         const std::optional<MemoryConfig>& memory_config_mm,
-        std::optional<operations::unary::UnaryWithParam> fused_activation,
-        const std::optional<const minimal_matmul::MinimalMatmulConfig> config,
+        std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+        std::optional<const ttnn::operations::experimental::minimal_matmul::MinimalMatmulConfig> config,
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<bool> read_local_slice_from_input) {
+    using OperationType = ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::
+        StridedAllGatherMinimalMatmulAsync;
+
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
@@ -112,41 +119,45 @@ std::
 
     /* AllGather setup */
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    strided_all_gather_async::operation_attributes_t strided_all_gather_async_struct =
-        strided_all_gather_async::operation_attributes_t(
-            devices,
-            dim,
-            num_links,
-            num_devices,
-            memory_config_ag.value_or(input_tensor.memory_config()),
-            topology,
-            multi_device_global_semaphore,
-            cluster_axis,
-            /*tiles_per_chunk=*/std::nullopt,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            config->compute_with_storage_grid_size.y,
-            config->M_block_size,
-            config->K_block_size);
+    ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t
+        strided_all_gather_async_struct =
+            ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t(
+                devices,
+                dim,
+                num_links,
+                num_devices,
+                memory_config_ag.value_or(input_tensor.memory_config()),
+                topology,
+                multi_device_global_semaphore,
+                cluster_axis,
+                /*tiles_per_chunk=*/std::nullopt,
+                num_workers_per_link,
+                num_buffers_per_channel,
+                config->compute_with_storage_grid_size.y,
+                config->M_block_size,
+                config->K_block_size);
 
     /* Matmul setup */
-    minimal_matmul::MinimalMatmulOp matmul_struct = minimal_matmul::MinimalMatmulOp{
-        .config = config,
-        .fused_activation = std::move(fused_activation),
-        .output_mem_config = memory_config_mm,
-        .compute_kernel_config = compute_kernel_config.value()};
-    strided_all_gather_async::StridedAllGatherAsync ag_op{};  // just need to call the static function on this
+    ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp matmul_struct =
+        ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp{
+            .config = config,
+            .fused_activation = std::move(fused_activation),
+            .output_mem_config = memory_config_mm,
+            .compute_kernel_config = compute_kernel_config.value()};
+    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);
 
-    return {
-        operation_attributes_t{
-            strided_all_gather_async_struct,
-            matmul_struct,
-            strided_all_gather_core_grid_offset,
-            read_local_from_input,
-            devices,
-            ag_op},
-        tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        strided_all_gather_async_struct,
+        matmul_struct,
+        strided_all_gather_core_grid_offset,
+        read_local_from_input,
+        devices,
+        ag_op};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
+
+}  // namespace ttnn::prim

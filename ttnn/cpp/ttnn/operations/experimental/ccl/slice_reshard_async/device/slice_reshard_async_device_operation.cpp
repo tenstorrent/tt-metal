@@ -79,18 +79,23 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<SliceReshardAsyncDeviceOperation::operation_attributes_t, SliceReshardAsyncDeviceOperation::tensor_args_t>
-SliceReshardAsyncDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation::tensor_return_value_t
+slice_reshard_async(
     const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t output_dim_offset,
-    const uint32_t output_dim_shape,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t output_dim_offset,
+    uint32_t output_dim_shape,
+    uint32_t cluster_axis,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
-    const size_t num_links,
+    size_t num_links,
     const MemoryConfig& memory_config,
-    const ttnn::ccl::Topology topology) {
+    ttnn::ccl::Topology topology) {
+    using OperationType = ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
     auto* mesh_device = input_tensor.device();
@@ -99,20 +104,21 @@ SliceReshardAsyncDeviceOperation::invoke(
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    return {
-        operation_attributes_t(
-            devices,
-            dim,
-            output_dim_offset,
-            output_dim_shape,
-            cluster_axis,
-            final_semaphore,
-            barrier_semaphore,
-            num_links,
-            memory_config,
-            topology,
-            num_devices),
-        tensor_args_t{.input = input_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        devices,
+        dim,
+        output_dim_offset,
+        output_dim_shape,
+        cluster_axis,
+        final_semaphore,
+        barrier_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        num_devices);
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
+}  // namespace ttnn::prim

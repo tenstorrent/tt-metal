@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
-
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -56,15 +56,20 @@ MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Ope
         compute_output_specs(operation_attributes, tensor_args), tensor_args.tmp_pow_sum.device());
 };
 
-std::tuple<MorehClipGradNormStep2Operation::operation_attributes_t, MorehClipGradNormStep2Operation::tensor_args_t>
-MorehClipGradNormStep2Operation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_clip_grad_norm_step2::MorehClipGradNormStep2Operation::tensor_return_value_t
+moreh_clip_grad_norm_step2(
     const Tensor& tmp_pow_sum,
-    const float norm_type,
+    float norm_type,
     const std::optional<Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
-    const DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        operation_attributes_t{norm_type, memory_config.value_or(tmp_pow_sum.memory_config()), compute_kernel_config},
-        tensor_args_t{tmp_pow_sum, total_norm}};
-};
-}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    using OperationType = ttnn::operations::moreh::moreh_clip_grad_norm_step2::MorehClipGradNormStep2Operation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        norm_type, memory_config.value_or(tmp_pow_sum.memory_config()), compute_kernel_config};
+    auto tensor_args = OperationType::tensor_args_t{tmp_pow_sum, total_norm};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

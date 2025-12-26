@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
@@ -85,7 +86,9 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
-namespace slice {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::operations::data_movement::slice {
 
 void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -220,7 +223,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-SliceDeviceOperation::tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+tensor_return_value_t SliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -268,8 +271,10 @@ SliceDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<SliceDeviceOperation::operation_attributes_t, SliceDeviceOperation::tensor_args_t>
-SliceDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::slice
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
     const Tensor& input,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
@@ -282,11 +287,10 @@ SliceDeviceOperation::invoke(
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
-        tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output}};
+        OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
 }
-
-}  // namespace slice
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

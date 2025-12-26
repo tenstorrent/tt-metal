@@ -56,20 +56,17 @@ struct BernoulliDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        uint32_t seed,
-        const std::optional<Tensor>& output,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli
 
 namespace ttnn::prim {
-constexpr auto bernoulli =
-    ttnn::register_operation<"ttnn::prim::bernoulli", ttnn::operations::bernoulli::BernoulliDeviceOperation>();
+ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t bernoulli(
+    const Tensor& input,
+    uint32_t seed,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim
