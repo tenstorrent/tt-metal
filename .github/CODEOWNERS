@@ -342,6 +342,7 @@ models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorr
 models/demos/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/speecht5_tts @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/SSD512 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
