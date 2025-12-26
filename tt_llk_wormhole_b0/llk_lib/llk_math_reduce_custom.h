@@ -207,6 +207,11 @@ inline void _llk_math_reduce_block_max_row_init_()
     _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>();
 }
 
+inline void _llk_math_reduce_block_max_row_uninit_()
+{
+    // No state to restore - all states are transient or default
+}
+
 /**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
