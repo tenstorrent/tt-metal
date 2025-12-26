@@ -7,6 +7,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Provide default REDUCE_OP/REDUCE_DIM so reduce_helpers.hpp always compiles.
+// For IDENTITY operations, these are never used (guarded by if constexpr).
+#ifndef REDUCE_OP
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
+#endif
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+
 /**
  * Compute kernel for tilize_untilize operation (multi-core version).
  *
@@ -30,10 +38,10 @@
 // Operation type enum - must match host-side definition
 enum class OpType : uint32_t {
     IDENTITY = 0,
+    REDUCE_W_SUM = 1,
+    REDUCE_W_MAX = 2,
+    REDUCE_W_AVG = 3,
     // Future:
-    // REDUCE_W_SUM = 1,
-    // REDUCE_W_MAX = 2,
-    // REDUCE_W_AVG = 3,
     // RELU = 4,
 };
 
@@ -47,13 +55,19 @@ void MAIN {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     // CB indices
-    constexpr uint32_t cb_in = tt::CBIndex::c_0;     // Row-major input from reader
-    constexpr uint32_t cb_tiled = tt::CBIndex::c_1;  // Tiled intermediate
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;      // Row-major input from reader
+    constexpr uint32_t cb_tiled = tt::CBIndex::c_1;   // Tiled intermediate
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;  // Scaler for reductions (when needed)
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;   // Row-major output to writer
+    constexpr uint32_t cb_reduced = tt::CBIndex::c_3;  // Reduced tile (output of reduce)
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;     // Row-major output to writer
 
-    // Initialize compute kernel hardware for tilize/untilize
-    compute_kernel_hw_startup(cb_in, cb_out);
+    // Initialize compute kernel hardware
+    if constexpr (op_type == OpType::IDENTITY) {
+        compute_kernel_hw_startup(cb_in, cb_out);
+    } else {
+        // For reductions: input CB, scaler CB, reduced output CB
+        compute_kernel_hw_startup(cb_tiled, cb_scaler, cb_reduced);
+    }
 
     // Process each block one at a time
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -65,21 +79,33 @@ void MAIN {
         if constexpr (op_type == OpType::IDENTITY) {
             // Pass-through: data flows directly from cb_tiled to untilize
             // No operation needed - tilize output goes straight to untilize
+        } else if constexpr (
+            op_type == OpType::REDUCE_W_SUM || op_type == OpType::REDUCE_W_MAX || op_type == OpType::REDUCE_W_AVG) {
+            // Reduce all tiles in row to single tile
+            // compute_kernel_lib::reduce handles everything:
+            // - cb_wait_front for scaler
+            // - reduce_init/uninit
+            // - tile_regs management
+            // - reduce_tile loop
+            // - pack_tile to output CB
+            compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                cb_tiled,           // input: num_tiles_per_row tiled tiles
+                cb_scaler,          // scaler tile
+                cb_reduced,         // output: 1 reduced tile
+                1,                  // Ht = 1 (one tile row per block)
+                num_tiles_per_row,  // Wt
+                1);                 // NC = 1 (one batch per block)
         }
-        // Future operations would be added here as else if constexpr blocks:
-        // else if constexpr (op_type == OpType::REDUCE_W_SUM) { ... }
-        // else if constexpr (op_type == OpType::RELU) { ... }
 
         // ========== Phase 3: Untilize ==========
-        // CB_tiled (tiled) -> CB_out (row-major)
-        // Automatically uses pack_untilize (hardware-accelerated) when tile_width fits in DEST
+        // CB_tiled (tiled) -> CB_out (row-major) for IDENTITY
+        // CB_reduced (tiled) -> CB_out (row-major) for reductions
         if constexpr (op_type == OpType::IDENTITY) {
             compute_kernel_lib::untilize<num_tiles_per_row, cb_tiled, cb_out>(1);
+        } else {
+            // Untilize single reduced tile
+            compute_kernel_lib::untilize<1, cb_reduced, cb_out>(1);
         }
-        // Future: reductions would untilize fewer tiles (e.g., 1 for reduce_w)
-        // else if constexpr (op_type == OpType::REDUCE_W_SUM) {
-        //     compute_kernel_lib::untilize<1, cb_tiled, cb_out>(1);
-        // }
     }
 }
 }  // namespace NAMESPACE

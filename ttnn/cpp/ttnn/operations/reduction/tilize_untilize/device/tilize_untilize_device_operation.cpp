@@ -56,10 +56,17 @@ spec_return_value_t TilizeUntilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    // Output shape computation
+    // Output shape computation - start with input shape
     auto output_shape = input.logical_shape();
-    auto output_padded = input.logical_shape();
 
+    // For REDUCE_W operations, output width is TILE_WIDTH (32)
+    // The kernel untilizes one reduced tile per row, producing 32 elements per row
+    if (operation_attributes.op_type == OpType::REDUCE_W_SUM || operation_attributes.op_type == OpType::REDUCE_W_MAX ||
+        operation_attributes.op_type == OpType::REDUCE_W_AVG) {
+        output_shape[-1] = tt::constants::TILE_WIDTH;
+    }
+
+    auto output_padded = output_shape;
     auto output_dtype = input.dtype();
 
     return TensorSpec(
@@ -78,7 +85,12 @@ tt::stl::hash::hash_t TilizeUntilizeDeviceOperation::compute_program_hash(
     const auto& input_shape = input.padded_shape();
 
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<TilizeUntilizeDeviceOperation>(
-        operation_attributes, input.dtype(), input.memory_config(), input_shape);
+        operation_attributes,
+        input.dtype(),
+        input.memory_config(),
+        input_shape,
+        static_cast<uint32_t>(operation_attributes.op_type),
+        operation_attributes.scaler);
 
     return hash;
 }
@@ -94,12 +106,16 @@ TilizeUntilizeDeviceOperation::invoke(
     const Tensor& input,
     std::optional<MemoryConfig> output_memory_config,
     std::optional<DataType> output_dtype,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    OpType op_type,
+    float scaler) {
     return {
         operation_attributes_t{
             .output_memory_config = output_memory_config,
             .output_dtype = output_dtype,
-            .output_mem_config = memory_config.value_or(input.memory_config())},
+            .output_mem_config = memory_config.value_or(input.memory_config()),
+            .op_type = op_type,
+            .scaler = scaler},
         tensor_args_t{.input = input}};
 }
 
