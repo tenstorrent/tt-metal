@@ -255,11 +255,12 @@ constexpr auto subtract = ttnn::
 constexpr auto subtract_ = ttnn::register_operation<
     "ttnn::subtract_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>>();
-constexpr auto multiply = ttnn::
-    register_operation<"ttnn::multiply", operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>>();
-constexpr auto multiply_ = ttnn::register_operation<
-    "ttnn::multiply_",
-    operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::MUL>>();
+// constexpr auto multiply = ttnn::
+//     register_operation<"ttnn::multiply",
+//     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>>();
+// constexpr auto multiply_ = ttnn::register_operation<
+//     "ttnn::multiply_",
+//     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::MUL>>();
 constexpr auto eq =
     ttnn::register_operation<"ttnn::eq", operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>>();
 constexpr auto ne =
@@ -310,6 +311,12 @@ constexpr auto divide = ttnn::register_operation<
 constexpr auto divide_ = ttnn::register_operation<
     "ttnn::divide_",
     operations::binary::InplaceBinaryOperationWithFastApprox<operations::binary::BinaryOpType::DIV>>();
+constexpr auto multiply = ttnn::register_operation<
+    "ttnn::multiply",
+    operations::binary::BinaryOperationWithFastApprox<operations::binary::BinaryOpType::MUL>>();
+constexpr auto multiply_ = ttnn::register_operation<
+    "ttnn::multiply_",
+    operations::binary::InplaceBinaryOperationWithFastApprox<operations::binary::BinaryOpType::MUL>>();
 constexpr auto gt_ = ttnn::register_operation<
     "ttnn::gt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();
