@@ -1390,6 +1390,51 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
             }
         }
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
+    } else if (is_multi_mesh()) {
+        const auto& global_nodes = device_info_provider_.get_global_node_ids();
+
+        std::unordered_map<MeshId, std::vector<MeshId>> mesh_adjacency_map;
+        const std::vector<RoutingDirection> directions = {
+            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+        for (const auto& src_node : global_nodes) {
+            MeshId src_mesh_id = src_node.mesh_id;
+            if (mesh_adjacency_map.find(src_mesh_id) == mesh_adjacency_map.end()) {
+                mesh_adjacency_map[src_mesh_id] = std::vector<MeshId>();
+            }
+            for (const auto& direction : directions) {
+                auto neighbor = route_manager_.get_neighbor_node_id_or_nullopt(src_node, direction);
+                if (neighbor.has_value() && neighbor->mesh_id != src_mesh_id) {
+                    auto& adj_list = mesh_adjacency_map[src_mesh_id];
+                    if (std::find(adj_list.begin(), adj_list.end(), neighbor->mesh_id) == adj_list.end()) {
+                        adj_list.push_back(neighbor->mesh_id);
+                    }
+                }
+            }
+        }
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        for (const auto& pair : all_pairs) {
+            MeshId src_mesh_id = pair.first.mesh_id;
+            MeshId dst_mesh_id = pair.second.mesh_id;
+            bool same_mesh = (src_mesh_id == dst_mesh_id);
+            bool dst_is_adjacent = false;
+            auto it = mesh_adjacency_map.find(src_mesh_id);
+            if (it != mesh_adjacency_map.end()) {
+                dst_is_adjacent = std::find(it->second.begin(), it->second.end(), dst_mesh_id) != it->second.end();
+            }
+            if (same_mesh || dst_is_adjacent) {
+                filtered_pairs.push_back(pair);
+            }
+        }
+
+        log_info(
+            LogTest,
+            "Multi-mesh all_to_all: filtered {} pairs to {} pairs with adjacent mesh destinations",
+            all_pairs.size(),
+            filtered_pairs.size());
+
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
         add_senders_from_pairs(test, all_pairs, base_pattern);
     }
@@ -1838,6 +1883,10 @@ uint32_t TestConfigBuilder::get_random_in_range(uint32_t min, uint32_t max) {
     }
     std::uniform_int_distribution<uint32_t> distrib(min, max);
     return distrib(this->gen_);
+}
+
+bool TestConfigBuilder::is_multi_mesh() const {
+    return device_info_provider_.get_global_node_ids().size() > device_info_provider_.get_local_node_ids().size();
 }
 
 // YamlTestConfigSerializer methods
