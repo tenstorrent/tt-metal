@@ -122,10 +122,10 @@ public:
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
     // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // of the Python object that owns the underlying data. For example, in nanobind:
     //
-    // py::object py_tensor = ...;
-    // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
+    // nb::object py_tensor = ...;
+    // MemoryPin py_data_pin(std::make_shared<nb::object>(py_tensor));
     // Tensor tensor = Tensor::from_borrowed_data(buffer, shape, py_data_pin);
     //
     // This API can also be used to create file-backed Tensors by means of `mmap`:
