@@ -242,67 +242,59 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
         return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
-    } else {
-        uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
-        uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+    }
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
 
-        const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-        uint32_t tile_height = tile_shape[0];
-        uint32_t tile_width = tile_shape[1];
+    const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
 
-        bool input_is_sharded = input_tensor_a.is_sharded();
-        bool output_is_sharded = output_tensor.is_sharded();
+    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_col = tensor_height / tile_height;
 
-        uint32_t num_tiles_per_row = tensor_width / tile_width;
-        uint32_t num_tiles_per_col = tensor_height / tile_height;
+    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
-        auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    size_t grid_area = grid_size.x * grid_size.y;
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_tiles_per_col) / grid_area);
+    const uint32_t num_compute_cores =
+        nblocks_per_core == 0 ? num_tiles_per_col : std::ceil(static_cast<float>(num_tiles_per_col) / nblocks_per_core);
 
-        size_t grid_area = grid_size.x * grid_size.y;
-        const uint32_t nblocks_per_core =
-            grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_tiles_per_col) / grid_area);
-        const uint32_t num_compute_cores = nblocks_per_core == 0
-                                               ? num_tiles_per_col
-                                               : std::ceil(static_cast<float>(num_tiles_per_col) / nblocks_per_core);
+    constexpr uint32_t threshold_row_block = 32;
+    if (!input_is_sharded and !output_is_sharded) {
+        if (num_tiles_per_row > threshold_row_block) {
+            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
+                uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                            (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
 
-        constexpr uint32_t threshold_row_block = 32;
-        if (!input_is_sharded and !output_is_sharded) {
-            if (num_tiles_per_row > threshold_row_block) {
-                if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                    uint32_t num_blocks_block =
-                        (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+                // Compute grid area and initial blocks-per-core using integer math.
+                uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
 
-                    // Compute grid area and initial blocks-per-core using integer math.
-                    uint32_t nblocks_per_core_wh =
-                        (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
+                // Adjust nblocks_per_core_wh and determine the optimal block size.
+                auto [adjusted_nblocks_per_core, single_block_size] =
+                    closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
+                nblocks_per_core_wh = adjusted_nblocks_per_core;
 
-                    // Adjust nblocks_per_core_wh and determine the optimal block size.
-                    auto [adjusted_nblocks_per_core, single_block_size] = closest_square_larger_than_b(
-                        nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
-                    nblocks_per_core_wh = adjusted_nblocks_per_core;
-
-                    const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
-                    const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
-                    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-                    const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
-                    if (num_compute_cores < ncores_block) {
-                        return program::UntilizeMultiCoreBlockProgramFactory{};
-                    }
+                const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
+                const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
+                const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+                const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
+                if (num_compute_cores < ncores_block) {
+                    return program::UntilizeMultiCoreBlockProgramFactory{};
                 }
             }
         }
-        // TODO : currently multi_core parallelization on column only works for single tile height tensors.
-        // Need to debug this to work on wide tensors that are higher than a single tile
-        auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
-        if (pf_option == 0) {
-            return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
-        } else if (pf_option == 1) {
-            return program::UntilizeSingleCoreProgramFactory{};
-        }
-        // Default multi core implementation
-        return program::UntilizeMultiCoreProgramFactory{};
     }
+    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
+    // Need to debug this to work on wide tensors that are higher than a single tile
+    auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
+    if (pf_option == 0) {
+        return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
+    } else if (pf_option == 1) {
+        return program::UntilizeSingleCoreProgramFactory{};
+    }
+    // Default multi core implementation
+    return program::UntilizeMultiCoreProgramFactory{};
 }
 
 std::tuple<UntilizeDeviceOperation::operation_attributes_t, UntilizeDeviceOperation::tensor_args_t>
