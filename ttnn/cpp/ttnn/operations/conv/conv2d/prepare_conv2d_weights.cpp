@@ -113,6 +113,48 @@ static void print_full_tensor_on_host(
     }
 }
 
+// Helper function to print tensor in 32x32 raw memory layout for debugging
+template <typename T>
+static void print_tensor_raw_memory_layout_on_device(const Tensor& tensor, const std::string& name) {
+    auto shape = tensor.logical_shape();
+
+    log_info(tt::LogOp, "DEBUG: === {} ===", name);
+    log_info(tt::LogOp, "DEBUG: Shape: [{}, {}, {}, {}]", shape[0], shape[1], shape[2], shape[3]);
+    log_info(tt::LogOp, "DEBUG: Layout: {}, Device: {}", tensor.layout(), tensor.device() != nullptr);
+
+    // Move to host and get raw data for visualization
+    auto host_tensor = tensor;
+    if (tensor.device() != nullptr) {
+        host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
+        log_info(tt::LogOp, "DEBUG: Moved tensor from device to host for visualization");
+    }
+
+    // Get raw buffer data without untilization to preserve memory layout
+    auto raw_buffer = tt::tt_metal::host_buffer::get_as<T>(host_tensor);
+    std::vector<T> data(raw_buffer.begin(), raw_buffer.end());
+    log_info(tt::LogOp, "DEBUG: Total elements: {}", data.size());
+    log_info(tt::LogOp, "DEBUG: RAW MEMORY LAYOUT (32x32):");
+
+    // Print exactly 32 values per row, showing raw memory layout
+    const uint32_t values_per_row = 32;
+    uint32_t total_elements = data.size();
+    uint32_t num_rows = (total_elements + values_per_row - 1) / values_per_row;
+
+    for (uint32_t row = 0; row < num_rows; row++) {
+        std::string row_content = "DEBUG: " + std::to_string(row) + ": ";
+        for (uint32_t col = 0; col < values_per_row; col++) {
+            uint32_t idx = row * values_per_row + col;
+            if (idx < total_elements) {
+                row_content += std::to_string(static_cast<int>(static_cast<float>(data[idx]))) + " ";
+            } else {
+                row_content += "  ";  // padding for incomplete rows
+            }
+        }
+        log_info(tt::LogOp, row_content);
+    }
+    log_info(tt::LogOp, "DEBUG: ");
+}
+
 // Overloaded function to automatically determine template parameter
 // static void print_full_tensor_on_host(const Tensor& tensor, const std::string& tensor_name, uint32_t max_elements =
 // 1000) {
@@ -1024,7 +1066,8 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
 }
 
 /*
-Helper function for converting 2D depthwise weight tensor to stick-by-stick TILED layout
+Helper function for converting 2D depthwise weight tensor to face-by-face TILED layout
+Arranges sticks (all values across channels for one kernel position) face by face within a 32x32 tile.
 */
 template <typename T>
 static Tensor conv_2d_depthwise_weight_layout_helper(
@@ -1046,55 +1089,88 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
         // Initialize output buffer to zeros
         std::fill(output_buffer.begin(), output_buffer.end(), static_cast<T>(0));
 
-        // Transform: [out_channels, 1, kernel_h, kernel_w] -> [out_channels, kernel_positions, 1, 1]
-        // Each output channel gets all its kernel weights as separate "input channels"
-        for (uint32_t ch = 0; ch < out_channels; ch++) {
-            for (uint32_t kh = 0; kh < kernel_h; kh++) {
-                for (uint32_t kw = 0; kw < kernel_w; kw++) {
-                    uint32_t kernel_pos = kh * kernel_w + kw;  // Linear kernel position
+        // Face-by-face layout: sticks are placed sequentially across faces
+        // Each stick occupies (out_channels / 16) rows and can span multiple faces
+        // For 32 channels: stick = 2 rows, face fits 8 sticks
+        // For 64 channels: stick = 4 rows, face fits 4 sticks
+        // For 96 channels: stick = 6 rows, sticks span face boundaries
+        // We fill faces sequentially: face 0, face 1, face 2, face 3
+        constexpr uint32_t FACE_SIZE = 16;  // 16x16 face
 
-                    // Get input value from [ch, 0, kh, kw] in original tensor
-                    auto input_flat_index = tt::tt_metal::compute_flat_indices(
-                        ttnn::SmallVector<int>{(int)ch, 0, (int)kh, (int)kw}, compute_strides(original_weight_shape));
-                    T value = conv_weight_tensor_buffer[input_flat_index];
+        // Calculate how many rows each stick occupies
+        // Each row in a single face holds 16 values
+        uint32_t rows_per_stick = (out_channels + FACE_SIZE - 1) / FACE_SIZE;  // ceil(out_channels / 16)
 
-                    // Place value at [ch, kernel_pos, 0, 0] in output tensor
-                    auto output_flat_index = tt::tt_metal::compute_flat_indices(
-                        ttnn::SmallVector<int>{(int)ch, (int)kernel_pos, 0, 0}, compute_strides(output_weight_shape));
-                    output_buffer[output_flat_index] = value;
+        log_debug(tt::LogOp, "DEBUG: out_channels={}, rows_per_stick={}", out_channels, rows_per_stick);
 
-                    // Debug print for sample values from first few channels and kernel positions
-                    if (ch < 3 && kernel_pos < 4) {
-                        log_debug(
-                            tt::LogOp,
-                            "DEBUG: ch[{}] kernel_pos[{}] = {} (from input[{}][0][{}][{}])",
-                            ch,
-                            kernel_pos,
-                            static_cast<float>(value),
-                            ch,
-                            kh,
-                            kw);
+        // Track current absolute row position across all faces (0-63 for a 32x32 tile viewed as 4 faces)
+        // We fill faces sequentially: face 0, face 1, face 2, face 3
+        uint32_t current_absolute_row = 0;
+
+        for (uint32_t kernel_pos = 0; kernel_pos < total_kernel_positions; kernel_pos++) {
+            // Extract kernel position
+            uint32_t kh = kernel_pos / kernel_w;
+            uint32_t kw = kernel_pos % kernel_w;
+
+            log_debug(tt::LogOp, "DEBUG: Stick {} starts at absolute row {}", kernel_pos, current_absolute_row);
+
+            // Place each row of this stick
+            // Each row holds 16 values in one face
+            for (uint32_t stick_row = 0; stick_row < rows_per_stick; stick_row++) {
+                uint32_t absolute_row = current_absolute_row + stick_row;
+
+                // Determine which face this row belongs to (0-3)
+                // We fill: face 0 (rows 0-15), face 1 (rows 16-31), face 2 (rows 32-47), face 3 (rows 48-63)
+                uint32_t face_idx = absolute_row / FACE_SIZE;
+                uint32_t row_in_face = absolute_row % FACE_SIZE;
+
+                // Map face index to tile position
+                // Face 0 (top-left): rows 0-15, cols 0-15
+                // Face 1 (top-right): rows 0-15, cols 16-31
+                // Face 2 (bottom-left): rows 16-31, cols 0-15
+                // Face 3 (bottom-right): rows 16-31, cols 16-31
+                uint32_t face_row_offset = (face_idx / 2) * FACE_SIZE;  // 0 for faces 0,1; 16 for faces 2,3
+                uint32_t face_col_offset = (face_idx % 2) * FACE_SIZE;  // 0 for faces 0,2; 16 for faces 1,3
+                uint32_t target_row = face_row_offset + row_in_face;
+
+                // Calculate the base channel index for this row of the stick
+                uint32_t base_ch = stick_row * FACE_SIZE;
+
+                // Place 16 values in this row of the current face
+                for (uint32_t col = 0; col < FACE_SIZE; col++) {
+                    uint32_t ch = base_ch + col;
+                    if (ch < out_channels) {
+                        // Get input value from [ch, 0, kh, kw] in original tensor
+                        auto input_flat_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{(int)ch, 0, (int)kh, (int)kw},
+                            compute_strides(original_weight_shape));
+                        T value = conv_weight_tensor_buffer[input_flat_index];
+
+                        uint32_t target_col = face_col_offset + col;
+
+                        // Place value at [target_col, target_row, 0, 0] in output tensor
+                        auto output_flat_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{(int)target_col, (int)target_row, 0, 0},
+                            compute_strides(output_weight_shape));
+                        output_buffer[output_flat_index] = value;
+
+                        if (kernel_pos < 2 && ch < 4) {
+                            log_debug(
+                                tt::LogOp,
+                                "DEBUG: kernel_pos[{}] ch[{}] = {} -> [row={}, col={}] (face {})",
+                                kernel_pos,
+                                ch,
+                                static_cast<float>(value),
+                                target_row,
+                                target_col,
+                                face_idx);
+                        }
                     }
                 }
             }
-        }
 
-        // Debug: Print sample of final output layout
-        log_debug(tt::LogOp, "DEBUG: Sample output layout (first 3 channels):");
-        for (uint32_t ch = 0; ch < std::min(3u, out_channels); ch++) {
-            std::string channel_values;
-            for (uint32_t kpos = 0; kpos < std::min(8u, total_kernel_positions); kpos++) {
-                auto output_flat_index = tt::tt_metal::compute_flat_indices(
-                    ttnn::SmallVector<int>{(int)ch, (int)kpos, 0, 0}, compute_strides(output_weight_shape));
-                T value = output_buffer[output_flat_index];
-                channel_values += std::to_string(static_cast<float>(value)) + " ";
-            }
-            log_debug(
-                tt::LogOp,
-                "DEBUG:   Channel {} (first {} kernel positions): {}",
-                ch,
-                std::min(8u, total_kernel_positions),
-                channel_values);
+            // Move to next stick position
+            current_absolute_row += rows_per_stick;
         }
 
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
@@ -1106,18 +1182,15 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
 }
 
 /*
-Converts 2D depthwise convolution weights to layout that preserves output channels
+Converts 2D depthwise convolution weights to face-by-face layout for tiling
 This function takes in a depthwise weight tensor with shape [out_channels, 1, kernel_h, kernel_w]
-and returns a tensor with shape [out_channels, kernel_h * kernel_w, 1, 1] where each output channel
-contains all its kernel weights as separate "input channels".
+and returns a tensor with shape [out_channels, padded_kernel_positions, 1, 1] where kernel_positions
+is padded to tile size (32) and arranged face-by-face.
 
 For a 3x3 kernel:
 - Input: [32, 1, 3, 3] - 32 channels, each with a 3x3 kernel
-- Output: [32, 9, 1, 1] - 32 channels, each with 9 "input channels" (one per kernel position)
-- Channel 0: [weight_k0, weight_k1, ..., weight_k8] where k0=(0,0), k1=(0,1), etc.
-
-This preserves the output channel structure required by the pipeline while enabling
-stick-by-stick organization in later processing stages.
+- Output: [32, 32, 1, 1] - 32 channels, with 9 kernel positions padded to 32, arranged face-by-face
+- This layout ensures that after tilization, data is stick-by-stick in memory
 */
 Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weight_tensor, DataType output_dtype) {
     const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
@@ -1126,26 +1199,32 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weig
     uint32_t kernel_w = original_conv_weight_tensor_shape[3];
     uint32_t total_kernel_positions = kernel_h * kernel_w;
 
+    // Pad kernel positions to tile size (32) for proper face-by-face layout
+    constexpr uint32_t TILE_SIZE = 32;
+    uint32_t padded_kernel_positions = ((total_kernel_positions + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
     log_info(
         tt::LogOp,
-        "DEBUG: 2D depthwise layout conversion - out_channels={}, kernel={}x{}, total_positions={}",
+        "DEBUG: 2D depthwise layout conversion - out_channels={}, kernel={}x{}, total_positions={}, "
+        "padded_positions={}",
         out_channels,
         kernel_h,
         kernel_w,
-        total_kernel_positions);
+        total_kernel_positions,
+        padded_kernel_positions);
 
-    // Preserve output channels in dimension 0, expand kernel positions in dimension 1
-    // This maintains compatibility with the weight preparation pipeline
-    ttnn::Shape output_conv_weight_tensor_shape{out_channels, total_kernel_positions, 1, 1};
+    // Output shape with padded kernel positions for face-by-face tile layout
+    ttnn::Shape output_conv_weight_tensor_shape{out_channels, padded_kernel_positions, 1, 1};
 
     log_info(
         tt::LogOp,
-        "DEBUG: Output tensor shape - [{}x{}x{}x{}], preserving {} output channels",
+        "DEBUG: Output tensor shape - [{}x{}x{}x{}], {} output channels, {} padded kernel positions",
         out_channels,
-        total_kernel_positions,
+        padded_kernel_positions,
         1,
         1,
-        out_channels);
+        out_channels,
+        padded_kernel_positions);
 
     // Create newly allocated buffer depending on the datatype of the weight tensor
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, DataType)>>
@@ -1789,7 +1868,11 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 weight_tensor_.dtype());
 
             weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
-            print_full_tensor_on_host<bfloat16>(weight_tensor_, "Converted 2D Depthwise Weights", 500);
+
+            // DEBUG: Print weight tensor raw memory layout after convert_conv_weight_tensor_to_2d_depthwise_layout
+            log_info(tt::LogOp, "DEBUG: === WEIGHT TENSOR AFTER CONVERT_CONV_WEIGHT_TENSOR_TO_2D_DEPTHWISE_LAYOUT ===");
+            print_tensor_raw_memory_layout_on_device<bfloat16>(
+                weight_tensor_, "WEIGHT TENSOR AFTER DEPTHWISE LAYOUT CONVERSION");
 
             // Debug: Print output tensor info
             const auto& output_shape = weight_tensor_.logical_shape();
@@ -1803,40 +1886,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 weight_tensor_.layout(),
                 weight_tensor_.dtype());
 
-            // Debug: Print full prepared tensor content to verify layout
-            if (weight_tensor_.layout() == Layout::ROW_MAJOR) {
-                auto host_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
-                log_info(tt::LogOp, "DEBUG: Full prepared weight tensor content:");
-                log_info(
-                    tt::LogOp,
-                    "DEBUG: Expected layout: [out_channels={}, kernel_positions={}, 1, 1]",
-                    output_shape[0],
-                    output_shape[1]);
-
-                // Print each output channel's kernel positions
-                for (uint32_t ch = 0; ch < std::min(4u, (uint32_t)output_shape[0]); ch++) {
-                    std::string channel_data = "  Channel " + std::to_string(ch) + ": [";
-                    for (uint32_t kpos = 0; kpos < output_shape[1]; kpos++) {
-                        // Calculate flat index for [ch, kpos, 0, 0]
-                        uint32_t flat_index = ch * output_shape[1] * output_shape[2] * output_shape[3] +
-                                              kpos * output_shape[2] * output_shape[3] + 0 * output_shape[3] + 0;
-                        float value = static_cast<float>(host_buffer[flat_index]);
-                        channel_data += std::to_string(value);
-                        if (kpos < output_shape[1] - 1) {
-                            channel_data += ", ";
-                        }
-                    }
-                    channel_data += "]";
-                    log_info(tt::LogOp, "DEBUG: {}", channel_data);
-                }
-
-                // Show mapping: kernel_position -> (kh, kw)
-                log_info(tt::LogOp, "DEBUG: Kernel position mapping (for 3x3 kernel):");
-                log_info(
-                    tt::LogOp,
-                    "DEBUG:   pos0=(0,0), pos1=(0,1), pos2=(0,2), pos3=(1,0), pos4=(1,1), pos5=(1,2), pos6=(2,0), "
-                    "pos7=(2,1), pos8=(2,2)");
-            }
         } else {
             log_info(
                 tt::LogOp,

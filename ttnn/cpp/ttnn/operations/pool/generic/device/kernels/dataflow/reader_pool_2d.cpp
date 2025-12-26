@@ -512,13 +512,13 @@ void kernel_main() {
         // Read weight tiles using TensorAccessor (handles TILED format correctly)
         // For TILED format [out_channels, kernel_positions, 1, 1], we read tiles by tile_id
         uint32_t weight_tile_id = 0;
-        for (uint32_t ch = 0; ch < in_c; ch++) {
-            for (uint32_t kpos = 0; kpos < kernel_positions; kpos++) {
-                noc_async_read_tile(weight_tile_id, s_weight, weight_l1_addr);
-                weight_l1_addr += weight_tile_nbytes;
-                weight_tile_id++;
-            }
-        }
+        // for (uint32_t ch = 0; ch < in_c; ch++) {
+        //     for (uint32_t kpos = 0; kpos < kernel_positions; kpos++) {
+        noc_async_read_tile(weight_tile_id, s_weight, weight_l1_addr);
+        //         weight_l1_addr += weight_tile_nbytes;
+        //         weight_tile_id++;
+        //     }
+        // }
         noc_async_read_barrier();
 
         // tt::data_movement::common::print_bf16_pages(get_write_ptr(weight_cb_id), 32, 32);

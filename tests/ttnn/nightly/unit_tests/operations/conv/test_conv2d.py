@@ -5292,7 +5292,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer):
 
-    num = 32
+    num = 96
     groups = num
     input_channels = num
     output_channels = num
@@ -5307,6 +5307,13 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
     )
 
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    # for out_ch in range(conv_weight_shape[0]):
+    #     for in_ch in range(conv_weight_shape[1]):
+    #         for kh in range(conv_weight_shape[2]):
+    #             for kw in range(conv_weight_shape[3]):
+    #                 stick_id = kh * kernel[1] + kw + 1  # +1 to avoid zero values
+    #                 torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
 
     conv_bias_shape = (1, 1, 1, output_channels)
 
@@ -5422,6 +5429,11 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
 
     # Permute from NHWC to NCHW format: [batch, out_h, out_w, channels] -> [batch, channels, out_h, out_w]
     torch_output_final = torch_output_reshaped.permute(0, 3, 1, 2)
+
+    # print("ttnn output:")
+    # print(torch_output_final)
+    # print("reference output:")
+    # print(ref)
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_final, ref, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
