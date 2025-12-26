@@ -6,10 +6,14 @@ Tensor utility functions for TTTv2 modules.
 """
 
 import json
+import re
 
 import torch
 
 import ttnn
+
+# Standard tile size - hardware constant
+TILE_SIZE = ttnn.TILE_SIZE  # 32
 
 
 # todo)) add a on-device pad_dim_to_size function?
@@ -31,6 +35,53 @@ def pad_dim_to_size(x: "torch.Tensor", dim: int, size: int) -> "torch.Tensor":
     pad[pad_index + 1] = pad_size
 
     return torch.nn.functional.pad(x, pad, mode="constant", value=0)
+
+
+def pad_to_shape(x: "torch.Tensor", target_shape: tuple[int, ...]) -> "torch.Tensor":
+    """Pad tensor to target_shape in a single F.pad call (more efficient than per-dim padding)."""
+    if x.shape == target_shape:
+        return x
+
+    # F.pad expects: (left_last, right_last, left_second_last, right_second_last, ...)
+    pad = []
+    for orig, target in zip(reversed(x.shape), reversed(target_shape)):
+        if target < orig:
+            raise ValueError(f"Target size {target} is smaller than current size {orig}")
+        pad.extend([0, target - orig])
+
+    return torch.nn.functional.pad(x, pad, mode="constant", value=0)
+
+
+def get_padded_hidden_dim(hidden_dim: int, num_devices: int, tile_size: int = 32) -> int:
+    """
+    Compute padded hidden_dim to satisfy ttnn.from_torch's tile alignment constraint.
+
+    ttnn.from_torch requires physical shard shapes to be tile-aligned. When sharding
+    a tensor across devices, each shard_dim = hidden_dim / num_devices must be
+    divisible by tile_size.
+
+    We pad the global tensor first, then shard evenly so only the last shard has padding.
+    """
+    shard_dim = hidden_dim // num_devices
+    padded_shard = ((shard_dim + tile_size - 1) // tile_size) * tile_size
+    return padded_shard * num_devices
+
+
+def parse_shard_dims_from_mesh_mapper_config(mesh_mapper_config: ttnn.MeshMapperConfig) -> list[int]:
+    """
+    Parse shard dimensions from MeshMapperConfig's repr.
+
+    MeshMapperConfig doesn't expose .placements directly, but repr shows them:
+        'MeshMapperConfig(placements: [PlacementShard(-1)], mesh_shape_override=MeshShape([8]))'
+
+    This parses out the shard dimensions (e.g., [-1]) from PlacementShard entries.
+    Returns empty list if no PlacementShard found (e.g., replicated).
+
+    Note: This is a workaround until TTNN exposes .placements directly.
+    """
+    config_repr = repr(mesh_mapper_config)
+    matches = re.findall(r"PlacementShard\((-?\d+)\)", config_repr)
+    return [int(d) for d in matches]
 
 
 def memory_config_to_dict(memory_config: ttnn.MemoryConfig):

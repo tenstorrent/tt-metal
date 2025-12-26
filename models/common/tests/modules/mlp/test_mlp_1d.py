@@ -24,7 +24,57 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
+from models.common.modules.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
+
+
+def _get_prefill_len_cutoff(hf_model_name: str, mesh_shape: tuple[int, int]) -> int | None:
+    """
+    Get model/device-specific prefill_len_cutoff override.
+
+    Root cause:
+        The matmul program config computes per_core_M = ceil(m / (tile_size * grid_height)),
+        where m = min(seq_len, prefill_len_cutoff). Larger per_core_M requires more L1 memory
+        for circular buffers. Combined with in0_block_w=8 and BFP8 weights, certain model/device
+        combinations overflow L1.
+
+    Symptom:
+        RuntimeError: TT_FATAL ... "Statically allocated circular buffers ... grow to ...
+        beyond max L1 size"
+
+    Fix:
+        Reduce prefill_len_cutoff from 1024 to 512 for affected models. This halves m,
+        reducing per_core_M (e.g., from 4 to 2), which fits in L1.
+
+    Matches tt_transformers/tt/model_config.py:577-584 logic:
+    - Llama-3.1-8B, Llama-3.2-11B, Mistral-7B, gemma-3-4b on N150 (1x1) → 512
+    - Qwen2.5-7B on N300 (1x2) → 512
+    - Mixtral-8x7B on T3K (1x8) → 512
+    - Others → None (use default)
+    """
+    # Extract base model name from HF model name
+    base_name = hf_model_name.split("/")[-1].rsplit("-Instruct", 1)[0]
+
+    # Map mesh_shape to device type
+    if mesh_shape == (1, 1):
+        device = "N150"
+    elif mesh_shape == (1, 2):
+        device = "N300"
+    elif mesh_shape == (1, 8):
+        device = "T3K"
+    else:
+        device = None
+
+    # Apply model_config.py logic
+    if base_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"] and device == "N150":
+        return 512
+    elif base_name in ["Qwen2.5-7B"] and device == "N300":
+        return 512
+    elif base_name in ["Mixtral-8x7B"] and device == "T3K":
+        return 512
+
+    return None  # Use default
+
 
 # ============================================================================
 # Weight Caching - Avoid expensive torch.randn_like() per test
@@ -40,13 +90,13 @@ def _get_or_init_mlp_weights(model_name: str, reference_mlp) -> None:
     This caches the random weights and reuses them across tests.
     """
     if model_name not in _CACHED_MLP_WEIGHTS:
-        logger.info(f"[CACHE] Initializing weights for {model_name} (first time)")
+        logger.info(f"\033[33m[cache miss]\033[0m Initializing weights for {model_name}")
         _CACHED_MLP_WEIGHTS[model_name] = {}
         with torch.no_grad():
             for name, param in reference_mlp.named_parameters():
                 _CACHED_MLP_WEIGHTS[model_name][name] = torch.randn_like(param)
     else:
-        logger.info(f"[CACHE] Reusing cached weights for {model_name}")
+        logger.info(f"\033[32m[cache hit]\033[0m Reusing cached weights for {model_name}")
 
     # Load cached weights into model
     with torch.no_grad():
@@ -112,7 +162,6 @@ def test_mlp_1d_config_defaults():
     assert config.max_batch_size == 32
     assert config.mlp_activation_type == ttnn.UnaryOpType.SILU
     assert config.num_reduce_scatter_links == 1
-    assert config.tile_size == 32
 
     # Optional fields default to None
     assert config.mesh_device is None
@@ -152,11 +201,24 @@ def test_mlp_1d_config_power_user_overrides():
 # Pulled from deduped perf sweep of existing model tests in CI
 LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
 LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
+LLAMA_1B = "meta-llama/Llama-3.2-1B-Instruct"
+LLAMA_3B = "meta-llama/Llama-3.2-3B-Instruct"
+LLAMA_11B = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+LLAMA_90B = "meta-llama/Llama-3.2-90B-Vision-Instruct"
+MISTRAL_7B = "mistralai/Mistral-7B-Instruct-v0.3"
+QWEN2_7B = "Qwen/Qwen2-7B-Instruct"
+QWEN25_7B = "Qwen/Qwen2.5-7B-Instruct"
+QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
+QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
+DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+PHI_4 = "microsoft/phi-4"
+QWEN3_32B = "Qwen/Qwen3-32B"
 
 _slow = pytest.mark.slow
 
 
-def _list_test_cases() -> list[pytest.param]:
+# [INFO] Galaxy DP run multiple copies of the following on 1x1, 1x2, and 1x8 meshes.
+def _list_glx_test_cases() -> list[pytest.param]:
     # fmt: off
     return [
         # === Fast tests (minimal coverage set) ===
@@ -200,6 +262,222 @@ def _list_test_cases() -> list[pytest.param]:
     # fmt: on
 
 
+# [INFO] Non-Galaxy test cases from N150/N300/T3K/BH runs.
+def _list_non_glx_test_cases() -> list[pytest.param]:
+    # fmt: off
+    return [
+        # === Fast tests (minimal coverage set) ===
+        # Single device (1x1) - small model
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x1-prefill-128-mixed-1B"),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-decode-32-uniform-1B"),
+        # Multi-device (1x2) - vision model 11B
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-128-uniform-11B"),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-decode-32-uniform-11B"),
+        # Multi-device (1x8) - vision model 90B
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_90B, 0.98, id="1x8-prefill-128-mixed-90B"),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_90B, 0.98, id="1x8-decode-32-mixed-90B"),
+        # Non-Llama model families
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, PHI_4, 0.99, id="1x2-prefill-128-uniform-phi-4"),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN3_32B, 0.98, id="1x8-prefill-128-mixed-Qwen3-32B"),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_7B, 0.99, id="1x2-prefill-128-uniform-Qwen2.5-7B"),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, DEEPSEEK_R1_14B, 0.98, id="1x2-prefill-128-mixed-DeepSeek-R1-14B"),
+        # === Slow tests (full coverage) ===
+        # (1,1) LLAMA_1B - remaining cases not in fast set
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x1-prefill-256-mixed-1B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x1-prefill-512-mixed-1B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x1-decode-32-mixed-1B", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x1-prefill-1024-mixed-1B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-128-uniform-1B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-256-uniform-1B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-512-uniform-1B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x1-prefill-128-mixed-3B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x1-prefill-256-mixed-3B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x1-prefill-512-mixed-3B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x1-decode-32-mixed-3B", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x1-prefill-1024-mixed-3B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-128-uniform-3B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-256-uniform-3B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-512-uniform-3B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-decode-32-uniform-3B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-128-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-256-uniform-8B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-512-uniform-8B", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-prefill-1024-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-1024-uniform-8B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x1-decode-32-mixed-8B", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-decode-32-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x2-prefill-128-mixed-1B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x2-prefill-256-mixed-1B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x2-prefill-512-mixed-1B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x2-prefill-1024-mixed-1B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x2-decode-32-mixed-1B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-128-uniform-1B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-256-uniform-1B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-512-uniform-1B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-1024-uniform-1B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-decode-32-uniform-1B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x2-prefill-128-mixed-3B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x2-prefill-256-mixed-3B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x2-prefill-512-mixed-3B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x2-prefill-1024-mixed-3B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x2-decode-32-mixed-3B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-128-uniform-3B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-256-uniform-3B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-512-uniform-3B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-1024-uniform-3B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-decode-32-uniform-3B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-128-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-256-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-512-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-1024-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-1024-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 2048, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-2048-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-2048-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 4096, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-4096-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 4096, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-4096-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 8192, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-prefill-8192-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-8192-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x2-decode-32-mixed-8B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-uniform-8B", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x2-prefill-128-mixed-11B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x2-prefill-256-mixed-11B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x2-prefill-512-mixed-11B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x2-prefill-1024-mixed-11B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x2-decode-32-mixed-11B", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-256-uniform-11B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-512-uniform-11B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-1024-uniform-11B", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x1-prefill-128-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x1-prefill-256-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x1-prefill-512-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x1-decode-32-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x1-prefill-1024-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-128-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-256-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-512-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 1), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-decode-32-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x2-prefill-128-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x2-prefill-256-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x2-prefill-512-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x2-prefill-1024-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x2-decode-32-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-128-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-256-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-512-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-1024-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 2), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN2_7B, 0.98, id="1x2-prefill-128-mixed-Qwen2-7B-Instruct", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN2_7B, 0.98, id="1x2-prefill-256-mixed-Qwen2-7B-Instruct", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN2_7B, 0.98, id="1x2-prefill-512-mixed-Qwen2-7B-Instruct", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN2_7B, 0.98, id="1x2-prefill-1024-mixed-Qwen2-7B-Instruct", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN2_7B, 0.98, id="1x2-decode-32-mixed-Qwen2-7B-Instruct", marks=_slow),
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, PHI_4, 0.99, id="1x2-prefill-256-uniform-phi-4", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, PHI_4, 0.99, id="1x2-prefill-512-uniform-phi-4", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, PHI_4, 0.99, id="1x2-prefill-1024-uniform-phi-4", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, PHI_4, 0.99, id="1x2-decode-32-uniform-phi-4", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x8-prefill-128-mixed-1B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x8-prefill-256-mixed-1B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x8-prefill-512-mixed-1B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x8-prefill-1024-mixed-1B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_1B, 0.98, id="1x8-decode-32-mixed-1B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-128-uniform-1B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-256-uniform-1B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-512-uniform-1B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-1024-uniform-1B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-decode-32-uniform-1B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x8-prefill-128-mixed-3B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x8-prefill-256-mixed-3B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x8-prefill-512-mixed-3B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x8-prefill-1024-mixed-3B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_3B, 0.98, id="1x8-decode-32-mixed-3B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-128-uniform-3B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-256-uniform-3B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-512-uniform-3B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-1024-uniform-3B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-decode-32-uniform-3B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-128-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-256-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-256-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-512-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-512-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-1024-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-1024-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 2048, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-2048-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-2048-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 4096, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-4096-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 4096, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-4096-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 8192, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-prefill-8192-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-8192-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_8B, 0.98, id="1x8-decode-32-mixed-8B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-uniform-8B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x8-prefill-128-mixed-11B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x8-prefill-256-mixed-11B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x8-prefill-512-mixed-11B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x8-prefill-1024-mixed-11B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, LLAMA_11B, 0.98, id="1x8-decode-32-mixed-11B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-128-uniform-11B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-256-uniform-11B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-512-uniform-11B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-1024-uniform-11B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-decode-32-uniform-11B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN3_32B, 0.98, id="1x8-prefill-256-mixed-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN3_32B, 0.98, id="1x8-prefill-512-mixed-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN3_32B, 0.98, id="1x8-prefill-1024-mixed-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN3_32B, 0.98, id="1x8-decode-32-mixed-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-128-uniform-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-256-uniform-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-512-uniform-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-1024-uniform-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-decode-32-uniform-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x8-prefill-128-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x8-prefill-256-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x8-prefill-512-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x8-prefill-1024-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, MISTRAL_7B, 0.98, id="1x8-decode-32-mixed-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-128-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-256-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-512-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-1024-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-decode-32-uniform-Mistral-7B-Instruct-v0.3", marks=_slow),
+        # --- New test cases from mlp_1d_performance.csv ---
+        # Qwen2.5-7B on N300 (1x2) - uniform BF8
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_7B, 0.99, id="1x2-prefill-256-uniform-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_7B, 0.99, id="1x2-prefill-512-uniform-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_7B, 0.99, id="1x2-prefill-1024-uniform-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_7B, 0.99, id="1x2-decode-32-uniform-Qwen2.5-7B", marks=_slow),
+        # Qwen2.5-72B on T3K (1x8) - mixed BF4/BF8
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_72B, 0.98, id="1x8-prefill-128-mixed-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_72B, 0.98, id="1x8-prefill-256-mixed-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_72B, 0.98, id="1x8-prefill-512-mixed-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_72B, 0.98, id="1x8-prefill-1024-mixed-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_72B, 0.98, id="1x8-decode-32-mixed-Qwen2.5-72B", marks=_slow),
+        # DeepSeek-R1-Distill-Qwen-14B on N300 (1x2) - mixed BF4/BF8
+        pytest.param((1, 2), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, DEEPSEEK_R1_14B, 0.98, id="1x2-prefill-256-mixed-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, DEEPSEEK_R1_14B, 0.98, id="1x2-prefill-512-mixed-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, DEEPSEEK_R1_14B, 0.98, id="1x2-prefill-1024-mixed-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, DEEPSEEK_R1_14B, 0.98, id="1x2-decode-32-mixed-DeepSeek-R1-14B", marks=_slow),
+        # Qwen2.5-Coder-32B on T3K (1x8) - mixed BF4/BF8
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_CODER_32B, 0.98, id="1x8-prefill-128-mixed-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_CODER_32B, 0.98, id="1x8-prefill-256-mixed-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_CODER_32B, 0.98, id="1x8-prefill-512-mixed-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_CODER_32B, 0.98, id="1x8-prefill-1024-mixed-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, QWEN25_CODER_32B, 0.98, id="1x8-decode-32-mixed-Qwen2.5-Coder-32B", marks=_slow),
+        # Qwen2.5-Coder-32B on T3K (1x8) - uniform BF8
+        pytest.param((1, 8), 1, 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-128-uniform-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 256, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-256-uniform-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 512, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-512-uniform-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-1024-uniform-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-decode-32-uniform-Qwen2.5-Coder-32B", marks=_slow),
+    ]
+
+
 # [INFO] generate random tensor for every test case is too expensive; cache weights and reuse them across test cases
 # [INFO] separate out ttnn_mesh_device parameter allows for sharing the same mesh device across test cases
 @pytest.mark.parametrize(
@@ -210,7 +488,7 @@ def _list_test_cases() -> list[pytest.param]:
 )
 @pytest.mark.parametrize(
     "mesh_shape,batch_size,seq_len,mode,act_dtype,w1_dtype,w2_dtype,w3_dtype,hf_model_name,pcc",
-    _list_test_cases(),
+    _list_non_glx_test_cases() + _list_glx_test_cases(),
 )
 def test_mlp_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
@@ -249,11 +527,20 @@ def test_mlp_1d_vs_reference(
 
     # Build MLP1D TT model and load the same weights in
     # TT expects weights in TTNN layout (in_features, out_features) - transpose from PyTorch layout
-    # todo)) transpose could be part of the MLP1D config! --> use dim and hidden_dim to figure out!
-    w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
-    w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    if hasattr(reference_mlp, "gate_proj"):
+        w1_torch = reference_mlp.gate_proj.weight.T.contiguous()  # (dim, hidden_dim)
+        w3_torch = reference_mlp.up_proj.weight.T.contiguous()  # (dim, hidden_dim)
+    elif hasattr(reference_mlp, "gate_up_proj"):
+        # Handle models like Phi-3/Phi-4 that use fused gate_up_proj
+        gate_up_weight = reference_mlp.gate_up_proj.weight
+        hidden_dim = gate_up_weight.shape[0] // 2
+        w1_torch = gate_up_weight[:hidden_dim, :].T.contiguous()
+        w3_torch = gate_up_weight[hidden_dim:, :].T.contiguous()
+    else:
+        raise AttributeError(f"Reference MLP {type(reference_mlp)} has no gate_proj or gate_up_proj")
+
     w2_torch = reference_mlp.down_proj.weight.T.contiguous()  # (hidden_dim, dim)
-    dim = config.hidden_size
+    dim = w1_torch.shape[0]
     torch_input = torch.randn(batch_size, 1, seq_len, dim, dtype=torch.bfloat16)
 
     # Create LazyWeights
@@ -263,8 +550,17 @@ def test_mlp_1d_vs_reference(
     lazy_w2 = LazyWeight(source=w2_torch, dtype=w2_dtype, cache_dir_weight_name=(cache_dir, "w2"))
     lazy_w3 = LazyWeight(source=w3_torch, dtype=w3_dtype, cache_dir_weight_name=(cache_dir, "w3"))
 
-    # Use from_config for power-user path (custom settings)
-    tt_model = MLP1D(lazy_w1, lazy_w2, lazy_w3)
+    # Get model/device-specific prefill_len_cutoff
+    prefill_len_cutoff = _get_prefill_len_cutoff(hf_model_name, mesh_shape)
+
+    # Construct the MLP1D model
+    if prefill_len_cutoff is None:
+        # Use default prefill_len_cutoff, take the happy path of MLP1D
+        tt_model = MLP1D(w1=lazy_w1, w2=lazy_w2, w3=lazy_w3)
+    else:
+        # Use custom config with prefill_len_cutoff override
+        mlp_config = MLP1DConfig(w1=lazy_w1, w2=lazy_w2, w3=lazy_w3, prefill_len_cutoff=prefill_len_cutoff)
+        tt_model = MLP1D.from_config(mlp_config)
 
     # Run TT model with the same input -- torch_input -- converted to ttnn tensor lazily on the fly
     # [INFO] we use LazyWeight on input for the benefit of faster testing (cached input); in production, the input is already a ttnn tensor.
@@ -341,7 +637,7 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
     cfg = tt_model.config
     dim = cfg.dim
     hidden_dim = cfg.hidden_dim
-    tile_size = cfg.tile_size
+    tile_size = TILE_SIZE
     prefill_len_cutoff = cfg.prefill_len_cutoff
 
     @lru_cache
