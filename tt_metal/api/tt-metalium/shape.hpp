@@ -57,6 +57,8 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
 tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
+std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides);
+
 }  // namespace tt::tt_metal
 
 template <>
