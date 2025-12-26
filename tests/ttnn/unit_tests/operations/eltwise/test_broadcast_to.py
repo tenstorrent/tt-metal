@@ -13,6 +13,8 @@ from functools import reduce
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
+pytestmark = pytest.mark.use_module_device
+
 input_bcast_shape_pairs = [
     ((1), (2, 10)),
     ((1, 1, 1, 1), (1, 1, 1, 67000)),

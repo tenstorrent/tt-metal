@@ -758,7 +758,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
                 dilation=1,
                 groups=1,
                 dtype=ttnn.bfloat16,
-                conv_config=conv1_config,
                 compute_config=conv1_compute_config,
                 return_weights_and_bias=True,
             )

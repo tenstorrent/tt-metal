@@ -120,6 +120,13 @@ from ttnn._ttnn.multi_device import (
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
+    Rank,
+    Size,
+    init_distributed_context,
+    is_initialized as distributed_context_is_initialized,
+    get_rank as distributed_context_get_rank,
+    get_size as distributed_context_get_size,
+    barrier as distributed_context_barrier,
 )
 
 from ttnn._ttnn.events import (
@@ -353,7 +360,7 @@ mul_ = ttnn.multiply_
 div_ = ttnn.divide_
 
 
-# TODO: pybind the overloaded operators below
+# TODO: nanobind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
