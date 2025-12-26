@@ -11,11 +11,12 @@
 #include "ops/profiler_no_op/profiler_no_op.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "ops/sdpa_bw/sdpa_bw.hpp"
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
-#include "optimizers/sgd_fused/sgd_fused.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
+#include "optimizers/sgd_fused/sgd_fused.hpp"
 
 namespace ttml::metal {
 
@@ -50,6 +51,9 @@ constexpr auto silu_bw =
 
 constexpr auto sdpa_fw =
     ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
+
+constexpr auto sdpa_bw =
+    ttnn::register_operation<"ttml::metal::sdpa_bw", ttml::metal::ops::sdpa_bw::SDPABackwardOperation>();
 
 constexpr auto swiglu_fw =
     ttnn::register_operation<"ttml::metal::swiglu_fw", ttml::metal::ops::swiglu_fw::SwiGLUForwardOperation>();
