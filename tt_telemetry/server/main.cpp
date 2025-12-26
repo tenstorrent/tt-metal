@@ -180,6 +180,9 @@ int main(int argc, char* argv[]) {
         "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
         "telemetry.",
         cxxopts::value<bool>()->default_value("false"))(
+        "mmio-only",
+        "Only collect telemetry from MMIO-capable chips (skip remote/non-MMIO chips)",
+        cxxopts::value<bool>()->default_value("false"))(
         "disable-watchdog",
         "Disables the watchdog timer that monitors the telemetry thread",
         cxxopts::value<bool>()->default_value("false"))(
@@ -208,6 +211,7 @@ int main(int argc, char* argv[]) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
+    bool mmio_only = result["mmio-only"].as<bool>();
 
     // Watchdog configuration
     bool watchdog_disabled = result["disable-watchdog"].as<bool>();
@@ -298,7 +302,8 @@ int main(int argc, char* argv[]) {
             rtoptions,
             fsd,
             watchdog_timeout,
-            failure_exposure_duration);
+            failure_exposure_duration,
+            mmio_only);
     }
 
     // Run until finished

@@ -344,7 +344,11 @@ constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = get_compile_time_arg_val(MAIN_C
 constexpr bool is_intermesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 19) != 0;
 constexpr bool is_intramesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 20) != 0;
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 21;
+// Fabric telemetry static info fields
+constexpr uint16_t fabric_telemetry_mesh_id = static_cast<uint16_t>(get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 21));
+constexpr uint8_t fabric_telemetry_device_id = static_cast<uint8_t>(get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 22));
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 23;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
