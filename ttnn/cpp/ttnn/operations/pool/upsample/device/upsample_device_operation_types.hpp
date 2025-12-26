@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::pool::upsample {
 
@@ -15,6 +16,7 @@ struct operation_attributes_t {
     std::string mode = "nearest";
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt;
 };
 
 struct tensor_args_t {

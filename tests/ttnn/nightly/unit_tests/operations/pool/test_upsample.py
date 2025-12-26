@@ -30,7 +30,10 @@ from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multico
     "dtype_torch, dtype_ttnn",
     [[torch.bfloat16, ttnn.bfloat8_b], [torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]],
 )
-def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn):
+@pytest.mark.parametrize("run_twice", [True])
+def test_upsample_nearest_interleaved(
+    device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn, run_twice
+):
     # Skip block datatypes if memory layout is not tiled
     if dtype_ttnn == ttnn.bfloat8_b and memory_layout != ttnn.TILE_LAYOUT:
         pytest.skip("Block datatypes require TILE_LAYOUT")
@@ -56,6 +59,10 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
+    if run_twice:
+        ttnn.deallocate(output_tensor, True)
+        output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
     torch_result = torch_result.permute(0, 2, 3, 1)
@@ -79,6 +86,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
+@pytest.mark.parametrize("run_twice", [True])
 def test_bilinear_interleaved_memory(
     device,
     batch_size,
@@ -89,6 +97,7 @@ def test_bilinear_interleaved_memory(
     scale_w,
     math_fidelity,
     math_approx_mode,
+    run_twice,
 ):
     # Performs bilinear upsampling on interleaved inputs
     # Automatically height shards the input tensor
@@ -113,6 +122,13 @@ def test_bilinear_interleaved_memory(
     )
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config)
+
+    if run_twice:
+        ttnn.deallocate(output_tensor, True)
+        output_tensor = ttnn.upsample(
+            input_tensor, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config
+        )
+
     output_tensor = ttnn.to_torch(output_tensor)
 
     torch_result = torch_result.permute(0, 2, 3, 1)
@@ -137,7 +153,8 @@ def test_bilinear_interleaved_memory(
         [((0, 0), (4, 3))],
     ],
 )
-def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range):
+@pytest.mark.parametrize("run_twice", [True])
+def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range, run_twice):
     (torch_result, output_tensor) = upsample_multicore_common(
         device=device,
         input_shape=input_shape,
@@ -146,6 +163,7 @@ def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_rang
         shard_strategy=ttnn.ShardStrategy.BLOCK,
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         core_range=core_range,
+        run_twice=run_twice,
     )
     ## compare the results
     torch_result = torch_result.permute(0, 2, 3, 1)
@@ -171,7 +189,10 @@ def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_rang
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 120}], indirect=True)
-def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation):
+@pytest.mark.parametrize("run_twice", [True])
+def test_upsample_various(
+    device, input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation, run_twice
+):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8 cores on y axis")
     (torch_result, output_tensor) = upsample_multicore_common(
@@ -182,6 +203,7 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
         shard_strategy=shard_strategy,
         shard_orientation=shard_orientation,
         core_range=core_range,
+        run_twice=run_twice,
     )
     ## compare the results
     torch_result = torch_result.permute(0, 2, 3, 1)
@@ -199,7 +221,10 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
         (1, 128, 64, 128, 2, 2, 2),
     ),
 )
-def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, width, scale_h, scale_w, num_slices):
+@pytest.mark.parametrize("run_twice", [True])
+def test_panoptic_upsample_sliced(
+    device, batch_size, num_channels, height, width, scale_h, scale_w, num_slices, run_twice
+):
     input_shape_nchw = [batch_size, num_channels, height, width]
     scale_factor = (scale_h, scale_w)
     mode_pytorch = "nearest"  # we only did nearest in panoptic due to pcc dropping very little and bilinear not being able to fit in memory as of now
@@ -237,6 +262,15 @@ def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, widt
             scale_factor=scale_factor,
             mode=mode_ttnn,
         )
+
+        if run_twice:
+            ttnn.deallocate(x_slice_upsampled, True)
+            x_slice_upsampled = ttnn.upsample(
+                x_slice_nhwc,
+                scale_factor=scale_factor,
+                mode=mode_ttnn,
+            )
+
         x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
         sliced_results.append(x_slice_upsampled)
 
