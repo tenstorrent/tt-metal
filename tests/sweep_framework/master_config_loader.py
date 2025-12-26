@@ -1888,11 +1888,10 @@ class MasterConfigLoader:
                     parse_memory_config=self.parse_memory_config,
                 )
 
-                # For operations without transformers, transformed_configs will be empty
-                # In that case, we use extracted_params directly in the operation-specific handling below
-                if transformed_configs or extracted_params:
-                    config_count = len(transformed_configs) if transformed_configs else len(extracted_params)
-                    print(f"✅ Loaded {config_count} traced configurations for {operation_name} (model_traced suite)")
+                if transformed_configs:
+                    print(
+                        f"✅ Loaded {len(transformed_configs)} traced configurations for {operation_name} (model_traced suite)"
+                    )
 
                     # For embedding, return tuples to prevent cartesian product explosion
                     if clean_op_name == "embedding":
