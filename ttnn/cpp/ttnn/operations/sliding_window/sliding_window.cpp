@@ -105,7 +105,13 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         output_h = input_hw.first * scale_h;
         output_w = input_hw.second * scale_w;
     }
-    log_trace(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
+    log_trace(
+        tt::LogOp,
+        "SlidingWindowConfig::get_output_shape():: {} {} {} for input {}",
+        batch_size,
+        output_h,
+        output_w,
+        *this);
     return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
