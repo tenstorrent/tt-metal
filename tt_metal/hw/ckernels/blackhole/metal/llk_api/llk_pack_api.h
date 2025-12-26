@@ -15,6 +15,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_rows.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
 
@@ -216,6 +217,46 @@ inline void llk_pack_untilize(
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
 }
+
+/*************************************************************************
+ * LLK PACK ROWS
+ *************************************************************************/
+
+/**
+ * @brief Initialize the pack rows operation.
+ *
+ * @param num_rows Total number of rows to pack from the destination register to L1.
+ *                 Each row contains 16 datums.
+ *
+ * This function prepares the packer hardware to pack a specified number of rows
+ * from the destination register to L1 memory in row-major format.
+ */
+inline void llk_pack_rows_init(const std::uint32_t num_rows) { _llk_pack_rows_init_(num_rows); }
+
+/**
+ * @brief Pack rows from a destination register to L1 memory.
+ *
+ * @param output The output circular buffer identifier
+ * @param dst_index Index in the destination register to read from
+ * @param output_index The index in the output CB to write to
+ *
+ * This function packs the specified number of rows (configured via llk_pack_rows_init)
+ * from the destination register to the output circular buffer.
+ */
+inline void llk_pack_rows(
+    const std::uint32_t output, const std::uint32_t dst_index, const std::uint32_t output_index = 0) {
+    const std::uint8_t output_id = get_output_id(output);
+    const std::uint32_t pack_addr = get_output_tile_address<true, false>(output_id, output_index);
+    _llk_pack_rows_(dst_index, pack_addr);
+}
+
+/**
+ * @brief Uninitialize the pack rows operation.
+ *
+ * Restores packer addrmods and counters to a safe default state.
+ * Should be called after the pack rows operation is complete.
+ */
+inline void llk_pack_rows_uninit() { _llk_pack_rows_uninit_(); }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
 inline void llk_matmul_pack(
