@@ -25,6 +25,4 @@ bool should_use_split_reader(
 uint32_t get_grid_batching_factor(
     const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode = "bilinear");
 
-uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor);
-
 }  // namespace ttnn::operations::pool::grid_sample
