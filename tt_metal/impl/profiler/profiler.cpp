@@ -1946,9 +1946,8 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         this->generateAnalysesForDeviceMarkers(device_markers_vec);
     }
 
-    // Only write to CSV during final dump, not during mid-run dumps
-    // Mid-run dumps should accumulate markers for the final dump
-    if (!is_mid_run_dump) {
+    // When automatic polling is enabled, defer this until the final dump to avoid writing multiple times
+    if (!getDeviceDebugDumpEnabled() || !is_mid_run_dump) {
         this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
     }
 
@@ -1965,9 +1964,7 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         log_info(tt::LogMetal, "Total markers: {}", totalMarkers);
     }
 
-    // Only clear markers during final dump, not during mid-run dumps
-    // Mid-run dumps should accumulate markers for the final dump
-    if (!is_mid_run_dump) {
+    if (!getDeviceDebugDumpEnabled() || !is_mid_run_dump) {
         this->device_markers_per_core_risc_map.clear();
     }
 

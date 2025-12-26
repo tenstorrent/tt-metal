@@ -129,7 +129,7 @@ private:
 
     // Map which DRAM buffer is currently being written to by the RISC cores. Used for debug dump mode with double
     // buffering.
-    std::map<CoreCoord, std::map<tracy::RiscType, bool>> active_dram_buffer_per_core_risc_map;
+    std::map<CoreCoord, std::map<tracy::RiscType, uint8_t>> active_dram_buffer_per_core_risc_map;
 
     // Map to store buffer end indices for inactive buffers (before they're reset)
     // Key: (core, risc_type, buffer_index) -> buffer_end_index
