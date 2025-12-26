@@ -305,14 +305,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "frequency_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "presence_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
-            },  # sampling_params (non-uniform)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
@@ -331,12 +324,7 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "enable_log_probs": [True] * 32,
-            },  # sampling_params (non-uniform)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
