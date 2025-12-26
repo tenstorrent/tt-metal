@@ -1,38 +1,16 @@
-USER="ttuser"
-CONFIG_FILE="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml"
-HOST_FILE=${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/configurations/2loudboxes/hosts.txt
-RANK_BINDINGS_FILE=${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/configurations/2loudboxes/rank_bindings.yaml
+#!/bin/bash
+#SBATCH --nodes=2
+#SBATCH --nodelist=metal-wh-09,metal-wh-18
+#SBATCH --partition=debug
+#SBATCH --job-name=test
+#SBATCH --output=test_%j.out
+#SBATCH --error=test_%j.err
 
-# Allow overrides via environment or CLI args (with defaults above)
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --hostfile)
-            shift
-            HOST_FILE="$1"
-            ;;
-        --user)
-            shift
-            USER="$1"
-            ;;
-        --rank-bindings)
-            shift
-            RANK_BINDINGS_FILE="$1"
-            ;;
-        --config)
-            shift
-            CONFIG_FILE="$1"
-            ;;
-        *)
-            echo "Unknown argument: $1"
-            exit 1
-            ;;
-    esac
-    shift
-done
+# Set environmental variables
+export TT_METAL_HOME="/data/abustamante/tt-metal"
+export PYTHONPATH="${TT_METAL_HOME}:${PYTHONPATH}"
+source ${TT_METAL_HOME}/python_env/bin/activate
 
-# copy all files to all machines (pass user and hostfile)
-${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
+CONFIG_FILE="training_configs/training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml"
 
-CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/example.py -c ${CONFIG_FILE}"
-# use tt-run to run the example script across all machines
-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} --tag-output" ${CMD}
+tt-run --mpi-args "-x TT_METAL_HOME --mca mpi_show_mca_params all --mca btl_tcp_if_include eno1 --mca oob_tcp_if_include eno1 --mca btl self,tcp --tag-output" --rank-binding configurations/2loudboxes/rank_bindings.yaml python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/example.py -c ${CONFIG_FILE}
