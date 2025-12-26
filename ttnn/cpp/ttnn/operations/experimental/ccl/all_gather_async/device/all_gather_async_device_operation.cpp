@@ -13,9 +13,7 @@
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn {
-
-namespace operations::experimental::ccl::all_gather_async {
+namespace ttnn::operations::experimental::ccl::all_gather_async {
 
 AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes) {
     // Check for minimal sharded case
@@ -312,6 +310,4 @@ AllGatherAsyncDeviceOperation::invoke(
         tensor_args_t{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
 }
 
-}  // namespace operations::experimental::ccl::all_gather_async
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::all_gather_async
