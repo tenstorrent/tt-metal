@@ -43,6 +43,21 @@ class TTSampling(LightweightModule):
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
 
+    def _is_default_val(self, values, default):
+        if values is None:
+            return True
+        if isinstance(values, (int, float)):
+            return values == default
+        return all(value == default for value in values)
+
+    def _is_force_argmax_sampling(self, k, p, temp):
+        return (
+            self._allow_force_argmax_sampling
+            and self._is_default_val(k, 1)
+            and self._is_default_val(p, 1.0)
+            and self._is_default_val(temp, 1.0)
+        )
+
     def __init__(
         self,
         mesh_device,
@@ -90,16 +105,6 @@ class TTSampling(LightweightModule):
             self.num_argmax_gather_links = self.num_gather_links
             self.ag_topology = ttnn.Topology.Linear
 
-        if (
-            self._allow_force_argmax_sampling
-            and (k is not None and k[0] == 1)
-            and (p is not None and p[0] == 1.0)
-            and (temp is not None and temp[0] == 1.0)
-        ):
-            self._force_argmax_sampling = True
-        else:
-            self._force_argmax_sampling = False
-
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
         # When p=0, the sampling operation will select the token with highest probability (argmax)
@@ -109,6 +114,8 @@ class TTSampling(LightweightModule):
             p = torch.zeros(self.max_batch_size)
         if temp is None:
             temp = torch.ones(self.max_batch_size)
+
+        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
         self.k_tensor = ttnn.from_torch(
@@ -203,16 +210,8 @@ class TTSampling(LightweightModule):
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         # Force argmax sampling
-        if (
-            self._allow_force_argmax_sampling
-            and (k is not None and k[0] == 1)
-            and (p is not None and p[0] == 1.0)
-            and (temp is not None and temp[0] == 1.0)
-        ):
-            self._force_argmax_sampling = True
-        else:
-            self._force_argmax_sampling = False
-
+        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        if not self._force_argmax_sampling:
             """Update sampling parameters (k, p, temperature) dynamically."""
             self.k_tensor_new = ttnn.from_torch(
                 torch.tensor(k),

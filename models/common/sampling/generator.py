@@ -80,11 +80,7 @@ class SamplingGenerator:
         for key, slot in self._trace_states.items():
             if slot["id"] is not None:
                 logger.debug(
-                    "Resetting sampling trace (penalties=%s, log_probs=%s, force_argmax=%s, trace_id=%s)",
-                    key.penalties_on,
-                    key.log_probs_on,
-                    key.force_argmax,
-                    slot["id"],
+                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
                 )
         self._trace_states.clear()
 
@@ -180,7 +176,9 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
-        logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
+        logger.debug(
+            f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+        )
         self._run_sampling(
             logits,
             penalties_on=penalties_on,
@@ -219,7 +217,6 @@ class SamplingGenerator:
             raise RuntimeError("Trace has not been captured yet.")
 
         ttnn.execute_trace(self.mesh_device, slot["id"], cq_id=self.cq_id, blocking=False)
-
         return slot["output"]
 
     def sample(
