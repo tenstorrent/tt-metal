@@ -168,20 +168,12 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconf
 
 // clang-format off
 /**
- * Initializes the pack rows operation. This function prepares the packer hardware to pack
+ * Initializes the pack rows operation. This function configures the packer to pack
  * a specified number of rows from the destination register to L1 memory in row-major order.
- * Each row contains 16 datums by default.
+ * Each row contains 16 datums.
  *
- * The pack rows operation is useful when you need to pack data from the destination register
- * to L1 memory in a row-major layout, as opposed to the tile-based layout used by standard
- * pack operations.
- *
- * This initialization function should be called before using `pack_rows` to perform the
- * actual packing.
- *
- * NOTE: Before calling this function, ensure that the packer hardware has been configured
- * for the output circular buffer (e.g., via an earlier initialization function that sets
- * up the destination format).
+ * Call this function before using `pack_rows`. After the pack_rows operation is complete,
+ * call `pack_rows_uninit` to restore the packer state.
  *
  * Return value: None
  *
@@ -225,7 +217,9 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  * This function should be called after the pack_rows operation is complete.
  *
  * The function restores packer address modifiers and counters to default values,
- * allowing other packing operations to function correctly.
+ * allowing subsequent standard packing operations (e.g., pack_tile) to function correctly.
+ * This is necessary because pack_rows uses a specialized packer configuration that differs
+ * from the default tile packing setup.
  *
  * Return value: None
  */

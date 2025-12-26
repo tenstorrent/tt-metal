@@ -240,13 +240,16 @@ inline void llk_matmul_pack(
 
 /*************************************************************************
  * LLK PACK ROWS
+ *
+ * This is a non-standard packing operation that requires explicit initialization
+ * and uninitialization, similar to pack_untilize.
  *************************************************************************/
 
 /**
  * @brief Initialize the pack rows operation.
  *
  * @param num_rows Total number of rows to pack from the destination register to L1.
- *                 Each row contains 16 datums.
+ *                 Each row contains 16 datums. Valid range: 1 to 64.
  *
  * This function prepares the packer hardware to pack a specified number of rows
  * from the destination register to L1 memory in row-major format.
