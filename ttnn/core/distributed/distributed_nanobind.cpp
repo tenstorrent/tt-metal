@@ -127,6 +127,7 @@ void py_module_types(nb::module_& mod) {
 }
 // NOLINTEND(misc-redundant-expression)
 // NOLINTEND(bugprone-unused-raii)
+// NOLINTEND(misc-redundant-expression)
 
 void py_module(nb::module_& mod) {
     static_cast<nb::class_<MeshShape>>(mod.attr("MeshShape"))
