@@ -1,7 +1,22 @@
 cmake_minimum_required(VERSION 3.22...3.30)
 
+# Add local cmake modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 # Find required packages
 find_package(Threads REQUIRED)
+
+# Use gRPC and its bundled Protobuf from third_party (fetched via CPM)
+# gRPC bundles its own protobuf to keep it isolated from tt-metal's protobuf
+# Set up the variables expected by BuildTelemetryProto.cmake
+# Use grpc++_unsecure since telemetry server uses UNIX sockets with InsecureServerCredentials (no SSL needed)
+set(_PROTOBUF_LIBPROTOBUF libprotobuf)  # gRPC's bundled protobuf (no protobuf:: namespace)
+set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)  # gRPC's bundled protoc
+set(_GRPC_GRPCPP grpc++_unsecure)
+set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+set(_REFLECTION grpc++_reflection)
+# gRPC's bundled protobuf doesn't provide protobuf_generate() function, use manual approach
+set(GRPC_FOUND_VIA_CMAKE FALSE)
 
 # Fetch cpp-httplib using CPM (consistent with third_party dependencies)
 CPMAddPackage(
@@ -67,18 +82,23 @@ target_link_libraries(
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
 
+# Build the telemetry gRPC proto library
+include(BuildTelemetryProto)
+
 add_executable(tt_telemetry_server)
 target_sources(
     tt_telemetry_server
     PRIVATE
         server/main.cpp
         telemetry/telemetry_collector.cpp
+        telemetry/telemetry_subscriber.cpp
         telemetry/watchdog.cpp
         telemetry/metric.cpp
         server/web_server.cpp
         server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
+        server/grpc_telemetry_server.cpp
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
@@ -109,7 +129,9 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
-        protobuf::libprotobuf # Add protobuf library for compatibility
+        ${_PROTOBUF_LIBPROTOBUF} # Add protobuf library for compatibility
+        telemetry_grpc_proto # Link the generated gRPC proto library
+        ${_GRPC_GRPCPP}
 )
 
 # Copy frontend files to build directory so they're accessible relative to the executable
