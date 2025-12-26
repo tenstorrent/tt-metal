@@ -14,25 +14,24 @@ using namespace ckernel;
  * @details Sets up MOP for unpacking and tilizing a single tile, works for SRCA/B/S and DEST
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_S
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t BLOCK_CT_DIM>
-inline void _llk_unpack_tilize_mop_config_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t BLOCK_CT_DIM>
+inline void _llk_unpack_tilize_mop_config_(const uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
-    static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
 
-    constexpr static uint unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, BUF_DESC_ID, 1 /*Set Dvalid*/);
+    uint unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
 
-    constexpr static uint reset_src_reg_instrn =
-        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, BUF_DESC_ID, 1 /*Set Dvalid*/);
+    uint reset_src_reg_instrn =
+        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
 
     if constexpr (IS_32b_DEST_EN)
     {
@@ -57,14 +56,14 @@ inline void _llk_unpack_tilize_mop_config_()
  * @brief Initialized unpacker to unpack tilize a single operand by full 32x32 tiles
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t BLOCK_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_init_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t BLOCK_CT_DIM, uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_init_(const uint32_t buf_desc_id)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -84,7 +83,7 @@ inline void _llk_unpack_tilize_init_()
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // how much to stride to go to next row within the same tile
     }
-    _llk_unpack_tilize_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN, BLOCK_CT_DIM>();
+    _llk_unpack_tilize_mop_config_<UNP_SEL, IS_32b_DEST_EN, BLOCK_CT_DIM>(buf_desc_id);
 }
 
 /**
@@ -114,26 +113,25 @@ inline void _llk_unpack_tilize_(const uint l1_tile_idx)
  * @details Sets up MOP for unpacking half a face with strided instruction and increments L1 counter
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  * @param c_dim_face: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_mop_config_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_mop_config_(const uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
-    static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = 1;
 
-    constexpr static uint unpack_half_face_instrn =
+    uint unpack_half_face_instrn =
         (UNP_SEL == p_unpacr::UNP_A)
-            ? TT_OP_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, BUF_DESC_ID, 0 /*Set Dvalid*/)
-            : TT_OP_UNPACR1_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, BUF_DESC_ID, 0 /*Set Dvalid*/);
+            ? TT_OP_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id, 0 /*Set Dvalid*/)
+            : TT_OP_UNPACR1_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
     constexpr static uint increment_half_face_instrn =
         TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, C_DIM_FACES * ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * FULL_CT_DIM);
 
@@ -147,14 +145,14 @@ inline void _llk_unpack_tilize_strided_mop_config_()
  * @brief Initialized unpacker with stride values for tilize strided 32x32 or 16x32
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_init_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_init_(const uint32_t buf_desc_id)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -168,8 +166,8 @@ inline void _llk_unpack_tilize_strided_init_()
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES);
     }
-    _llk_unpack_tilize_strided_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN, FULL_CT_DIM, C_DIM_FACES>(); // TODO: This throws a compile time error for UPK
-                                                                                                              // but not PCK - why?
+    _llk_unpack_tilize_strided_mop_config_<UNP_SEL, IS_32b_DEST_EN, FULL_CT_DIM, C_DIM_FACES>(buf_desc_id); // TODO: This throws a compile time error for UPK
+                                                                                                            // but not PCK - why?
 }
 
 /**
@@ -237,26 +235,24 @@ inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint 
  * @details Sets up MOP for unpacking half a face with strided instruction and increments L1 counter
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ>
-inline void _llk_unpack_tilize_strided_mop_config_small_faces_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ>
+inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
-    static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
     static_assert(!(IS_32b_DEST_EN && UNP_SEL != p_unpacr::UNP_A), "If IS_32b_DEST_EN then UNP_SEL should be UNP_A");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
 
-    constexpr static uint unpack_face0_instrn =
-        TT_OP_UNPACR0_STRIDE(ROWS_READ /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, BUF_DESC_ID, 0 /*Set Dvalid*/);
-    constexpr static uint unpack_face1_instrn = TT_OP_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, BUF_DESC_ID, 1 /*Set Dvalid*/);
+    uint unpack_face0_instrn = TT_OP_UNPACR0_STRIDE(ROWS_READ /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
+    uint unpack_face1_instrn = TT_OP_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, buf_desc_id, 1 /*Set Dvalid*/);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_face0_instrn, unpack_face1_instrn);
 
@@ -277,20 +273,20 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_()
  * @brief Initialized unpacker with stride values for tilize strided for 8x32, 4x32, 2x32, 1x32
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_init_small_faces_()
+template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ, uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_init_small_faces_(const uint32_t buf_desc_id)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
     cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES);
-    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN, FULL_CT_DIM, ROWS_READ>();
+    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, IS_32b_DEST_EN, FULL_CT_DIM, ROWS_READ>(buf_desc_id);
 }
 
 /**

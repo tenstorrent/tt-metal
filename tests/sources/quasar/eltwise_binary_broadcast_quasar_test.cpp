@@ -17,8 +17,8 @@
 void run_kernel()
 {
     tdma_descriptor_t td_val_A, td_val_B;
-    const uint BUF_DESC_ID_A        = 0;
-    const uint BUF_DESC_ID_B        = 1;
+    const uint buf_desc_id_a        = 0;
+    const uint buf_desc_id_b        = 1;
     const uint num_tiles_per_unpack = TILE_CNT;
 
     // Setup data valid scheme
@@ -33,7 +33,7 @@ void run_kernel()
     bd_val_A.f.z_dim             = num_faces;
 
     td_val_A.buf_desc        = bd_val_A;
-    td_val_A.buf_desc_id     = BUF_DESC_ID_A;
+    td_val_A.buf_desc_id     = buf_desc_id_a;
     td_val_A.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     // Configure Source B buffer descriptor
@@ -45,11 +45,11 @@ void run_kernel()
     bd_val_B.f.z_dim             = num_faces;
 
     td_val_B.buf_desc        = bd_val_B;
-    td_val_B.buf_desc_id     = BUF_DESC_ID_B;
+    td_val_B.buf_desc_id     = buf_desc_id_b;
     td_val_B.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-    _llk_unpack_binary_broadcast_operands_init_<BUF_DESC_ID_A, BUF_DESC_ID_B, BROADCAST_TYPE>(num_tiles_per_unpack);
+    _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(buf_desc_id_a, buf_desc_id_b, num_tiles_per_unpack);
     _llk_unpack_binary_broadcast_operands_(0, 0);
 }
 
@@ -90,7 +90,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    uint32_t const BUF_DESC       = 8;
+    uint32_t const buf_desc_id    = 8;
     const uint num_tiles_per_pack = TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -105,11 +105,11 @@ void run_kernel()
     tdma_descriptor_t tdma_desc;
 
     tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = BUF_DESC;
+    tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0, BUF_DESC>(num_tiles_per_pack);
+    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
     _llk_pack_<p_pacr::PACK0>(0, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

@@ -32,15 +32,16 @@ inline void _llk_pack_srcs_config_()
 
 /**
  * @brief Unpacks tiles to SrcS, Each SrcS slice is only 8*16*16bit
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0-31
  * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0-31
  * @param start_l1_tile_idx: The tile index into the l1 input buffer
  * that unpacker can start unpacking from
  */
-template <uint8_t BUF_DESC_ID, uint8_t INSTRN_COUNT>
-inline void _llk_unpack_srcs_(const uint start_l1_tile_idx
+template <uint8_t INSTRN_COUNT>
+inline void _llk_unpack_srcs_(
+    const uint8_t buf_desc_id, const uint start_l1_tile_idx
 
 )
 {
@@ -50,21 +51,22 @@ inline void _llk_unpack_srcs_(const uint start_l1_tile_idx
 
     for (uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
-        TTI_UNPACR2_TILE_INC(0b0, 0b1 /*SrcS l1 increment*/, BUF_DESC_ID, 0b1 /*Set dvalid*/);
+        TT_UNPACR2_TILE_INC(0b0, 0b1 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }
 }
 
 /**
  * @brief Packs tiles from SrcS to L1, Each SrcS slice is only 8*16*16bit
- * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0-31
  * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
+ * @param buf_desc_id: The buffer descriptor ID where the buffer information is
+ * stored in the buffer descriptor table, values = 0-31
  * @param start_l1_tile_idx: The tile index into the l1 output buffer
  * that packer can start packing to
  */
-template <uint8_t BUF_DESC_ID, uint8_t INSTRN_COUNT>
-inline void _llk_pack_srcs_(const uint start_l1_tile_idx
+template <uint8_t INSTRN_COUNT>
+inline void _llk_pack_srcs_(
+    const uint8_t buf_desc_id, const uint start_l1_tile_idx
 
 )
 {
@@ -74,6 +76,6 @@ inline void _llk_pack_srcs_(const uint start_l1_tile_idx
 
     for (uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
-        TTI_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, BUF_DESC_ID, 0b1 /*Set dvalid*/);
+        TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }
 }

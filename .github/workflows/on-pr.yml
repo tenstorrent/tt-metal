@@ -34,13 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: pre-commit
     outputs:
-      wormhole: ${{ steps.filter.outputs.wormhole }}
-      blackhole: ${{ steps.filter.outputs.blackhole }}
-      tests: ${{ steps.filter.outputs.tests }}
-      github: ${{ steps.filter.outputs.github }}
-      documentation: ${{ steps.filter.outputs.documentation }}
-      performance: ${{ steps.filter.outputs.performance }}
-      quasar: ${{ steps.filter.outputs.quasar }}
+      wormhole: ${{ steps.filter.outputs.wormhole_any_changed }}
+      blackhole: ${{ steps.filter.outputs.blackhole_any_changed }}
+      tests: ${{ steps.filter.outputs.tests_any_changed }}
+      github: ${{ steps.filter.outputs.github_any_changed }}
+      documentation: ${{ steps.filter.outputs.documentation_any_changed }}
+      performance: ${{ steps.filter.outputs.performance_any_changed }}
+      quasar: ${{ steps.filter.outputs.quasar_any_changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,29 +48,31 @@ jobs:
           fetch-depth: 200
 
       - name: Detect which directories changed
-        uses: dorny/paths-filter@v3
+        uses: tj-actions/changed-files@v47
         id: filter
         with:
-          filters: |
-              wormhole:
-                - 'tt_llk_wormhole_b0/**'
-              blackhole:
-                - 'tt_llk_blackhole/**'
-              quasar:
-                - 'tt_llk_quasar/**'
-              tests:
-                - 'tests/**'
-                - '!tests/sources/quasar/**'
-                - '!tests/python_tests/quasar/**'
-              github:
-                - '.github/**'
-              documentation:
-                - 'docs/**'
-                - '**/*.md'
-                - '**/*.rst'
-              performance:
-                - '**/*perf**'
-                - '**/*profiler**'
+          files_yaml: |
+            wormhole:
+              - 'tt_llk_wormhole_b0/**'
+            blackhole:
+              - 'tt_llk_blackhole/**'
+            quasar:
+              - 'tt_llk_quasar/**'
+              - 'tests/sources/quasar/**'
+              - 'tests/python_tests/quasar/**'
+            tests:
+              - 'tests/**'
+              - '!tests/sources/quasar/**'
+              - '!tests/python_tests/quasar/**'
+            github:
+              - '.github/**'
+            documentation:
+              - 'docs/**'
+              - '**/*.md'
+              - '**/*.rst'
+            performance:
+              - '**/*perf**'
+              - '**/*profiler**'
 
   label-pr:
     name: "🏷️ Label PR"
