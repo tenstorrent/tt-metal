@@ -336,6 +336,14 @@ from ttnn.decorators import (
 def auto_register_ttnn_cpp_operations(module):
     for attribute_name in dir(module):
         attribute = getattr(module, attribute_name)
+
+        if hasattr(attribute, "operation_type") and attribute.operation_type == "ttnn_lightweight":
+            split_name = module.__name__.split(".")
+            module_name = split_name[0]
+            operation_name = attribute_name
+            target_module = create_module_if_not_exists(module_name)
+            register_cpp_operation(target_module, operation_name, attribute)
+
         if hasattr(attribute, "__ttnn_operation__") and attribute.__ttnn_operation__ is None:
             full_name = attribute.python_fully_qualified_name
             module_path, _, func_name = full_name.rpartition(".")
