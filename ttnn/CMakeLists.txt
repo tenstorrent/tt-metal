@@ -416,6 +416,12 @@ list(
 # Build the libraries!
 ##################################################
 
+if(TT_LTO_ENABLED)
+    set(TTNN_CPP_BUILD_TYPE STATIC)
+else()
+    set(TTNN_CPP_BUILD_TYPE SHARED)
+endif()
+
 #there are two ways to build TTNN
 # 1) Without Python bindings
 #        ttnncpp will be a dynamic library that can be linked to any project
@@ -426,10 +432,14 @@ list(
 # Most of the use cases will link to ttnn without caring a lot about the backend, but
 # for those who need this second use case, now it is officially supported
 
-add_library(ttnncpp SHARED)
+add_library(ttnncpp ${TTNN_CPP_BUILD_TYPE})
 add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
+
+#if(TT_LTO_ENABLED)
+#    set_target_properties(ttnncpp PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+#endif()
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
@@ -654,9 +664,14 @@ if(TT_INSTALL)
 endif()
 
 if(WITH_PYTHON_BINDINGS)
-    add_library(ttnn SHARED)
+    add_library(ttnn ${TTNN_CPP_BUILD_TYPE})
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+
+    #if(TT_LTO_ENABLED)
+    #    set_target_properties(ttnn PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    #endif()
+
     target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
     TT_ENABLE_UNITY_BUILD(ttnn)
 
