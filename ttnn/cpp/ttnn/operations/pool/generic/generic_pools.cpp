@@ -290,6 +290,9 @@ static std::vector<Tensor> pool2d_L1(
         .stride_hw = {stride.at(0), stride.at(1)},
         .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
+        .ceil_pad_hw = ceil_pad.has_value()
+                           ? std::optional<sliding_window::uint32_pair_t>({ceil_pad->at(0), ceil_pad->at(1)})
+                           : std::nullopt,
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
         .core_range_set = parallel_config.grid,
