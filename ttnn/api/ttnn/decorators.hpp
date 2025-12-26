@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>  // size_t
+#include <set>
 #include <string>
 #include <type_traits>  // is_same_v, decay
 #include <utility>      // index_sequence, forward
@@ -12,10 +14,42 @@
 #include <fmt/format.h>
 #include <reflect>
 
+#include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "ttnn/graph/graph_processor.hpp"
+
+// Forward declaration for database functions
+namespace ttnn::database {
+void insert_operation(
+    const std::filesystem::path& report_path,
+    uint64_t operation_id,
+    const std::string& operation_name,
+    std::optional<double> duration_ms);
+void insert_devices(
+    const std::filesystem::path& report_path, const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+void insert_buffers(
+    const std::filesystem::path& report_path,
+    uint64_t operation_id,
+    const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+void insert_buffer_pages(
+    const std::filesystem::path& report_path,
+    uint64_t operation_id,
+    const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+void insert_captured_graph(
+    const std::filesystem::path& report_path, uint64_t operation_id, const nlohmann::json& captured_graph);
+void insert_input_tensors(
+    const std::filesystem::path& report_path, uint64_t operation_id, const std::vector<Tensor>& tensors);
+void insert_output_tensors(
+    const std::filesystem::path& report_path, uint64_t operation_id, const std::vector<Tensor>& tensors);
+void insert_stack_trace(const std::filesystem::path& report_path, uint64_t operation_id);
+uint64_t get_next_operation_id();
+}  // namespace ttnn::database
 
 namespace ttnn {
 namespace decorators {
@@ -25,6 +59,70 @@ using OptionalTensors = tt::tt_metal::operation::OptionalTensors;
 using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 
 namespace detail {
+
+// Helper to extract devices from operation arguments
+template <typename T>
+void collect_devices_from_arg(std::set<tt::tt_metal::distributed::MeshDevice*>& devices, const T& arg) {
+    if constexpr (std::is_same_v<std::decay_t<T>, Tensor>) {
+        if (arg.storage_type() == StorageType::DEVICE && arg.is_allocated()) {
+            devices.insert(arg.device());
+        }
+    } else if constexpr (std::is_same_v<std::decay_t<T>, tt::tt_metal::distributed::MeshDevice*>) {
+        if (arg != nullptr) {
+            devices.insert(arg);
+        }
+    } else if constexpr (std::is_same_v<std::decay_t<T>, tt::tt_metal::distributed::MeshDevice&>) {
+        devices.insert(&arg);
+    }
+    // Other types are ignored
+}
+
+template <typename... Args>
+std::vector<tt::tt_metal::distributed::MeshDevice*> extract_devices(const Args&... args) {
+    std::set<tt::tt_metal::distributed::MeshDevice*> device_set;
+    (collect_devices_from_arg(device_set, args), ...);
+    return std::vector<tt::tt_metal::distributed::MeshDevice*>(device_set.begin(), device_set.end());
+}
+
+// Helper to collect tensors from arguments
+template <typename T>
+void collect_tensors_from_arg(std::vector<Tensor>& tensors, const T& arg) {
+    if constexpr (std::is_same_v<std::decay_t<T>, Tensor>) {
+        tensors.push_back(arg);
+    } else if constexpr (std::is_same_v<std::decay_t<T>, std::optional<Tensor>>) {
+        if (arg.has_value()) {
+            tensors.push_back(arg.value());
+        }
+    } else if constexpr (std::is_same_v<std::decay_t<T>, std::vector<Tensor>>) {
+        for (const auto& t : arg) {
+            tensors.push_back(t);
+        }
+    }
+    // Other types are ignored
+}
+
+template <typename... Args>
+std::vector<Tensor> extract_input_tensors(const Args&... args) {
+    std::vector<Tensor> tensors;
+    (collect_tensors_from_arg(tensors, args), ...);
+    return tensors;
+}
+
+// Helper to extract output tensors from return value
+template <typename T>
+std::vector<Tensor> extract_output_tensors(const T& output) {
+    std::vector<Tensor> tensors;
+    if constexpr (std::is_same_v<std::decay_t<T>, Tensor>) {
+        tensors.push_back(output);
+    } else if constexpr (std::is_same_v<std::decay_t<T>, std::optional<Tensor>>) {
+        if (output.has_value()) {
+            tensors.push_back(output.value());
+        }
+    } else if constexpr (std::is_same_v<std::decay_t<T>, std::vector<Tensor>>) {
+        tensors = output;
+    }
+    return tensors;
+}
 
 // Get "add" from "ttnn::add"
 static std::string base_name(const std::string& cpp_fully_qualified_name) {
@@ -94,12 +192,79 @@ private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
         log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+
+        // Check if logging is enabled
+        const bool logging_enabled =
+            !ttnn::CONFIG.get<"enable_fast_runtime_mode">() && ttnn::CONFIG.get<"enable_logging">();
+        const auto report_path = ttnn::CONFIG.get<"report_path">();
+        const bool should_log = logging_enabled && report_path.has_value();
+
+        uint64_t operation_id = 0;
+        std::vector<tt::tt_metal::distributed::MeshDevice*> devices;
+
+        std::vector<Tensor> input_tensors;
+
+        if (should_log) {
+            operation_id = ttnn::database::get_next_operation_id();
+            devices = detail::extract_devices(args...);
+            input_tensors = detail::extract_input_tensors(args...);
+
+            // Synchronize devices before operation
+            for (auto* device : devices) {
+                tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+            }
+
+            // Pre-operation database inserts
+            ttnn::database::insert_operation(
+                report_path.value(), operation_id, python_fully_qualified_name(), std::nullopt);
+
+            ttnn::database::insert_stack_trace(report_path.value(), operation_id);
+            ttnn::database::insert_input_tensors(report_path.value(), operation_id, input_tensors);
+        }
+
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
+        // Begin graph capture
+        ttnn::graph::GraphProcessor::begin_graph_capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
+
+        auto start_time = std::chrono::high_resolution_clock::now();
         auto output = invoke(std::forward<args_t>(args)...);
+        auto end_time = std::chrono::high_resolution_clock::now();
+
+        // End graph capture
+        auto captured_graph = ttnn::graph::GraphProcessor::end_graph_capture();
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
         log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+
+        if (should_log) {
+            // Synchronize devices after operation
+            for (auto* device : devices) {
+                tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+            }
+
+            // Calculate duration in milliseconds
+            auto duration_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
+            // Extract output tensors
+            auto output_tensors = detail::extract_output_tensors(output);
+
+            // Post-operation database inserts
+            ttnn::database::insert_devices(report_path.value(), devices);
+            ttnn::database::insert_operation(
+                report_path.value(), operation_id, python_fully_qualified_name(), duration_ms);
+            ttnn::database::insert_output_tensors(report_path.value(), operation_id, output_tensors);
+            ttnn::database::insert_buffers(report_path.value(), operation_id, devices);
+
+            if (ttnn::CONFIG.get<"enable_detailed_buffer_report">()) {
+                ttnn::database::insert_buffer_pages(report_path.value(), operation_id, devices);
+            }
+
+            if (!captured_graph.is_null()) {
+                ttnn::database::insert_captured_graph(report_path.value(), operation_id, captured_graph);
+            }
+        }
+
         return output;
     }
 

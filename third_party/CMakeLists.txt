@@ -390,3 +390,11 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
 )
+
+############################################################################################################################
+# SQLite3 : For TTNN Visualizer C++ database support
+############################################################################################################################
+find_library(SQLITE3_LIBRARY NAMES sqlite3)
+if(NOT SQLITE3_LIBRARY)
+    message(FATAL_ERROR "SQLite3 library not found. Please install libsqlite3-dev")
+endif()

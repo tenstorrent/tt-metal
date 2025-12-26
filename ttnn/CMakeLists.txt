@@ -66,6 +66,7 @@ target_sources(
         core/cluster.cpp
         core/config.cpp
         core/core.cpp
+        core/database.cpp
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
@@ -126,6 +127,7 @@ target_link_libraries(
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
+        sqlite3
 )
 
 install(
