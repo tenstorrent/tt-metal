@@ -152,24 +152,14 @@ void run_single_core_pack_rows_program(
     };
     vector<uint32_t> golden = ::unit_tests::compute::gold_standard_pack_rows(src0_vec, golden_config);
 
-    bool pass = true;
-    pass &= (golden.size() == result_vec.size());
-    pass &= (golden == result_vec);
-
-    if (not pass) {
-        std::cout << "GOLDEN " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(golden));
-        std::cout << "RESULTS " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
-    }
+    EXPECT_EQ(golden.size(), result_vec.size());
+    EXPECT_EQ(golden, result_vec);
 
     log_info(
         tt::LogTest,
-        "Done running test with: num_rows = {}, DstSyncFull = {}, pass = {}",
+        "Done running test with: num_rows = {}, DstSyncFull = {}",
         test_config.num_rows,
-        test_config.dst_full_sync_en,
-        pass);
-    ASSERT_TRUE(pass);
+        test_config.dst_full_sync_en);
 }
 
 }  // namespace unit_tests::compute::pack_rows
@@ -178,17 +168,42 @@ void run_single_core_pack_rows_program(
 Following tests are for pack_rows
 ***************************************/
 
-TEST_F(MeshDeviceFixture, TensixComputePackRows) {
-    vector<uint32_t> num_rows_values = {1, 8, 16, 32, 48, 64};
-    for (auto num_rows : num_rows_values) {
-        for (bool dst_full_sync_en : {true, false}) {
-            unit_tests::compute::pack_rows::TestConfig test_config = {
-                .dst_full_sync_en = dst_full_sync_en,
-                .num_rows = num_rows,
-            };
-            unit_tests::compute::pack_rows::run_single_core_pack_rows_program(this->devices_.at(0), test_config);
-        }
-    }
+// Parameterized test fixture that combines MeshDeviceFixture with test parameters
+class TensixComputePackRowsTest : public MeshDeviceFixture,
+                                  public testing::WithParamInterface<unit_tests::compute::pack_rows::TestConfig> {};
+
+// The actual parameterized test
+TEST_P(TensixComputePackRowsTest, PackRows) {
+    auto test_config = GetParam();
+    unit_tests::compute::pack_rows::run_single_core_pack_rows_program(this->devices_.at(0), test_config);
 }
+
+// Define all test parameter combinations
+INSTANTIATE_TEST_SUITE_P(
+    AllCombinations,
+    TensixComputePackRowsTest,
+    testing::Values(
+        // num_rows = 1
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 1},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 1},
+        // num_rows = 8
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 8},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 8},
+        // num_rows = 16
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 16},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 16},
+        // num_rows = 32
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 32},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 32},
+        // num_rows = 48
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 48},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 48},
+        // num_rows = 64
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = false, .num_rows = 64},
+        unit_tests::compute::pack_rows::TestConfig{.dst_full_sync_en = true, .num_rows = 64}),
+    // Custom name generator for better test output
+    [](const testing::TestParamInfo<TensixComputePackRowsTest::ParamType>& info) {
+        return fmt::format("NumRows_{}_DstSync_{}", info.param.num_rows, info.param.dst_full_sync_en ? "On" : "Off");
+    });
 
 }  // namespace tt::tt_metal
