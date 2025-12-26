@@ -5,11 +5,12 @@
 MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
+from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from .expert_configs import GPTOSSProgramConfig
 from .experts import ExpertConfig, Experts
+from .experts_throughput import ThroughputExpertConfig, ThroughputExperts
 from .topk import TopKRouter
 
 
@@ -25,6 +26,7 @@ class MLP:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=None,
+        use_throughput_experts=True,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -38,34 +40,73 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
         )
 
-        # Create expert config from HF config
-        expert_config = ExpertConfig(
-            intermediate_size=hf_config.intermediate_size,
-            num_experts=hf_config.num_local_experts,
-            hidden_size=hf_config.hidden_size,
-            num_experts_per_tok=hf_config.num_experts_per_tok,
-            swiglu_limit=hf_config.swiglu_limit,
+        # TODO: Replace this with a factory method
+        self.use_throughput_experts = use_throughput_experts
+        if self.use_throughput_experts:
+            # Create TT config
+            throughput_expert_config = ThroughputExpertConfig(
+                intermediate_size=hf_config.intermediate_size,
+                num_experts=hf_config.num_local_experts,
+                hidden_size=hf_config.hidden_size,
+                num_experts_per_tok=hf_config.num_experts_per_tok,
+                num_devices=mesh_device.get_num_devices(),
+            )
+
+            # Create TT experts module
+            self.experts = ThroughputExperts(
+                mesh_device=mesh_device,
+                config=throughput_expert_config,
+                state_dict=experts_state_dict,
+                weight_dtype=ttnn.bfloat4_b,
+                dispatch_cluster_axis=0,
+                # decode_memory_config=ttnn.L1_MEMORY_CONFIG,
+                decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+            )
+        else:
+            # Create expert config from HF config
+            expert_config = ExpertConfig(
+                intermediate_size=hf_config.intermediate_size,
+                num_experts=hf_config.num_local_experts,
+                hidden_size=hf_config.hidden_size,
+                num_experts_per_tok=hf_config.num_experts_per_tok,
+                swiglu_limit=hf_config.swiglu_limit,
+            )
+
+            # Use GPT-OSS specific program config
+            program_config = GPTOSSProgramConfig()
+
+            # Create experts with new modular implementation
+            self.experts = Experts(
+                mesh_device=mesh_device,
+                config=expert_config,
+                state_dict=experts_state_dict,
+                ccl_manager=ccl_manager,
+                mesh_config=mesh_config,
+                program_config=program_config,
+                weight_dtype=ttnn.bfloat4_b,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+            )
+
+    def __call__(self, hidden_states, is_decode):
+        """Forward pass: route -> experts
+        Args:
+            hidden_states: Input tensor [batch, seq_len, hidden_size]
+        Returns:
+            Expert output tensor [batch, seq_len, hidden_size]
+        """
+
+        # router_scores, router_indices, router_logits = self.router(hidden_states)
+        expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
+
+        # Save router indices for analysis (convert to CPU before deallocation)
+        # if hasattr(self, "track_routing") and self.track_routing:
+        #     self.last_router_indices = ttnn.to_torch(router_indices).cpu()
+
+        # router_logits.deallocate()
+        # router_indices.deallocate()
+        # expert_output = self.experts(hidden_states, router_scores)
+        expert_output = self.experts(
+            hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )
-
-        # Use GPT-OSS specific program config
-        program_config = GPTOSSProgramConfig()
-
-        # Create experts with new modular implementation
-        self.experts = Experts(
-            mesh_device=mesh_device,
-            config=expert_config,
-            state_dict=experts_state_dict,
-            ccl_manager=ccl_manager,
-            mesh_config=mesh_config,
-            program_config=program_config,
-            weight_dtype=ttnn.bfloat4_b,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
-        )
-
-    def __call__(self, hidden_states):
-        """Forward pass: route -> experts"""
-        router_scores, router_indices, router_logits = self.router(hidden_states)
-        router_logits.deallocate()
-        router_indices.deallocate()
-        expert_output = self.experts(hidden_states, router_scores)
-        return expert_output, router_scores
+        return expert_output

@@ -14,24 +14,23 @@ import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
-def topk_router(g, experts_per_token):
+def topk_router(g, experts_per_token, use_throughput_experts):
     """
     Select top-k experts for each token based on router logits.
 
     This function implements the core routing logic:
     1. Select top-k expert indices using TTNN's topk operation
     2. Normalize the selected expert weights using softmax
-    3. Scatter the weights back to full expert dimension for downstream use
+    3. Scatter the weights back to full expert dimension for downstream use if using sparse expert weights (non-throughput experts)
 
     Args:
         g: Router logits tensor of shape (batch * seq_len, num_experts)
         experts_per_token: Number of experts to select per token (k value)
-
+        use_throughput_experts: Whether to return dense expert weights for throughput experts or sparse for standard
     Returns:
         Tuple of:
-            - router_scores: Sparse scores tensor with non-zero values only for selected experts
-            - expert_weights: Normalized weights for selected experts (used for weighted combination)
             - expert_indices: Indices of selected experts for each token
+            - expert_weights: Normalized weights for selected experts (used for weighted combination)
 
     Note:
         The softmax normalization uses HiFi4 math fidelity and FP32 accumulation
@@ -55,8 +54,10 @@ def topk_router(g, experts_per_token):
         packer_l1_acc=False,
     )
     expert_weights = ttnn.softmax(expert_weights, dim=1, numeric_stable=True, compute_kernel_config=compute_config)
-    router_scores = ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
-    return router_scores, expert_weights, expert_indices
+    if use_throughput_experts:
+        return expert_indices, expert_weights
+    else:
+        return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
 
 
 class TopKRouter:
@@ -123,22 +124,27 @@ class TopKRouter:
         # )
         self.compute_config = None
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, use_throughput_experts):
         """
         Route tokens to top-k experts.
 
         Args:
             hidden_states: Input tensor of shape (batch, seq_len, hidden_dim)
-
+            use_throughput_experts: Whether to return dense expert weights for throughput experts or sparse for standard
         Returns:
             Tuple of:
-                - router_scores: Sparse expert scores for all tokens
+                - router_scores: Expert scores for all tokens (sparse for standard, dense for throughput)
                 - router_indices: Selected expert indices for each token
-                - router_logits: Raw logits before top-k selection (used for load balancing loss)
         """
         # Detect decode mode for L1_WIDTH_SHARDED optimization (like tt-transformers MLP)
         is_decode_mode = hidden_states.shape[1] == 1
-        mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+        # mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+        # mem_config = (
+        #     ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        #     if (is_decode_mode and self.weight.shape[1] > 32)
+        #     else ttnn.DRAM_MEMORY_CONFIG
+        # )
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(
@@ -153,5 +159,8 @@ class TopKRouter:
         if is_decode_mode:
             router_logits = ttnn.to_memory_config(router_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
-        return router_scores, router_indices, router_logits
+        # router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
+        # return router_scores, router_indices, router_logits
+        expert_indices, expert_weights = topk_router(router_logits, self.top_k, use_throughput_experts)
+        ttnn.deallocate(router_logits)
+        return expert_indices, expert_weights

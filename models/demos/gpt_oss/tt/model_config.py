@@ -39,6 +39,13 @@ class ModelArgs:
         self.mesh_device = mesh_device
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        if self.max_batch_size > 32:
+            assert (
+                self.max_batch_size % self.mesh_device.shape[0] == 0
+            ), "max_batch_size must be divisible by the number of device rows"
+            self.max_local_batch_size = self.max_batch_size // self.mesh_device.shape[0]
+        else:
+            self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
@@ -237,6 +244,8 @@ class ModelArgs:
             return state_dict
 
     def weight_cache_path(self, dtype):
+        if self.mesh_device.shape[0] == 1:
+            raise ValueError
         """Return weight cache path for the model"""
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:

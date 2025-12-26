@@ -21,6 +21,7 @@ def create_tt_model(
     num_layers=None,
     mesh_config=None,
     create_kv_cache=True,
+    users_row_sharded=False,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -59,10 +60,11 @@ def create_tt_model(
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+        tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
         paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
         create_kv_cache=create_kv_cache,
+        users_row_sharded=users_row_sharded,
     )
 
     # Extract tt_kv_cache like tt_transformers does

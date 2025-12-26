@@ -28,6 +28,7 @@ def prefill_forward(
     position_idx,
     page_table,
     ccl_manager,
+    user_id=0,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -50,7 +51,7 @@ def prefill_forward(
         Attention output [batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat16
-    batch_size, seq_len, hidden_size = hidden_states.shape
+    _, batch_size, seq_len, hidden_size = hidden_states.shape
 
     # Validate prefill mode
     if seq_len <= 1:
@@ -85,12 +86,12 @@ def prefill_forward(
         tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
         tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
 
-        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
     else:
         # Non-paged attention
-        ttnn.fill_cache(k_cache, tt_k, batch_idx=0)
-        ttnn.fill_cache(v_cache, tt_v, batch_idx=0)
+        ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
+        ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
@@ -108,7 +109,7 @@ def prefill_forward(
     tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
 
     tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
+    # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
     # Tensor parallel allreduce
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)

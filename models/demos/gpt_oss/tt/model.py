@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 
 import ttnn
@@ -9,7 +10,6 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
-from ttnn import replicate_tensor_to_mesh_mapper
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -40,6 +40,8 @@ class Model:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
+        max_local_batch_size=1,
+        users_row_sharded=False,
     ):
         """
         Initialize GPT-OSS model
@@ -59,6 +61,8 @@ class Model:
         self.hf_config = hf_config
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
+        self.max_local_batch_size = max_local_batch_size
+        self.users_row_sharded = users_row_sharded
 
         self.ccl_manager = ccl_manager
 
@@ -74,7 +78,7 @@ class Model:
         max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
         self.rope_setup = RotarySetup(
             device=mesh_device,
-            batch_size=1,
+            batch_size=max_local_batch_size,
             head_dim=hf_config.head_dim,
             max_seq_len=max_seq_len,
             rope_theta=getattr(hf_config, "rope_theta", 10000.0),
@@ -110,6 +114,8 @@ class Model:
                 mesh_config=self.mesh_config,
                 create_kv_cache=create_kv_cache,
                 transformation_mats=self.transformation_mats,
+                max_local_batch_size=max_local_batch_size,
+                users_row_sharded=users_row_sharded,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -137,13 +143,14 @@ class Model:
         dtype,
         mesh_device,
         state_dict,
-        weight_cache_path,
+        tensor_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
         mesh_config=None,
         create_kv_cache=True,
+        users_row_sharded=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -159,10 +166,12 @@ class Model:
             state_dict=state_dict,
             ccl_manager=ccl_manager,
             dtype=dtype,
-            tensor_cache_path=weight_cache_path,
+            tensor_cache_path=tensor_cache_path,
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
+            max_local_batch_size=args.max_local_batch_size,
+            users_row_sharded=users_row_sharded,
         )
 
         # Add tt_transformers compatible attributes
@@ -173,7 +182,9 @@ class Model:
 
         return instance
 
-    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1):
+    def _forward_layers_and_head(
+        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
+    ):
         """
         Shared forward pass through decoder layers and final projection.
 
@@ -193,6 +204,8 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+            # if is_decode:
+            #     print(f"layer {i} hidden_states shape: {hidden_states.shape}")
 
             hidden_states = decoder_layer(
                 hidden_states,
@@ -200,6 +213,8 @@ class Model:
                 position_idx=current_pos,
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
+                is_decode=is_decode,
+                user_id=user_id,
             )
         logits = hidden_states
 
@@ -210,8 +225,8 @@ class Model:
             logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
             logits.deallocate(True)
             logits = logits_sliced
-            if len(logits.shape) == 4 and logits.shape[1] == 1:
-                logits = ttnn.squeeze(logits, dim=1)
+            # if len(logits.shape) == 4 and logits.shape[1] == 1:
+            #     logits = ttnn.squeeze(logits, dim=1)
             hidden_states = logits
 
         # Final norm and lm_head
@@ -221,9 +236,16 @@ class Model:
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
         if config.tp > 1:
-            logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
+            logits_gathered = self.mesh_config.allgather(
+                logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
+            )
             logits.deallocate(True)
             logits = logits_gathered
+        # if get_last_token == -1:
+        #     # i.e decode, we need to collect all the users
+        #     logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=0, dim=-2)
+        #     logits.deallocate(True)
+        #     logits = logits_gathered
         return logits
 
     def ttnn_decode_forward(
@@ -242,23 +264,25 @@ class Model:
         """
         # Embed tokens
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        input_embeds = ttnn.unsqueeze(input_embeds, 0)
 
         # Ensure proper shape for decoder layers
-        if len(input_embeds.shape) == 4:
-            hidden_states = ttnn.squeeze(input_embeds, dim=1)
-        else:
-            hidden_states = input_embeds
+        # if len(input_embeds.shape) == 4:
+        #     hidden_states = ttnn.squeeze(input_embeds, dim=1)
+        # else:
+        #     hidden_states = input_embeds
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Forward through layers and head (shared with prefill)
         out = self._forward_layers_and_head(
-            hidden_states=hidden_states,
+            hidden_states=input_embeds,
             rope_mats=rope_mats,
             current_pos=current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
+            is_decode=True,
         )
         # Return logits and None for log-probs for compatibility with generator interface
         # TODO: Add log-probs return value once sampling_on_device is supported
@@ -278,13 +302,13 @@ class Model:
     ):
         """Prefill forward pass - processes full sequences"""
         # Ensure proper shape for decoder layers
-        if len(x.shape) == 4:
-            hidden_states = ttnn.squeeze(x, dim=1)
-        else:
-            hidden_states = x
+        # if len(x.shape) == 4:
+        #     hidden_states = ttnn.squeeze(x, dim=1)
+        # else:
+        #     hidden_states = x
 
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
-        seq_len = hidden_states.shape[-2]
+        seq_len = x.shape[-2]
         if rot_mats_global is not None:
             rope_mats = rot_mats_global
         else:
@@ -296,12 +320,14 @@ class Model:
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
-            hidden_states=hidden_states,
+            hidden_states=x,
             rope_mats=rope_mats,
             current_pos=None,  # No current_pos for prefill
             page_table=page_table,
             kv_cache=kv_cache,
             get_last_token=get_last_token,
+            is_decode=False,
+            user_id=user_id,
         )
 
         return logits
@@ -344,12 +370,13 @@ class Model:
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
         # Convert tokens to TTNN format
-        tokens = ttnn.from_torch(
-            tokens,
-            device=None,
-            dtype=ttnn.uint32,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-        )
+        # batch_tiles = math.ceil(len(tokens) / 32)
+        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
+        if self.users_row_sharded:
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
+        else:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
         # Ensure position indices are non-negative (matches tt-transformers)
@@ -357,21 +384,11 @@ class Model:
         rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
         # Prepare current position tensor
-        current_pos_tt = ttnn.from_torch(
-            current_pos,
-            device=None,
-            dtype=ttnn.int32,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-        )
+        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = ttnn.from_torch(
-                page_table,
-                device=None,
-                dtype=ttnn.int32,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-            )
+            page_table = ttnn.from_torch(page_table, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
@@ -420,7 +437,21 @@ class Model:
         tt_page_table = None
         tt_chunk_page_table = None
         if page_table is not None:
-            tt_page_table = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if self.users_row_sharded:
+                tt_page_table = ttnn.from_torch(
+                    page_table,
+                    device=device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                    ),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            else:
+                tt_page_table = ttnn.from_torch(
+                    page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -437,22 +468,26 @@ class Model:
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """Process decode output and convert to torch tensors"""
         concat_out = self.concat_device_output(tt_out)
-
         if is_tokens:
             return concat_out[:B, 0]  # [batch_size]
 
-        torch_out = concat_out[:, 0, : self.vocab_size]  # [batch, vocab_size]
-        return torch_out.unsqueeze(1).view(B, S, -1)
+        torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
+        # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong
+        return torch_out.view(B, S, -1)
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
-        tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
-        return ttnn.to_torch(tt_output_tensor)
+        if self.users_row_sharded:
+            tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_device.shape[1]]
+            return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
+        else:
+            tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
+            tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
+            return ttnn.to_torch(tt_output_tensor)
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Process prefill output and extract last token logits"""
         tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
         torch_output = ttnn.to_torch(tt_output_tensor)
-        result = torch_output[:, last_token_idx, : self.vocab_size]
+        result = torch_output[..., last_token_idx, : self.vocab_size]
         return result

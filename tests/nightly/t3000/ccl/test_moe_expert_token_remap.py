@@ -108,11 +108,11 @@ def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, re
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [16])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("seq", [1, 2])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("experts_per_device", [16])
+@pytest.mark.parametrize("selected_experts_k", [4])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("scheme", ["sequential", "random"])
 def test_moe_expert_token_remaps(
@@ -181,6 +181,7 @@ def test_moe_expert_token_remaps(
 
     out_tensor_list = []
     for topk, mapping, metadata in zip(topk_tensors, expert_mapping_tensors, expert_metadata_tensors):
+        breakpoint()
         tt_op_out = ttnn.moe_expert_token_remap(topk, mapping, metadata)
         out_tensor_list.append(tt_op_out)
 
