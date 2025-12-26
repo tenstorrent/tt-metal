@@ -72,6 +72,7 @@
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 #include "ttnn/operations/rand/rand_pybind.hpp"
+#include "ttnn/operations/randn/randn_pybind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 
 namespace ttnn::operations {
@@ -199,6 +200,9 @@ void py_module(py::module& module) {
 
     auto m_rand = module.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
+
+    auto m_randn = module.def_submodule("randn", "ttnn randn operation");
+    randn::bind_randn_operation(m_randn);
 
     auto m_point_to_point = module.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::py_bind_point_to_point(m_point_to_point);
