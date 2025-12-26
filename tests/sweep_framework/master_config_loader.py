@@ -508,22 +508,22 @@ class MasterConfigLoader:
                 }
 
             # Special handling for operations with complex parameter structures
-            if operation_name in ["conv2d", "ttnn::conv2d"]:
+            if self._matches_operation(operation_name, "conv2d"):
                 print(f"🔧 Detected conv2d operation with special parameter structure")
                 return self._get_conv2d_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in ["linear", "ttnn::linear"]:
+            elif self._matches_operation(operation_name, "linear"):
                 print(f"🔧 Detected linear operation with special parameter structure")
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in ["embedding", "ttnn::embedding"]:
+            elif self._matches_operation(operation_name, "embedding"):
                 print(f"🔧 Detected embedding operation with special parameter structure")
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
-            elif operation_name in ["concat", "ttnn::concat"]:
+            elif self._matches_operation(operation_name, "concat"):
                 print(f"🔧 Detected concat operation with vector of tensors input")
                 return self._get_concat_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
@@ -660,7 +660,7 @@ class MasterConfigLoader:
 
                         # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
                         # (TILE layout doesn't support front padding, but ROW_MAJOR does)
-                        if operation_name in ["pad", "ttnn::pad"]:
+                        if self._matches_operation(operation_name, "pad"):
                             # Extract padding from config to check for front padding
                             padding = None
                             for arg in config:
@@ -701,7 +701,7 @@ class MasterConfigLoader:
 
                         # upsample: C++ code requires INTERLEAVED memory layout (see upsample_op.cpp:22-23)
                         # Also, if shape is not tile-aligned, use ROW_MAJOR layout (TILE layout requires tile-aligned shapes)
-                        if operation_name in ["upsample", "ttnn::upsample"]:
+                        if self._matches_operation(operation_name, "upsample"):
                             parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
 
                             # Check if shape is tile-aligned
@@ -737,10 +737,10 @@ class MasterConfigLoader:
                             if operation_name == "sharded_to_interleaved":
                                 # This operation converts sharded to interleaved, so output must be INTERLEAVED
                                 output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
-                            elif operation_name in ["upsample", "ttnn::upsample"]:
+                            elif self._matches_operation(operation_name, "upsample"):
                                 # upsample output also needs INTERLEAVED
                                 output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-                            elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
+                            elif self._matches_operation(operation_name, "untilize_with_unpadding"):
                                 # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
                                 # (see untilize_with_unpadding_op.cpp:37)
                                 if parsed_mem_config.memory_layout in [
@@ -903,10 +903,10 @@ class MasterConfigLoader:
                 dim1_list = [] if operation_name == "transpose" else None
                 target_shape_list = [] if operation_name == "reshape" else None
                 # pad specific parameters (support both padding and output_padded_shape formats)
-                padding_list = [] if operation_name in ["pad", "ttnn::pad"] else None
-                output_padded_shape_list = [] if operation_name in ["pad", "ttnn::pad"] else None
-                input_tensor_start_list = [] if operation_name in ["pad", "ttnn::pad"] else None
-                value_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                padding_list = [] if self._matches_operation(operation_name, "pad") else None
+                output_padded_shape_list = [] if self._matches_operation(operation_name, "pad") else None
+                input_tensor_start_list = [] if self._matches_operation(operation_name, "pad") else None
+                value_list = [] if self._matches_operation(operation_name, "pad") else None
                 padded_shape_list = [] if operation_name == "tilize_with_val_padding" else None
                 pad_value_list = [] if operation_name == "tilize_with_val_padding" else None
                 num_heads_list = (
@@ -930,8 +930,8 @@ class MasterConfigLoader:
                 dilation_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
                 applied_shard_scheme_list = [] if operation_name in ["max_pool2d", "ttnn::max_pool2d"] else None
                 # upsample specific parameters
-                scale_factor_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
-                mode_list = [] if operation_name in ["upsample", "ttnn::upsample"] else None
+                scale_factor_list = [] if self._matches_operation(operation_name, "upsample") else None
+                mode_list = [] if self._matches_operation(operation_name, "upsample") else None
                 # typecast specific parameters
                 output_dtype_list = [] if operation_name in ["typecast", "ttnn::typecast"] else None
                 # gt specific parameters
@@ -964,7 +964,7 @@ class MasterConfigLoader:
 
                     # Check operation-specific requirements (report but don't convert)
                     # Note: tilize and upsample are hardcoded above, so these checks are just for reporting
-                    if operation_name in ["upsample", "ttnn::upsample"]:
+                    if self._matches_operation(operation_name, "upsample"):
                         if isinstance(shape, list) and len(shape) >= 4:
                             h, w = shape[1], shape[2]
                             if h % 32 != 0 or w % 32 != 0:
@@ -1040,7 +1040,7 @@ class MasterConfigLoader:
                         if "applied_shard_scheme" in cfg:
                             applied_shard_scheme_list.append(cfg["applied_shard_scheme"])
                     # Extract upsample parameters
-                    if operation_name in ["upsample", "ttnn::upsample"]:
+                    if self._matches_operation(operation_name, "upsample"):
                         if "scale_factor" in cfg:
                             scale_factor_list.append(cfg["scale_factor"])
                         if "mode" in cfg:
@@ -1170,7 +1170,7 @@ class MasterConfigLoader:
                         param_names.append("applied_shard_scheme")
                         param_lists.append(applied_shard_scheme_list)
                 # Add upsample parameters
-                if operation_name in ["upsample", "ttnn::upsample"]:
+                if self._matches_operation(operation_name, "upsample"):
                     if scale_factor_list:
                         param_names.append("scale_factor")
                         param_lists.append(scale_factor_list)
