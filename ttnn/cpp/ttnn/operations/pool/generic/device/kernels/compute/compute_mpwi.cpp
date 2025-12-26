@@ -11,6 +11,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
+#include "compute_kernel_api/copy_dest_values.h"
 
 #define DEBUG_PRINT 0
 
@@ -100,12 +101,9 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = true;
     constexpr bool zero_srca_avgpool = false;
 
-    constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
-    constexpr w_chunks = kernel_w % max_rows_for_reduction == 0 ? kernel_w / max_rows_for_reduction
-                                                                : kernel_w / max_rows_for_reduction + 1;
-    constexpr uint32_t interm_reduction_chunks = return_indices    ? w_chunks * kenrel_h
-                                                 : remaining_elems ? window_size_hw / max_sticks_for_reduction + 1
-                                                                   : window_size_hw / max_sticks_for_reduction;
+    constexpr uint32_t w_chunks = kernel_w % max_sticks_for_reduction == 0 ? kernel_w / max_sticks_for_reduction
+                                                                           : kernel_w / max_sticks_for_reduction + 1;
+    constexpr uint32_t interm_reduction_chunks = w_chunks * kernel_h;
 
     cb_wait_front(in_scalar_cb_id_0, 1);
 

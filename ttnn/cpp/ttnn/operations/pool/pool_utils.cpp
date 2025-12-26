@@ -259,6 +259,11 @@ uint32_t calculate_L1_usage(
         // 1 data sized tile (pack_tmp_cb) and 5 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
         // up_left_wrap_inc)
         total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
+        if (params.is_large_kernel) {
+            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc,
+            // compute_idx_tmp)
+            total_mpwi_cb_size += 3 * idx_tile_size;
+        }
     }
 
     uint32_t out_cb_pagesize;
