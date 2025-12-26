@@ -332,12 +332,6 @@ void MetalContext::initialize(
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
-
-    // Register teardown function, but only once.
-    if (not teardown_registered_) {
-        std::atexit([]() { MetalContext::instance().teardown(); });
-        teardown_registered_ = true;
-    }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
@@ -410,9 +404,35 @@ void MetalContext::teardown() {
     control_plane_.reset();
 }
 
+// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
+MetalContext* g_instance;
+// Use a recursive mutex because the instance destructor calls into MetalContext::instance.
+std::recursive_mutex g_instance_mutex;
+bool registered_atexit = false;
+
 MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
-    return inst.get();
+    std::lock_guard lock(g_instance_mutex);
+    if (!g_instance) {
+        g_instance = new MetalContext();
+        if (!registered_atexit) {
+            std::atexit([]() { MetalContext::destroy_instance(); });
+            registered_atexit = true;
+        }
+    }
+    return *g_instance;
+}
+
+void MetalContext::destroy_instance() {
+    std::lock_guard lock(g_instance_mutex);
+    if (!g_instance) {
+        return;
+    }
+    if (g_instance->device_manager() && g_instance->device_manager()->is_initialized() &&
+        !g_instance->device_manager()->get_all_active_devices().empty()) {
+        TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
+    }
+    delete g_instance;
+    g_instance = nullptr;
 }
 
 void MetalContext::teardown_base_objects() {
@@ -474,10 +494,6 @@ MetalContext::MetalContext() {
     }
 
     device_manager_ = std::make_unique<DeviceManager>();
-
-    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
-    // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
@@ -503,6 +519,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 }
 
 MetalContext::~MetalContext() {
+    teardown();
     device_manager_.reset();
     teardown_base_objects();
 }

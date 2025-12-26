@@ -51,6 +51,8 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
+    static void destroy_instance();
+
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;
@@ -174,7 +176,6 @@ private:
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
 
     bool initialized_ = false;
-    bool teardown_registered_ = false;
     bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;
