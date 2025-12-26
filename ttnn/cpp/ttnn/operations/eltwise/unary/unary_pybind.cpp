@@ -1100,6 +1100,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
         Keyword Args:
             beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
             threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
+            approx_mode (int, optional): Approximation mode for the softplus calculation. Defaults to `0`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1131,14 +1132,16 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
                const Tensor& input,
                const float beta,
                const float threshold,
+               const uint32_t approx_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) {
-                return self(input, beta, threshold, memory_config, output_tensor);
+                return self(input, beta, threshold, approx_mode, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("beta") = 1.0f,
             py::arg("threshold") = 20.0f,
+            py::arg("approx_mode") = 0,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt});
 }
