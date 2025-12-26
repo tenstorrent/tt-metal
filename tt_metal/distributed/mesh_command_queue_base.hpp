@@ -97,6 +97,10 @@ public:
 
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
+
+    // Reset the in_use flag without waiting for completion.
+    // Only safe to call when you know all enqueued work has completed (e.g., after CCL sync).
+    virtual void reset_in_use() {}
 };
 
 }  // namespace tt::tt_metal::distributed

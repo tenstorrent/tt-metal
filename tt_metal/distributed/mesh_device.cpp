@@ -1182,9 +1182,17 @@ void MeshDevice::quiesce_devices() {
         for (auto& device : get_devices()) {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
-                "Last completed event is not 0");
+                "Last completed event is not 0 for device {} and command queue {}",
+                device->id(),
+                command_queue->id());
             TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
         }
+    }
+}
+
+void MeshDevice::reset_cq_in_use() {
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->reset_in_use();
     }
 }
 

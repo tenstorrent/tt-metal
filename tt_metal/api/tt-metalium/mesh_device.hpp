@@ -337,6 +337,13 @@ public:
      */
     void quiesce_devices();
 
+    /**
+     * Reset the in_use flag on all command queues without waiting for completion.
+     * Only safe to call when you know all enqueued work has completed (e.g., after CCL operations
+     * which have built-in synchronization across devices).
+     */
+    void reset_cq_in_use();
+
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
