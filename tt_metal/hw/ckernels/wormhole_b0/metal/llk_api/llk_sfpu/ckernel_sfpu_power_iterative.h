@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -202,7 +203,7 @@ inline void calculate_power_iterative(const uint32_t exponent) {
 }
 
 inline void sfpu_unary_pow_init() {
-    sfpi::vConstFloatPrgm0 = 1.442695f;
+    sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
     sfpi::vConstFloatPrgm1 = -127.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }

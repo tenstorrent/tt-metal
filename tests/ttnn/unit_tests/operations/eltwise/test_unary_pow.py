@@ -8,7 +8,21 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-@pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5])
+def generate_clean_bf16_tensor(dtype=torch.bfloat16):
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)  # 65536 values
+    fp32 = input_tensor.to(torch.float32)
+
+    # Remove special values (NaN, -0.0, +inf, -inf, subnormals)
+    neg_zero_mask = (fp32 == 0.0) & torch.signbit(fp32)
+    tiny = torch.finfo(torch.bfloat16).tiny  # 2**-126
+    good_mask = torch.isfinite(fp32) & ~neg_zero_mask & (fp32.abs() >= tiny)
+    fp32 = fp32[good_mask]  # 65024 values
+
+    return fp32.to(dtype)
+
+
+@pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5, -0.566, -2])
 def test_pow(exponent, device):
     torch.manual_seed(42)
     torch_base = torch.rand([4, 4], dtype=torch.bfloat16)

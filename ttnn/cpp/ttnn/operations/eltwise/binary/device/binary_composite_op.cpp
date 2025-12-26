@@ -749,7 +749,11 @@ Tensor ExecutePower::invoke(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
+    if (output_tensor.has_value()) {
+        ttnn::power(input_a, exponent, output_mem_config, output_tensor);
+        return output_tensor.value();
+    }
+    return ttnn::power(input_a, exponent, output_mem_config);
 }
 
 // power - integer exponent
