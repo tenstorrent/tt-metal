@@ -16,7 +16,7 @@
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     const uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
@@ -80,7 +80,7 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     if (!unpack_to_dest)
     {
@@ -90,7 +90,7 @@ void run_kernel()
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en, src_format, src_format>();
 
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-        for (int i = 0; i < TILE_CNT; ++i)
+        for (int i = 0; i < params->TILE_CNT; ++i)
         {
             _llk_math_eltwise_unary_datacopy_<num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/>(i);
         }
@@ -106,7 +106,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     uint32_t const buf_desc_id    = 8;
     const uint num_tiles_per_pack = TILE_CNT;

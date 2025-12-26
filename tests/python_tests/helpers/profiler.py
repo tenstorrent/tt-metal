@@ -2,15 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import re
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, fields
 from enum import Enum
-from pathlib import Path
+from hashlib import sha256
+from typing import ClassVar
 
 import pandas as pd
-from helpers.chip_architecture import get_chip_architecture
+import pytest
 from ttexalens.tt_exalens_lib import read_words_from_device
+
+from .device import BootMode, wait_for_tensix_operations_finished
+from .format_config import FormatConfig
+from .llk_params import DestAccumulation, PerfRunType
+from .perf import PerfReport
+from .stimuli_config import StimuliConfig
+from .test_config import ProfilerBuild, TestConfig, TestMode
+from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 
 @dataclass
@@ -141,15 +150,15 @@ class ProfilerData:
     # Filter by thread
     def unpack(self) -> "ProfilerData":
         """Filter: Unpack thread data"""
-        return ProfilerData(self.df, self.mask & (self.df["thread"] == "UNPACK"))
+        return ProfilerData(self.df, self.mask & (self.df["thread"] == "unpack"))
 
     def math(self) -> "ProfilerData":
         """Filter: Math thread data"""
-        return ProfilerData(self.df, self.mask & (self.df["thread"] == "MATH"))
+        return ProfilerData(self.df, self.mask & (self.df["thread"] == "math"))
 
     def pack(self) -> "ProfilerData":
         """Filter: Pack thread data"""
-        return ProfilerData(self.df, self.mask & (self.df["thread"] == "PACK"))
+        return ProfilerData(self.df, self.mask & (self.df["thread"] == "pack"))
 
     # Filter by type
     def zones(self) -> "ProfilerData":
@@ -168,13 +177,118 @@ class ProfilerData:
         """Filter: Marker"""
         return ProfilerData(self.df, self.mask & (self.df["marker"] == marker))
 
+    def __str__(self):
+        return f"{self.raw()}"
 
-class Profiler:
+
+def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
+    # dont aggregate marker column
+    timings = perf_data.columns.drop("marker")
+    result = perf_data.groupby("marker", as_index=False)[timings].agg(["mean", "std"])
+
+    columns = ["marker"]
+    columns += [f"{stat}({col})" for col in timings for stat in ["mean", "std"]]
+
+    result.columns = columns
+    return result
+
+
+def _stats_l1_to_l1(data: ProfilerData) -> pd.Series:
+    groups = data.zones().raw().groupby(["marker"])
+
+    timings = []
+    for (marker,), group in groups:
+        unpack_start = group[
+            (group["thread"] == "unpack") & (group["type"] == "ZONE_START")
+        ].reset_index(drop=True)
+
+        pack_end = group[
+            (group["thread"] == "pack") & (group["type"] == "ZONE_END")
+        ].reset_index(drop=True)
+
+        if len(unpack_start) == 0 or len(pack_end) == 0:
+            raise ValueError(
+                "Zone must be captured on both unpack and pack for L1_TO_L1 to work properly"
+            )
+
+        if len(unpack_start) != len(pack_end):
+            raise ValueError(
+                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly"
+            )
+
+        durations = pack_end["timestamp"] - unpack_start["timestamp"]
+
+        marker_timings = pd.DataFrame(
+            {
+                "marker": marker,
+                PerfRunType.L1_TO_L1.name: durations,
+            }
+        )
+        timings.append(marker_timings)
+
+    return _stats_timings(pd.concat(timings, ignore_index=True))
+
+
+def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
+    start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
+        drop=True
+    )
+
+    end_entries = raw_thread[(raw_thread["type"] == "ZONE_END")].reset_index(drop=True)
+
+    if len(start_entries) != len(end_entries):
+        raise ValueError(
+            f"Mismatched start/end zones: {len(start_entries)} != {len(end_entries)}"
+        )
+
+    timings = pd.DataFrame(
+        {
+            "marker": start_entries["marker"],
+            stat: end_entries["timestamp"] - start_entries["timestamp"],
+        }
+    )
+
+    return _stats_timings(timings)
+
+
+def _stats_unpack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.UNPACK_ISOLATE.name, data.unpack().raw())
+
+
+def _stats_math_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.MATH_ISOLATE.name, data.math().raw())
+
+
+def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.PACK_ISOLATE.name, data.pack().raw())
+
+
+def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
+    stats = [
+        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data.unpack().raw()),
+        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()),
+    ]
+
+    return pd.concat(stats, ignore_index=True)
+
+
+class EntryType(Enum):
+    TIMESTAMP = 0b1000
+    TIMESTAMP_DATA = 0b1001
+    ZONE_START = 0b1010
+    ZONE_END = 0b1011
+
+
+class ProfilerConfig(TestConfig):
+    # === STATIC VARIABLES ===
+
+    TEST_COUNTER: ClassVar[int] = 0
 
     META_PATTERN = re.compile(
         r"(?P<full_marker>LLK_PROFILER:(?P<file>[^:]+):(?P<line>\d+):(?P<marker>[^']+))",
     )
 
+    # === Addresses ===
     BUFFER_LENGTH = 0x400
     THREAD_BUFFER = [
         0x16B000,  # Unpack
@@ -182,6 +296,7 @@ class Profiler:
         0x16D000,  # Pack
     ]
 
+    # === Bit masks ===
     ENTRY_TYPE_SHAMT = 28
     ENTRY_ID_SHAMT = ENTRY_TYPE_SHAMT - 16
 
@@ -191,19 +306,15 @@ class Profiler:
 
     ENTRY_EXISTS_BIT = 0b1000 << ENTRY_TYPE_SHAMT
 
-    class EntryType(Enum):
-        TIMESTAMP = 0b1000
-        TIMESTAMP_DATA = 0b1001
-        ZONE_START = 0b1010
-        ZONE_END = 0b1011
-
-    @staticmethod
-    def dump_csv(profiler_data, filename: str = "profiler_data.csv") -> None:
-        llk_home = Path(os.environ.get("LLK_HOME"))
-        output_path = llk_home / "tests" / "build" / filename
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        profiler_data.to_csv(output_path, index=False)
+    # === Stats functions ===
+    STATS_FUNCTION = {
+        PerfRunType.L1_TO_L1: _stats_l1_to_l1,
+        PerfRunType.UNPACK_ISOLATE: _stats_unpack_isolate,
+        PerfRunType.MATH_ISOLATE: _stats_math_isolate,
+        PerfRunType.PACK_ISOLATE: _stats_pack_isolate,
+        PerfRunType.L1_CONGESTION: _stats_l1_congestion,
+    }
+    SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
     @staticmethod
     def _hash_meta(s: str) -> int:
@@ -223,73 +334,40 @@ class Profiler:
 
     @staticmethod
     def _parse_meta(meta: str):
-        expr = Profiler.META_PATTERN.search(meta)
-        if expr is None:
+        if expr := ProfilerConfig.META_PATTERN.search(meta):
+            groups = expr.groupdict()
+            return ProfilerFullMarker(
+                marker=groups["marker"],
+                file=groups["file"],
+                line=int(groups["line"]),
+                id=ProfilerConfig._hash_meta(groups["full_marker"]),
+            )
+        else:
             return None
 
-        groups = expr.groupdict()
-        return ProfilerFullMarker(
-            marker=groups["marker"],
-            file=groups["file"],
-            line=int(groups["line"]),
-            id=Profiler._hash_meta(groups["full_marker"]),
-        )
-
     @staticmethod
-    def _get_meta(testname: str) -> dict[id, ProfilerFullMarker]:
-        chip_arch = get_chip_architecture()
-        llk_home = Path(os.environ.get("LLK_HOME"))
-
-        profiler_dir = (
-            llk_home
-            / "tests"
-            / "build"
-            / chip_arch.value
-            / "tests"
-            / testname
-            / "profiler"
-        )
-
-        files = [
-            profiler_dir / "unpack.meta.bin",
-            profiler_dir / "math.meta.bin",
-            profiler_dir / "pack.meta.bin",
-        ]
-
-        meta = {}
-        for file in files:
+    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+        profiler_data_dir = ProfilerConfig.PROFILER_META / testname / variant_id
+        metadata = {}
+        for thread in ProfilerConfig.KERNEL_COMPONENTS:
+            file = profiler_data_dir / f"{thread}.meta.bin"
             if not file.exists():
                 continue
             with open(file, "rb") as f:
                 binary = f.read()
                 strings = [s.decode("ascii") for s in binary.split(b"\0")]
                 for s in strings:
-                    marker = Profiler._parse_meta(s)
-                    if marker:
-                        Profiler._assert_no_collision(meta, marker)
-                        meta[marker.id] = marker
-        return meta
+                    if marker := ProfilerConfig._parse_meta(s):
+                        ProfilerConfig._assert_no_collision(metadata, marker)
+                        metadata[marker.id] = marker
 
-    @staticmethod
-    def get_data(testname: str) -> pd.DataFrame:
-        meta = Profiler._get_meta(testname)
-        return Profiler._parse_buffers(Profiler._load_buffers(), meta)
-
-    @staticmethod
-    def _load_buffers(location="0,0", word_count=BUFFER_LENGTH) -> list[list[int]]:
-        """Load profiler buffers from device memory for each thread."""
-        return [
-            read_words_from_device(
-                location=location, addr=buffer_address, word_count=word_count
-            )
-            for buffer_address in Profiler.THREAD_BUFFER
-        ]
+        return metadata
 
     @staticmethod
     def _dataframe(rows: list[dict] | None = None) -> pd.DataFrame:
         # Define the schema
         schema = {
-            "thread": pd.CategoricalDtype(categories=["UNPACK", "MATH", "PACK"]),
+            "thread": pd.CategoricalDtype(categories=ProfilerConfig.KERNEL_COMPONENTS),
             "type": pd.CategoricalDtype(
                 categories=["TIMESTAMP", "ZONE_START", "ZONE_END"]
             ),
@@ -304,17 +382,15 @@ class Profiler:
         return pd.DataFrame(rows or [], columns=schema.keys()).astype(schema)
 
     @staticmethod
-    def _parse_buffers(buffers, profiler_meta) -> pd.DataFrame:
-        THREADS = ["UNPACK", "MATH", "PACK"]
-
+    def _parse_buffers(buffers: list, profiler_meta: dict) -> pd.DataFrame:
+        marker_rows = []
         # Parse each thread and append to the DataFrame
-        threads = [
-            parsed_thread
-            for thread, buffer in zip(THREADS, buffers)
-            for parsed_thread in Profiler._parse_thread(thread, buffer, profiler_meta)
-        ]
+        for thread, buffer in zip(ProfilerConfig.KERNEL_COMPONENTS, buffers):
+            marker_rows.extend(
+                ProfilerConfig._parse_thread(thread, buffer, profiler_meta)
+            )
 
-        df = Profiler._dataframe(threads)
+        df = ProfilerConfig._dataframe(marker_rows)
         return ProfilerData(df)
 
     @staticmethod
@@ -324,11 +400,15 @@ class Profiler:
 
         word_stream = iter(words)
         for word in word_stream:
-            if not (word & Profiler.ENTRY_EXISTS_BIT):
+            if not (word & ProfilerConfig.ENTRY_EXISTS_BIT):
                 break
 
-            type = (word & Profiler.ENTRY_TYPE_MASK) >> Profiler.ENTRY_TYPE_SHAMT
-            marker_id = (word & Profiler.ENTRY_ID_MASK) >> Profiler.ENTRY_ID_SHAMT
+            type = (
+                word & ProfilerConfig.ENTRY_TYPE_MASK
+            ) >> ProfilerConfig.ENTRY_TYPE_SHAMT
+            marker_id = (
+                word & ProfilerConfig.ENTRY_ID_MASK
+            ) >> ProfilerConfig.ENTRY_ID_SHAMT
 
             try:
                 marker = profiler_meta[marker_id]
@@ -337,34 +417,41 @@ class Profiler:
                     f"Marker with ID {marker_id} not found in profiler metadata"
                 )
 
-            timestamp_high = word & Profiler.ENTRY_TIME_HIGH_MASK
+            timestamp_high = word & ProfilerConfig.ENTRY_TIME_HIGH_MASK
             timestamp_low = next(word_stream)
             timestamp = (timestamp_high << 32) | timestamp_low
 
-            entry_type = Profiler.EntryType(type)
-            match entry_type:
-                case Profiler.EntryType.TIMESTAMP:
+            match EntryType(type):
+                case EntryType.TIMESTAMP:
                     rows.append(
-                        Profiler._row(thread, "TIMESTAMP", marker, timestamp, pd.NA)
+                        ProfilerConfig._row(
+                            thread, "TIMESTAMP", marker, timestamp, pd.NA
+                        )
                     )
 
-                case Profiler.EntryType.TIMESTAMP_DATA:
+                case EntryType.TIMESTAMP_DATA:
                     data_high = next(word_stream)
                     data_low = next(word_stream)
                     data = (data_high << 32) | data_low
                     rows.append(
-                        Profiler._row(thread, "TIMESTAMP", marker, timestamp, data)
+                        ProfilerConfig._row(
+                            thread, "TIMESTAMP", marker, timestamp, data
+                        )
                     )
 
-                case Profiler.EntryType.ZONE_START:
+                case EntryType.ZONE_START:
                     zone_stack.append(
-                        Profiler._row(thread, "ZONE_START", marker, timestamp, pd.NA)
+                        ProfilerConfig._row(
+                            thread, "ZONE_START", marker, timestamp, pd.NA
+                        )
                     )
 
-                case Profiler.EntryType.ZONE_END:
+                case EntryType.ZONE_END:
                     rows.append(zone_stack.pop())  # Pop the ZONE_START pair
                     rows.append(
-                        Profiler._row(thread, "ZONE_END", marker, timestamp, pd.NA)
+                        ProfilerConfig._row(
+                            thread, "ZONE_END", marker, timestamp, pd.NA
+                        )
                     )
 
         return rows
@@ -381,3 +468,145 @@ class Profiler:
             "file": marker.file,
             "line": marker.line,
         }
+
+    def __init__(
+        self,
+        test_name: str,
+        formats: FormatConfig,
+        run_types: list[PerfRunType] = [],
+        templates: set[TemplateParameter] = [],
+        runtimes: set[RuntimeParameter] = [],
+        variant_stimuli: StimuliConfig = None,
+        unpack_to_dest=False,
+        disable_format_inference=False,
+        dest_acc=DestAccumulation.No,
+    ):
+        super().__init__(
+            test_name,
+            formats,
+            templates,
+            runtimes,
+            variant_stimuli,
+            BootMode.DEFAULT,
+            ProfilerBuild.Yes,
+            1,  # L1_2_L1s
+            unpack_to_dest,
+            disable_format_inference,
+            dest_acc,
+        )
+
+        for run_type in run_types:
+            assert (
+                run_type in ProfilerConfig.SUPPORTED_RUNS
+            ), f"ERROR: run_type={run_type} not implemented"
+
+        self.passed_templates = templates
+        self.passed_runtimes = runtimes
+        self.current_run_type = None
+        self.run_configs = [
+            (templates.copy() + [PERF_RUN_TYPE(run_type)], runtimes.copy(), run_type)
+            for run_type in run_types
+        ]
+
+    def get_data(self, location: str = "0,0") -> pd.DataFrame:
+        meta = ProfilerConfig._get_meta(self.test_name, self.variant_id)
+        buffer_data = [
+            read_words_from_device(
+                addr=buffer_address,
+                word_count=ProfilerConfig.BUFFER_LENGTH,
+                location=location,
+            )
+            for buffer_address in ProfilerConfig.THREAD_BUFFER
+        ]
+
+        return ProfilerConfig._parse_buffers(buffer_data, meta)
+
+    def generate_variant_hash(self):
+        NON_COMPILATION_ARGUMETNS = [
+            "variant_stimuli",
+            "run_configs",
+            "variant_id",
+            "runtime_params_struct",
+            "runtime_format",
+            "runtimes",
+        ]
+        temp_str = [
+            str(value)
+            for field_name, value in self.__dict__.items()
+            if field_name not in NON_COMPILATION_ARGUMETNS
+        ]
+
+        # print(temp_str, file=sys.stderr)
+
+        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+
+    @staticmethod
+    def _dataclass_names(parent, obj):
+        """Provides the **names** of the columns for the report"""
+        return [f"{parent}.{f.name}" for f in fields(obj)]
+
+    @staticmethod
+    def _dataclass_values(obj):
+        """Provides the **values** of the columns for the report"""
+        return [getattr(obj, f.name) for f in fields(obj)]
+
+    def run(
+        self,
+        perf_report: PerfReport,
+        run_count=2,
+        location="0,0",
+        delete_artefacts: bool = False,
+    ):
+        ProfilerConfig.TEST_COUNTER += 1
+        results = []
+
+        if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
+            for templates, runtimes, run_type in self.run_configs:
+                self.current_run_type = run_type
+                self.templates = templates
+                self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.build_elfs()
+
+        if TestConfig.MODE == TestMode.PRODUCE:
+            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+        for templates, runtimes, run_type in self.run_configs:
+            self.current_run_type = run_type
+            self.templates = templates
+            self.runtimes = runtimes
+            self.generate_variant_hash()
+            runs = []
+            for _ in range(run_count):
+                self.write_runtimes_to_L1(location)
+                elfs = self.run_elf_files(location)
+                wait_for_tensix_operations_finished(elfs, location)
+
+                profiler_data = self.get_data(location)
+
+                runs.append(profiler_data)
+
+            get_stats = ProfilerConfig.STATS_FUNCTION[run_type]
+            results.append(get_stats(ProfilerData.concat(runs)))
+
+            if delete_artefacts:
+                shutil.rmtree(
+                    TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+                )
+
+        results = pd.concat(results, ignore_index=True)
+        run_results = results.groupby("marker").first().reset_index()
+
+        names, values = [], []
+        for param in self.passed_templates:
+            names.extend(ProfilerConfig._dataclass_names(type(param).__name__, param))
+            values.extend(ProfilerConfig._dataclass_values(param))
+
+        for param in self.passed_runtimes:
+            names.extend(ProfilerConfig._dataclass_names(type(param).__name__, param))
+            values.extend(ProfilerConfig._dataclass_values(param))
+
+        sweep = pd.DataFrame([values], columns=names)
+        combined = sweep.merge(run_results, how="cross")
+
+        perf_report.append(combined)

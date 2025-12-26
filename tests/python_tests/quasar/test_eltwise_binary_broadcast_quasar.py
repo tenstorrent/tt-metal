@@ -7,10 +7,6 @@ from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
 )
-from helpers.device import (
-    collect_results,
-    write_stimuli_to_l1,
-)
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -28,14 +24,25 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, run_test
+from helpers.test_config import BootMode, TestConfig
+from helpers.test_variant_parameters import (
+    BROADCAST_TYPE,
+    DEST_SYNC,
+    IMPLIED_MATH_FORMAT,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    MATH_OP,
+    NUM_FACES,
+    TEST_FACE_DIMS,
+    TILE_COUNT,
+)
 from helpers.utils import passed_test
 
 
 @pytest.mark.quasar
 @parametrize(
-    test_name="eltwise_binary_broadcast_quasar_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -61,7 +68,6 @@ from helpers.utils import passed_test
     input_dimensions=lambda dest_acc: generate_unary_input_dimensions(dest_acc),
 )
 def test_eltwise_binary_broadcast_quasar(
-    test_name,
     formats,
     dest_acc,
     mathop,
@@ -72,10 +78,11 @@ def test_eltwise_binary_broadcast_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -84,7 +91,7 @@ def test_eltwise_binary_broadcast_quasar(
         src_B,
         formats.output_format,
         num_faces=4,
-        tile_cnt=tile_cnt,
+        tile_cnt=tile_cnt_A,
         face_r_dim=16,
     )
 
@@ -97,40 +104,46 @@ def test_eltwise_binary_broadcast_quasar(
         math_fidelity,
     )
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "mathop": mathop,
-        "math_fidelity": math_fidelity,
-        "implied_math_format": implied_math_format,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": False,
-        "broadcast_type": broadcast_type,
-        "tile_cnt": tile_cnt,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-        num_faces=4,
+    configuration = TestConfig(
+        "sources/quasar/eltwise_binary_broadcast_quasar_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_OP(mathop=mathop),
+            IMPLIED_MATH_FORMAT(implied_math_format),
+            BROADCAST_TYPE(broadcast_type),
+            DEST_SYNC(),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(4),
+            TEST_FACE_DIMS(),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_cnt_A,
+            num_faces=4,
+        ),
+        unpack_to_dest=False,
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
     )
 
-    run_test(test_config, boot_mode=boot_mode)
+    res_from_L1 = configuration.run()
 
-    res_from_L1 = collect_results(
-        formats, tile_count=tile_cnt, address=res_address, num_faces=4
-    )
-
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

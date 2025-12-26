@@ -21,16 +21,16 @@ uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     _llk_unpack_hw_configure_<false>(
         formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_bcastA_B_init_();
 
     // Single call works on 1 tile that goes to srcA and then reuses it for 4 srcB tiles that are changeable
-    for (uint32_t i = 0; i < TILE_CNT / SRCA_REUSE_COUNT; i++)
+    for (int i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
     {
-        _llk_unpack_bcastA_B_(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i * SRCA_REUSE_COUNT]), SRCA_REUSE_COUNT);
+        _llk_unpack_bcastA_B_(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
     }
 }
 
@@ -42,17 +42,17 @@ void run_kernel()
 #include "llk_math_eltwise_binary.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_(formats.math, formats.math);
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, 0>(SRCA_REUSE_COUNT);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, 0>(params->SRCA_REUSE_COUNT);
 
     _llk_math_wait_for_dest_available_<dest_sync>();
 
-    for (uint32_t i = 0; i < TILE_CNT / SRCA_REUSE_COUNT; i++)
+    for (int i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
     {
-        _llk_math_eltwise_binary_(i * SRCA_REUSE_COUNT /* dst_index */);
+        _llk_math_eltwise_binary_(i * params->SRCA_REUSE_COUNT /* dst_index */);
     }
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
@@ -66,7 +66,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -83,7 +83,7 @@ void run_kernel()
 #endif
 
     _llk_packer_wait_for_math_done_();
-    for (uint32_t i = 0; i < TILE_CNT; i++)
+    for (int i = 0; i < params->TILE_CNT; i++)
     {
         _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
     }

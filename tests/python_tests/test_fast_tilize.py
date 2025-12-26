@@ -4,13 +4,18 @@
 import pytest
 import torch
 from conftest import skip_for_blackhole
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    LOOP_FACTOR,
+    TILE_COUNT,
+)
 from helpers.utils import passed_test
 
 
@@ -49,14 +54,13 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
 
 @skip_for_blackhole
 @parametrize(
-    test_name="fast_tilize_test",
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
 )
-def test_fast_tilize(test_name, formats, dest_acc, dimensions):
+def test_fast_tilize(formats, dest_acc, dimensions, workers_tensix_coordinates):
 
     input_width, input_height = dimensions
 
@@ -65,35 +69,36 @@ def test_fast_tilize(test_name, formats, dest_acc, dimensions):
 
     input_dimensions = [input_height * 32, input_width * 32]
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input, formats.input, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_golden = get_golden_generator(TilizeGolden)
     golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_cnt,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "dest_acc": dest_acc,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input,
-        formats.input,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
+    configuration = TestConfig(
+        "sources/fast_tilize_test.cpp",
+        formats,
+        templates=[INPUT_DIMENSIONS(input_dimensions, input_dimensions)],
+        runtimes=[TILE_COUNT(tile_cnt_A), LOOP_FACTOR(1)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
     )
 
-    run_test(test_config)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
     assert len(res_from_L1) == len(golden_tensor)
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output])

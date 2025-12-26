@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     MatmulGolden,
@@ -20,8 +19,21 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_face_matmul_data
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    IN_TILE_DIMS,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    NUM_FACES,
+    PARTIAL_FACE,
+    STOCHASTIC_ROUNDING,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHING_FACE,
+)
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -62,7 +74,6 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
 
 @pytest.mark.nightly
 @parametrize(
-    test_name="unpack_matmul_test",
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -71,21 +82,18 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
     ],
     matmul_config=MATMUL_COMBINATIONS + TINY_TILES_MATMUL_COMBINATIONS,
 )
-def test_unpack_matmul(test_name, math_fidelity, matmul_config):
+def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates):
 
     formats = matmul_config.formats
     dest_acc = matmul_config.dest_acc
     input_A_dimensions = matmul_config.tile_dimensions.input_A_dimensions
     input_B_dimensions = matmul_config.tile_dimensions.input_B_dimensions
-    stochastic_rnd = matmul_config.stochastic_rnd
     num_faces_A = matmul_config.face_layout_config.num_faces_A
     num_faces_B = matmul_config.face_layout_config.num_faces_B
     num_faces = matmul_config.face_layout_config.num_faces
     partial_face_A = matmul_config.face_layout_config.partial_face_A
     partial_face_B = matmul_config.face_layout_config.partial_face_B
     transpose = matmul_config.face_layout_config.unpack_transpose_faces
-
-    torch_format = format_dict[formats.output_format]
 
     # Generate test data for all tiles with the right faces zeroed out
     src_A = generate_face_matmul_data(
@@ -140,63 +148,70 @@ def test_unpack_matmul(test_name, math_fidelity, matmul_config):
         src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "math_fidelity": math_fidelity,
-        "tile_cnt": matmul_config.tile_dimensions.tile_cnt,
-        "input_A_dimensions": input_A_dimensions,
-        "input_B_dimensions": input_B_dimensions,
-        "output_dimensions": matmul_config.tile_dimensions.output_dimensions,
-        "rt_dim": matmul_config.tile_dimensions.rt_dim,
-        "ct_dim": matmul_config.tile_dimensions.ct_dim,
-        "kt_dim": matmul_config.tile_dimensions.kt_dim,
-        "in0_tile_r_dim": matmul_config.tile_dimensions.in0_tile_r_dim,
-        "in0_tile_c_dim": matmul_config.tile_dimensions.in0_tile_c_dim,
-        "in1_tile_r_dim": matmul_config.tile_dimensions.in1_tile_r_dim,
-        "in1_tile_c_dim": matmul_config.tile_dimensions.in1_tile_c_dim,
-        "stochastic_rnd": stochastic_rnd,
-        "unpack_transpose_faces": transpose,
-        "unpack_transpose_within_face": transpose,  # matmul transposes both faces and within faces, there is no option for one or the other
-        "num_faces_A": num_faces_A,  # Number of active faces for matrix A
-        "num_faces_B": num_faces_B,  # Number of active faces for matrix B
-        "num_faces": num_faces,  # Number of active faces for result matrix
-        "partial_face_A": partial_face_A,  # Partial face setting for matrix A
-        "partial_face_B": partial_face_B,  # Partial face setting for matrix B
-        "tiny_tiles": matmul_config.tile_dimensions.in0_tile_r_dim <= 16,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        tilized_A.flatten(),
-        tilized_B.flatten(),
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=matmul_config.tile_dimensions.tile_cnt_A,
-        tile_count_B=matmul_config.tile_dimensions.tile_cnt_B,
+    configuration = TestConfig(
+        "sources/unpack_matmul_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_A_dimensions, input_B_dimensions),
+            STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
+            MATH_FIDELITY(math_fidelity),
+        ],
+        runtimes=[
+            TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
+            NUM_FACES(num_faces, num_faces_A, num_faces_B),
+            UNPACK_TRANS_FACES(transpose),
+            UNPACK_TRANS_WITHING_FACE(transpose),
+            PARTIAL_FACE(
+                partial_a=partial_face_A,
+                partial_face_pack=partial_face_A,
+                partial_b=partial_face_B,
+                partial_face_math=partial_face_B,
+            ),
+            CRK_TILE_DIMM(
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.kt_dim,
+            ),
+            IN_TILE_DIMS(
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                matmul_config.tile_dimensions.in0_tile_c_dim,
+                matmul_config.tile_dimensions.in1_tile_r_dim,
+                matmul_config.tile_dimensions.in1_tile_c_dim,
+            ),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=matmul_config.tile_dimensions.tile_cnt_A,
+            tile_count_B=matmul_config.tile_dimensions.tile_cnt_B,
+            tile_count_res=matmul_config.tile_dimensions.tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
     )
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    run_test(test_config)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
-    res_from_L1 = collect_results(
-        formats, tile_count=matmul_config.tile_dimensions.tile_cnt, address=res_address
-    )
-    assert len(res_from_L1) == len(golden_tensor)
-
-    bfloat_in_dest = formats.input_format in [
-        DataFormat.Float16_b,
-        DataFormat.Float32,
-    ] and formats.output_format in [
-        DataFormat.Float16_b,
-        DataFormat.Float32,
-    ]  # according to data format inference model
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    # bfloat_in_dest = formats.input_format in [
+    #     DataFormat.Float16_b,
+    #     DataFormat.Float32,
+    # ] and formats.output_format in [
+    #     DataFormat.Float16_b,
+    #     DataFormat.Float32,
+    # ]  # according to data format inference model
 
     # Only compare the active faces in each tile since that's what the hardware processes
     num_elements_per_tile = num_faces * 256  # Each face is 16x16 = 256 elements
     tile_cnt = matmul_config.tile_dimensions.output_tile_cnt
+
+    torch_format = format_dict[formats.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     # Compare each tile separately
     for i in range(tile_cnt):
@@ -209,4 +224,4 @@ def test_unpack_matmul(test_name, math_fidelity, matmul_config):
                 start : start + num_elements_per_tile
             ],  # Only compare active faces in this tile
             formats.output_format,
-        )
+        ), f"Assert on tile {i}/{tile_cnt} against golden failed"

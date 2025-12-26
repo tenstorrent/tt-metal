@@ -18,7 +18,7 @@ on:
       pytest_markers:
         description: "Pytest mark expression to select/deselect tests (e.g., 'not perf', 'nightly or not perf')"
         required: false
-        default: "not perf"
+        default: "not perf and not quasar"
         type: string
       timeout_minutes:
         description: "Timeout in minutes for the test job"
@@ -30,9 +30,15 @@ on:
         required: false
         default: false
         type: boolean
+      coverage:
+        description: "Enable code coverage testing for entire test suite"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
+  contents: read
 
 jobs:
   generate-matrix:
@@ -79,17 +85,36 @@ jobs:
           CHIP_ARCH=unknown
           if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
             CHIP_ARCH=wormhole
+            RUN_PARALEL_FLAG="--tx 8*popen://python=python"
           elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
             CHIP_ARCH=blackhole
+            RUN_PARALEL_FLAG="-n 8"
           fi
+          export CHIP_ARCH
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
           SPLITS=$TEST_SPLITS
           cd tests/python_tests/
-          pytest -m "${{ inputs.pytest_markers }}" \
+
+          COVERAGE_FLAG=""
+          if [[ "${{ inputs.coverage }}" == "true" ]]; then
+            COVERAGE_FLAG="--coverage"
+          fi
+
+          echo "Compiling artefacts"
+          pytest $COVERAGE_FLAG --compile-producer -n 10 \
+                -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --timeout=60 \
-                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .
+                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
+
+          echo "Running tests"
+          pytest $COVERAGE_FLAG --compile-consumer \
+                -m "${{ inputs.pytest_markers }}" \
+                ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
+                --splits $SPLITS --group ${{ matrix.test_group }} \
+                --override-ini="addopts=-v" --timeout=60 \
+                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml .
 
       # Step 4: Zip performance data if perf tests were run
       - name: Zip performance data
@@ -99,6 +124,14 @@ jobs:
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
           echo "Performance data zipped successfully"
 
+      # Step 4.1: Upload generated info file per runner
+      - name: Upload code coverage for this runner
+        uses: actions/upload-artifact@v4
+        if: ${{ inputs.coverage }}
+        with:
+          name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.info
+
       # Step 5: Upload performance data
       - name: Upload performance data
         uses: actions/upload-artifact@v4
@@ -107,15 +140,23 @@ jobs:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
-      # Step 6: Upload the JUnit report
-      - name: Upload JUnit report
+      - name: Upload JUnit report for compiling elfs
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: >-
             ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
-                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
-          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
+                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-compile
+          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-compile.xml
+
+      - name: Upload JUnit report for running elfs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: >-
+            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
+                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-run
+          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-run.xml
 
       # Step 7: Publish the test results
       - name: Publish Test Results
@@ -125,3 +166,62 @@ jobs:
           report_paths: tests/python_tests/pytest-report-*-${{ matrix.test_group }}.xml
           include_passed: true
           annotate_only: true
+
+  merge-coverage:
+    name: "Merge coverage files"
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker_image }}
+    needs: setup-and-test
+    if: inputs.coverage == true
+    permissions:
+      contents: read
+    steps:
+      - name: Set CHIP_ARCH
+        shell: bash
+        run: |
+          CHIP_ARCH=unknown
+          if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
+            CHIP_ARCH=blackhole
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: code-coverage-${{ env.CHIP_ARCH }}*
+          path: ./merged_coverage_files
+      - name: Unzip artefacts, merge coverage data, and generate HTML report
+        shell: bash
+        run: |
+          # Get first file with full path
+          first=$(find ./merged_coverage_files/ -name "*.info" | head -n 1)
+          cp "$first" merged.info
+
+          # Merge all other files
+          for f in $(find ./merged_coverage_files/ -name "*.info"); do
+            if [ "$f" != "$first" ]; then
+              lcov -q -a merged.info -a "$f" -o ./merged.info
+            fi
+          done
+
+          lcov -q --remove ./merged.info '*tests/*' \
+            -o ./code_coverage_for_${{ env.CHIP_ARCH }}.info
+
+      - name: Upload merged coverage .info file
+        uses: actions/upload-artifact@v4
+        with:
+          name: code_coverage_for_${{ env.CHIP_ARCH }}
+          path: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
+          name: coverage-report-${{ env.CHIP_ARCH }}
+          verbose: true

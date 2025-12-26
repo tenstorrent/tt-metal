@@ -7,9 +7,9 @@
 #if defined(LLK_PROFILER)
 
 #include <cstdint>
-#include <cstring>
 
 #include "ckernel.h"
+#include "string.h"
 
 // Logic to convert zone name -> 16bit numeric id
 #define Stringize(L)       #L

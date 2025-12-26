@@ -4,26 +4,25 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    DestAccumulation,
-    MathOperation,
-    ReducePool,
-)
+from helpers.llk_params import DestAccumulation, MathOperation, PerfRunType, ReducePool
 from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf import (
-    PerfRunType,
-    perf_benchmark,
-    update_report,
+from helpers.profiler import ProfilerConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    INPUT_DIMENSIONS,
+    LOOP_FACTOR,
+    MATH_OP,
+    REDUCE_POOL_TYPE,
+    TILE_COUNT,
 )
 
 
 @skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
-    test_name="sfpu_reduce_sdpa_perf",
     formats=input_output_formats(
         [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
         same=True,
@@ -37,12 +36,12 @@ from helpers.perf import (
 )
 def test_perf_sfpu_reduce_sdpa(
     perf_report,
-    test_name,
     formats,
     dest_acc,
     mathop,
     reduce_pool,
     loop_factor,
+    workers_tensix_coordinates,
 ):
     """
     Performance test for SFPU reduce SDPA operation.
@@ -58,30 +57,39 @@ def test_perf_sfpu_reduce_sdpa(
     input_dimensions = [128, 64]
     tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
 
-    test_config = {
-        "testname": test_name,
-        "tile_cnt": tile_count,
-        "formats": formats,
-        "dest_acc": dest_acc,
-        "pool_type": reduce_pool,
-        "mathop": mathop,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": False,  # Must be False since math kernel does A2D copy
-        "loop_factor": loop_factor,  # Used to minimize profiler overhead
-    }
-
     # Run performance benchmarks focusing on MATH_ISOLATE to measure SFPU cycles
     # MATH_ISOLATE measures only the math operation cycles, excluding unpack/pack
     # This specifically measures the _calculate_reduce_sdpa_ function cycles
-    results = perf_benchmark(
-        test_config,
-        [
-            # PerfRunType.L1_TO_L1,      # Full operation timing
+    configuration = ProfilerConfig(
+        "sources/sfpu_reduce_sdpa_perf.cpp",
+        formats,
+        run_types=[
+            # PerfRunType.L1_TO_L1,         # Full operation timing
             PerfRunType.MATH_ISOLATE,  # Only SFPU computation cycles (_calculate_reduce_sdpa_)
-            # PerfRunType.UNPACK_ISOLATE, # Unpack timing for reference
-            # PerfRunType.PACK_ISOLATE,   # Pack timing for reference
+            # PerfRunType.UNPACK_ISOLATE,   # Unpack timing for reference
+            # PerfRunType.PACK_ISOLATE,     # Pack timing for reference
         ],
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_OP(mathop=mathop),
+            REDUCE_POOL_TYPE(reduce_pool),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(loop_factor),  # Used to minimize profiler overhead
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        unpack_to_dest=False,  # Must be False since math kernel does A2D copy
+        dest_acc=dest_acc,
     )
 
-    update_report(perf_report, test_config, results)
+    configuration.run(perf_report, location=workers_tensix_coordinates)

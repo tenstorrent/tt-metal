@@ -18,7 +18,7 @@ uint32_t math_sync_tile_dst_index = 0;
 uint32_t tile_size                = 128;
 const int iterations              = 32; // Dependent on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
 
-constexpr uint32_t buffer_A_tilized = 0x17000;
+constexpr uint32_t buffer_A_tilized = 0x66000; // L1 address of buffer, placed so both coverage and non-coverage elfs don't run it over
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -27,7 +27,7 @@ constexpr uint32_t buffer_A_tilized = 0x17000;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -40,14 +40,14 @@ void run_kernel()
         4 /* num_faces */,
         4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), 0, 0, tile_size, tile_size);
+    _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), 0, 0, TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_src, formats_array[run].unpack_dst, tile_size);
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats_array[run].unpack_src, formats_array[run].unpack_dst, TILE_SIZE_PACK);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0, 0, FACE_R_DIM, 4, formats_array[run].unpack_src, formats_array[run].unpack_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -69,7 +69,7 @@ void run_kernel()
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_math_matmul_init_<MATH_FIDELITY>();
@@ -112,7 +112,7 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
 #ifdef ARCH_BLACKHOLE
@@ -133,7 +133,7 @@ void run_kernel()
 
     // Start of second pack kernel to perform final pack after executing matmul on tilized data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, tile_size);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, TILE_SIZE_PACK);
 
     _llk_pack_init_<false, false>(formats_array[run].pack_dst);
 

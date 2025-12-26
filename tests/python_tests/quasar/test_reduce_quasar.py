@@ -5,7 +5,6 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -22,8 +21,20 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    IMPLIED_MATH_FORMAT,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    MATH_OP,
+    NUM_FACES,
+    TEST_FACE_DIMS,
+    TILE_COUNT,
+    UNPACKER_ENGINE_SEL,
+)
 from helpers.utils import passed_test
 
 # Helper dictionary to map reduce dimensions to math operations
@@ -59,7 +70,6 @@ def generate_pool_type_and_math_fidelity_combinations():
 
 @pytest.mark.quasar
 @parametrize(
-    test_name="reduce_quasar_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -72,7 +82,6 @@ def generate_pool_type_and_math_fidelity_combinations():
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_reduce_quasar(
-    test_name,
     formats,
     dest_acc,
     reduce_dim,
@@ -84,14 +93,18 @@ def test_reduce_quasar(
 
     input_dimensions = [64, 64]
 
-    src_A, _, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     if pool_type in [
         ReducePool.Max,
         ReducePool.Sum,
-    ]:  # result in srcA should be multiplied by 1
+    ]:
+        # result in srcA should be multiplied by 1
         src_B = torch.full((1024,), 1)
     else:
         # reduce average divides by length of elements in array we reduce
@@ -110,33 +123,46 @@ def test_reduce_quasar(
 
     mathop = mathop_mapping[reduce_dim]
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "reduce_dim": reduce_dim,
-        "pool_type": pool_type,
-        "mathop": mathop,
-        "math_fidelity": math_fidelity,
-        "implied_math_format": implied_math_format,
-        "tile_cnt": tile_cnt,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=1,
+    configuration = TestConfig(
+        "sources/quasar/reduce_quasar_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop, pool_type=pool_type),
+            UNPACKER_ENGINE_SEL(),
+            IMPLIED_MATH_FORMAT(implied_math_format),
+            DEST_SYNC(),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            TEST_FACE_DIMS(),
+            NUM_FACES(),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=tile_cnt,
+        ),
+        unpack_to_dest=(
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        ),
+        dest_acc=dest_acc,
     )
 
-    run_test(test_config)
+    res_from_L1 = configuration.run()
 
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

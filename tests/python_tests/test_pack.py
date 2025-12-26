@@ -18,18 +18,22 @@ from helpers.constraints import (
     get_valid_dest_indices,
 )
 from helpers.data_format_inference import infer_data_formats
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden, get_golden_generator
-from helpers.llk_params import (
-    DestAccumulation,
-    DestSync,
-    PackerReluType,
-    format_dict,
-)
+from helpers.llk_params import DestAccumulation, DestSync, PackerReluType, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    DEST_INDEX,
+    DEST_SYNC,
+    INPUT_DIMENSIONS,
+    NUM_FACES,
+    RELU_CONFIG,
+    TILE_COUNT,
+    TILIZE,
+)
 from helpers.utils import passed_test
 
 
@@ -106,7 +110,6 @@ def is_relu_threshold_tolerance_issue(
 
 
 @parametrize(
-    test_name="pack_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -132,7 +135,13 @@ def is_relu_threshold_tolerance_issue(
     ),
 )
 def test_pack(
-    test_name, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+    workers_tensix_coordinates,
 ):
 
     if (formats.input_format == DataFormat.Int32) ^ (
@@ -142,12 +151,11 @@ def test_pack(
             "Pack does not support mixing Int32 with other formats. Check format conversions in packer for more information."
         )
 
-    # Generate test data
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        negative_values=True,
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     # Generate golden output
@@ -207,42 +215,46 @@ def test_pack(
         data_formats.pack_src,
     )
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "tile_cnt": tile_cnt,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "unpack_to_dest": unpack_to_dest,
-        "dest_acc": dest_acc,
-        "relu_config": relu_config,
-        "dest_sync": dest_sync,
-        "dest_index": dest_index,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-    )
-
-    run_test(test_config)
-
-    res_from_L1 = collect_results(
+    configuration = TestConfig(
+        "sources/pack_test.cpp",
         formats,
-        tile_count=tile_cnt,
-        address=res_address,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            TILIZE(),
+            DEST_SYNC(dest_sync),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            DEST_INDEX(dest_index),
+            RELU_CONFIG(relu_config),
+            NUM_FACES(num_faces=4),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
     )
-    assert len(res_from_L1) == len(golden_tensor)
+
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
+    test_passed = passed_test(
+        golden_tensor, res_tensor, formats.output_format, print_erros=False
+    )
 
     if not test_passed and relu_type in [
         PackerReluType.MinThresholdRelu,

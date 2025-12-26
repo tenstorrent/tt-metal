@@ -16,7 +16,7 @@ uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     int32_t* A = (int32_t*)buffer_A[0];
     int32_t* B = (int32_t*)buffer_B[0];
@@ -29,7 +29,7 @@ void run_kernel()
 
 #ifdef LLK_TRISC_MATH
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     int32_t* A = (int32_t*)buffer_A[1];
     int32_t* B = (int32_t*)buffer_B[1];
@@ -42,7 +42,7 @@ void run_kernel()
 
 #ifdef LLK_TRISC_PACK
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams* params)
 {
     int32_t* A = (int32_t*)buffer_A[2];
     int32_t* B = (int32_t*)buffer_B[2];

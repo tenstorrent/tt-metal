@@ -4,15 +4,16 @@
 
 import pytest
 import torch
-from helpers.device import (
-    collect_results,
-    write_stimuli_to_l1,
-)
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    DISABLE_SRC_ZERO_FLAG,
+    MATH_OP,
+)
 
 
 def generate_golden(operand1, true_value, false_value):
@@ -29,7 +30,6 @@ def torch_equal_nan(a, b):
 
 
 @parametrize(
-    test_name="ttnn_where_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -42,7 +42,7 @@ def torch_equal_nan(a, b):
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
-def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
+def test_ttnn_where(formats, dest_acc, mathop, test_case, workers_tensix_coordinates):
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
@@ -55,23 +55,19 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
     input_dimensions = [32, 32]  # Single tile dimensions
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        sfpu=False,
+    )
 
-    src_A, _, tile_cnt_A = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        sfpu=False,
-    )
-    src_B, _, tile_cnt_B = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        sfpu=False,
-    )
-    src_C, _, tile_cnt_C = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_C, tile_cnt_C, _, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
         sfpu=False,
     )
 
@@ -82,52 +78,36 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         src_A = torch.zeros_like(src_A)
     # For "mixed" case, use the generated stimuli as-is
 
-    location = "0,0"
-
     golden = generate_golden(src_A, src_B, src_C)
 
-    # Create test config for storing buffer addresses
-    buffer_config = {}
-
-    # Write all three inputs using the enhanced helper function
-    result_buffer_address = write_stimuli_to_l1(
-        test_config=buffer_config,
-        buffer_A=src_A.flatten(),
-        buffer_B=src_B.flatten(),
-        stimuli_A_format=formats.input_format,
-        stimuli_B_format=formats.input_format,
-        tile_count_A=tile_cnt_A,
-        tile_count_B=tile_cnt_B,
-        location=location,
-        buffer_C=src_C.flatten(),
-        stimuli_C_format=formats.input_format,
-        tile_count_C=tile_cnt_C,
+    configuration = TestConfig(
+        "sources/ttnn_where_test.cpp",
+        formats,
+        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A.flatten(),
+            formats.input_format,
+            src_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            buffer_C=src_C.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_cnt_C,
+        ),
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
     )
 
-    unpack_to_dest = formats.input_format.is_32_bit()
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "mathop": mathop,
-        "unpack_to_dest": unpack_to_dest,
-        "buffer_A_address": buffer_config["buffer_A_address"],
-        "buffer_B_address": buffer_config["buffer_B_address"],
-        "buffer_C_address": buffer_config["buffer_C_address"],
-        "result_buffer_address": buffer_config["result_buffer_address"],
-        "tile_cnt_A": tile_cnt_A,
-        "tile_cnt_B": tile_cnt_B,
-        "tile_cnt_C": tile_cnt_C,
-    }
-
-    run_test(test_config)
-
-    res_from_L1 = collect_results(
-        formats, tile_count=tile_cnt_A, address=result_buffer_address
-    )
     res_from_L1 = res_from_L1[:1024]
-    assert len(res_from_L1) == len(golden)
+    assert len(res_from_L1) == len(
+        golden
+    ), "Result tensor and golder tensor are not of the same length"
 
     golden_tensor = torch.tensor(
         golden,
@@ -146,13 +126,12 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         ),
     )
 
-    assert torch_equal_nan(golden_tensor, res_tensor)
+    assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
 # MCW test with dynamic format sweeping like main test
 # Use same input/output format - no mixing
 @parametrize(
-    test_name="ttnn_where_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -166,7 +145,9 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
     height=[32],
     width=[32],
 )
-def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
+def test_ttnn_where_mcw(
+    formats, dest_acc, mathop, height, width, workers_tensix_coordinates
+):
     # Generate dtype dynamically based on current input format
 
     if (
@@ -179,28 +160,6 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
     ) and dest_acc == DestAccumulation.Yes:
         pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
-    # Generate stimuli using the standard helper function
-    input_dimensions = [height, width]
-
-    C, _, tile_cnt_C = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        sfpu=False,
-    )
-    T, _, tile_cnt_T = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        sfpu=False,
-    )
-    F, _, tile_cnt_F = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
-        sfpu=False,
-    )
-
     # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2
     C = pattern.view(height, width).to(format_dict[formats.input_format])
@@ -209,49 +168,32 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
     T = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 2
     F = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 11
 
-    location = "0,0"
-
     golden = generate_golden(C, T, F)
 
-    # Create test config for storing buffer addresses
-    buffer_config = {}
-
-    result_buffer_address = write_stimuli_to_l1(
-        test_config=buffer_config,
-        buffer_A=C.flatten(),
-        buffer_B=T.flatten(),
-        stimuli_A_format=formats.input_format,
-        stimuli_B_format=formats.input_format,
-        tile_count_A=tile_cnt_C,
-        tile_count_B=tile_cnt_T,
-        location=location,
-        buffer_C=F.flatten(),
-        stimuli_C_format=formats.input_format,
-        tile_count_C=tile_cnt_F,
+    configuration = TestConfig(
+        "sources/ttnn_where_test.cpp",
+        formats,
+        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            C.flatten(),
+            formats.input_format,
+            T.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=1,
+            buffer_C=F.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=1,
+        ),
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
     )
 
-    unpack_to_dest = formats.input_format.is_32_bit()
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "unpack_to_dest": unpack_to_dest,
-        "mathop": mathop,
-        "buffer_A_address": buffer_config["buffer_A_address"],
-        "buffer_B_address": buffer_config["buffer_B_address"],
-        "buffer_C_address": buffer_config["buffer_C_address"],
-        "result_buffer_address": buffer_config["result_buffer_address"],
-        "tile_cnt_A": tile_cnt_C,
-        "tile_cnt_B": tile_cnt_T,
-        "tile_cnt_C": tile_cnt_F,
-    }
-
-    run_test(test_config)
-
-    res_from_L1 = collect_results(
-        formats, tile_count=tile_cnt_C, address=result_buffer_address
-    )
     res_from_L1 = res_from_L1[:1024]
 
     golden_tensor = torch.tensor(
@@ -274,5 +216,7 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
         ),
     )
 
-    assert len(res_tensor) == len(golden_tensor)
-    assert torch_equal_nan(golden_tensor, res_tensor)
+    assert len(res_tensor) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
+    assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"

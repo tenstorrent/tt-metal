@@ -5,13 +5,24 @@ from typing import List
 
 import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType, Transpose
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfRunType, perf_benchmark, update_report
+from helpers.profiler import ProfilerConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    DEST_SYNC,
+    INPUT_DIMENSIONS,
+    LOOP_FACTOR,
+    MATH_FIDELITY,
+    NUM_FACES,
+    THROTTLE_LEVEL,
+    UNPACK_TRANS_FACES,
+)
 
 # Important K dimensions to test
 KT_DIMS = [1, 2, 3, 4, 8, 64]
@@ -44,7 +55,6 @@ def matmul_combos(
 
 @pytest.mark.perf
 @parametrize(
-    test_name="matmul_perf",
     combos=matmul_combos(
         formats=input_output_formats(
             [
@@ -63,7 +73,7 @@ def matmul_combos(
         MathFidelity.HiFi4,
     ],
 )
-def test_perf_matmul(perf_report, test_name, combos, math_fidelity):
+def test_perf_matmul(perf_report, combos, math_fidelity):
 
     formats, dest_acc, (matrix_a, matrix_b) = combos
 
@@ -81,20 +91,35 @@ def test_perf_matmul(perf_report, test_name, combos, math_fidelity):
     # Calculate all matmul dimensions using helper function
     dims = generate_tile_dims((matrix_a, matrix_b))
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "loop_factor": 16,
-        "tile_cnt": dims.rt_dim * dims.ct_dim * dims.kt_dim,
-        "input_A_dimensions": matrix_a,
-        "input_B_dimensions": matrix_b,
-        "output_dimensions": dims.output_dimensions,
-        "rt_dim": dims.rt_dim,
-        "ct_dim": dims.ct_dim,
-        "kt_dim": dims.kt_dim,
-        "dest_acc": dest_acc,
-        "math_fidelity": math_fidelity,
-    }
+    variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
 
-    results = perf_benchmark(test_config, run_types)
-    update_report(perf_report, test_config, results)
+    configuration = ProfilerConfig(
+        "sources/matmul_perf.cpp",
+        formats,
+        run_types,
+        templates=[
+            INPUT_DIMENSIONS(matrix_a, matrix_b),
+            MATH_FIDELITY(math_fidelity),
+            DEST_SYNC(),
+            THROTTLE_LEVEL(),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(Transpose.No),
+            NUM_FACES(),
+            LOOP_FACTOR(16),
+            CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=variant_tile_count,
+            tile_count_B=variant_tile_count,
+            tile_count_res=variant_tile_count,
+        ),
+        dest_acc=dest_acc,
+    )
+
+    configuration.run(perf_report)

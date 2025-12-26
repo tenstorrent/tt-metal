@@ -41,7 +41,6 @@ SECTIONS
   /*
    * Rest of the sections are standard sections
    */
-
   PROVIDE (__executable_start = __firmware_start);
   .init __firmware_start :
   {
@@ -124,6 +123,15 @@ SECTIONS
     . = ALIGN(4);
     __ldm_bss_end = .;
   } > REGION_DATA
+
+  .runtime_args (NOLOAD):
+  {
+    . = ALIGN(16);
+    __runtime_args_start = .;
+    . += LENGTH(REGION_RUNTIME_ARGS);
+    __runtime_args_end = .;
+  } > REGION_RUNTIME_ARGS
+
   local_data_noinit __ldm_bss_end (NOLOAD) :
   {
     *(local_data_noinit)

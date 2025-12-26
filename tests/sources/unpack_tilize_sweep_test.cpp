@@ -21,10 +21,10 @@ uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_tilize.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, NUM_FACES, NUM_FACES);
+        formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, params->num_faces, params->num_faces);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     // Initialize tilize unpacker
@@ -33,13 +33,13 @@ void run_kernel()
         formats.unpack_dst,
         BLOCK_CT_DIM,
         FACE_R_DIM,
-        NARROW_TILE // narrow_tile disabled for now
+        params->NARROW_TILE // narrow_tile disabled for now
     );
 
     uint32_t read_offset = 0;
 
     const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
-    const std::uint32_t num_faces    = is_blackhole ? 4 : NUM_FACES;
+    const std::uint32_t num_faces    = is_blackhole ? 4 : params->num_faces;
 
     // Main tilize loop - handle different tile configurations
     for (uint32_t row = 0; row < BLOCK_RT_DIM; ++row)
@@ -74,23 +74,23 @@ const bool TILIZE = true;
 using namespace ckernel;
 const bool is_int_fpu_en = false;
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     // Copy srca to dest with tilize flag
 #ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(params->num_faces, formats.math);
 #else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(params->num_faces, formats.math);
 #endif
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    for (int i = 0; i < TILE_CNT; ++i)
+    for (int i = 0; i < params->TILE_CNT; ++i)
     {
 #ifdef ARCH_BLACKHOLE
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, NUM_FACES);
+            i, formats.math, formats.math, params->num_faces);
 #else
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             i, formats.math, formats.math);
@@ -107,23 +107,23 @@ void run_kernel()
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel()
+void run_kernel(const volatile struct RuntimeParams *params)
 {
     const bool UNTILIZE             = false;
-    const std::uint32_t DATUM_COUNT = 16 * 16 * NUM_FACES;
+    const std::uint32_t DATUM_COUNT = 16 * 16 * params->num_faces;
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, NUM_FACES);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, NUM_FACES);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params->num_faces);
+    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params->num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, NUM_FACES);
-    _llk_pack_init_<UNTILIZE, false>(formats.pack_dst, FACE_R_DIM, NUM_FACES);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, params->num_faces);
+    _llk_pack_init_<UNTILIZE, false>(formats.pack_dst, FACE_R_DIM, params->num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
 #endif
 
     _llk_packer_wait_for_math_done_();
-    for (int i = 0; i < TILE_CNT; ++i)
+    for (int i = 0; i < params->TILE_CNT; ++i)
     {
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(i, L1_ADDRESS(buffer_Res[i]));
     }

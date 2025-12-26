@@ -4,7 +4,6 @@
 import pytest
 import torch
 from conftest import skip_for_blackhole
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -13,15 +12,23 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    MATH_OP,
+    SRCA_REUSE_COUNT,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
 @skip_for_blackhole
 @parametrize(
-    test_name="unpack_a_bcast_eltwise_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -40,13 +47,13 @@ from helpers.utils import passed_test
     ],
 )
 def test_unp_bcast_sub_sdpa(
-    test_name,
     formats,
     mathop,
     dest_acc,
     math_fidelity,
     input_dimensions,
     srca_reuse_count,
+    workers_tensix_coordinates,
 ):
 
     # Precompute constants
@@ -59,8 +66,11 @@ def test_unp_bcast_sub_sdpa(
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     src_A = src_A[: 1024 * reuse_factor]
@@ -75,7 +85,7 @@ def test_unp_bcast_sub_sdpa(
         take.append(reshaped_a[i])
         take.append(reshaped_a[i + 16])
 
-    # Reconstruct tiles with boradcasted data
+    # Reconstruct tiles with broadcasted data
 
     reconstructed_tiles = []
     for i in range(0, len(take), 2):
@@ -106,36 +116,47 @@ def test_unp_bcast_sub_sdpa(
 
                 golden.append(result)
 
-    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])
+    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])[
+        : 1024 * reuse_factor
+    ]
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "input_A_dimensions": input_dimensions,
-        "input_B_dimensions": input_dimensions,
-        "mathop": mathop,
-        "math_fidelity": math_fidelity,
-        "tile_cnt": tile_cnt,
-        "srca_reuse_count": srca_reuse_count,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=reuse_factor,
-        tile_count_B=tile_cnt,
+    configuration = TestConfig(
+        "sources/unpack_a_bcast_eltwise_test.cpp",
+        formats,
+        templates=[
+            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop),
+            DEST_SYNC(),
+            TILE_COUNT(tile_cnt_A),
+            SRCA_REUSE_COUNT(srca_reuse_count),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            SRCA_REUSE_COUNT(srca_reuse_count),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=reuse_factor,
+            tile_count_B=reuse_factor,
+            tile_count_res=reuse_factor,
+        ),
+        dest_acc=dest_acc,
     )
 
-    run_test(test_config)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

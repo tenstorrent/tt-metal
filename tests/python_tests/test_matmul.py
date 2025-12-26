@@ -4,7 +4,7 @@
 from typing import List
 
 import torch
-from helpers.device import BootMode, collect_results, write_stimuli_to_l1
+from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
@@ -13,8 +13,16 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    INPUT_DIMENSIONS,
+    MATH_FIDELITY,
+    NUM_FACES,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -62,7 +70,6 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 
 
 @parametrize(
-    test_name="matmul_test",
     math_fidelity=[
         MathFidelity.LoFi,
         MathFidelity.HiFi2,
@@ -73,7 +80,10 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
-    test_name, math_fidelity, format_dest_acc_and_dims, boot_mode=BootMode.DEFAULT
+    math_fidelity,
+    format_dest_acc_and_dims,
+    workers_tensix_coordinates,
+    boot_mode=BootMode.DEFAULT,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -82,16 +92,11 @@ def test_matmul(
     input_A_dimensions = format_dest_acc_and_dims[2][0]
     input_B_dimensions = format_dest_acc_and_dims[2][1]
 
-    src_A, _, tile_cnt_A = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_A_dimensions,
-        sfpu=False,
-    )
-    src_B, _, tile_cnt_B = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_B_dimensions,
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_A_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_B_dimensions,
         sfpu=False,
     )
 
@@ -106,7 +111,8 @@ def test_matmul(
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
         input_B_dimensions=input_B_dimensions,
-        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+        # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+        tilize=True,
     )
 
     if formats.input_format != DataFormat.Bfp8_b:
@@ -121,38 +127,40 @@ def test_matmul(
         tilized_A = src_A
         tilized_B = src_B
 
-    test_config = {
-        "formats": formats,
-        "testname": test_name,
-        "dest_acc": dest_acc,
-        "math_fidelity": math_fidelity,
-        "tile_cnt": matmul_dims.output_tile_cnt,
-        "input_A_dimensions": input_A_dimensions,
-        "input_B_dimensions": input_B_dimensions,
-        "output_dimensions": matmul_dims.output_dimensions,
-        "rt_dim": matmul_dims.rt_dim,
-        "ct_dim": matmul_dims.ct_dim,
-        "kt_dim": matmul_dims.kt_dim,
-    }
-
-    # Use the new helper function for writing stimuli
-    res_address = write_stimuli_to_l1(
-        test_config,
-        tilized_A.flatten(),
-        tilized_B.flatten(),
-        formats.input_format,
-        formats.input_format,
-        tile_cnt_A,
-        tile_cnt_B,
+    configuration = TestConfig(
+        "sources/matmul_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            INPUT_DIMENSIONS(input_A_dimensions, input_B_dimensions),
+        ],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            tilized_A.flatten(),
+            formats.input_format,
+            tilized_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=matmul_dims.output_tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
     )
 
-    run_test(test_config, boot_mode)
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
 
-    res_from_L1 = collect_results(
-        formats, tile_count=matmul_dims.output_tile_cnt, address=res_address
-    )
-    assert len(res_from_L1) == len(golden_tensor)
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golder tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"

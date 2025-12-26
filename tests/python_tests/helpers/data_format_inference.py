@@ -201,8 +201,6 @@ def infer_data_formats(
     Returns:
         FormatConfig struct containing all formats (with same_src_format=True, so A and B formats match)
     """
-    if chip_arch is None:
-        chip_arch = get_chip_architecture()
 
     # Determine the intermediate formats
     unpack_out = infer_unpack_out(
@@ -286,9 +284,6 @@ def data_formats(
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
-
-    if chip_arch is None:
-        chip_arch = get_chip_architecture()
 
     if disable_format_inference:
         # Return a single FormatConfig where all formats are the same if format inference is disabled or not supported for the architecture
