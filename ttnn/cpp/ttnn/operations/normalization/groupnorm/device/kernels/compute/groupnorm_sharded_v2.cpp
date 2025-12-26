@@ -214,6 +214,7 @@ void MAIN {
             reconfig_data_format_srcb(cb_input_mask, cb_ones);
 
             // Partial-E[x]
+            // LOCAL reduction: Use mul_tiles for high precision (don't use reduce helper here!)
             index_h_offset = 0;
             mul_tiles_init(cb_x, cb_ones);
             cb_reserve_back(cb_ex2pe, 1);
@@ -222,7 +223,7 @@ void MAIN {
             cb_wait_front(cb_ones, 1);
 
             index_h_offset = 0;
-            // Accomulate into dest directly by using mul_tiles (tile * 1 is accomulated into dest at the moment)
+            // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
@@ -251,6 +252,7 @@ void MAIN {
             cb_push_back(cb_ex_partial, 1);
             reduce_uninit<FP32_DEST_ACC>();
 
+            // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
