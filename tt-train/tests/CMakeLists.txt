@@ -57,6 +57,7 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/gelu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
