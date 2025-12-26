@@ -137,6 +137,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_test.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
@@ -290,6 +291,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # Matmul Test
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/matmul_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/matmul_test.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/device/matmul_test_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/device/matmul_test_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/device/matmul_test_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/device/matmul_test_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/matmul_test/device/matmul_test_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
