@@ -148,6 +148,11 @@ inline void _llk_pack_init_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     _llk_pack_configure_addrmod_<untilize>();
     _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
+
+    set_packer_l1_offset(pack_dst_format, face_r_dim);
+    const uint face_dim   = face_r_dim * FACE_C_DIM;
+    const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34587
