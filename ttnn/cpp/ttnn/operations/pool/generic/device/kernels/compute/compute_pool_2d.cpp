@@ -259,6 +259,7 @@ void MAIN {
 
                     for (uint32_t j = 0; j < num_pages_to_8; j++) {
                         cb_wait_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
+                        // UNPACK((tt::compute::common::print_full_tile(weight_cb_id, 0)));
                         for (uint32_t i = 0; i < effective_tiles; ++i) {
                             mul_tiles(curr_in_cb_id, weight_cb_id, i, 0, j * tiles_to_reduce + i);
                         }
