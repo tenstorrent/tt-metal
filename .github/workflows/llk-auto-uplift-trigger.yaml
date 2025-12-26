@@ -329,8 +329,9 @@ jobs:
             local branch_head_sha=$(gh run view "$run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
             local branch_annotations="[]"
             if [ -n "$branch_head_sha" ]; then
-              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Include both "error" and "failure" annotation levels (pytest uses "error")
+              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" --paginate \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo 0)"
@@ -370,8 +371,9 @@ jobs:
             local main_head_sha=$(gh run view "$main_run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
             local main_annotations="[]"
             if [ -n "$main_head_sha" ]; then
-              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Include both "error" and "failure" annotation levels (pytest uses "error")
+              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" --paginate \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Main failed tests count: $(echo "$main_annotations" | jq 'length' 2>/dev/null || echo 0)"
@@ -653,8 +655,9 @@ jobs:
             local branch_head_sha=$(gh run view "$run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
             local branch_annotations="[]"
             if [ -n "$branch_head_sha" ]; then
-              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Include both "error" and "failure" annotation levels (pytest uses "error")
+              branch_annotations=$(gh api "/repos/${{ github.repository }}/commits/$branch_head_sha/check-runs" --paginate \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Branch failed tests count: $(echo "$branch_annotations" | jq 'length' 2>/dev/null || echo 0)" >&2
@@ -694,8 +697,9 @@ jobs:
             local main_head_sha=$(gh run view "$main_run_id" --json headSha --jq '.headSha' --repo "${{ github.repository }}" 2>/dev/null)
             local main_annotations="[]"
             if [ -n "$main_head_sha" ]; then
-              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" \
-                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
+              # Include both "error" and "failure" annotation levels (pytest uses "error")
+              main_annotations=$(gh api "/repos/${{ github.repository }}/commits/$main_head_sha/check-runs" --paginate \
+                --jq '[.check_runs[] | select(.conclusion == "failure") | .output.annotations // [] | .[] | select(.annotation_level == "failure" or .annotation_level == "error") | "\(.path // ""):\(.title // "")"] | sort | unique' 2>/dev/null || echo "[]")
             fi
 
             echo "Main failed tests count: $(echo "$main_annotations" | jq 'length' 2>/dev/null || echo 0)" >&2
