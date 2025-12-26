@@ -18,7 +18,6 @@ class TtTransformer2DModel(LightweightModule):
 
         self.device = device
 
-        self.norm_core_grid = ttnn.CoreGrid(y=8, x=4) if out_dim == 640 else ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-6
 

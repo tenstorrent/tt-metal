@@ -272,3 +272,6 @@ class RefinerModelOptimisations(ModelOptimisations):
         if "attentions" in module_path:
             return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
         return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+
+    def get_layernorm_config(self, module_path):
+        return ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)

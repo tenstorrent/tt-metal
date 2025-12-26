@@ -842,6 +842,26 @@ class ModelOptimisations:
 
         # region LAYERNORM CONFIGS
         self.core_grid_x = 5 if not force_full_grid else 8
+
+        self.layernorm_configs = {}
+        self.layernorm_configs["640_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+            subblock_w=4,
+            block_h=16,
+            block_w=4,
+            inplace=False,
+            legacy_reduction=True,
+            legacy_rsqrt=True,
+        )
+        self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid_x, 8),
+            subblock_w=1280 // 32 // self.core_grid_x,
+            block_h=4,
+            block_w=1280 // 32 // self.core_grid_x,
+            inplace=False,
+            legacy_reduction=True,
+            legacy_rsqrt=True,
+        )
         # endregion
 
         # region GROUPNORM CONFIGS
@@ -1276,3 +1296,9 @@ class ModelOptimisations:
 
         mask, negative_mask, gamma, beta = self.generate_groupnorm_params(config, weights, bias, groups, device)
         return config["op_config"], config["memory_config"], mask, negative_mask, gamma, beta
+
+    def get_layernorm_config(self, module_path):
+        if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+            return self.layernorm_configs["640_config"]
+        else:
+            return self.layernorm_configs["1280_config"]
