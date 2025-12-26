@@ -128,7 +128,13 @@ class TTPenalties(LightweightModule):
 
     def _alloc_int_buffer(self, shard_dims, host=None, layout=ttnn.TILE_LAYOUT):
         if host is None:
-            host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
+            host = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.num_devices * (((self.vocab_size + self.num_devices - 1) // self.num_devices)),
+                ),
+                dtype=torch.int32,
+            )
         return ttnn.from_torch(
             host,
             dtype=ttnn.int32,
