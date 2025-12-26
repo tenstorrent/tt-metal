@@ -542,6 +542,52 @@ Tensor ExecuteBinaryRemainder::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
 
+    // Use div_floor for int32 inputs
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+
+    if (is_int32) {
+        // q = floor(a / b)
+        Tensor q = BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
+            input_a,
+            input_b,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            /*use_legacy=*/false,
+            sub_core_grids);
+
+        // b * q
+        Tensor bq = ttnn::multiply(
+            input_b,
+            q,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            false,
+            sub_core_grids);
+
+        // a - b*q
+        Tensor result = ttnn::subtract(
+            input_a,
+            bq,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            false,
+            sub_core_grids);
+
+        return result;
+    }
+
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
     const auto& a =
@@ -585,6 +631,48 @@ Tensor ExecuteBinaryFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+
+    if (is_int32) {
+        // q = trunc(a / b)
+        Tensor q = BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
+            input_a,
+            input_b,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            /*use_legacy=*/false,
+            sub_core_grids);
+
+        // result = a - b*q
+        Tensor result = ttnn::subtract(
+            input_a,
+            ttnn::multiply(
+                input_b,
+                q,
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+                tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+                tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+                false,
+                sub_core_grids),
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            tt::stl::Span<const unary::EltwiseUnaryWithParam>{},
+            false,
+            sub_core_grids);
+
+        return result;
+    }
+
     Tensor div_res = ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
