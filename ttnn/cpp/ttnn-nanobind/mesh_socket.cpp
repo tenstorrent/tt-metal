@@ -11,6 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 
 #include <tt-metalium/mesh_socket.hpp>
 
@@ -63,19 +64,53 @@ void py_module_types(nb::module_& mod) {
             )doc");
     nb::class_<tt::tt_metal::distributed::SocketConfig>(mod, "SocketConfig")
         .def(
-            nb::init<
-                std::vector<tt::tt_metal::distributed::SocketConnection>,
-                tt::tt_metal::distributed::SocketMemoryConfig>(),
+            "__init__",
+            [](tt::tt_metal::distributed::SocketConfig* config,
+               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
+               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               std::optional<int> sender_rank,
+               std::optional<int> receiver_rank) {
+                new (config) tt::tt_metal::distributed::SocketConfig();
+                config->socket_connection_config = std::move(connections);
+                config->socket_mem_config = memory_config;
+                if (sender_rank.has_value()) {
+                    config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
+                }
+                if (receiver_rank.has_value()) {
+                    config->receiver_rank = tt::tt_metal::distributed::multihost::Rank(receiver_rank.value());
+                }
+            },
             nb::arg("connections"),
             nb::arg("memory_config"),
+            nb::arg("sender_rank") = nb::none(),
+            nb::arg("receiver_rank") = nb::none(),
             R"doc(
                 Initialize a SocketConfig with connections and memory config.
 
                 Args:
                     connections (List[SocketConnection]): The connections of the socket
                     memory_config (SocketMemoryConfig): The memory config of the socket
+                    sender_rank (int, optional): The rank of the sender host in a multi-host context
+                    receiver_rank (int, optional): The rank of the receiver host in a multi-host context
             )doc");
-    nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket");
+    nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
+        .def(
+            nb::init<
+                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+                const tt::tt_metal::distributed::SocketConfig&>(),
+            nb::arg("device"),
+            nb::arg("config"),
+            R"doc(
+                Initialize a MeshSocket with a device and socket configuration.
+
+                Args:
+                    device (MeshDevice): The mesh device on which to create the socket
+                    config (SocketConfig): The configuration for the socket
+
+                Note:
+                    Sockets should typically be created in pairs using create_socket_pair()
+                    rather than using this constructor directly.
+            )doc");
 }
 
 void py_module(nb::module_& mod) {

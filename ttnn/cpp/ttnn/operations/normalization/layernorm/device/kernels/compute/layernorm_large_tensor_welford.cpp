@@ -17,6 +17,9 @@
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+
+namespace generic = norm::kernel_util::generic;
 
 namespace NAMESPACE {
 
@@ -55,33 +58,33 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_push_back(cb_ex, 1);
     cb_push_back(cb_ex2, 1);
 
-    for (uint32_t wt = 0; wt < Wt; wt += blk) {
+    for (auto block : generic::blocks(Wt, blk)) {
         // Fused pre-add
         reconfig_data_format(cb_in, cb_inb);
         add_tiles_init(cb_in, cb_inb);
-        cb_wait_front(cb_in, blk);
-        cb_wait_front(cb_inb, blk);
+        cb_wait_front(cb_in, block.full_block_size());
+        cb_wait_front(cb_inb, block.full_block_size());
         tile_regs_acquire();
-        for (uint32_t j = 0; j < blk; j++) {
-            add_tiles(cb_in, cb_inb, j, j, j);
+        for (auto i : block.local()) {
+            add_tiles(cb_in, cb_inb, i, i, i);
         }
         tile_regs_commit();
-        cb_pop_front(cb_inb, blk);
-        cb_pop_front(cb_in, blk);
+        cb_pop_front(cb_in, block.full_block_size());
+        cb_pop_front(cb_inb, block.full_block_size());
 
         // Pack to intermediate CB (needed
         // to workaround transpose_wh_dest bug)
         pack_reconfig_data_format(cb_interm_pre_add);
-        cb_reserve_back(cb_interm_pre_add, blk);
+        cb_reserve_back(cb_interm_pre_add, block.full_block_size());
         tile_regs_wait();
-        for (uint32_t j = 0; j < blk; j++) {
-            pack_tile(j, cb_interm_pre_add);
+        for (auto i : block.local()) {
+            pack_tile(i, cb_interm_pre_add);
         }
         tile_regs_release();
-        cb_push_back(cb_interm_pre_add, blk);
+        cb_push_back(cb_interm_pre_add, block.full_block_size());
 
         // Now run Welfords in these blk number of tiles
-        cb_wait_front(cb_interm_pre_add, blk);
+        cb_wait_front(cb_interm_pre_add, block.full_block_size());
         cb_wait_front(cb_ex, 1);
         cb_wait_front(cb_ex2, 1);
         tile_regs_acquire();
@@ -95,16 +98,16 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
         transpose_wh_init_short(cb_interm_pre_add);
-        for (uint32_t j = 0; j < blk; j++) {
+        for (auto i : block.local()) {
             // Welford's needs transposed input tile
-            transpose_wh_tile(cb_interm_pre_add, j, input_dst);
+            transpose_wh_tile(cb_interm_pre_add, i, input_dst);
 
             if constexpr (is_last_tile_full) {
                 // All tiles can go through the faster call which does 32 rows
                 welford_update<W>(input_dst, sample_idx, reciprocal_lut);
             } else {
                 // If it is the end tile, do it differently
-                if ((wt + j) == (Wt - 1)) {
+                if ((block.start() + i) == (Wt - 1)) {
                     welford_update<W>(input_dst, sample_idx, reciprocal_lut);
                 } else {
                     welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
@@ -114,7 +117,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
         welford_save_state(mean_dst);
         tile_regs_commit();
-        cb_pop_front(cb_interm_pre_add, blk);
+        cb_pop_front(cb_interm_pre_add, block.full_block_size());
         cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_ex2, 1);
 
@@ -153,7 +156,14 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
  * @param: W: width of the input
  * @param: p_reciprocals: pointer to the reciprocal LUT
  */
-template <tt::CBIndex cb_in, uint32_t input_dst, uint32_t mean_dst, uint32_t Wt, uint32_t tile_width, uint32_t W>
+template <
+    tt::CBIndex cb_in,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // The number of valid rows in the last tile in width dimension
     constexpr uint32_t last_tile_rows = W % tile_width;
@@ -178,7 +188,10 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     // Process the last tile
-    cb_wait_front(cb_in, 1);
+    // Reader is sending full blocks, so we need to stay in sync.
+    // wait/pop the last tile + any remaining in the last block
+    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
+    cb_wait_front(cb_in, num_to_sync);
     transpose_wh_tile(cb_in, 0, input_dst);
 
     if constexpr (is_last_tile_full) {
@@ -191,7 +204,8 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     welford_finalize_to_row<W>(mean_dst, W - 1, reciprocal_lut);
 
     tile_regs_commit();
-    cb_pop_front(cb_in, 1);
+
+    cb_pop_front(cb_in, num_to_sync);
 }
 
 void MAIN {
@@ -264,7 +278,7 @@ void MAIN {
                 W,
                 blk>(*p_reciprocals);
         } else {
-            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W>(*p_reciprocals);
+            welford_no_fuse_pre_add<cb_in, input_dst, mean_dst, Wt, tile_width, W, blk>(*p_reciprocals);
         }
         // We should expect that either of the two would have have populated dst regs with mean and
         // variance in mean_dst and var_dst respectively.
@@ -349,34 +363,37 @@ void MAIN {
         cb_wait_front(cb_ex2pe, onetile);
         cb_wait_front(cb_ex, onetile);
 
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_in, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            // Last block may only be partially-filled,
+            // and only tiles that have data in them are
+            // processed, but need to sync with reader on full blocks
+            cb_wait_front(cb_in, block.full_block_size());
             tile_regs_acquire();
             reconfig_data_format(cb_in, cb_ex);
             sub_bcast_cols_init_short(cb_in, cb_ex);
             // x-E[x]
-            for (uint32_t j = 0; j < blk; j++) {
-                sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
+            for (auto i : block.local()) {
+                sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
             }
-            cb_pop_front(cb_in, blk);
+            cb_pop_front(cb_in, block.full_block_size());
 
-            reconfig_data_format_srca(cb_in, cb_ex2pe);
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
-                reconfig_data_format_srca(cb_ex2pe, cb_inb);
+                reconfig_data_format_srca(cb_in, cb_inb);
                 binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                cb_wait_front(cb_inb, blk);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
+                cb_wait_front(cb_inb, block.full_block_size());
+                for (auto i : block.local()) {
+                    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
                 }
-                cb_pop_front(cb_inb, blk);
+                cb_pop_front(cb_inb, block.full_block_size());
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
             // Multiply by 1/(√(Var(X) + ε))
+            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
-            for (uint32_t j = 0; j < blk; j++) {
-                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, j);
+            for (auto i : block.local()) {
+                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, i);
             }
             tile_regs_commit();
 
@@ -385,44 +402,45 @@ void MAIN {
             }
 
             pack_reconfig_data_format(cb_xmm);
-            cb_reserve_back(cb_xmm, blk);
+            // Sync with writer on full blocks
+            cb_reserve_back(cb_xmm, block.full_block_size());
             tile_regs_wait();
-            for (uint32_t j = 0; j < blk; j++) {
-                pack_tile(j, cb_xmm);
+            for (auto i : block.local()) {
+                pack_tile(i, cb_xmm);
             }
-            cb_push_back(cb_xmm, blk);
+            cb_push_back(cb_xmm, block.full_block_size());
             tile_regs_release();
 
             if constexpr (do_gamma == 1) {
                 // Multiply by gamma
                 reconfig_data_format(cb_xmm, cb_gamma);
                 tile_regs_acquire();
-                cb_wait_front(cb_gamma, blk);
-                cb_wait_front(cb_xmm, blk);
+                cb_wait_front(cb_gamma, block.full_block_size());
+                cb_wait_front(cb_xmm, block.full_block_size());
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
-                for (uint32_t j = 0; j < blk; j++) {
-                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, j, j, j);
+                for (auto i : block.local()) {
+                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_gamma, blk);
-                cb_pop_front(cb_xmm, blk);
+                cb_pop_front(cb_gamma, block.full_block_size());
+                cb_pop_front(cb_xmm, block.full_block_size());
 
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
                 }
                 tile_regs_wait();
                 if constexpr (!do_beta) {
-                    cb_reserve_back(cb_out, blk);
-                    for (uint32_t j = 0; j < blk; j++) {
-                        pack_tile(j, cb_out);
+                    cb_reserve_back(cb_out, block.full_block_size());
+                    for (auto i : block.local()) {
+                        pack_tile(i, cb_out);
                     }
-                    cb_push_back(cb_out, blk);
+                    cb_push_back(cb_out, block.full_block_size());
                 } else {
-                    cb_reserve_back(cb_xmm, blk);
-                    for (uint32_t j = 0; j < blk; j++) {
-                        pack_tile(j, cb_xmm);
+                    cb_reserve_back(cb_xmm, block.full_block_size());
+                    for (auto i : block.local()) {
+                        pack_tile(i, cb_xmm);
                     }
-                    cb_push_back(cb_xmm, blk);
+                    cb_push_back(cb_xmm, block.full_block_size());
                 }
                 tile_regs_release();
             }
@@ -432,23 +450,23 @@ void MAIN {
                 tile_regs_acquire();
                 reconfig_data_format(cb_xmm, cb_beta);
                 add_bcast_rows_init_short(cb_xmm, cb_beta);
-                cb_wait_front(cb_xmm, blk);
-                cb_wait_front(cb_beta, blk);
-                for (uint32_t j = 0; j < blk; j++) {
-                    add_tiles_bcast_rows(cb_xmm, cb_beta, j, j, j);
+                cb_wait_front(cb_xmm, block.full_block_size());
+                cb_wait_front(cb_beta, block.full_block_size());
+                for (auto i : block.local()) {
+                    add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(cb_beta, blk);
-                cb_pop_front(cb_xmm, blk);
+                cb_pop_front(cb_beta, block.full_block_size());
+                cb_pop_front(cb_xmm, block.full_block_size());
 
                 pack_reconfig_data_format(cb_out);
-                cb_reserve_back(cb_out, blk);
+                cb_reserve_back(cb_out, block.full_block_size());
                 tile_regs_wait();
-                for (uint32_t j = 0; j < blk; j++) {
-                    pack_tile(j, cb_out);
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_out);
                 }
                 tile_regs_release();
-                cb_push_back(cb_out, blk);
+                cb_push_back(cb_out, block.full_block_size());
             }
         }
 
