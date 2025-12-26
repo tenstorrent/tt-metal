@@ -222,20 +222,20 @@ void MAIN {
                 FP32_DEST_ACC>(cb_x, cb_scaler, cb_ex_partial, block_h, block_w, 1);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    1,   // Ht
+                    1,   // Wt
+                    1);  // num_batches
                 cb_reserve_back(cb_ex, 1);
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }
             // x - E[x]
@@ -338,20 +338,20 @@ void MAIN {
             cb_pop_front(cb_ex2pe, 1);
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    true,
+                    true,
+                    FP32_DEST_ACC>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    1,   // Ht
+                    1,   // Wt
+                    1);  // num_batches
                 cb_reserve_back(cb_ex, 1);
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
-                tile_regs_release();
-                reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }
 
