@@ -9,6 +9,9 @@ Usage:
 
 Description:
     This script does nothing. It is used to test the triage output testing framework.
+
+Owner:
+    tt-vjovanovic
 """
 
 from triage import ScriptConfig, run_script

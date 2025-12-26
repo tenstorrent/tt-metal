@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Check status on the ethernet cores
+
+Owner:
+    nhuang-tt
 """
 
 from abc import ABC, abstractmethod
