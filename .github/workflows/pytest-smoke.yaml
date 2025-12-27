@@ -24,7 +24,7 @@ jobs:
     container:
       image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
       volumes:
-        - /work
+        - ${{ github.workspace }}:/work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
@@ -35,11 +35,10 @@ jobs:
       - name: Checkout tests
         uses: actions/checkout@v4
         with:
-          path: .
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             tests/
-            models/common/utility_functions.py
+            models/
             conftest.py
             pytest.ini
             tt_metal/test/lsan.supp
@@ -55,12 +54,61 @@ jobs:
         run: |
           pip install /work/wheel/*.whl
 
+      - name: Detect ASan runtime + symbolizer paths (clang-20)
+        id: asan_paths
+        run: |
+          set -euo pipefail
+
+          # Find ASan runtime .so from the package contents first (most reliable on Ubuntu)
+          ASAN_SO="$(dpkg -L libclang-rt-20-dev | grep -m1 'libclang_rt\.asan-x86_64\.so' || true)"
+
+          # Fallback: use clang's resource dir (handles distro layout differences)
+          if [[ -z "$ASAN_SO" ]]; then
+            RES="$(clang-20 -print-resource-dir || true)"
+            if [[ -n "$RES" ]]; then
+              ASAN_SO="$(find "$RES/lib" -maxdepth 3 -name 'libclang_rt.asan-x86_64.so' -print -quit 2>/dev/null || true)"
+            fi
+          fi
+
+          echo "Detected ASan runtime: ${ASAN_SO:-<empty>}"
+          if [[ -z "${ASAN_SO:-}" || ! -f "${ASAN_SO}" ]]; then
+            echo "::error::Could not locate libclang_rt.asan-x86_64.so (libclang-rt-20-dev may be missing, or layout differs)."
+            echo "Installed packages (clang/rt):"
+            dpkg -l | grep -E 'clang-20|libclang-20-dev|libclang-rt-20-dev|llvm-20' || true
+            echo "Candidate locations under /usr/lib/llvm-20/lib/clang:"
+            find /usr/lib/llvm-20/lib/clang -maxdepth 4 -name 'libclang_rt.asan-x86_64.so' 2>/dev/null || true
+            exit 1
+          fi
+
+          # Symbolizer (for usable ASan/LSan stacks)
+          SYMBOLIZER="$(command -v llvm-symbolizer || true)"
+          if [[ -z "$SYMBOLIZER" ]]; then
+            SYMBOLIZER="$(find /usr -name llvm-symbolizer -print -quit 2>/dev/null || true)"
+          fi
+
+          echo "Detected llvm-symbolizer: ${SYMBOLIZER:-<empty>}"
+          if [[ -z "${SYMBOLIZER:-}" || ! -f "${SYMBOLIZER}" ]]; then
+            echo "::warning::llvm-symbolizer not found; ASan stacks may be unsymbolized."
+            SYMBOLIZER=""
+          fi
+
+          # Export for later steps via $GITHUB_ENV
+          {
+            echo "ASAN_RT_SO=$ASAN_SO"
+            if [[ -n "$SYMBOLIZER" ]]; then
+              echo "ASAN_SYMBOLIZER_PATH=$SYMBOLIZER"
+            fi
+          } >> "$GITHUB_ENV"
+
       - name: Run pytest with ASan
         timeout-minutes: 10
         env:
-          LD_PRELOAD: /usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so
+          ASAN_SYMBOLIZER_PATH: ${{ env.ASAN_SYMBOLIZER_PATH }}
           ASAN_OPTIONS: "color=always:detect_leaks=1:detect_stack_use_after_return=1"
           LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
           UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+          PYTHONPATH: /work
         run: |
+          # Set LD_PRELOAD here (not in env:) to avoid bash preload errors
+          export LD_PRELOAD="${ASAN_RT_SO}"
           pytest tests/ttnn/unit_tests/tensor -v --timeout=60 -x -m "not disable_fast_runtime_mode"

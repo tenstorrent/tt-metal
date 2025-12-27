@@ -7,3 +7,11 @@
 # Bug: https://github.com/open-mpi/ompi/issues/12584
 # ASan Build with LeakSantizer complains about leaks in openmpi lib.
 leak:openmpi
+
+# The RISC-V cross-compiler toolchain (sfpi) is invoked at runtime to build
+# firmware. When LD_PRELOAD injects ASan into these subprocesses, LeakSanitizer
+# reports benign "leaks" from the compiler itself (compilers often skip freeing
+# memory at exit since the OS reclaims it). Suppress these false positives.
+leak:cc1plus
+leak:cc1
+leak:sfpi
