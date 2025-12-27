@@ -38,7 +38,7 @@ jobs:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ttnn-dist-${{ matrix.os }}-Release
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Activate env and run release tests - host
