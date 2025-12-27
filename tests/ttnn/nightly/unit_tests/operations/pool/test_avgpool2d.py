@@ -231,6 +231,7 @@ def run_avg_pool2d(
             dtype=out_dtype,
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
+            dram_slice_config=dram_slice_config,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -613,4 +614,5 @@ def test_avg_pool2d_dram(
         in_dtype=in_dtype,
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
+        run_twice=True,
     )
