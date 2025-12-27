@@ -19,6 +19,9 @@ using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
+// Type alias for cleaner access to 2D mesh routing constants
+using LowLatencyMeshRoutingFields = RoutingFieldsConstants::Mesh;
+
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {

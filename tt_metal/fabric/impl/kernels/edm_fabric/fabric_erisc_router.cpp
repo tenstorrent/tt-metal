@@ -45,6 +45,9 @@
 
 using namespace tt::tt_fabric;
 
+// Type alias for cleaner access to 2D mesh routing constants
+using LowLatencyMeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
+
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.

@@ -53,6 +53,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include "fabric/fabric_context.hpp"
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
@@ -1076,10 +1077,11 @@ KernelHandle CreateDataMovementKernel(
     auto& control_plane = MetalContext::instance().get_control_plane();
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
-        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
-        auto udm_mode = MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
-            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes)
+        auto& fabric_context = control_plane.get_fabric_context();
+        auto fabric_defines = fabric_context.get_fabric_kernel_defines();
+        if (!fabric_defines.empty()) {
+            kernel->add_defines(fabric_defines);
         }
     }
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
@@ -1108,10 +1110,11 @@ KernelHandle CreateEthernetKernel(
     auto& control_plane = MetalContext::instance().get_control_plane();
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
-        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
-        auto udm_mode = MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
-            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes)
+        auto& fabric_context = control_plane.get_fabric_context();
+        auto fabric_defines = fabric_context.get_fabric_kernel_defines();
+        if (!fabric_defines.empty()) {
+            kernel->add_defines(fabric_defines);
         }
     }
 
