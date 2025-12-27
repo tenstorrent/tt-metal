@@ -626,8 +626,8 @@ run_t3000_tttv2_modules_tests() {
   export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct # Only used for test_mlp_1d_vs_reference_from_model_args, which will retire with TTTv1
   export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d
   pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    -m "not slow" \
     --tb=short \
-    --m "not slow" \
     --cov=models.common.modules.mlp.mlp_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg

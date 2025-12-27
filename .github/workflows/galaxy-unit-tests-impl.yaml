@@ -236,7 +236,7 @@ jobs:
             pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
 
       - name: Run tttv2 module tests
-        if: ${{ matrix.test-group.model == 'tttv2-modules' }}
+        if: ${{ matrix.test-group.model == 'tttv2' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           HF_HOME: /mnt/MLPerf/huggingface
