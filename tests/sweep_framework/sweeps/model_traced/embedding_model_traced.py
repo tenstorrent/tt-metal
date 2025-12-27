@@ -78,6 +78,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
