@@ -85,6 +85,11 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
     }
     end_core = cores[num_cores_unpadded - 1];
 
+    // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
+    CoreRangeSet used_cores = num_cores_unpadded < num_cores
+                                  ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
+                                  : all_cores;
+
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -95,14 +100,14 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
         tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size)
             .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, used_cores, cb_src0_config);
     if (convert_df) {
         out_cb_index = CBIndex::c_16;
         uint32_t output_page_size = align(output_unit_size, output.buffer()->alignment());
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
                 .set_page_size(out_cb_index, output_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+        tt_metal::CreateCircularBuffer(program, used_cores, output_cb_out_config);
     }
 
     auto* dst_buffer = output.buffer();
@@ -112,7 +117,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        all_cores,
+        used_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
@@ -127,7 +132,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
             program,
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
+            used_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
         std::vector<uint32_t> writer_compile_time_args = {out_cb_index, num_units_per_row};
@@ -137,7 +142,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
             program,
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
+            used_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     if (convert_df) {
@@ -146,11 +151,11 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
         tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
-            all_cores,
+            used_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }
 
-    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
+    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, used_cores, {num_units_per_shard});
 
     uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, slice_index);
     uint32_t curr_idx_h = 0;

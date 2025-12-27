@@ -47,9 +47,6 @@ def run_unet_model(batch, groups, device, iterations=1):
         UNET_FULL_MODEL_PCC if is_wormhole_b0(device) else UNET_FULL_MODEL_PCC_BH,
     )
 
-    del output_tensor
-    del ttnn_output_tensor
-
     for _ in range(iterations - 1):
         _, ttnn_input = create_unet_input_tensors(
             batch,

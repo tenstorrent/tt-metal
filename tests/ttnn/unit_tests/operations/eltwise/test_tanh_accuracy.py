@@ -7,6 +7,8 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
