@@ -1130,7 +1130,7 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
         uint32_t current_absolute_row = 0;
 
         // Output dimensions for row-major indexing
-        uint32_t output_width = padded_out_channels;  // Width is padded channels (32)
+        uint32_t output_width = padded_out_channels;  // Width is padded channels
 
         for (uint32_t kernel_pos = 0; kernel_pos < total_kernel_positions; kernel_pos++) {
             uint32_t kh = kernel_pos / kernel_w;
@@ -1142,9 +1142,19 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
                 uint32_t face_idx = absolute_row / FACE_SIZE;
                 uint32_t row_in_face = absolute_row % FACE_SIZE;
 
-                // Map face index to tile coordinates
-                uint32_t face_row_offset = (face_idx / 2) * FACE_SIZE;
-                uint32_t face_col_offset = (face_idx % 2) * FACE_SIZE;
+                // Determine which tile (horizontally) this face belongs to
+                // Each tile has 4 faces (2x2 layout)
+                uint32_t tile_idx = face_idx / 4;
+                uint32_t face_in_tile = face_idx % 4;
+
+                // Map face_in_tile to row/col offsets within the tile
+                // Face layout in a 32x32 tile:
+                // Face 0: rows 0-15, cols 0-15
+                // Face 1: rows 0-15, cols 16-31
+                // Face 2: rows 16-31, cols 0-15
+                // Face 3: rows 16-31, cols 16-31
+                uint32_t face_row_offset = (face_in_tile / 2) * FACE_SIZE;
+                uint32_t face_col_offset = (face_in_tile % 2) * FACE_SIZE;
                 uint32_t target_row = face_row_offset + row_in_face;
 
                 // Place 16 channel values in this row
@@ -1159,8 +1169,8 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
                         ttnn::SmallVector<int>{(int)ch, 0, (int)kh, (int)kw}, compute_strides(original_weight_shape));
                     T value = conv_weight_tensor_buffer[input_flat_index];
 
-                    // Calculate target column
-                    uint32_t target_col = face_col_offset + col;
+                    // Calculate target column with tile offset for multi-tile support
+                    uint32_t target_col = tile_idx * TILE_SIZE + face_col_offset + col;
 
                     // Output is stored as [padded_channels, padded_kernel_positions, 1, 1]
                     // which becomes row-major: output[row * width + col]
@@ -1172,16 +1182,18 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
                         output_buffer[output_idx] = value;
                     }
 
-                    if (kernel_pos < 2 && ch < 4) {
+                    if (kernel_pos < 3 && ch < 4) {
                         log_info(
                             tt::LogOp,
-                            "DEBUG: kernel_pos[{}] ch[{}] = {} -> abs_row={}, face={}, target_row={}, target_col={}, "
-                            "idx={}",
+                            "DEBUG: kernel_pos[{}] ch[{}] = {} -> abs_row={}, face={}, tile={}, face_in_tile={}, "
+                            "target_row={}, target_col={}, idx={}",
                             kernel_pos,
                             ch,
                             static_cast<float>(value),
                             absolute_row,
                             face_idx,
+                            tile_idx,
+                            face_in_tile,
                             target_row,
                             target_col,
                             output_idx);
