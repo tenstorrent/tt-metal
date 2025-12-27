@@ -84,9 +84,12 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
     t0 = time.time()
     ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
     t1 = time.time()
-    ttnn_sentence_embeddings = ttnn.to_torch(
-        ttnn_out, mesh_composer=ttnn_module.runner_infra.output_mesh_composer, dtype=torch.float32
-    )
+
+    # Only pass mesh_composer if it's not None (single device case)
+    to_torch_kwargs = {"dtype": torch.float32}
+    if ttnn_module.runner_infra.output_mesh_composer is not None:
+        to_torch_kwargs["mesh_composer"] = ttnn_module.runner_infra.output_mesh_composer
+    ttnn_sentence_embeddings = ttnn.to_torch(ttnn_out, **to_torch_kwargs)
     cosine_sim_matrix1 = cosine_similarity(reference_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)
     similarities1 = upper_triangle1[upper_triangle1 != 0]
