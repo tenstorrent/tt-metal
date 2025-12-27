@@ -64,9 +64,8 @@ Tensor reduce_min(
         compute_kernel_config,
         std::nullopt,
         true);
-    // Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
-    // return min_tensor;
-    return max_reduce;
+    Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
+    return min_tensor;
 }
 
 Tensor reduce(
