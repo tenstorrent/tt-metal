@@ -1863,8 +1863,8 @@ class ModelArgs:
         if self.is_llama_vision():
             text_prefix = self.state_dict_text_prefix
         else:
-            # Standard models and non-Llama vision: no prefix for text, prefix for vision
-            text_prefix = "" if not is_vision else self.state_dict_text_prefix
+            # Standard models and non-Llama vision: use text prefix for text, empty for vision
+            text_prefix = self.state_dict_text_prefix if not is_vision else ""
 
         vision_prefix = self.state_dict_vision_prefix if is_vision else ""
 
