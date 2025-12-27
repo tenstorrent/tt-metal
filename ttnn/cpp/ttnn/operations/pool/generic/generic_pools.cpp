@@ -73,7 +73,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             output_shape[1],
             output_shape[2],
             channels,
-            8,
+            8,  // L1 NOC Alignment in elements.
             core_grid,
             ShardOrientation::ROW_MAJOR,
             false,
