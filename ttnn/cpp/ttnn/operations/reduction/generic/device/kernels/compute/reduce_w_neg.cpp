@@ -13,6 +13,8 @@
 
 #include "llk_math_eltwise_binary.h"
 
+#include "api/debug/dprint.h"
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -27,6 +29,8 @@ void MAIN {
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
+
+    DPRINT << "Starting reduce_w_neg kernel" << ENDL();
 
     cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -78,10 +82,8 @@ void MAIN {
             tile_regs_acquire();
             copy_tile_init(cb_acc);
             copy_tile(cb_acc, 0, dst_idx);
-            // To be uncommented after all kernels have negated variant
-            // and negation can be safely removed from reduce_min()
-            // negative_tile_init();
-            // negative_tile(dst_idx);
+            negative_tile_init();
+            negative_tile(dst_idx);
             tile_regs_wait();
             cb_pop_front(cb_acc, onetile);
             cb_reserve_back(cb_output, onetile);

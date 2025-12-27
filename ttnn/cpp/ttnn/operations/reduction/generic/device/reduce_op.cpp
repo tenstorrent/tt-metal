@@ -53,7 +53,7 @@ Tensor reduce_min(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
     }
-    Tensor max_reduce = detail::reduce(
+    return detail::reduce(
         input,
         tt::tt_metal::ReduceOpMath::MAX,
         reduce_dim,
@@ -63,8 +63,6 @@ Tensor reduce_min(
         compute_kernel_config,
         std::nullopt,
         true);
-    Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
-    return min_tensor;
 }
 
 Tensor reduce(
